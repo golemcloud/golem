@@ -191,6 +191,7 @@ object JsAgentDependency {
 @js.native
 sealed trait JsAgentType extends js.Object {
   def typeName: String                           = js.native
+  def kind: String                               = js.native
   def description: String                        = js.native
   def sourceLanguage: String                     = js.native
   def schema: JsSchemaGraph                      = js.native
@@ -205,6 +206,7 @@ sealed trait JsAgentType extends js.Object {
 object JsAgentType {
   def apply(
     typeName: String,
+    kind: String,
     description: String,
     sourceLanguage: String,
     schema: JsSchemaGraph,
@@ -218,6 +220,7 @@ object JsAgentType {
   ): JsAgentType = {
     val obj = js.Dynamic.literal(
       "typeName"       -> typeName,
+      "kind"           -> kind,
       "description"    -> description,
       "sourceLanguage" -> sourceLanguage,
       "schema"         -> schema,

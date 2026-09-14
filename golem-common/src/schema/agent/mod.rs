@@ -467,6 +467,7 @@ pub struct AgentDependencySchema {
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
+    pub kind: AgentTypeKind,
     pub description: String,
     #[serde(default)]
     pub source_language: String,
@@ -490,6 +491,16 @@ pub struct AgentTypeSchema {
     pub snapshotting: Snapshotting,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<AgentConfigDeclarationSchema>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentTypeKind {
+    Regular,
+    HttpRouter,
 }
 
 /// Schema-layer form of an agent config declaration.
@@ -547,6 +558,7 @@ impl AgentTypeSchema {
     /// Validates semantic constraints of the agent type, including stream
     /// placement and definitions that are not reachable from an allowed use.
     pub fn validate(&self) -> Result<(), String> {
+        http::validate(self)?;
         if self.mode == AgentMode::Ephemeral {
             for method in &self.methods {
                 if method.read_only.is_some() {
@@ -767,6 +779,8 @@ pub mod bindings {
 /// in [`bindings`].
 #[cfg(feature = "full")]
 pub mod wit;
+
+pub mod http;
 
 #[cfg(test)]
 mod tests;

@@ -23,6 +23,26 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
   private val principalParams = Set("caller")
 
   def spec = suite("HttpValidationPrincipalSpec")(
+    test("low-level HTTP model preserves mapping order/provider and distinguishes Any from Custom ANY") {
+      val mount = HttpMountDetails(
+        Nil,
+        false,
+        false,
+        Nil,
+        Nil,
+        List(FileMapping.Subtree(List("assets"), "/srv/assets"), FileMapping.Exact(List("x"), "/srv/x")),
+        List(FileMapping.Exact(List("data"), "/var/data")),
+        Some("provider-text")
+      )
+      assertTrue(
+        mount.staticBindings.map(_.productPrefix) == List("Subtree", "Exact"),
+        mount.filesystemBindings.map(_.productPrefix) == List("Exact"),
+        mount.openapiProvider.contains("provider-text"),
+        HttpMethod.Any != HttpMethod.Custom("ANY"),
+        HttpMethod.fromString("ANY") == Right(HttpMethod.Custom("ANY")),
+        HttpMethod.fromString("any") == Right(HttpMethod.Custom("any"))
+      )
+    },
     suite("endpoint Principal validation")(
       test("rejects path variable referencing Principal param") {
         val endpoint = HttpEndpointDetails(
@@ -158,7 +178,10 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           authRequired = false,
           phantomAgent = false,
           corsAllowedPatterns = Nil,
-          webhookSuffix = Nil
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProvider = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
         assertTrue(
@@ -172,7 +195,10 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           authRequired = false,
           phantomAgent = false,
           corsAllowedPatterns = Nil,
-          webhookSuffix = Nil
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProvider = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
         assertTrue(result.isRight)
@@ -183,7 +209,10 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           authRequired = false,
           phantomAgent = false,
           corsAllowedPatterns = Nil,
-          webhookSuffix = Nil
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProvider = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, Set.empty)
         assertTrue(result.isRight)

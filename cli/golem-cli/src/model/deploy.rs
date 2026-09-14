@@ -1560,6 +1560,7 @@ fn render_http_method(method: &HttpMethod) -> &str {
         HttpMethod::Trace(_) => "TRACE",
         HttpMethod::Patch(_) => "PATCH",
         HttpMethod::Custom(method) => &method.value,
+        HttpMethod::Any(_) => "<any>",
     }
 }
 

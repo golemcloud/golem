@@ -4006,6 +4006,7 @@ mod tests {
 
     fn test_agent_type(agent_type_name: AgentTypeName, mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name,
             description: String::new(),
             source_language: String::new(),

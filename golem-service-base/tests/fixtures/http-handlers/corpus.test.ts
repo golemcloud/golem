@@ -31,6 +31,10 @@ function checkBytes(value: unknown, location: string): void {
   } else if (value !== null && typeof value === "object") {
     for (const [key, item] of Object.entries(value)) {
       if (key.endsWith("_hex")) {
+        const isSequence = key.endsWith("chunks_hex") || key === "response_bodies_hex";
+        if (Array.isArray(item) !== isSequence) {
+          throw new Error(`${location}/${key}: invalid byte notation`);
+        }
         const items = Array.isArray(item) ? item : [item];
         if (
           !items.every(
@@ -183,6 +187,21 @@ test("invalid bytes and expected observations are rejected", () => {
     expect(() =>
       checkBytes({ producer_chunks_hex: ["61", invalid] }, "test"),
     ).toThrow("invalid byte notation");
+  }
+});
+
+test("byte scalars and sequences cannot be interchanged", () => {
+  for (const field of ["body_hex", "value_hex", "guest_input_hex"]) {
+    expect(() => checkBytes({ [field]: ["61", "62"] }, "test")).toThrow(
+      "invalid byte notation",
+    );
+    checkBytes({ [field]: "6162" }, "test");
+  }
+  for (const field of ["chunks_hex", "producer_chunks_hex", "response_bodies_hex"]) {
+    expect(() => checkBytes({ [field]: "6162" }, "test")).toThrow(
+      "invalid byte notation",
+    );
+    checkBytes({ [field]: ["61", "62"] }, "test");
   }
 });
 

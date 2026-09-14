@@ -27,6 +27,8 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
 
+pub mod http_files;
+
 /// Content hash of an agent file. All files with identical content share the same hash.
 #[derive(Copy, Debug, Clone, PartialEq, Eq, std::hash::Hash, Serialize, Deserialize)]
 pub struct AgentFileContentHash(pub DiffHash);
@@ -484,6 +486,48 @@ pub struct HttpMountDetails {
     pub phantom_agent: bool,
     pub cors_options: CorsOptions,
     pub webhook_suffix: Vec<PathSegment>,
+    pub static_bindings: Vec<FileMapping>,
+    pub filesystem_bindings: Vec<FileMapping>,
+    pub openapi_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum FileMapping {
+    Exact(ExactFileMapping),
+    Subtree(SubtreeFileMapping),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExactFileMapping {
+    pub public_path: Vec<String>,
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SubtreeFileMapping {
+    pub public_prefix: Vec<String>,
+    pub filesystem_root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -534,6 +578,7 @@ pub enum HttpMethod {
     Trace(Empty),
     Patch(Empty),
     Custom(CustomHttpMethod),
+    Any(Empty),
 }
 
 #[cfg(feature = "full")]
@@ -554,6 +599,9 @@ impl TryFrom<HttpMethod> for http::Method {
             HttpMethod::Custom(custom) => {
                 let converted = http::Method::from_bytes(custom.value.as_bytes())?;
                 Ok(converted)
+            }
+            HttpMethod::Any(_) => {
+                anyhow::bail!("Any is a route matcher, not an HTTP request method")
             }
         }
     }
@@ -858,6 +906,7 @@ mod tests {
     fn mock_agent_type(mode: AgentMode, methods: Vec<AgentMethodSchema>) -> AgentTypeSchema {
         AgentTypeSchema {
             type_name: AgentTypeName("Test".to_string()),
+            kind: crate::schema::agent::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),

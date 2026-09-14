@@ -17,7 +17,10 @@ use assert2::{assert, check, let_assert};
 use chrono::{Datelike, Utc};
 use futures::future::join_all;
 use golem_common::base_model::Empty;
-use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::base_model::agent::{
+    AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, Snapshotting,
+};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent_secret::{
@@ -49,7 +52,10 @@ use golem_common::model::tool_release::{
 };
 use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
-use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::schema::{
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+    NamedField, OutputSchema, SchemaGraph, SchemaType,
+};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -4521,6 +4527,7 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 fn make_test_agent_type(name: &str) -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
+        kind: golem_common::schema::AgentTypeKind::Regular,
         description: format!("Test agent {name}"),
         source_language: String::new(),
         schema: SchemaGraph::empty(),
@@ -4536,6 +4543,229 @@ fn make_test_agent_type(name: &str) -> AgentTypeSchema {
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: vec![],
+    }
+}
+
+fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
+    let mappings = |pairs: &[(&str, &str)]| {
+        FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
+    };
+    let mount = |static_bindings, filesystem_bindings, openapi_provider| HttpMountDetails {
+        path_prefix: vec![PathSegment::Literal(LiteralSegment {
+            value: "assets".to_string(),
+        })],
+        auth_details: None,
+        phantom_agent: false,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        webhook_suffix: vec![],
+        static_bindings,
+        filesystem_bindings,
+        openapi_provider,
+    };
+    let endpoint = |http_method| HttpEndpointDetails {
+        http_method,
+        path_suffix: vec![],
+        header_vars: vec![],
+        query_vars: vec![],
+        auth_details: None,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+    };
+    let router = AgentTypeSchema {
+        type_name: AgentTypeName("PersistenceRouter".to_string()),
+        kind: AgentTypeKind::HttpRouter,
+        description: "Persistence router".to_string(),
+        source_language: "test".to_string(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![
+            AgentMethodSchema {
+                name: "handle".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "request",
+                    golem_common::schema::agent::http::request_schema(),
+                )]),
+                output_schema: OutputSchema::Single(Box::new(
+                    golem_common::schema::agent::http::response_schema(),
+                )),
+                http_endpoint: vec![endpoint(HttpMethod::Any(Empty {}))],
+                read_only: None,
+            },
+            AgentMethodSchema {
+                name: "describe".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                http_endpoint: vec![],
+                read_only: None,
+            },
+        ],
+        dependencies: vec![],
+        mode: AgentMode::Ephemeral,
+        http_mount: Some(mount(
+            mappings(&[("/logo", "/public/logo.svg"), ("/docs/*", "/site/$1")]),
+            vec![],
+            Some("describe".to_string()),
+        )),
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![],
+    };
+    let mut regular = make_test_agent_type("PersistenceRegular");
+    regular.methods.push(AgentMethodSchema {
+        name: "literal-any".to_string(),
+        description: String::new(),
+        prompt_hint: None,
+        input_schema: InputSchema::parameters([]),
+        output_schema: OutputSchema::Unit,
+        http_endpoint: vec![endpoint(HttpMethod::Custom(CustomHttpMethod {
+            value: "ANY".to_string(),
+        }))],
+        read_only: None,
+    });
+    regular.http_mount = Some(mount(
+        vec![],
+        mappings(&[
+            ("/download/*", "/data/$1"),
+            ("/manifest", "/app/manifest.json"),
+        ]),
+        None,
+    ));
+    router.validate().expect("router fixture must be valid");
+    regular.validate().expect("regular fixture must be valid");
+    vec![router, regular]
+}
+
+pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("http-persistence-{}", new_repo_uuid());
+    let expected = make_http_persistence_agent_types();
+    let component = deps
+        .component_repo
+        .create(
+            env.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    Some("ordinary-metadata".to_string()),
+                    Some("1.0.0".to_string()),
+                    expected.clone(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let stored_component = deps
+        .component_repo
+        .get_staged_by_id(component.revision.component_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .agent_types(),
+        expected
+    );
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .root_package_name(),
+        &Some("ordinary-metadata".to_string())
+    );
+
+    let deployment_revision_id = 1;
+    let records = expected
+        .iter()
+        .map(|agent_type| DeploymentRegisteredAgentTypeRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id,
+            agent_type_name: agent_type.type_name.0.clone(),
+            component_id: component.revision.component_id,
+            component_revision_id: component.revision.revision_id,
+            component_name: component_name.clone(),
+            owner_account_id: owner.revision.account_id,
+            owner_account_email: owner.revision.email.clone(),
+            webhook_prefix_authority_and_path: None,
+            agent_type: Blob::new(agent_type.clone()),
+            canonical_agent_type_name: agent_type.type_name.0.to_kebab_case(),
+        })
+        .collect();
+    deps.full_deployment_repo
+        .deploy(
+            DeploymentRevisionCreationRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id,
+                version: "1.0.0".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                components: vec![DeploymentComponentRevisionRecord {
+                    environment_id: env.revision.environment_id,
+                    deployment_revision_id,
+                    component_id: component.revision.component_id,
+                    component_revision_id: component.revision.revision_id,
+                }],
+                http_api_deployments: vec![],
+                mcp_deployments: vec![],
+                compiled_routes: vec![],
+                compiled_mcp: vec![],
+                registered_agent_types: records,
+                tool_releases: vec![],
+                registered_tools: vec![],
+                agent_tool_bindings: vec![],
+                created_agent_secrets: vec![],
+                updated_agent_secrets: vec![],
+                replaced_agent_secrets: vec![],
+                created_resource_definitions: vec![],
+                created_retry_policies: vec![],
+                user_account_id: owner.revision.account_id,
+            },
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let stored_agents = deps
+        .full_deployment_repo
+        .list_deployment_agent_types(env.revision.environment_id, deployment_revision_id)
+        .await
+        .unwrap();
+    assert_eq!(stored_agents.len(), expected.len());
+    for expected_agent in expected {
+        let stored = stored_agents
+            .iter()
+            .find(|stored| stored.agent_type_name == expected_agent.type_name.0)
+            .unwrap();
+        assert_eq!(stored.agent_type.value(), &expected_agent);
     }
 }
 

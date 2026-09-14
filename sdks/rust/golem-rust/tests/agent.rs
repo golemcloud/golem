@@ -25,8 +25,8 @@ mod tests {
     };
     use golem_rust::agentic::{Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, Snapshotting,
-        SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
+        CachePolicy, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
@@ -2247,6 +2247,8 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "AllHttpMethodsAgent")
             .expect("AllHttpMethodsAgent not found");
+
+        assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
             ("get_method", "HttpMethod::Get"),

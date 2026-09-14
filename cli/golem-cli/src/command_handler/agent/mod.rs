@@ -3290,6 +3290,7 @@ mod tests {
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),

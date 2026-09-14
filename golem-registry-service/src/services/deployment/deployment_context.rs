@@ -594,6 +594,16 @@ impl DeploymentContext {
                     &registered_agent_type.agent_type,
                 );
 
+                if registered_agent_type.agent_type.kind
+                    == golem_common::schema::AgentTypeKind::HttpRouter
+                    || !http_mount.filesystem_bindings.is_empty()
+                {
+                    errors.push(make_mount_validation_error(
+                        "Custom HTTP routers and filesystem mounts are not supported by deployment compilation yet".into(),
+                    ));
+                    continue;
+                }
+
                 let constructor_parameters = ok_or_continue!(
                     build_http_agent_constructor_parameters(
                         http_mount,
@@ -1315,6 +1325,98 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unsupported_http_mounts_fail_only_when_selected_for_deployment() {
+        use golem_common::model::agent::{CorsOptions, FileMapping, HttpMountDetails};
+        use golem_common::model::http_api_deployment::{
+            HttpApiDeploymentId, HttpApiDeploymentRevision,
+        };
+        use golem_common::schema::AgentTypeKind;
+
+        for (kind, static_files, live_files) in [
+            (AgentTypeKind::HttpRouter, false, false),
+            (AgentTypeKind::HttpRouter, true, false),
+            (AgentTypeKind::Regular, false, true),
+            (AgentTypeKind::Regular, false, false),
+        ] {
+            let environment = test_environment();
+            let mut agent = agent_type_with_secret_config(
+                AgentTypeName("site".into()),
+                vec!["key".into()],
+                SchemaType::string(),
+            );
+            agent.kind = kind;
+            if kind == AgentTypeKind::HttpRouter {
+                agent.mode = AgentMode::Ephemeral;
+            }
+            let mapping = FileMapping::compile("/", "/index.html").unwrap();
+            agent.http_mount = Some(HttpMountDetails {
+                path_prefix: vec![],
+                auth_details: None,
+                phantom_agent: false,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                webhook_suffix: vec![],
+                static_bindings: if static_files {
+                    vec![mapping.clone()]
+                } else {
+                    vec![]
+                },
+                filesystem_bindings: if live_files { vec![mapping] } else { vec![] },
+                openapi_provider: None,
+            });
+            agent.validate().unwrap();
+            let name = agent.type_name.clone();
+            let mut context = DeploymentContext {
+                environment: environment.clone(),
+                components: BTreeMap::new(),
+                http_api_deployments: BTreeMap::new(),
+                mcp_deployments: BTreeMap::new(),
+                registered_agent_types: HashMap::from([(
+                    name.clone(),
+                    InProgressDeployedRegisteredAgentType {
+                        agent_type: agent,
+                        implemented_by: test_implementer(),
+                        webhook_domain_and_segments: None,
+                    },
+                )]),
+            };
+            let mut errors = vec![];
+            let mut warnings = vec![];
+            assert!(
+                context
+                    .compile_http_api_routes(&mut errors, &mut warnings)
+                    .is_empty()
+            );
+            assert!(errors.is_empty());
+            let domain = Domain("example.com".into());
+            context.http_api_deployments.insert(
+                domain.clone(),
+                HttpApiDeployment {
+                    id: HttpApiDeploymentId::new(),
+                    revision: HttpApiDeploymentRevision::INITIAL,
+                    environment_id: environment.id,
+                    domain,
+                    hash: diff::Hash::empty(),
+                    agents: BTreeMap::from([(name, Default::default())]),
+                    webhooks_prefix: "/webhooks".into(),
+                    openapi_endpoint_prefix: "/".into(),
+                    created_at: chrono::Utc::now(),
+                },
+            );
+            context.compile_http_api_routes(&mut errors, &mut warnings);
+            if kind == AgentTypeKind::HttpRouter || live_files {
+                assert_eq!(errors.len(), 1, "{errors:?}");
+                assert!(
+                    matches!(&errors[0], DeployValidationError::HttpApiDeploymentAgentConstructorInvalid { error, .. } if error.contains("not supported by deployment compilation yet"))
+                );
+            } else {
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+        }
+    }
+
     fn agent_type_with_secret_config(
         agent_type_name: AgentTypeName,
         path: Vec<String>,
@@ -1322,6 +1424,7 @@ mod tests {
     ) -> AgentTypeSchema {
         AgentTypeSchema {
             type_name: agent_type_name,
+            kind: golem_common::schema::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),

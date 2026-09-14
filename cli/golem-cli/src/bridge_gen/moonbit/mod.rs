@@ -3769,6 +3769,7 @@ mod tests {
         let mut multimodal = SchemaType::list(variant);
         multimodal.metadata_mut().role = Some(Role::Multimodal);
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("VisionSession".to_string()),
             description: String::new(),
             source_language: "moonbit".to_string(),
@@ -3817,6 +3818,7 @@ mod tests {
             SchemaType::string(),
         ))));
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("StreamingFixture".to_string()),
             description: String::new(),
             source_language: "rust".to_string(),

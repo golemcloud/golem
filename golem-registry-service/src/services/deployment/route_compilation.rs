@@ -622,6 +622,7 @@ pub fn render_http_method(method: &HttpMethod) -> String {
         HttpMethod::Trace(_) => "TRACE".to_string(),
         HttpMethod::Patch(_) => "PATCH".to_string(),
         HttpMethod::Custom(custom) => custom.value.clone(),
+        HttpMethod::Any(_) => "<any>".to_string(),
     }
 }
 
@@ -818,6 +819,7 @@ mod tests {
     fn test_agent(mode: AgentMode, phantom_agent: bool) -> AgentTypeSchema {
         AgentTypeSchema {
             type_name: AgentTypeName("note-agent".to_string()),
+            kind: golem_common::schema::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),
@@ -859,6 +861,9 @@ mod tests {
                     allowed_patterns: vec![],
                 },
                 webhook_suffix: vec![],
+                static_bindings: vec![],
+                filesystem_bindings: vec![],
+                openapi_provider: None,
             }),
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],

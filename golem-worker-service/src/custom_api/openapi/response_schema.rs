@@ -340,5 +340,6 @@ fn http_method_name(method: &HttpMethod) -> String {
         HttpMethod::Trace(_) => "TRACE".to_string(),
         HttpMethod::Patch(_) => "PATCH".to_string(),
         HttpMethod::Custom(custom) => custom.value.to_uppercase(),
+        HttpMethod::Any(_) => "<any>".to_string(),
     }
 }

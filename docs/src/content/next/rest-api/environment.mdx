@@ -443,6 +443,7 @@ Path|Method|Protected
     {
       "agentType": {
         "type_name": "string",
+        "kind": "regular",
         "description": "string",
         "source_language": "string",
         "schema": {
@@ -593,7 +594,7 @@ Path|Method|Protected
             "http_endpoint": [
               {
                 "httpMethod": {
-                  "type": "Patch"
+                  "type": "Any"
                 },
                 "pathSuffix": [
                   {
@@ -781,7 +782,7 @@ Path|Method|Protected
                 "http_endpoint": [
                   {
                     "httpMethod": {
-                      "type": "Patch"
+                      "type": "Any"
                     },
                     "pathSuffix": [
                       {
@@ -843,7 +844,26 @@ Path|Method|Protected
               "type": "Literal",
               "value": "string"
             }
-          ]
+          ],
+          "staticBindings": [
+            {
+              "type": "Exact",
+              "publicPath": [
+                "string"
+              ],
+              "filePath": "string"
+            }
+          ],
+          "filesystemBindings": [
+            {
+              "type": "Exact",
+              "publicPath": [
+                "string"
+              ],
+              "filePath": "string"
+            }
+          ],
+          "openapiProvider": "string"
         },
         "snapshotting": {
           "type": "Disabled"
@@ -901,6 +921,7 @@ Path|Method|Protected
 {
   "agentType": {
     "type_name": "string",
+    "kind": "regular",
     "description": "string",
     "source_language": "string",
     "schema": {
@@ -1051,7 +1072,7 @@ Path|Method|Protected
         "http_endpoint": [
           {
             "httpMethod": {
-              "type": "Patch"
+              "type": "Any"
             },
             "pathSuffix": [
               {
@@ -1241,7 +1262,7 @@ Path|Method|Protected
             "http_endpoint": [
               {
                 "httpMethod": {
-                  "type": "Patch"
+                  "type": "Any"
                 },
                 "pathSuffix": [
                   {
@@ -1303,7 +1324,26 @@ Path|Method|Protected
           "type": "Literal",
           "value": "string"
         }
-      ]
+      ],
+      "staticBindings": [
+        {
+          "type": "Exact",
+          "publicPath": [
+            "string"
+          ],
+          "filePath": "string"
+        }
+      ],
+      "filesystemBindings": [
+        {
+          "type": "Exact",
+          "publicPath": [
+            "string"
+          ],
+          "filePath": "string"
+        }
+      ],
+      "openapiProvider": "string"
     },
     "snapshotting": {
       "type": "Disabled"

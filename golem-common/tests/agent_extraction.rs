@@ -60,6 +60,35 @@ async fn can_extract_agent_type_schemas_2() -> anyhow::Result<()> {
 }
 
 #[test]
+async fn can_extract_http_mounts_from_rust_and_typescript_components() -> anyhow::Result<()> {
+    for artifact in [
+        "golem_it_agent_sdk_rust_release.wasm",
+        "golem_it_agent_sdk_ts.wasm",
+    ] {
+        let agent_types = extract_agent_type_schemas(
+            &PathBuf::from("../test-components").join(artifact),
+            false,
+            false,
+        )
+        .await?;
+        assert_valid_regular_agent_types(&agent_types);
+        let agent = agent_types
+            .iter()
+            .find(|agent| agent.type_name.0 == "HttpAgent")
+            .expect("fixture must export HttpAgent");
+        let mount = agent
+            .http_mount
+            .as_ref()
+            .expect("HttpAgent must be mounted");
+        assert!(mount.path_prefix.len() == 2);
+        assert!(mount.static_bindings.is_empty());
+        assert!(mount.filesystem_bindings.is_empty());
+        assert!(mount.openapi_provider.is_none());
+    }
+    Ok(())
+}
+
+#[test]
 async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> anyhow::Result<()> {
     let wasm_path = PathBuf::from_str("../test-components/golem_it_http_tests_release.wasm")?;
 

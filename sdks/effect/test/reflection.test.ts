@@ -33,6 +33,7 @@ const registration = (): AgentHost.RegisteredAgentType => {
     implementedBy: { uuid: { highBits: 1n, lowBits: 2n } },
     agentType: {
       typeName: "Recursive",
+      kind: "regular",
       description: "recursive reflected agent",
       sourceLanguage: "typescript",
       mode: "durable",

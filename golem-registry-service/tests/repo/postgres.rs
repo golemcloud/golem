@@ -453,6 +453,11 @@ async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

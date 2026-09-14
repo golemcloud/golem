@@ -20,6 +20,26 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
       }
 }
 ///|
+pub(all) enum AgentTypeKind {
+      REGULAR; HTTP_ROUTER
+} derive(Debug, Eq)
+
+pub fn AgentTypeKind::ordinal(self : AgentTypeKind) -> Int {
+      match self {
+            REGULAR => 0
+            HTTP_ROUTER => 1
+      }
+}
+
+///|
+pub fn AgentTypeKind::from(self : Int) -> AgentTypeKind {
+      match self {
+            0 => REGULAR
+            1 => HTTP_ROUTER
+            _ => panic()
+      }
+}
+///|
 pub(all) enum AutoInjectedKind {
       PRINCIPAL
 } derive(Debug, Eq)
@@ -68,6 +88,19 @@ pub(all) struct ReadOnlyConfig {
       cache_policy : CachePolicy; uses_principal : Bool
 } derive(Debug, Eq)
 ///|
+pub(all) struct ExactFileMapping {
+      public_path : Array[String]; file_path : String
+} derive(Debug, Eq)
+///|
+pub(all) struct SubtreeFileMapping {
+      public_prefix : Array[String]; filesystem_root : String
+} derive(Debug, Eq)
+///|
+pub(all) enum FileMapping {
+      Exact(ExactFileMapping)
+      Subtree(SubtreeFileMapping)
+} derive(Debug, Eq)
+///|
 pub(all) struct CorsOptions {
       allowed_patterns : Array[String]
 } derive(Debug, Eq)
@@ -83,6 +116,7 @@ pub(all) enum HttpMethod {
       Trace
       Patch
       Custom(String)
+      Any
 } derive(Debug, Eq)
 ///|
 pub(all) enum SystemVariable {
@@ -129,7 +163,7 @@ pub(all) struct AuthDetails {
 } derive(Debug, Eq)
 ///|
 pub(all) struct HttpMountDetails {
-      path_prefix : Array[PathSegment]; auth_details : AuthDetails?; phantom_agent : Bool; cors_options : CorsOptions; webhook_suffix : Array[PathSegment]
+      path_prefix : Array[PathSegment]; auth_details : AuthDetails?; phantom_agent : Bool; cors_options : CorsOptions; webhook_suffix : Array[PathSegment]; static_bindings : Array[FileMapping]; filesystem_bindings : Array[FileMapping]; openapi_provider : String?
 } derive(Debug, Eq)
 ///|
 pub(all) struct HttpEndpointDetails {
@@ -211,7 +245,7 @@ pub(all) struct AgentConfigDeclaration {
 /// `schema.root` field is a structurally-required placeholder and is not the
 /// semantic root of the agent type.
 pub(all) struct AgentType {
-      type_name : String; description : String; source_language : String; schema : @types.SchemaGraph; constructor_ : AgentConstructor; methods : Array[AgentMethod]; dependencies : Array[AgentDependency]; mode : AgentMode; http_mount : HttpMountDetails?; snapshotting : Snapshotting; config : Array[AgentConfigDeclaration]
+      type_name : String; kind : AgentTypeKind; description : String; source_language : String; schema : @types.SchemaGraph; constructor_ : AgentConstructor; methods : Array[AgentMethod]; dependencies : Array[AgentDependency]; mode : AgentMode; http_mount : HttpMountDetails?; snapshotting : Snapshotting; config : Array[AgentConfigDeclaration]
 } derive(Debug, Eq)
 ///|
 /// Associates an agent type with a component that implements it

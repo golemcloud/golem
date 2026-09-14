@@ -245,6 +245,11 @@ async fn test_component_stage(deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
     crate::repo::common::test_initial_permission_card_ids_by_account_are_unique(deps).await;
 }

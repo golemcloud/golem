@@ -5663,9 +5663,10 @@
     },
     "AgentType": {
       "type": "object",
-      "required": ["type_name", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
+      "required": ["type_name", "kind", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
       "properties": {
         "type_name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["regular", "http-router"] },
         "description": { "type": "string" },
         "source_language": { "type": "string" },
         "schema": { "$ref": "#/definitions/SchemaGraph" },
@@ -5813,15 +5814,42 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "openapiProvider"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
-        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "openapiProvider": { "type": ["string", "null"] }
       },
       "additionalProperties": false
+    },
+    "FileMapping": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "publicPath", "filePath"],
+          "properties": {
+            "type": { "const": "Exact" },
+            "publicPath": { "type": "array", "items": { "type": "string" } },
+            "filePath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "publicPrefix", "filesystemRoot"],
+          "properties": {
+            "type": { "const": "Subtree" },
+            "publicPrefix": { "type": "array", "items": { "type": "string" } },
+            "filesystemRoot": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "HttpEndpointDetails": {
       "type": "object",
@@ -5872,7 +5900,8 @@
     "HttpMethod": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {

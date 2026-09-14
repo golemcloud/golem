@@ -20,6 +20,7 @@ import golem.config.{AgentConfigDeclaration, ConfigSchema}
 import golem.runtime.annotations.{description, prompt, readOnly}
 import golem.runtime.{
   AgentMetadata,
+  AgentTypeKind,
   CachePolicy,
   ConstructorMetadata,
   FieldSource,
@@ -116,7 +117,7 @@ object AgentDefinitionMacro {
       val mountSegments     = HttpRouteParser.parsePathOnly(mountPath, "mount").getOrElse(Nil)
       val idPrincipalParams = idConstructorPrincipalParams(typeRepr)
       if (idPrincipalParams.nonEmpty) {
-        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil)
+        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None)
         HttpValidation.validateMountVarsAreNotPrincipal(agentTypeName, mount, idPrincipalParams) match {
           case Left(err) => report.errorAndAbort(err)
           case Right(()) => ()
@@ -147,6 +148,7 @@ object AgentDefinitionMacro {
         name = ${
           Expr(agentTypeName)
         },
+        kind = AgentTypeKind.Regular,
         description = ${
           optionalString(traitDescription)
         },
@@ -739,7 +741,10 @@ object AgentDefinitionMacro {
           authRequired = authRequired,
           phantomAgent = phantomAgent,
           corsAllowedPatterns = corsPatterns,
-          webhookSuffix = webhookSuffix
+          webhookSuffix = webhookSuffix,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProvider = None
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)
@@ -753,7 +758,10 @@ object AgentDefinitionMacro {
               authRequired = $authExpr,
               phantomAgent = $phantomExpr,
               corsAllowedPatterns = $corsExpr,
-              webhookSuffix = $webhookExpr
+              webhookSuffix = $webhookExpr,
+              staticBindings = Nil,
+              filesystemBindings = Nil,
+              openapiProvider = None
             )
           )
         }
@@ -872,6 +880,7 @@ object AgentDefinitionMacro {
           case HttpMethod.Options   => '{ HttpMethod.Options }
           case HttpMethod.Connect   => '{ HttpMethod.Connect }
           case HttpMethod.Trace     => '{ HttpMethod.Trace }
+          case HttpMethod.Any       => '{ HttpMethod.Any }
           case HttpMethod.Custom(m) => '{ HttpMethod.Custom(${ Expr(m) }) }
         }
         val authExpr = authOverride match {
