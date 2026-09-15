@@ -471,6 +471,13 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
+            PublicOplogEntry::Resumed(params) => {
+                logln(format_message_highlight("RESUMED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+            }
             PublicOplogEntry::ActivatePlugin(params) => {
                 logln(format_message_highlight("ACTIVATE PLUGIN"));
                 logln(format!(

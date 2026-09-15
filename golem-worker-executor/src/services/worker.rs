@@ -1221,7 +1221,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
-            for shard_id in shard_assignment.shard_ids {
+            for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
                 let mut shard_worker = self.enum_workers_at_key(&key).await?;
                 result.append(&mut shard_worker);
@@ -1782,11 +1782,11 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use std::collections::{BTreeMap, HashSet, VecDeque};
+    use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
@@ -2136,7 +2136,12 @@ mod tests {
         let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let number_of_shards = 4;
-        shard_service.register(number_of_shards, &HashSet::new());
+        shard_service.register(
+            number_of_shards,
+            &HashMap::new(),
+            None,
+            ShardLeaseRevision::default(),
+        );
         let service = DefaultWorkerService::new(
             key_value_storage.clone(),
             shard_service,

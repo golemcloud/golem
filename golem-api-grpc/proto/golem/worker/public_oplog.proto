@@ -83,6 +83,7 @@ message OplogEntry {
     DurableStreamRecordParameters StreamEnd = 62;
     DurableStreamRecordParameters StreamCancel = 63;
     DurableStreamRecordParameters StreamSession = 64;
+    TimestampParameter Resumed = 65;
   }
 }
 

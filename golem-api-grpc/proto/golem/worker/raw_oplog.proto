@@ -79,6 +79,7 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_end = 61;
     RawDurableStreamRecordParameters stream_cancel = 62;
     RawDurableStreamRecordParameters stream_session = 63;
+    RawTimestampOnly resumed = 64;
   }
 }
 

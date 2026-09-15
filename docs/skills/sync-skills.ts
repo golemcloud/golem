@@ -12,6 +12,7 @@ const CATEGORIES: Record<string, string> = {
   common: "General",
   rust: "Rust",
   ts: "TypeScript",
+  effect: "Effect",
   scala: "Scala",
   moonbit: "MoonBit",
 }
@@ -199,7 +200,7 @@ function parseSkillFile(raw: string, fallbackName: string): { title: string; con
 function humanize(slug: string): string {
   return slug
     .replace(/^golem-/, "")
-    .replace(/-(rust|ts|scala)$/, "")
+    .replace(/-(rust|ts|effect|scala|moonbit)$/, "")
     .split("-")
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")

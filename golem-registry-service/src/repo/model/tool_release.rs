@@ -120,11 +120,6 @@ impl ToolReleaseRecord {
                 "system tool release coordinate does not match its definition"
             ));
         }
-        if !matches!(provision.source, ToolSource::Host { .. }) {
-            return Err(anyhow!(
-                "protected system tool releases must use a host source"
-            ));
-        }
         let now = SqlDateTime::now();
         let mut record = Self {
             tool_release_id: ToolReleaseId::new().0,
