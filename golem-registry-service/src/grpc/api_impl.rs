@@ -223,6 +223,7 @@ impl RegistryServiceGrpcApi {
                             month: period.month,
                         },
                         monthly_usage_mode_revision: u.monthly_usage_mode_revision,
+                        monthly_policy_revision: u.monthly_policy_revision,
                         memory_byte_nanoseconds_remainder: u.memory_byte_nanoseconds_remainder,
                         durable_storage_byte_nanoseconds_remainder: u
                             .durable_storage_byte_nanoseconds_remainder,

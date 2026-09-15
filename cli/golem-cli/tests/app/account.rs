@@ -5,7 +5,8 @@ use golem_cli::{fs, versions};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, MonthlyLimitBehavior,
-    MonthlyResourceLimits, MonthlyUsageMode, StorageLimit, StorageLimitDisabledReason,
+    MonthlyResourceLimits, MonthlyUsageMode, PerAgentLimitUnit, StorageLimit,
+    StorageLimitDisabledReason,
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
@@ -281,24 +282,26 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     assert_eq!(limits.account_id.0, account_id);
     assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::HardLimit);
     assert!(!limits.overage_allowed_by_plan);
-    assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.resolved_monthly_amount, Some(5));
     assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
     assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
     assert_eq!(
         limits.monthly.compute_gcu.behavior,
         Some(MonthlyLimitBehavior::HardLimit)
     );
-    assert_eq!(limits.monthly.memory_gb_seconds.monthly_amount, Some(50));
+    assert_eq!(limits.monthly.memory_gb_seconds.plan_amount, Some(50));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(50)
+    );
     assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
     assert_eq!(limits.monthly.memory_gb_seconds.remaining, Some(36));
-    assert_eq!(
-        limits.monthly.durable_storage_gb_month.monthly_amount,
-        Some(7)
-    );
+    assert_eq!(limits.monthly.durable_storage_gb_month.plan_amount, Some(7));
     assert_eq!(limits.monthly.durable_storage_gb_month.usage, Some(1.0));
     assert_eq!(limits.monthly.durable_storage_gb_month.remaining, Some(6.0));
     assert_eq!(
-        limits.monthly.ephemeral_storage_gb_month.monthly_amount,
+        limits.monthly.ephemeral_storage_gb_month.plan_amount,
         Some(11)
     );
     assert_eq!(limits.monthly.ephemeral_storage_gb_month.usage, Some(2.0));
@@ -310,6 +313,8 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         limits.max_storage_per_agent,
         StorageLimit {
             enabled: false,
+            unit: PerAgentLimitUnit::Bytes,
+            active_admin_grant: None,
             effective_value: None,
             plan_default: None,
             override_value: None,
@@ -324,7 +329,8 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     assert!(output.stdout_contains("Monthly usage mode"));
     assert!(output.stdout_contains("hardLimit"));
     assert!(output.stdout_contains("Overage allowed by plan"));
-    assert!(output.stdout_contains("Monthly compute amount:"));
+    assert!(output.stdout_contains("Monthly compute plan amount:"));
+    assert!(output.stdout_contains("Monthly compute resolved monthly amount:"));
     assert!(output.stdout_contains("5 GCU"));
     assert!(output.stdout_contains("Monthly compute usage:"));
     assert!(output.stdout_contains("1.5 GCU"));

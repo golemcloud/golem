@@ -19,7 +19,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension,
     BYTE_NANOSECONDS_PER_GB_SECOND, MonthlyPlanAmountError, MonthlyPlanAmounts, MonthlyUsageMode,
-    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, StorageLimit,
+    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, ResolvedMonthlyPlanAmounts,
+    StorageLimit,
 };
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::{MonthlyResourcePolicy, ResourceLimits};
@@ -123,6 +124,7 @@ pub struct AccountUsage {
     pub metering: Option<ResourceUsageMetering>,
     pub monthly_usage_mode: MonthlyUsageMode,
     pub monthly_usage_mode_revision: u64,
+    pub monthly_policy_revision: u64,
     pub monthly_memory_byte_nanoseconds_remainder: u128,
     pub monthly_durable_storage_byte_nanoseconds_remainder: u128,
     pub monthly_ephemeral_storage_byte_nanoseconds_remainder: u128,
@@ -132,10 +134,32 @@ pub struct AccountUsage {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MonthlyUsageAttribution {
-    pub revision: u64,
+    pub policy_revision: u64,
     pub memory_byte_nanoseconds_remainder: u64,
     pub durable_storage_byte_nanoseconds_remainder: u64,
     pub ephemeral_storage_byte_nanoseconds_remainder: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonthlyPolicySnapshot {
+    pub mode: MonthlyUsageMode,
+    pub resolved: ResolvedMonthlyPlanAmounts,
+}
+
+pub fn exact_usage_delta(whole: i64, remainder: u64, units_per_whole: u128) -> i128 {
+    (whole as i128)
+        .saturating_mul(units_per_whole.min(i128::MAX as u128) as i128)
+        .saturating_add(remainder as i128)
+}
+
+pub fn billable_excess_delta(baseline: u128, allowance: u128, delta: i128) -> i128 {
+    let baseline = baseline.min(i128::MAX as u128) as i128;
+    let allowance = allowance.min(i128::MAX as u128) as i128;
+    let final_usage = baseline.saturating_add(delta).max(0);
+    final_usage
+        .saturating_sub(allowance)
+        .max(0)
+        .saturating_sub(baseline.saturating_sub(allowance).max(0))
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
@@ -219,6 +243,29 @@ impl AccountUsagePlan {
             max_memory_per_worker: self.max_memory_grant_value.as_ref().map(NumericU64::get),
             max_disk_space_per_worker: self.storage_grant_value.as_ref().map(NumericU64::get),
         }
+    }
+
+    pub fn monthly_policy_snapshot(&self) -> RepoResult<MonthlyPolicySnapshot> {
+        let grants = self.admin_grant_values();
+        Ok(MonthlyPolicySnapshot {
+            mode: self.monthly_usage_mode()?,
+            resolved: MonthlyPlanAmounts {
+                compute_gcu: grants
+                    .monthly_compute_gcu
+                    .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
+                memory_gb_seconds: grants
+                    .monthly_memory_gb_seconds
+                    .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
+                durable_storage_gb_month: grants
+                    .monthly_durable_storage_gb_month
+                    .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
+                ephemeral_storage_gb_month: grants
+                    .monthly_ephemeral_storage_gb_month
+                    .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
+            }
+            .resolve()
+            .map_err(|error| RepoError::InternalError(error.into()))?,
+        })
     }
 
     pub fn admin_grants(&self) -> RepoResult<Vec<AdminResourceGrant>> {
@@ -306,6 +353,10 @@ pub struct AccountUsageRecord {
     pub ephemeral_storage_byte_seconds: u64,
     pub compute_fuel: u64,
     pub memory_gb_seconds: u64,
+    pub allow_overage_compute_fuel: u64,
+    pub allow_overage_memory_byte_nanoseconds: u128,
+    pub allow_overage_durable_storage_byte_nanoseconds: u128,
+    pub allow_overage_ephemeral_storage_byte_nanoseconds: u128,
     pub metering: Option<ResourceUsageMetering>,
 }
 
@@ -457,6 +508,10 @@ impl AccountUsageRecord {
             ephemeral_storage_byte_seconds: 0,
             compute_fuel: 0,
             memory_gb_seconds: 0,
+            allow_overage_compute_fuel: 0,
+            allow_overage_memory_byte_nanoseconds: 0,
+            allow_overage_durable_storage_byte_nanoseconds: 0,
+            allow_overage_ephemeral_storage_byte_nanoseconds: 0,
             metering: None,
         }
     }
@@ -497,6 +552,22 @@ impl AccountUsageRecord {
 }
 
 impl AccountUsage {
+    pub fn monthly_policy_snapshot(&self) -> Result<MonthlyPolicySnapshot, MonthlyPlanAmountError> {
+        Ok(MonthlyPolicySnapshot {
+            mode: self.monthly_usage_mode,
+            resolved: self.monthly_plan_amounts().resolve()?,
+        })
+    }
+
+    pub fn plan_row_monthly_amounts(&self) -> MonthlyPlanAmounts {
+        MonthlyPlanAmounts {
+            compute_gcu: self.plan.monthly_compute_gcu.get(),
+            memory_gb_seconds: self.plan.monthly_memory_gb_seconds.get(),
+            durable_storage_gb_month: self.plan.monthly_durable_storage_gb_month.get(),
+            ephemeral_storage_gb_month: self.plan.monthly_ephemeral_storage_gb_month.get(),
+        }
+    }
+
     pub fn monthly_plan_amounts(&self) -> MonthlyPlanAmounts {
         MonthlyPlanAmounts {
             compute_gcu: self
@@ -593,6 +664,7 @@ impl AccountUsage {
 
         Ok(ResourceLimits {
             monthly_usage_mode_revision: self.monthly_usage_mode_revision,
+            monthly_policy_revision: self.monthly_policy_revision,
             monthly_policy: MonthlyResourcePolicy {
                 period: AccountUsagePeriod {
                     year: self.year,
@@ -632,8 +704,8 @@ impl AccountUsage {
 mod tests {
     use super::{
         AccountUsage, AccountUsageRecord, AdminResourceGrantValues, MonthlyUsageModeStateRecord,
-        MonthlyUsageModeTransitionRecord, UsageType, monthly_usage_mode,
-        monthly_usage_mode_transition_source,
+        MonthlyUsageModeTransitionRecord, UsageType, billable_excess_delta, exact_usage_delta,
+        monthly_usage_mode, monthly_usage_mode_transition_source,
     };
     use crate::repo::model::plan::PlanRecord;
     use chrono::{DateTime, Utc};
@@ -691,6 +763,19 @@ mod tests {
     }
 
     #[test]
+    fn exact_usage_delta_preserves_fractional_refunds() {
+        assert_eq!(exact_usage_delta(1, 250, 1_000), 1_250);
+        assert_eq!(exact_usage_delta(-1, 250, 1_000), -750);
+    }
+
+    #[test]
+    fn billable_excess_delta_crosses_and_refunds_the_threshold() {
+        assert_eq!(billable_excess_delta(90, 100, 20), 10);
+        assert_eq!(billable_excess_delta(150, 100, -100), -50);
+        assert_eq!(billable_excess_delta(90, 100, -20), 0);
+    }
+
+    #[test]
     fn resource_limits_preserve_storage_whole_seconds_and_remainders() {
         let plan = PlanRecord {
             plan_id: Uuid::new_v4(),
@@ -738,6 +823,7 @@ mod tests {
             metering: None,
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             monthly_memory_byte_nanoseconds_remainder: 0,
             monthly_durable_storage_byte_nanoseconds_remainder: 400_000_000,
             monthly_ephemeral_storage_byte_nanoseconds_remainder: 250_000_000,

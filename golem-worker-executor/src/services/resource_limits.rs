@@ -158,7 +158,8 @@ impl CapturedUsageUpdate {
 
 #[derive(Debug)]
 struct UsageRevisionState {
-    current_revision: u64,
+    current_policy_revision: u64,
+    current_mode_revision: u64,
     current_period: AccountUsagePeriod,
     pending: VecDeque<CapturedUsageUpdate>,
     monthly_policy: Option<MonthlyPolicyGate>,
@@ -653,7 +654,7 @@ impl AtomicResourceEntry {
         max_disk_space: u64,
         max_concurrent_agents_per_executor: u64,
     ) -> Self {
-        Self::new_with_all_limits_metering_policy_and_revision(
+        Self::new_with_all_limits_metering_policy_and_revisions(
             monthly_policy,
             max_memory,
             max_table_elements,
@@ -665,6 +666,7 @@ impl AtomicResourceEntry {
             max_concurrent_agents_per_executor,
             Self::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             ResourceUsageMeteringConfig::all_enabled(),
+            0,
             0,
             0,
         )
@@ -766,7 +768,7 @@ impl AtomicResourceEntry {
         metering: ResourceUsageMeteringConfig,
         monthly_usage_mode_revision: u64,
     ) -> Self {
-        Self::new_with_all_limits_metering_policy_and_revision(
+        Self::new_with_all_limits_metering_policy_and_revisions(
             MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
@@ -789,12 +791,13 @@ impl AtomicResourceEntry {
             oplog_writes_per_second,
             metering,
             monthly_usage_mode_revision,
+            monthly_usage_mode_revision,
             0,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_with_all_limits_metering_policy_and_revision(
+    fn new_with_all_limits_metering_policy_and_revisions(
         monthly_policy: MonthlyResourcePolicy,
         max_memory: usize,
         max_table_elements: usize,
@@ -807,12 +810,14 @@ impl AtomicResourceEntry {
         oplog_writes_per_second: u64,
         metering: ResourceUsageMeteringConfig,
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         refresh_generation: u64,
     ) -> Self {
         Self {
             metering,
             usage_revision_state: Mutex::new(UsageRevisionState {
-                current_revision: monthly_usage_mode_revision,
+                current_policy_revision: monthly_policy_revision,
+                current_mode_revision: monthly_usage_mode_revision,
                 current_period: monthly_policy.period,
                 pending: VecDeque::new(),
                 monthly_policy: (metering.compute || metering.memory || metering.filesystem)
@@ -1002,7 +1007,7 @@ impl AtomicResourceEntry {
         }
         let key = (
             revision_state.current_period,
-            revision_state.current_revision,
+            revision_state.current_policy_revision,
         );
         let gate = revision_state
             .monthly_policy
@@ -1025,7 +1030,7 @@ impl AtomicResourceEntry {
         }
         let key = (
             revision_state.current_period,
-            revision_state.current_revision,
+            revision_state.current_policy_revision,
         );
         let gate = revision_state
             .monthly_policy
@@ -1178,7 +1183,7 @@ impl AtomicResourceEntry {
         if self.metering.compute {
             self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
         }
-        let revision = revision_state.current_revision;
+        let revision = revision_state.current_policy_revision;
         let period = revision_state.current_period;
         let generation = revision_state
             .monthly_policy
@@ -1330,7 +1335,7 @@ impl AtomicResourceEntry {
                 && gate.available_fuel.is_some()
                 && self.effective_fuel_with_revision_state(&revision_state) == 0
                 && generation.is_none_or(|generation| gate.settled_generation > generation))
-            .then_some((revision_state.current_revision, gate.period))
+            .then_some((revision_state.current_policy_revision, gate.period))
         })
     }
 
@@ -1350,7 +1355,11 @@ impl AtomicResourceEntry {
     }
 
     pub fn return_fuel(&self, amount: u64) {
-        let revision = self.usage_revision_state.lock().unwrap().current_revision;
+        let revision = self
+            .usage_revision_state
+            .lock()
+            .unwrap()
+            .current_policy_revision;
         self.return_fuel_for_revision(amount, revision);
     }
 
@@ -1374,7 +1383,11 @@ impl AtomicResourceEntry {
     }
 
     pub fn record_overdraft_debt(&self, amount: u64) {
-        let revision = self.usage_revision_state.lock().unwrap().current_revision;
+        let revision = self
+            .usage_revision_state
+            .lock()
+            .unwrap()
+            .current_policy_revision;
         self.record_overdraft_debt_for_revision(amount, revision);
     }
 
@@ -1401,21 +1414,25 @@ impl AtomicResourceEntry {
     ) {
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         assert!(
-            revision <= revision_state.current_revision,
+            revision <= revision_state.current_policy_revision,
             "fuel usage references future revision {revision}; current revision is {}",
-            revision_state.current_revision
+            revision_state.current_policy_revision
         );
-        if revision == revision_state.current_revision && period == revision_state.current_period {
+        if revision == revision_state.current_policy_revision
+            && period == revision_state.current_period
+        {
             self.delta
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(fuel_delta))
                 })
                 .ok();
         } else {
+            let monthly_usage_mode_revision = revision_state.current_mode_revision;
             revision_state.pending.push_back(CapturedUsageUpdate {
                 update: ResourceUsageUpdate {
                     period,
-                    monthly_usage_mode_revision: revision,
+                    monthly_usage_mode_revision,
+                    monthly_policy_revision: revision,
                     memory_byte_nanoseconds_remainder: 0,
                     durable_storage_byte_nanoseconds_remainder: 0,
                     ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -1558,7 +1575,8 @@ impl AtomicResourceEntry {
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         if period < revision_state.current_period {
             let captured = self.capture_historical_byte_time_settlements(
-                revision_state.current_revision,
+                revision_state.current_mode_revision,
+                revision_state.current_policy_revision,
                 period,
                 mode,
                 memory,
@@ -1589,6 +1607,7 @@ impl AtomicResourceEntry {
     fn capture_historical_byte_time_settlements(
         &self,
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         period: AccountUsagePeriod,
         mode: AgentMode,
         memory: ByteTimeSettlement,
@@ -1600,16 +1619,18 @@ impl AtomicResourceEntry {
         let mut batches = Vec::new();
         while accumulator.is_active() {
             let captured = accumulator.capture(false);
-            batches.push(self.captured_byte_time_update(
+            batches.push(self.captured_byte_time_update_with_policy_revision(
                 monthly_usage_mode_revision,
+                monthly_policy_revision,
                 period,
                 captured,
             ));
         }
         let remainder = accumulator.capture(true);
         if !remainder.is_zero() {
-            batches.push(self.captured_byte_time_update(
+            batches.push(self.captured_byte_time_update_with_policy_revision(
                 monthly_usage_mode_revision,
+                monthly_policy_revision,
                 period,
                 remainder,
             ));
@@ -1617,9 +1638,10 @@ impl AtomicResourceEntry {
         batches
     }
 
-    fn captured_byte_time_update(
+    fn captured_byte_time_update_with_policy_revision(
         &self,
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         period: AccountUsagePeriod,
         captured: CapturedAccountUsage,
     ) -> CapturedUsageUpdate {
@@ -1627,6 +1649,7 @@ impl AtomicResourceEntry {
             update: ResourceUsageUpdate {
                 period,
                 monthly_usage_mode_revision,
+                monthly_policy_revision,
                 memory_byte_nanoseconds_remainder: captured.memory_byte_nanoseconds_remainder,
                 durable_storage_byte_nanoseconds_remainder: captured
                     .durable_storage_byte_nanoseconds_remainder,
@@ -1757,7 +1780,8 @@ impl AtomicResourceEntry {
         }
 
         let captured = self.capture_current_usage(
-            revision_state.current_revision,
+            revision_state.current_mode_revision,
+            revision_state.current_policy_revision,
             revision_state.current_period,
             false,
         );
@@ -1768,6 +1792,7 @@ impl AtomicResourceEntry {
     fn capture_current_usage(
         &self,
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         period: AccountUsagePeriod,
         include_remainders: bool,
     ) -> CapturedUsageUpdate {
@@ -1782,8 +1807,12 @@ impl AtomicResourceEntry {
             .map_or_else(CapturedAccountUsage::default, |accumulator| {
                 accumulator.lock().unwrap().capture(include_remainders)
             });
-        let mut captured =
-            self.captured_byte_time_update(monthly_usage_mode_revision, period, captured_usage);
+        let mut captured = self.captured_byte_time_update_with_policy_revision(
+            monthly_usage_mode_revision,
+            monthly_policy_revision,
+            period,
+            captured_usage,
+        );
         captured.update.fuel_delta = fuel_delta;
         captured.update.http_call_count_delta = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
         captured.update.rpc_call_count_delta = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
@@ -1860,7 +1889,7 @@ impl AtomicResourceEntry {
         revision_state: &mut UsageRevisionState,
         new_revision: u64,
     ) {
-        if revision_state.current_revision >= new_revision {
+        if revision_state.current_policy_revision >= new_revision {
             return;
         }
 
@@ -1876,14 +1905,16 @@ impl AtomicResourceEntry {
                 break;
             }
             let captured = self.capture_current_usage(
-                revision_state.current_revision,
+                revision_state.current_mode_revision,
+                revision_state.current_policy_revision,
                 revision_state.current_period,
                 false,
             );
             revision_state.pending.push_back(captured);
         }
         let captured = self.capture_current_usage(
-            revision_state.current_revision,
+            revision_state.current_mode_revision,
+            revision_state.current_policy_revision,
             revision_state.current_period,
             true,
         );
@@ -1893,7 +1924,7 @@ impl AtomicResourceEntry {
         {
             revision_state.pending.push_back(captured);
         }
-        revision_state.current_revision = new_revision;
+        revision_state.current_policy_revision = new_revision;
     }
 
     fn update_usage_period_locked(
@@ -1917,14 +1948,16 @@ impl AtomicResourceEntry {
                 break;
             }
             let captured = self.capture_current_usage(
-                revision_state.current_revision,
+                revision_state.current_mode_revision,
+                revision_state.current_policy_revision,
                 revision_state.current_period,
                 false,
             );
             revision_state.pending.push_back(captured);
         }
         let captured = self.capture_current_usage(
-            revision_state.current_revision,
+            revision_state.current_mode_revision,
+            revision_state.current_policy_revision,
             revision_state.current_period,
             true,
         );
@@ -2017,6 +2050,7 @@ impl AtomicResourceEntry {
         delivered
     }
 
+    #[cfg(test)]
     fn apply_monthly_snapshot(
         &self,
         generation: u64,
@@ -2024,12 +2058,30 @@ impl AtomicResourceEntry {
         monthly_usage_mode_revision: u64,
         usage_update_applied: bool,
     ) -> bool {
+        self.apply_monthly_snapshot_with_policy_revision(
+            generation,
+            monthly_policy,
+            monthly_usage_mode_revision,
+            monthly_usage_mode_revision,
+            usage_update_applied,
+        )
+    }
+
+    fn apply_monthly_snapshot_with_policy_revision(
+        &self,
+        generation: u64,
+        monthly_policy: MonthlyResourcePolicy,
+        monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
+        usage_update_applied: bool,
+    ) -> bool {
         self.flush_active_resource_usage();
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         let current_period = revision_state.current_period;
-        let current_revision = revision_state.current_revision;
+        let current_policy_revision = revision_state.current_policy_revision;
         if revision_state.monthly_policy.is_none() {
-            self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
+            self.update_usage_revision_locked(&mut revision_state, monthly_policy_revision);
+            revision_state.current_mode_revision = monthly_usage_mode_revision;
             self.update_usage_period_locked(&mut revision_state, monthly_policy.period);
             return true;
         }
@@ -2046,7 +2098,7 @@ impl AtomicResourceEntry {
             }
             return false;
         }
-        if monthly_usage_mode_revision < current_revision {
+        if monthly_policy_revision < current_policy_revision {
             let retry =
                 retain_unaccepted_delivery(gate, delivered, current_period, usage_update_applied);
             gate.settled_generation = generation;
@@ -2056,7 +2108,8 @@ impl AtomicResourceEntry {
             return false;
         }
 
-        self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
+        self.update_usage_revision_locked(&mut revision_state, monthly_policy_revision);
+        revision_state.current_mode_revision = monthly_usage_mode_revision;
         self.update_usage_period_locked(&mut revision_state, monthly_policy.period);
         let gate = revision_state
             .monthly_policy
@@ -2194,6 +2247,7 @@ impl AtomicResourceEntry {
         let update = ResourceUsageUpdate {
             period,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -2794,10 +2848,11 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            if !entry.apply_monthly_snapshot(
+            if !entry.apply_monthly_snapshot_with_policy_revision(
                 refresh_generation,
                 updated_limits.monthly_policy.clone(),
                 updated_limits.monthly_usage_mode_revision,
+                updated_limits.monthly_policy_revision,
                 updated_limits.usage_update_applied,
             ) {
                 return;
@@ -2889,7 +2944,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                 let refresh_generation = self.next_refresh_generation();
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                    AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
                         fetched.monthly_policy,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
@@ -2902,6 +2957,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.oplog_writes_per_second,
                         self.metering,
                         fetched.monthly_usage_mode_revision,
+                        fetched.monthly_policy_revision,
                         refresh_generation,
                     ),
                 ))
@@ -3070,7 +3126,7 @@ mod tests {
         mode: MonthlyUsageMode,
         available_fuel: u64,
     ) -> AtomicResourceEntry {
-        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
             MonthlyResourcePolicy {
                 period,
                 mode,
@@ -3097,6 +3153,7 @@ mod tests {
                 filesystem: false,
             },
             7,
+            7,
             0,
         )
     }
@@ -3106,7 +3163,7 @@ mod tests {
         mode: MonthlyUsageMode,
         available_memory_gb_seconds: u64,
     ) -> AtomicResourceEntry {
-        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
             memory_policy(period, mode, available_memory_gb_seconds),
             usize::MAX,
             usize::MAX,
@@ -3123,6 +3180,7 @@ mod tests {
                 filesystem: false,
             },
             7,
+            7,
             0,
         )
     }
@@ -3133,7 +3191,7 @@ mod tests {
         available_durable_storage_byte_seconds: u64,
         available_ephemeral_storage_byte_seconds: u64,
     ) -> AtomicResourceEntry {
-        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
             storage_policy(
                 period,
                 mode,
@@ -3154,6 +3212,7 @@ mod tests {
                 memory: false,
                 filesystem: true,
             },
+            7,
             7,
             0,
         )
@@ -3367,7 +3426,11 @@ mod tests {
         entry.update_usage_revision(3);
 
         assert_eq!(
-            entry.usage_revision_state.lock().unwrap().current_revision,
+            entry
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .current_policy_revision,
             7
         );
     }
@@ -3386,7 +3449,8 @@ mod tests {
             let mut revision_state = entry.usage_revision_state.lock().unwrap();
             revision_state.current_period = current_period;
             let gate = revision_state.monthly_policy.as_mut().unwrap();
-            let captured = entry.captured_byte_time_update(
+            let captured = entry.captured_byte_time_update_with_policy_revision(
+                7,
                 7,
                 period,
                 CapturedAccountUsage {
@@ -3414,7 +3478,8 @@ mod tests {
             let mut revision_state = entry.usage_revision_state.lock().unwrap();
             revision_state.current_period = current_period;
             let gate = revision_state.monthly_policy.as_mut().unwrap();
-            let mut captured = entry.captured_byte_time_update(
+            let mut captured = entry.captured_byte_time_update_with_policy_revision(
+                7,
                 7,
                 period,
                 CapturedAccountUsage {
@@ -4176,7 +4241,7 @@ mod tests {
         config.resource_usage_metering.filesystem = true;
         config.filesystem_storage.managed_xfs_root_dir = None;
         let metering = config.effective_resource_usage_metering();
-        let entry = AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+        let entry = AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
             MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
@@ -4198,6 +4263,7 @@ mod tests {
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
             AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             metering,
+            0,
             0,
             0,
         );
@@ -4357,7 +4423,7 @@ mod tests {
                             }
                         }
                         let entry =
-                            AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                            AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
                                 policy,
                                 4_096,
                                 usize::MAX,
@@ -4369,6 +4435,7 @@ mod tests {
                                 AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
                                 AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                                 metering,
+                                7,
                                 7,
                                 0,
                             );
@@ -4397,7 +4464,7 @@ mod tests {
                     }
 
                     let accounting_entry =
-                        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
                             MonthlyResourcePolicy {
                                 period,
                                 mode: MonthlyUsageMode::HardLimit,
@@ -4419,6 +4486,7 @@ mod tests {
                             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
                             AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                             metering,
+                            7,
                             7,
                             0,
                         );
@@ -5706,7 +5774,7 @@ mod tests {
             true,
         ));
         let revision_state = entry.usage_revision_state.lock().unwrap();
-        assert_eq!(revision_state.current_revision, 8);
+        assert_eq!(revision_state.current_policy_revision, 8);
         assert_eq!(
             revision_state.monthly_policy.as_ref().unwrap().mode,
             MonthlyUsageMode::AllowOverage
@@ -5779,7 +5847,7 @@ mod tests {
 
         let revision_state = entry.usage_revision_state.lock().unwrap();
         let gate = revision_state.monthly_policy.as_ref().unwrap();
-        assert_eq!(revision_state.current_revision, 8);
+        assert_eq!(revision_state.current_policy_revision, 8);
         assert_eq!(gate.mode, MonthlyUsageMode::HardLimit);
         assert_eq!(
             gate.available_durable_storage_byte_nanoseconds,
@@ -6652,6 +6720,7 @@ mod tests {
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
         });
 
         let svc = make_grpc(mock.clone());
@@ -6679,6 +6748,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -6714,6 +6784,7 @@ mod tests {
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
         });
         let mut updated = HashMap::new();
         updated.insert(
@@ -6731,6 +6802,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -6839,6 +6911,7 @@ mod tests {
                     oplog_writes_per_second: u64::MAX,
                     usage_update_applied: true,
                     monthly_usage_mode_revision: 0,
+                    monthly_policy_revision: 0,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
                 delayed_batch_updates: Mutex::new(VecDeque::new()),
@@ -7137,6 +7210,7 @@ mod tests {
             oplog_writes_per_second: u64::MAX,
             usage_update_applied: true,
             monthly_usage_mode_revision,
+            monthly_policy_revision: monthly_usage_mode_revision,
         }
     }
 
@@ -7540,6 +7614,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7584,6 +7659,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7628,11 +7704,11 @@ mod tests {
     }
 
     #[test]
-    async fn registry_response_revision_is_used_by_the_next_batch() {
+    async fn registry_policy_revision_is_used_by_the_next_batch_without_changing_mode_revision() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
         let mut current_limits = mock.get_limits_result.lock().unwrap().clone().unwrap();
-        current_limits.monthly_usage_mode_revision = 1;
+        current_limits.monthly_policy_revision = 1;
         let mut updated = HashMap::new();
         updated.insert(id, current_limits);
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7642,10 +7718,12 @@ mod tests {
         assert!(entry.borrow_fuel(100));
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
         assert_eq!(mock.last_batch_update(id).monthly_usage_mode_revision, 0);
+        assert_eq!(mock.last_batch_update(id).monthly_policy_revision, 0);
 
         assert!(entry.borrow_fuel(100));
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
-        assert_eq!(mock.last_batch_update(id).monthly_usage_mode_revision, 1);
+        assert_eq!(mock.last_batch_update(id).monthly_usage_mode_revision, 0);
+        assert_eq!(mock.last_batch_update(id).monthly_policy_revision, 1);
     }
 
     #[test]
@@ -7669,6 +7747,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7705,6 +7784,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7831,6 +7911,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7865,6 +7946,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7926,6 +8008,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -7967,6 +8050,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -8042,6 +8126,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -8076,6 +8161,7 @@ mod tests {
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
         });
         mock
     }
@@ -8128,6 +8214,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -8164,6 +8251,7 @@ mod tests {
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

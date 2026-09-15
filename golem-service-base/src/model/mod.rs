@@ -154,6 +154,7 @@ pub struct MonthlyResourcePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
     pub monthly_usage_mode_revision: u64,
+    pub monthly_policy_revision: u64,
     pub monthly_policy: MonthlyResourcePolicy,
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
@@ -196,6 +197,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
         let monthly_policy = value.monthly_policy;
         Self {
             monthly_usage_mode_revision: value.monthly_usage_mode_revision,
+            monthly_policy_revision: value.monthly_policy_revision,
             monthly_policy: Some(
                 golem_api_grpc::proto::golem::common::MonthlyResourcePolicy {
                     period: Some(golem_api_grpc::proto::golem::common::AccountUsagePeriod {
@@ -292,6 +294,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
 
         Ok(Self {
             monthly_usage_mode_revision: value.monthly_usage_mode_revision,
+            monthly_policy_revision: value.monthly_policy_revision,
             monthly_policy: MonthlyResourcePolicy {
                 period: golem_common::model::account_usage::AccountUsagePeriod {
                     year: period.year,

@@ -310,6 +310,16 @@ async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
 }
 
 #[test]
+async fn test_monthly_policy_revision_tracks_allowance_changes(deps: &Deps) {
+    crate::repo::common::test_monthly_policy_revision_tracks_allowance_changes(deps).await;
+}
+
+#[test]
+async fn test_billable_excess_preserves_fractional_usage_and_refunds(deps: &Deps) {
+    crate::repo::common::test_billable_excess_preserves_fractional_usage_and_refunds(deps).await;
+}
+
+#[test]
 async fn test_fractional_memory_attribution_reduces_available_capacity(deps: &Deps) {
     crate::repo::common::test_fractional_memory_attribution_reduces_available_capacity(deps).await;
 }

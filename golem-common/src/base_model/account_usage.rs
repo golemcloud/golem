@@ -161,6 +161,20 @@ pub enum MonthlyStorageUnit {
     GbMonth,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+pub enum PerAgentLimitUnit {
+    #[serde(rename = "bytes")]
+    #[cfg_attr(feature = "full", oai(rename = "bytes"))]
+    Bytes,
+}
+
+impl Display for PerAgentLimitUnit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("bytes")
+    }
+}
+
 impl Display for MonthlyStorageUnit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("GB-month")
@@ -201,11 +215,18 @@ declare_structs! {
     pub struct MonthlyComputeLimit {
         pub metering: MeteringStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub monthly_amount: Option<u64>,
+        pub plan_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub active_admin_grant: Option<AdminResourceGrant>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub resolved_monthly_amount: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub usage: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub remaining: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// Usage above the applied revision's resolved allowance that accrued with overage enabled.
+        pub allow_overage_usage: Option<f64>,
         pub unit: MonthlyComputeUnit,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub behavior: Option<MonthlyLimitBehavior>,
@@ -215,11 +236,18 @@ declare_structs! {
     pub struct MonthlyMemoryLimit {
         pub metering: MeteringStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub monthly_amount: Option<u64>,
+        pub plan_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub active_admin_grant: Option<AdminResourceGrant>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub resolved_monthly_amount: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub usage: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub remaining: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// Usage above the applied revision's resolved allowance that accrued with overage enabled.
+        pub allow_overage_usage: Option<f64>,
         pub unit: MonthlyMemoryUnit,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub behavior: Option<MonthlyLimitBehavior>,
@@ -229,11 +257,18 @@ declare_structs! {
     pub struct MonthlyStorageLimit {
         pub metering: MeteringStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub monthly_amount: Option<u64>,
+        pub plan_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub active_admin_grant: Option<AdminResourceGrant>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub resolved_monthly_amount: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub usage: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub remaining: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// Usage above the applied revision's resolved allowance that accrued with overage enabled.
+        pub allow_overage_usage: Option<f64>,
         pub unit: MonthlyStorageUnit,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub behavior: Option<MonthlyLimitBehavior>,
@@ -266,7 +301,6 @@ declare_structs! {
         pub overage_allowed_by_plan: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub latest_owner_transition: Option<MonthlyUsageModeTransition>,
-        pub admin_grants: Vec<AdminResourceGrant>,
         pub monthly: MonthlyResourceLimits,
         pub max_memory_per_agent: MemoryLimit,
         pub max_storage_per_agent: StorageLimit,
@@ -276,6 +310,9 @@ declare_structs! {
     #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
     pub struct StorageLimit {
         pub enabled: bool,
+        pub unit: PerAgentLimitUnit,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub active_admin_grant: Option<AdminResourceGrant>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub effective_value: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,7 +331,11 @@ declare_structs! {
     }
 
     #[derive(Eq)]
+    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
     pub struct MemoryLimit {
+        pub unit: PerAgentLimitUnit,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub active_admin_grant: Option<AdminResourceGrant>,
         pub effective_value: u64,
         pub plan_default: u64,
         pub override_value: Option<u64>,
@@ -307,6 +348,7 @@ declare_structs! {
     }
 
     #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+    #[derive(Eq)]
     pub struct AdminResourceGrant {
         pub dimension: AdminResourceGrantDimension,
         pub value: u64,
@@ -416,6 +458,8 @@ impl StorageLimit {
                 .filter(|value| (plan_default..=ceiling).contains(value));
             Self {
                 enabled: true,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: Some(override_value.unwrap_or(plan_default)),
                 plan_default: Some(plan_default),
                 override_value,
@@ -426,6 +470,8 @@ impl StorageLimit {
         } else {
             Self {
                 enabled: false,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: None,
                 plan_default: None,
                 override_value: None,
@@ -464,37 +510,48 @@ impl poem_openapi::types::Example for AccountResourcePolicy {
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             overage_allowed_by_plan: false,
             latest_owner_transition: None,
-            admin_grants: Vec::new(),
             monthly: MonthlyResourceLimits {
                 compute_gcu: MonthlyComputeLimit {
                     metering: MeteringStatus::Enabled,
-                    monthly_amount: Some(100),
+                    plan_amount: Some(100),
+                    active_admin_grant: None,
+                    resolved_monthly_amount: Some(100),
                     usage: Some(25.0),
                     remaining: Some(75.0),
+                    allow_overage_usage: Some(0.0),
                     unit: MonthlyComputeUnit::Gcu,
                     behavior: Some(MonthlyLimitBehavior::HardLimit),
                 },
                 memory_gb_seconds: MonthlyMemoryLimit {
                     metering: MeteringStatus::Enabled,
-                    monthly_amount: Some(10_000),
+                    plan_amount: Some(10_000),
+                    active_admin_grant: None,
+                    resolved_monthly_amount: Some(10_000),
                     usage: Some(2_500),
                     remaining: Some(7_500),
+                    allow_overage_usage: Some(0.0),
                     unit: MonthlyMemoryUnit::GbSeconds,
                     behavior: Some(MonthlyLimitBehavior::HardLimit),
                 },
                 durable_storage_gb_month: MonthlyStorageLimit {
                     metering: MeteringStatus::Enabled,
-                    monthly_amount: Some(50),
+                    plan_amount: Some(50),
+                    active_admin_grant: None,
+                    resolved_monthly_amount: Some(50),
                     usage: Some(12.5),
                     remaining: Some(37.5),
+                    allow_overage_usage: Some(0.0),
                     unit: MonthlyStorageUnit::GbMonth,
                     behavior: Some(MonthlyLimitBehavior::HardLimit),
                 },
                 ephemeral_storage_gb_month: MonthlyStorageLimit {
                     metering: MeteringStatus::Enabled,
-                    monthly_amount: Some(25),
+                    plan_amount: Some(25),
+                    active_admin_grant: None,
+                    resolved_monthly_amount: Some(25),
                     usage: Some(5.0),
                     remaining: Some(20.0),
+                    allow_overage_usage: Some(0.0),
                     unit: MonthlyStorageUnit::GbMonth,
                     behavior: Some(MonthlyLimitBehavior::HardLimit),
                 },
@@ -542,13 +599,42 @@ impl poem_openapi::types::Example for AdminResourceGrantChange {
 #[cfg(feature = "full")]
 impl poem_openapi::types::Example for StorageLimit {
     fn example() -> Self {
-        Self::resolve(
+        let mut limit = Self::resolve(
             true,
             1024 * 1024 * 1024,
             None,
             10 * 1024 * 1024 * 1024,
             true,
-        )
+        );
+        limit.effective_value = Some(2 * 1024 * 1024 * 1024);
+        limit.active_admin_grant = Some(AdminResourceGrant {
+            dimension: AdminResourceGrantDimension::MaxStoragePerAgent,
+            value: 2 * 1024 * 1024 * 1024,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
+            granted_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            expires_at: None,
+        });
+        limit
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Example for MemoryLimit {
+    fn example() -> Self {
+        let mut limit = Self::resolve(1024 * 1024 * 1024, None, 10 * 1024 * 1024 * 1024, true);
+        limit.effective_value = 2 * 1024 * 1024 * 1024;
+        limit.active_admin_grant = Some(AdminResourceGrant {
+            dimension: AdminResourceGrantDimension::MaxMemoryPerAgent,
+            value: 2 * 1024 * 1024 * 1024,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
+            granted_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            expires_at: None,
+        });
+        limit
     }
 }
 
@@ -563,6 +649,8 @@ impl MemoryLimit {
             .filter(|_| user_configurable)
             .filter(|value| (plan_default..=ceiling).contains(value));
         Self {
+            unit: PerAgentLimitUnit::Bytes,
+            active_admin_grant: None,
             effective_value: override_value.unwrap_or(plan_default),
             plan_default,
             override_value,
@@ -645,9 +733,9 @@ mod tests {
         BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit,
         MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
         MonthlyPlanAmountError, MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode,
-        MonthlyUsageModeTransitionSource, PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts,
-        SetAdminResourceGrant, StorageLimit, StorageLimitDisabledReason, byte_seconds_to_gb_month,
-        fuel_to_gcu,
+        MonthlyUsageModeTransitionSource, PERIOD_FORMAT_ERROR, PerAgentLimitUnit,
+        ResolvedMonthlyPlanAmounts, SetAdminResourceGrant, StorageLimit,
+        StorageLimitDisabledReason, byte_seconds_to_gb_month, fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -687,6 +775,8 @@ mod tests {
         assert_eq!(
             MemoryLimit::resolve(100, Some(150), 200, true),
             MemoryLimit {
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: 150,
                 plan_default: 100,
                 override_value: Some(150),
@@ -705,6 +795,8 @@ mod tests {
         assert_eq!(
             MemoryLimit::resolve(100, Some(150), 200, false),
             MemoryLimit {
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: 100,
                 plan_default: 100,
                 override_value: None,
@@ -720,6 +812,8 @@ mod tests {
             StorageLimit::resolve(true, 100, Some(150), 200, true),
             StorageLimit {
                 enabled: true,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: Some(150),
                 plan_default: Some(100),
                 override_value: Some(150),
@@ -740,6 +834,8 @@ mod tests {
             StorageLimit::resolve(true, 100, Some(150), 200, false),
             StorageLimit {
                 enabled: true,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: Some(100),
                 plan_default: Some(100),
                 override_value: None,
@@ -758,6 +854,8 @@ mod tests {
             limit,
             StorageLimit {
                 enabled: false,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: None,
                 plan_default: None,
                 override_value: None,
@@ -778,7 +876,15 @@ mod tests {
             <StorageLimit as poem_openapi::types::ToJSON>::to_json(&example),
             Some(serde_json::json!({
                 "enabled": true,
-                "effectiveValue": 1024 * 1024 * 1024_u64,
+                "unit": "bytes",
+                "activeAdminGrant": {
+                    "dimension": "maxStoragePerAgent",
+                    "value": 2 * 1024 * 1024 * 1024_u64,
+                    "reason": "support",
+                    "actorAccountId": "00000000-0000-0000-0000-000000000002",
+                    "grantedAt": "2023-11-14T22:13:20+00:00",
+                },
+                "effectiveValue": 2 * 1024 * 1024 * 1024_u64,
                 "planDefault": 1024 * 1024 * 1024_u64,
                 "ceiling": 10 * 1024 * 1024 * 1024_u64,
                 "userConfigurable": true,
@@ -788,6 +894,7 @@ mod tests {
         let disabled = StorageLimit::resolve(false, 1, Some(2), 3, true);
         let expected = serde_json::json!({
             "enabled": false,
+            "unit": "bytes",
             "userConfigurable": false,
             "disabledReason": "managedFilesystemUnavailable",
         });
@@ -796,6 +903,22 @@ mod tests {
             Some(expected.clone())
         );
         assert_eq!(serde_json::to_value(disabled).unwrap(), expected);
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn memory_limit_openapi_example_uses_memory_grant() {
+        let example = <MemoryLimit as poem_openapi::types::Example>::example();
+        let json = <MemoryLimit as poem_openapi::types::ToJSON>::to_json(&example).unwrap();
+
+        assert_eq!(
+            json["activeAdminGrant"]["dimension"],
+            serde_json::json!("maxMemoryPerAgent")
+        );
+        assert_eq!(
+            json["effectiveValue"],
+            serde_json::json!(2 * 1024 * 1024 * 1024_u64)
+        );
     }
 
     #[cfg(feature = "full")]
@@ -819,6 +942,7 @@ mod tests {
         assert_eq!(MonthlyComputeUnit::Gcu.to_string(), "GCU");
         assert_eq!(MonthlyMemoryUnit::GbSeconds.to_string(), "GB-seconds");
         assert_eq!(MonthlyStorageUnit::GbMonth.to_string(), "GB-month");
+        assert_eq!(PerAgentLimitUnit::Bytes.to_string(), "bytes");
 
         assert_eq!(
             serde_json::to_value(MonthlyComputeUnit::Gcu).unwrap(),
@@ -831,6 +955,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(MonthlyStorageUnit::GbMonth).unwrap(),
             serde_json::json!("GB-month")
+        );
+        assert_eq!(
+            serde_json::to_value(PerAgentLimitUnit::Bytes).unwrap(),
+            serde_json::json!("bytes")
         );
 
         assert!(serde_json::from_str::<MonthlyComputeUnit>(r#""GB-seconds""#).is_err());

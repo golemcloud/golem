@@ -27,10 +27,12 @@ use chrono::{TimeZone, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, AccountUsageMetering, AccountUsageMetrics,
-    AccountUsagePeriod, MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit,
-    MonthlyLimitBehavior, MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits,
-    MonthlyStorageLimit, MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransition,
-    MonthlyUsageModeTransitionSource, byte_seconds_to_gb_month, fuel_to_gcu,
+    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension,
+    BYTE_NANOSECONDS_PER_GB_SECOND, BYTE_SECONDS_PER_GB_MONTH, MeteringStatus, MonthlyComputeLimit,
+    MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryLimit, MonthlyMemoryUnit,
+    MonthlyResourceLimits, MonthlyStorageLimit, MonthlyStorageUnit, MonthlyUsageMode,
+    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, byte_seconds_to_gb_month,
+    fuel_to_gcu,
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
@@ -48,6 +50,7 @@ use std::sync::Arc;
 pub struct ResourceUsageUpdate {
     pub period: AccountUsagePeriod,
     pub monthly_usage_mode_revision: u64,
+    pub monthly_policy_revision: u64,
     pub memory_byte_nanoseconds_remainder: u64,
     pub durable_storage_byte_nanoseconds_remainder: u64,
     pub ephemeral_storage_byte_nanoseconds_remainder: u64,
@@ -62,7 +65,7 @@ pub struct ResourceUsageUpdate {
 
 fn monthly_usage_attribution(update: &ResourceUsageUpdate) -> MonthlyUsageAttribution {
     MonthlyUsageAttribution {
-        revision: update.monthly_usage_mode_revision,
+        policy_revision: update.monthly_policy_revision,
         memory_byte_nanoseconds_remainder: update.memory_byte_nanoseconds_remainder,
         durable_storage_byte_nanoseconds_remainder: update
             .durable_storage_byte_nanoseconds_remainder,
@@ -254,8 +257,14 @@ impl AccountUsageService {
                     );
 
                     let monthly_usage_mode_revision = account_usage.monthly_usage_mode_revision;
+                    let monthly_policy_revision = account_usage.monthly_policy_revision;
                     let fallback_limits = account_usage.resource_limits().ok().map(|limits| {
-                        Self::fence_monthly_policy(limits, monthly_usage_mode_revision, true)
+                        Self::fence_monthly_policy(
+                            limits,
+                            monthly_usage_mode_revision,
+                            monthly_policy_revision,
+                            true,
+                        )
                     });
                     match self.account_usage_repo.add(&account_usage).await {
                         Ok(_) => match self.get_account_usage(account_id, None).await {
@@ -274,6 +283,7 @@ impl AccountUsageService {
                                         fallback_limits.clone().unwrap_or_else(|| {
                                             Self::fenced_resource_limits(
                                                 monthly_usage_mode_revision,
+                                                monthly_policy_revision,
                                                 true,
                                             )
                                         }),
@@ -283,7 +293,11 @@ impl AccountUsageService {
                             Err(AccountUsageError::AccountNotfound(_)) => {
                                 limits_of_updated_accounts.insert(
                                     account_id,
-                                    Self::fenced_resource_limits(monthly_usage_mode_revision, true),
+                                    Self::fenced_resource_limits(
+                                        monthly_usage_mode_revision,
+                                        monthly_policy_revision,
+                                        true,
+                                    ),
                                 );
                             }
                             Err(error) => {
@@ -297,6 +311,7 @@ impl AccountUsageService {
                                     fallback_limits.unwrap_or_else(|| {
                                         Self::fenced_resource_limits(
                                             monthly_usage_mode_revision,
+                                            monthly_policy_revision,
                                             true,
                                         )
                                     }),
@@ -316,7 +331,7 @@ impl AccountUsageService {
                     // We received an update for a deleted account. Return an empty
                     // set of limits to fence the executor more quickly.
                     limits_of_updated_accounts
-                        .insert(account_id, Self::fenced_resource_limits(0, false));
+                        .insert(account_id, Self::fenced_resource_limits(0, 0, false));
                 }
                 Err(error) => {
                     tracing::error!(
@@ -526,8 +541,9 @@ impl AccountUsageService {
         report: AccountUsageRecord,
         monthly_usage_mode: AccountMonthlyUsageMode,
     ) -> Result<AccountResourcePolicy, AccountUsageError> {
-        let monthly_amounts = account_usage.monthly_plan_amounts();
-        let resolved = monthly_amounts
+        let plan_amounts = account_usage.plan_row_monthly_amounts();
+        let resolved_amounts = account_usage.monthly_plan_amounts();
+        let resolved = resolved_amounts
             .resolve()
             .map_err(|error| AccountUsageError::InternalError(error.into()))?;
         let metering = report.metering.map_or_else(
@@ -547,53 +563,94 @@ impl AccountUsageService {
                 }
             },
         );
+        let mut max_memory_per_agent = account_usage.max_memory_per_worker.clone();
+        max_memory_per_agent.active_admin_grant = active_grant(
+            &account_usage.admin_grants,
+            AdminResourceGrantDimension::MaxMemoryPerAgent,
+        );
+        let mut max_storage_per_agent = account_usage.storage_limit.clone();
+        if max_storage_per_agent.enabled {
+            max_storage_per_agent.active_admin_grant = active_grant(
+                &account_usage.admin_grants,
+                AdminResourceGrantDimension::MaxStoragePerAgent,
+            );
+        }
 
         Ok(AccountResourcePolicy {
             account_id,
             monthly_usage_mode: monthly_usage_mode.mode,
             overage_allowed_by_plan: monthly_usage_mode.overage_eligible,
             latest_owner_transition: monthly_usage_mode.latest_owner_transition,
-            admin_grants: account_usage.admin_grants,
             monthly: MonthlyResourceLimits {
                 compute_gcu: compute_limit(
                     metering.compute,
-                    monthly_amounts.compute_gcu,
+                    plan_amounts.compute_gcu,
+                    active_grant(
+                        &account_usage.admin_grants,
+                        AdminResourceGrantDimension::MonthlyComputeGcu,
+                    ),
+                    resolved_amounts.compute_gcu,
                     resolved.compute_fuel,
                     report.compute_fuel,
+                    report.allow_overage_compute_fuel,
                     monthly_usage_mode.mode,
                 ),
                 memory_gb_seconds: memory_limit(
                     metering.memory,
-                    monthly_amounts.memory_gb_seconds,
+                    plan_amounts.memory_gb_seconds,
+                    active_grant(
+                        &account_usage.admin_grants,
+                        AdminResourceGrantDimension::MonthlyMemoryGbSeconds,
+                    ),
+                    resolved_amounts.memory_gb_seconds,
                     report.memory_gb_seconds,
+                    byte_nanoseconds_to_gb_seconds(report.allow_overage_memory_byte_nanoseconds),
                     monthly_usage_mode.mode,
                 ),
                 durable_storage_gb_month: storage_limit_policy(
                     metering.durable_storage,
-                    monthly_amounts.durable_storage_gb_month,
+                    plan_amounts.durable_storage_gb_month,
+                    active_grant(
+                        &account_usage.admin_grants,
+                        AdminResourceGrantDimension::MonthlyDurableStorageGbMonth,
+                    ),
+                    resolved_amounts.durable_storage_gb_month,
                     resolved.durable_storage_byte_seconds,
                     report.durable_storage_byte_seconds,
+                    byte_nanoseconds_to_gb_month(
+                        report.allow_overage_durable_storage_byte_nanoseconds,
+                    ),
                     monthly_usage_mode.mode,
                 ),
                 ephemeral_storage_gb_month: storage_limit_policy(
                     metering.ephemeral_storage,
-                    monthly_amounts.ephemeral_storage_gb_month,
+                    plan_amounts.ephemeral_storage_gb_month,
+                    active_grant(
+                        &account_usage.admin_grants,
+                        AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth,
+                    ),
+                    resolved_amounts.ephemeral_storage_gb_month,
                     resolved.ephemeral_storage_byte_seconds,
                     report.ephemeral_storage_byte_seconds,
+                    byte_nanoseconds_to_gb_month(
+                        report.allow_overage_ephemeral_storage_byte_nanoseconds,
+                    ),
                     monthly_usage_mode.mode,
                 ),
             },
-            max_memory_per_agent: account_usage.max_memory_per_worker,
-            max_storage_per_agent: account_usage.storage_limit,
+            max_memory_per_agent,
+            max_storage_per_agent,
         })
     }
 
     fn fenced_resource_limits(
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         usage_update_applied: bool,
     ) -> ResourceLimits {
         ResourceLimits {
             monthly_usage_mode_revision,
+            monthly_policy_revision,
             monthly_policy: MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
@@ -621,9 +678,11 @@ impl AccountUsageService {
     fn fence_monthly_policy(
         mut limits: ResourceLimits,
         monthly_usage_mode_revision: u64,
+        monthly_policy_revision: u64,
         usage_update_applied: bool,
     ) -> ResourceLimits {
         limits.monthly_usage_mode_revision = monthly_usage_mode_revision;
+        limits.monthly_policy_revision = monthly_policy_revision;
         limits.monthly_policy = MonthlyResourcePolicy {
             period: AccountUsagePeriod::current(),
             mode: MonthlyUsageMode::HardLimit,
@@ -702,33 +761,45 @@ impl AccountUsageService {
 
 fn compute_limit(
     metering: MeteringStatus,
-    monthly_amount: u64,
+    plan_amount: u64,
+    active_admin_grant: Option<AdminResourceGrant>,
+    resolved_monthly_amount: u64,
     amount_fuel: u64,
     usage_fuel: u64,
+    allow_overage_usage_fuel: u64,
     mode: MonthlyUsageMode,
 ) -> MonthlyComputeLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyComputeLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: Some(plan_amount),
+            active_admin_grant,
+            resolved_monthly_amount: Some(resolved_monthly_amount),
             usage: Some(fuel_to_gcu(usage_fuel)),
             remaining: Some(fuel_to_gcu(amount_fuel.saturating_sub(usage_fuel))),
+            allow_overage_usage: Some(fuel_to_gcu(allow_overage_usage_fuel)),
             unit: MonthlyComputeUnit::Gcu,
             behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyComputeLimit {
             metering,
-            monthly_amount: None,
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyComputeUnit::Gcu,
             behavior: None,
         },
         MeteringStatus::Unknown => MonthlyComputeLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyComputeUnit::Gcu,
             behavior: None,
         },
@@ -737,32 +808,44 @@ fn compute_limit(
 
 fn memory_limit(
     metering: MeteringStatus,
-    monthly_amount: u64,
+    plan_amount: u64,
+    active_admin_grant: Option<AdminResourceGrant>,
+    resolved_monthly_amount: u64,
     usage: u64,
+    allow_overage_usage: f64,
     mode: MonthlyUsageMode,
 ) -> MonthlyMemoryLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyMemoryLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: Some(plan_amount),
+            active_admin_grant,
+            resolved_monthly_amount: Some(resolved_monthly_amount),
             usage: Some(usage),
-            remaining: Some(monthly_amount.saturating_sub(usage)),
+            remaining: Some(resolved_monthly_amount.saturating_sub(usage)),
+            allow_overage_usage: Some(allow_overage_usage),
             unit: MonthlyMemoryUnit::GbSeconds,
             behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyMemoryLimit {
             metering,
-            monthly_amount: None,
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyMemoryUnit::GbSeconds,
             behavior: None,
         },
         MeteringStatus::Unknown => MonthlyMemoryLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyMemoryUnit::GbSeconds,
             behavior: None,
         },
@@ -771,39 +854,69 @@ fn memory_limit(
 
 fn storage_limit_policy(
     metering: MeteringStatus,
-    monthly_amount: u64,
+    plan_amount: u64,
+    active_admin_grant: Option<AdminResourceGrant>,
+    resolved_monthly_amount: u64,
     amount_byte_seconds: u64,
     usage_byte_seconds: u64,
+    allow_overage_usage_gb_month: f64,
     mode: MonthlyUsageMode,
 ) -> MonthlyStorageLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyStorageLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: Some(plan_amount),
+            active_admin_grant,
+            resolved_monthly_amount: Some(resolved_monthly_amount),
             usage: Some(byte_seconds_to_gb_month(usage_byte_seconds)),
             remaining: Some(byte_seconds_to_gb_month(
                 amount_byte_seconds.saturating_sub(usage_byte_seconds),
             )),
+            allow_overage_usage: Some(allow_overage_usage_gb_month),
             unit: MonthlyStorageUnit::GbMonth,
             behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyStorageLimit {
             metering,
-            monthly_amount: None,
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyStorageUnit::GbMonth,
             behavior: None,
         },
         MeteringStatus::Unknown => MonthlyStorageLimit {
             metering,
-            monthly_amount: Some(monthly_amount),
+            plan_amount: None,
+            active_admin_grant: None,
+            resolved_monthly_amount: None,
             usage: None,
             remaining: None,
+            allow_overage_usage: None,
             unit: MonthlyStorageUnit::GbMonth,
             behavior: None,
         },
     }
+}
+
+fn byte_nanoseconds_to_gb_month(value: u128) -> f64 {
+    value as f64 / (BYTE_SECONDS_PER_GB_MONTH as f64 * 1_000_000_000.0)
+}
+
+fn byte_nanoseconds_to_gb_seconds(value: u128) -> f64 {
+    value as f64 / BYTE_NANOSECONDS_PER_GB_SECOND as f64
+}
+
+fn active_grant(
+    grants: &[AdminResourceGrant],
+    dimension: AdminResourceGrantDimension,
+) -> Option<AdminResourceGrant> {
+    grants
+        .iter()
+        .find(|grant| grant.dimension == dimension)
+        .cloned()
 }
 
 fn monthly_limit_behavior(mode: MonthlyUsageMode) -> MonthlyLimitBehavior {
@@ -860,7 +973,7 @@ mod tests {
     use crate::repo::model::plan::PlanRecord;
     use golem_common::model::account_usage::{
         AdminResourceGrant, BYTE_NANOSECONDS_PER_GB_SECOND, BYTE_SECONDS_PER_GB_MONTH,
-        FUEL_PER_GCU, MemoryLimit, StorageLimit,
+        FUEL_PER_GCU, MemoryLimit, PerAgentLimitUnit, StorageLimit,
     };
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
@@ -909,6 +1022,8 @@ mod tests {
             plan,
             storage_limit: StorageLimit {
                 enabled: false,
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: None,
                 plan_default: None,
                 override_value: None,
@@ -919,6 +1034,8 @@ mod tests {
                 ),
             },
             max_memory_per_worker: golem_common::model::account_usage::MemoryLimit {
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: None,
                 effective_value: u64::MAX,
                 plan_default: u64::MAX,
                 override_value: None,
@@ -930,6 +1047,7 @@ mod tests {
             metering: None,
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             monthly_memory_byte_nanoseconds_remainder: 0,
             monthly_durable_storage_byte_nanoseconds_remainder: 0,
             monthly_ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -960,6 +1078,13 @@ mod tests {
             memory_gb_seconds: 60,
             durable_storage_byte_seconds: 8 * BYTE_SECONDS_PER_GB_MONTH,
             ephemeral_storage_byte_seconds: 4 * BYTE_SECONDS_PER_GB_MONTH,
+            allow_overage_compute_fuel: FUEL_PER_GCU / 2,
+            allow_overage_memory_byte_nanoseconds: 10 * BYTE_NANOSECONDS_PER_GB_SECOND,
+            allow_overage_durable_storage_byte_nanoseconds: 2
+                * BYTE_SECONDS_PER_GB_MONTH as u128
+                * 1_000_000_000,
+            allow_overage_ephemeral_storage_byte_nanoseconds: BYTE_SECONDS_PER_GB_MONTH as u128
+                * 1_000_000_000,
             metering,
         }
     }
@@ -997,30 +1122,55 @@ mod tests {
         .unwrap();
 
         assert_eq!(policy.account_id, account_id);
-        assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(5));
+        assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(5));
+        assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(5));
         assert_eq!(policy.monthly.compute_gcu.usage, Some(1.5));
         assert_eq!(policy.monthly.compute_gcu.remaining, Some(3.5));
+        assert_eq!(policy.monthly.compute_gcu.allow_overage_usage, Some(0.5));
         assert_eq!(
             policy.monthly.compute_gcu.behavior,
             Some(MonthlyLimitBehavior::HardLimit)
         );
-        assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(50));
+        assert_eq!(policy.monthly.memory_gb_seconds.plan_amount, Some(50));
+        assert_eq!(
+            policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+            Some(50)
+        );
         assert_eq!(policy.monthly.memory_gb_seconds.usage, Some(60));
         assert_eq!(policy.monthly.memory_gb_seconds.remaining, Some(0));
         assert_eq!(
-            policy.monthly.durable_storage_gb_month.monthly_amount,
+            policy.monthly.memory_gb_seconds.allow_overage_usage,
+            Some(10.0)
+        );
+        assert_eq!(policy.monthly.durable_storage_gb_month.plan_amount, Some(7));
+        assert_eq!(
+            policy
+                .monthly
+                .durable_storage_gb_month
+                .resolved_monthly_amount,
             Some(7)
         );
         assert_eq!(policy.monthly.durable_storage_gb_month.usage, Some(8.0));
         assert_eq!(policy.monthly.durable_storage_gb_month.remaining, Some(0.0));
         assert_eq!(
-            policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+            policy.monthly.durable_storage_gb_month.allow_overage_usage,
+            Some(2.0)
+        );
+        assert_eq!(
+            policy.monthly.ephemeral_storage_gb_month.plan_amount,
             Some(11)
         );
         assert_eq!(policy.monthly.ephemeral_storage_gb_month.usage, Some(4.0));
         assert_eq!(
             policy.monthly.ephemeral_storage_gb_month.remaining,
             Some(7.0)
+        );
+        assert_eq!(
+            policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .allow_overage_usage,
+            Some(1.0)
         );
         assert_eq!(policy.max_storage_per_agent, expected_storage_limit);
         assert_eq!(policy.max_memory_per_agent, expected_memory_limit);
@@ -1056,16 +1206,89 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(policy.admin_grants, vec![grant]);
-        assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(8));
-        assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(70));
+        assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(5));
+        assert_eq!(policy.monthly.compute_gcu.active_admin_grant, Some(grant));
+        assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(8));
+        assert_eq!(policy.monthly.memory_gb_seconds.plan_amount, Some(50));
         assert_eq!(
-            policy.monthly.durable_storage_gb_month.monthly_amount,
+            policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+            Some(70)
+        );
+        assert_eq!(policy.monthly.durable_storage_gb_month.plan_amount, Some(7));
+        assert_eq!(
+            policy
+                .monthly
+                .durable_storage_gb_month
+                .resolved_monthly_amount,
             Some(9)
         );
         assert_eq!(
-            policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+            policy.monthly.ephemeral_storage_gb_month.plan_amount,
+            Some(11)
+        );
+        assert_eq!(
+            policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .resolved_monthly_amount,
             Some(12)
+        );
+    }
+
+    #[test]
+    fn resource_policy_exposes_per_agent_admin_grants() {
+        let mut usage = make_policy_usage();
+        let memory_grant = AdminResourceGrant {
+            dimension: AdminResourceGrantDimension::MaxMemoryPerAgent,
+            value: usage.max_memory_per_worker.effective_value,
+            reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
+            actor_account_id: AccountId::SYSTEM,
+            granted_at: Utc::now(),
+            expires_at: None,
+        };
+        let storage_grant = AdminResourceGrant {
+            dimension: AdminResourceGrantDimension::MaxStoragePerAgent,
+            value: usage.storage_limit.effective_value.unwrap(),
+            reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
+            actor_account_id: AccountId::SYSTEM,
+            granted_at: Utc::now(),
+            expires_at: None,
+        };
+        usage.admin_grants = vec![memory_grant.clone(), storage_grant.clone()];
+        let account_id = AccountId(usage.account_id);
+
+        let policy = AccountUsageService::resource_policy(
+            account_id,
+            usage,
+            make_policy_report(Some(ResourceUsageMetering::all_enabled())),
+            hard_limit_mode(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            policy.max_memory_per_agent.active_admin_grant,
+            Some(memory_grant)
+        );
+        assert_eq!(
+            policy.max_storage_per_agent.active_admin_grant,
+            Some(storage_grant)
+        );
+    }
+
+    #[test]
+    fn resource_policy_preserves_fractional_memory_excess() {
+        let usage = make_policy_usage();
+        let account_id = AccountId(usage.account_id);
+        let mut report = make_policy_report(Some(ResourceUsageMetering::all_enabled()));
+        report.allow_overage_memory_byte_nanoseconds = BYTE_NANOSECONDS_PER_GB_SECOND / 2;
+
+        let policy =
+            AccountUsageService::resource_policy(account_id, usage, report, allow_overage_mode())
+                .unwrap();
+
+        assert_eq!(
+            policy.monthly.memory_gb_seconds.allow_overage_usage,
+            Some(0.5)
         );
     }
 
@@ -1148,7 +1371,7 @@ mod tests {
 
     #[test]
     fn deleted_account_limits_fence_monthly_policy_for_current_period() {
-        let limits = AccountUsageService::fenced_resource_limits(0, false);
+        let limits = AccountUsageService::fenced_resource_limits(0, 0, false);
 
         assert_eq!(limits.monthly_policy.period, AccountUsagePeriod::current());
         assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::HardLimit);
@@ -1159,7 +1382,7 @@ mod tests {
 
     #[test]
     fn post_write_failure_fence_acknowledges_the_committed_update() {
-        let limits = AccountUsageService::fenced_resource_limits(7, true);
+        let limits = AccountUsageService::fenced_resource_limits(7, 9, true);
 
         assert_eq!(limits.monthly_policy.period, AccountUsagePeriod::current());
         assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::HardLimit);
@@ -1168,6 +1391,7 @@ mod tests {
         assert_eq!(limits.available_http_calls, 0);
         assert_eq!(limits.available_rpc_calls, 0);
         assert_eq!(limits.monthly_usage_mode_revision, 7);
+        assert_eq!(limits.monthly_policy_revision, 9);
         assert!(limits.usage_update_applied);
     }
 
@@ -1182,11 +1406,12 @@ mod tests {
         let expected_concurrency = limits.max_concurrent_agents_per_executor;
         let expected_oplog_rate = limits.oplog_writes_per_second;
 
-        limits = AccountUsageService::fence_monthly_policy(limits, 7, true);
+        limits = AccountUsageService::fence_monthly_policy(limits, 7, 9, true);
 
         assert_eq!(limits.monthly_policy.available_fuel, 0);
         assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 0);
         assert_eq!(limits.monthly_usage_mode_revision, 7);
+        assert_eq!(limits.monthly_policy_revision, 9);
         assert!(limits.usage_update_applied);
         assert_eq!(limits.max_memory_per_worker, expected_memory);
         assert_eq!(
@@ -1225,15 +1450,18 @@ mod tests {
         ] {
             let dimension = &value["monthly"][dimension];
             assert_eq!(dimension["metering"], "disabled");
-            assert!(dimension.get("monthlyAmount").is_none());
+            assert!(dimension.get("planAmount").is_none());
+            assert!(dimension.get("activeAdminGrant").is_none());
+            assert!(dimension.get("resolvedMonthlyAmount").is_none());
             assert!(dimension.get("usage").is_none());
             assert!(dimension.get("remaining").is_none());
+            assert!(dimension.get("allowOverageUsage").is_none());
             assert!(dimension.get("behavior").is_none());
         }
     }
 
     #[test]
-    fn resource_policy_exposes_only_amount_when_metering_is_unknown() {
+    fn resource_policy_omits_unknown_dimension_values() {
         let usage = make_policy_usage();
         let account_id = AccountId(usage.account_id);
         let policy = AccountUsageService::resource_policy(
@@ -1245,17 +1473,20 @@ mod tests {
         .unwrap();
         let value = serde_json::to_value(policy).unwrap();
 
-        for (dimension, monthly_amount) in [
-            ("computeGcu", 5),
-            ("memoryGbSeconds", 50),
-            ("durableStorageGbMonth", 7),
-            ("ephemeralStorageGbMonth", 11),
+        for dimension in [
+            "computeGcu",
+            "memoryGbSeconds",
+            "durableStorageGbMonth",
+            "ephemeralStorageGbMonth",
         ] {
             let dimension = &value["monthly"][dimension];
             assert_eq!(dimension["metering"], "unknown");
-            assert_eq!(dimension["monthlyAmount"], monthly_amount);
+            assert!(dimension.get("planAmount").is_none());
+            assert!(dimension.get("activeAdminGrant").is_none());
+            assert!(dimension.get("resolvedMonthlyAmount").is_none());
             assert!(dimension.get("usage").is_none());
             assert!(dimension.get("remaining").is_none());
+            assert!(dimension.get("allowOverageUsage").is_none());
             assert!(dimension.get("behavior").is_none());
         }
     }

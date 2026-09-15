@@ -128,7 +128,7 @@ use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, Poo
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::Blob;
-use golem_service_base::repo::SqlDateTime;
+use golem_service_base::repo::{NumericU64, SqlDateTime};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -4072,15 +4072,33 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.admin_grants.len(), grants.len());
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(5));
-    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(7000));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(4));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(5));
+    assert!(policy.monthly.compute_gcu.active_admin_grant.is_some());
+    assert_eq!(policy.monthly.memory_gb_seconds.plan_amount, Some(6000));
     assert_eq!(
-        policy.monthly.durable_storage_gb_month.monthly_amount,
+        policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(7000)
+    );
+    assert!(
+        policy
+            .monthly
+            .memory_gb_seconds
+            .active_admin_grant
+            .is_some()
+    );
+    assert_eq!(
+        policy
+            .monthly
+            .durable_storage_gb_month
+            .resolved_monthly_amount,
         Some(5)
     );
     assert_eq!(
-        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        policy
+            .monthly
+            .ephemeral_storage_gb_month
+            .resolved_monthly_amount,
         Some(6)
     );
     assert_eq!(policy.monthly_usage_mode, MonthlyUsageMode::HardLimit);
@@ -4183,14 +4201,23 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(4));
-    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(6000));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(4));
     assert_eq!(
-        policy.monthly.durable_storage_gb_month.monthly_amount,
+        policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(6000)
+    );
+    assert_eq!(
+        policy
+            .monthly
+            .durable_storage_gb_month
+            .resolved_monthly_amount,
         Some(4)
     );
     assert_eq!(
-        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        policy
+            .monthly
+            .ephemeral_storage_gb_month
+            .resolved_monthly_amount,
         Some(5)
     );
 }
@@ -4897,9 +4924,10 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(3));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(4));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
+    assert!(policy.monthly.compute_gcu.active_admin_grant.is_some());
     assert_eq!(policy.max_memory_per_agent.effective_value, 300);
-    assert_eq!(policy.admin_grants.len(), 4);
 
     plan.monthly_compute_gcu = 2.into();
     plan.max_memory_per_worker = 100.into();
@@ -4916,7 +4944,8 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(3));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(2));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
     assert_eq!(policy.max_memory_per_agent.effective_value, 300);
     assert_eq!(policy.max_storage_per_agent.effective_value, Some(300));
 }
@@ -5015,7 +5044,8 @@ pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(3));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(4));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
     assert_eq!(policy.max_memory_per_agent.effective_value, 5000);
 
     destination.monthly_compute_gcu = 2.into();
@@ -5034,7 +5064,8 @@ pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(3));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(2));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
     assert_eq!(policy.max_memory_per_agent.effective_value, 5000);
 }
 
@@ -5432,14 +5463,25 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(2));
-    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(3));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(2));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(2));
+    assert_eq!(policy.monthly.memory_gb_seconds.plan_amount, Some(3));
     assert_eq!(
-        policy.monthly.durable_storage_gb_month.monthly_amount,
+        policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(3)
+    );
+    assert_eq!(
+        policy
+            .monthly
+            .durable_storage_gb_month
+            .resolved_monthly_amount,
         Some(5)
     );
     assert_eq!(
-        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        policy
+            .monthly
+            .ephemeral_storage_gb_month
+            .resolved_monthly_amount,
         Some(7)
     );
 
@@ -5460,14 +5502,25 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
         .await
         .unwrap();
-    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(11));
-    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(13));
+    assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(11));
+    assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(11));
+    assert_eq!(policy.monthly.memory_gb_seconds.plan_amount, Some(13));
     assert_eq!(
-        policy.monthly.durable_storage_gb_month.monthly_amount,
+        policy.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(13)
+    );
+    assert_eq!(
+        policy
+            .monthly
+            .durable_storage_gb_month
+            .resolved_monthly_amount,
         Some(17)
     );
     assert_eq!(
-        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        policy
+            .monthly
+            .ephemeral_storage_gb_month
+            .resolved_monthly_amount,
         Some(19)
     );
 
@@ -6722,13 +6775,27 @@ async fn record_compute_usage_at_revision(deps: &Deps, account_id: Uuid, revisio
         .unwrap()
         .unwrap();
     usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
-        revision,
+        policy_revision: revision,
         memory_byte_nanoseconds_remainder: 0,
         durable_storage_byte_nanoseconds_remainder: 0,
         ephemeral_storage_byte_nanoseconds_remainder: 0,
     });
+    usage.metering =
+        Some(golem_service_base::clients::registry::ResourceUsageMetering::all_enabled());
     usage.add_change(UsageType::MonthlyGasLimit, fuel);
     deps.account_usage_repo.add(&usage).await.unwrap();
+}
+
+async fn register_current_monthly_policy(deps: &Deps, account_id: Uuid) -> u64 {
+    deps.account_usage_repo
+        .get_or_create_monthly_policy_revision(
+            account_id,
+            AccountUsagePeriod::current(),
+            &SqlDateTime::now(),
+        )
+        .await
+        .unwrap()
+        .revision()
 }
 
 async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i64)> {
@@ -6737,7 +6804,7 @@ async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i
             .with_ro("test", "compute_usage_by_revision")
             .fetch_all_as(
                 sqlx::query_as(
-                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
+                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_policy_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
                 )
                 .bind(account_id),
             )
@@ -6747,7 +6814,7 @@ async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i
             .with_ro("test", "compute_usage_by_revision")
             .fetch_all_as(
                 sqlx::query_as(
-                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
+                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_policy_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
                 )
                 .bind(account_id),
             )
@@ -6757,7 +6824,7 @@ async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i
 }
 
 async fn fractional_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i64, i64, i64)> {
-    let query = "SELECT CAST(revision AS BIGINT), CAST(SUM(memory_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(durable_storage_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(ephemeral_storage_byte_nanoseconds_remainder) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision";
+    let query = "SELECT CAST(revision AS BIGINT), CAST(SUM(memory_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(durable_storage_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(ephemeral_storage_byte_nanoseconds_remainder) AS BIGINT) FROM account_monthly_policy_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision";
     match &deps.test_db {
         TestDb::Postgres(pool) => pool
             .with_ro("test", "fractional_usage_by_revision")
@@ -6819,6 +6886,7 @@ pub async fn test_monthly_usage_mode_consent_invariants(deps: &Deps) {
     deps.plan_repo.create_or_update(plan).await.unwrap();
 
     let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let other_account_id = deps.create_account().await.revision.account_id;
     assert!(matches!(
         deps.account_usage_repo
@@ -6867,6 +6935,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
     deps.plan_repo.create_or_update(plan).await.unwrap();
 
     let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let mut zero_usage = deps
         .account_usage_repo
         .get(account_id, &SqlDateTime::now())
@@ -6884,7 +6953,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
             .is_none()
     );
 
-    record_compute_usage_at_revision(deps, account_id, 0, 10).await;
+    record_compute_usage_at_revision(deps, account_id, 0, 1_900_000).await;
 
     deps.account_usage_repo
         .set_monthly_usage_mode(
@@ -6895,8 +6964,18 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         )
         .await
         .unwrap();
-    record_compute_usage_at_revision(deps, account_id, 0, 20).await;
-    record_compute_usage_at_revision(deps, account_id, 1, 30).await;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 1);
+    assert_eq!(
+        deps.account_usage_repo
+            .get_monthly_usage_mode(account_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        1
+    );
+    record_compute_usage_at_revision(deps, account_id, 0, 50_000).await;
+    record_compute_usage_at_revision(deps, account_id, 1, 100_000).await;
 
     deps.account_usage_repo
         .set_monthly_usage_mode(
@@ -6907,8 +6986,9 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         )
         .await
         .unwrap();
-    record_compute_usage_at_revision(deps, account_id, 1, 40).await;
-    record_compute_usage_at_revision(deps, account_id, 2, 50).await;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 2);
+    record_compute_usage_at_revision(deps, account_id, 1, 40_000).await;
+    record_compute_usage_at_revision(deps, account_id, 2, 50_000).await;
 
     let mut delayed_update = HashMap::new();
     delayed_update.insert(
@@ -6916,10 +6996,11 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 1,
+            monthly_policy_revision: 1,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
-            fuel_delta: 60,
+            fuel_delta: 60_000,
             http_call_count_delta: 0,
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
@@ -6942,6 +7023,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 1,
+            monthly_policy_revision: 1,
             memory_byte_nanoseconds_remainder: 11,
             durable_storage_byte_nanoseconds_remainder: 22,
             ephemeral_storage_byte_nanoseconds_remainder: 33,
@@ -6964,12 +7046,70 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
 
     assert_eq!(
         compute_usage_by_revision(deps, account_id).await,
-        vec![(0, 30), (1, 130), (2, 50)]
+        vec![(0, 1_950_000), (1, 200_000), (2, 50_000)]
     );
     assert_eq!(
         fractional_usage_by_revision(deps, account_id).await,
         vec![(0, 0, 0, 0), (1, 11, 22, 33), (2, 0, 0, 0)]
     );
+    let report = deps
+        .account_usage_repo
+        .get_usage_report(account_id, AccountUsagePeriod::current())
+        .await
+        .unwrap();
+    assert_eq!(report.compute_fuel, 2_200_000);
+    assert_eq!(report.allow_overage_compute_fuel, 150_000);
+    let current_period = AccountUsagePeriod::current();
+    let next_period = if current_period.month == 12 {
+        AccountUsagePeriod {
+            year: current_period.year + 1,
+            month: 1,
+        }
+    } else {
+        AccountUsagePeriod {
+            year: current_period.year,
+            month: current_period.month + 1,
+        }
+    };
+    let history = deps
+        .account_usage_repo
+        .get_usage_history(account_id, next_period, 1)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].allow_overage_compute_fuel, 150_000);
+
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 3);
+    record_compute_usage_at_revision(deps, account_id, 2, 10_000).await;
+    record_compute_usage_at_revision(deps, account_id, 3, 20_000).await;
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::HardLimit,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 4);
+    record_compute_usage_at_revision(deps, account_id, 3, 30_000).await;
+    record_compute_usage_at_revision(deps, account_id, 4, 40_000).await;
+    let report = deps
+        .account_usage_repo
+        .get_usage_report(account_id, AccountUsagePeriod::current())
+        .await
+        .unwrap();
+    assert_eq!(report.compute_fuel, 2_300_000);
+    assert_eq!(report.allow_overage_compute_fuel, 200_000);
 
     let mut future_usage = deps
         .account_usage_repo
@@ -6978,7 +7118,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         .unwrap()
         .unwrap();
     future_usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
-        revision: 3,
+        policy_revision: 5,
         memory_byte_nanoseconds_remainder: 0,
         durable_storage_byte_nanoseconds_remainder: 0,
         ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -6987,8 +7127,210 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
     assert!(deps.account_usage_repo.add(&future_usage).await.is_err());
 }
 
+pub async fn test_monthly_policy_revision_tracks_allowance_changes(deps: &Deps) {
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 1);
+    assert_eq!(
+        deps.account_usage_repo
+            .get_monthly_usage_mode(account_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        1
+    );
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let included_gcu = usage.monthly_plan_amounts().compute_gcu;
+    let included_fuel = usage
+        .monthly_policy_snapshot()
+        .unwrap()
+        .resolved
+        .compute_fuel;
+    record_compute_usage_at_revision(
+        deps,
+        account_id,
+        1,
+        i64::try_from(included_fuel + 100).unwrap(),
+    )
+    .await;
+
+    deps.account_resource_override_repo
+        .set_admin_grant(
+            account_id,
+            AccountResourceOverrideDimension::MonthlyComputeGcu,
+            included_gcu + 1,
+            AdminResourceGrantReason::Support,
+            None,
+            account_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 2);
+
+    deps.account_resource_override_repo
+        .clear_admin_grant(
+            account_id,
+            AccountResourceOverrideDimension::MonthlyComputeGcu,
+            account_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 3);
+    assert_eq!(
+        deps.account_usage_repo
+            .get_monthly_usage_mode(account_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        1
+    );
+
+    record_compute_usage_at_revision(deps, account_id, 3, 50).await;
+    record_compute_usage_at_revision(deps, account_id, 2, FUEL_PER_GCU as i64).await;
+
+    let report = deps
+        .account_usage_repo
+        .get_usage_report(account_id, AccountUsagePeriod::current())
+        .await
+        .unwrap();
+    assert_eq!(report.allow_overage_compute_fuel, 250);
+}
+
+pub async fn test_billable_excess_preserves_fractional_usage_and_refunds(deps: &Deps) {
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 1);
+
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let resolved = usage.monthly_policy_snapshot().unwrap().resolved;
+    usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+        policy_revision: 1,
+        memory_byte_nanoseconds_remainder: (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64,
+        durable_storage_byte_nanoseconds_remainder: 500_000_000,
+        ephemeral_storage_byte_nanoseconds_remainder: 500_000_000,
+    });
+    usage.metering =
+        Some(golem_service_base::clients::registry::ResourceUsageMetering::all_enabled());
+    usage.add_change(
+        UsageType::MonthlyGasLimit,
+        i64::try_from(resolved.compute_fuel + 100).unwrap(),
+    );
+    usage.add_change(
+        UsageType::MonthlyMemoryGbSeconds,
+        i64::try_from(resolved.memory_gb_seconds).unwrap(),
+    );
+    usage.add_change(
+        UsageType::MonthlyDurableAgentStorageByteSeconds,
+        i64::try_from(resolved.durable_storage_byte_seconds).unwrap(),
+    );
+    usage.add_change(
+        UsageType::MonthlyEphemeralStorageByteSeconds,
+        i64::try_from(resolved.ephemeral_storage_byte_seconds).unwrap(),
+    );
+    deps.account_usage_repo.add(&usage).await.unwrap();
+
+    let report = deps
+        .account_usage_repo
+        .get_usage_report(account_id, AccountUsagePeriod::current())
+        .await
+        .unwrap();
+    assert_eq!(report.allow_overage_compute_fuel, 100);
+    assert_eq!(
+        report.allow_overage_memory_byte_nanoseconds,
+        BYTE_NANOSECONDS_PER_GB_SECOND / 2
+    );
+    assert_eq!(
+        report.allow_overage_durable_storage_byte_nanoseconds,
+        500_000_000
+    );
+    assert_eq!(
+        report.allow_overage_ephemeral_storage_byte_nanoseconds,
+        500_000_000
+    );
+
+    let mut refund = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    refund.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+        policy_revision: 1,
+        memory_byte_nanoseconds_remainder: (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64,
+        durable_storage_byte_nanoseconds_remainder: 500_000_000,
+        ephemeral_storage_byte_nanoseconds_remainder: 500_000_000,
+    });
+    refund.metering =
+        Some(golem_service_base::clients::registry::ResourceUsageMetering::all_enabled());
+    refund.add_change(UsageType::MonthlyGasLimit, -200);
+    refund.add_change(UsageType::MonthlyMemoryGbSeconds, -1);
+    refund.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, -1);
+    refund.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, -1);
+    deps.account_usage_repo.add(&refund).await.unwrap();
+
+    let report = deps
+        .account_usage_repo
+        .get_usage_report(account_id, AccountUsagePeriod::current())
+        .await
+        .unwrap();
+    assert_eq!(report.allow_overage_compute_fuel, 0);
+    assert_eq!(report.allow_overage_memory_byte_nanoseconds, 0);
+    assert_eq!(report.allow_overage_durable_storage_byte_nanoseconds, 0);
+    assert_eq!(report.allow_overage_ephemeral_storage_byte_nanoseconds, 0);
+}
+
 pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps: &Deps) {
     let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let date = SqlDateTime::now();
     let before = deps
         .account_usage_repo
@@ -7017,7 +7359,7 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
             .unwrap()
             .unwrap();
         usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
-            revision: 0,
+            policy_revision: 0,
             memory_byte_nanoseconds_remainder: remainder as u64,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -7058,6 +7400,7 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
 
 pub async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
     let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let date = SqlDateTime::now();
     let mut usage = deps
         .account_usage_repo
@@ -7067,7 +7410,7 @@ pub async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
         .unwrap();
     assert!(usage.add_change(UsageType::TotalWorkerConnectionCount, 7));
     usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
-        revision: 0,
+        policy_revision: 0,
         memory_byte_nanoseconds_remainder: 125_000_000,
         durable_storage_byte_nanoseconds_remainder: 250_000_000,
         ephemeral_storage_byte_nanoseconds_remainder: 500_000_000,
@@ -7095,6 +7438,7 @@ pub async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
 
 pub async fn test_fractional_storage_attribution_reduces_separate_capacities(deps: &Deps) {
     let account_id = deps.create_account().await.revision.account_id;
+    assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let date = SqlDateTime::now();
     let before = deps
         .account_usage_repo
@@ -7120,7 +7464,7 @@ pub async fn test_fractional_storage_attribution_reduces_separate_capacities(dep
             .unwrap()
             .unwrap();
         usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
-            revision: 0,
+            policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: durable_remainder,
             ephemeral_storage_byte_nanoseconds_remainder: ephemeral_remainder,
@@ -7390,6 +7734,7 @@ pub async fn test_resource_usage_response_uses_fresh_post_write_policy(deps: &De
                         ResourceUsageUpdate {
                             period: AccountUsagePeriod::current(),
                             monthly_usage_mode_revision: 0,
+                            monthly_policy_revision: 0,
                             memory_byte_nanoseconds_remainder: 0,
                             durable_storage_byte_nanoseconds_remainder: 0,
                             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -7445,6 +7790,96 @@ pub async fn test_resource_usage_response_uses_fresh_post_write_policy(deps: &De
     );
 }
 
+pub async fn test_monthly_policy_revision_resolves_policy_after_account_lock(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let date = SqlDateTime::now();
+    let initial = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(initial.monthly_policy_revision, 0);
+
+    let updated_compute_gcu = initial.plan.monthly_compute_gcu.get() + 1;
+    let granted_compute_gcu = updated_compute_gcu + 1;
+    let mut updater = pool
+        .with_rw("test", "update_plan_before_policy_reader_lock")
+        .begin()
+        .await
+        .unwrap();
+    updater
+        .execute(
+            sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
+                .bind(account_id),
+        )
+        .await
+        .unwrap();
+    updater
+        .execute(
+            sqlx::query(
+                "UPDATE plans SET monthly_compute_gcu = $1, overage_eligible = TRUE WHERE plan_id = $2",
+            )
+                .bind(NumericU64::new(updated_compute_gcu))
+                .bind(initial.plan.plan_id),
+        )
+        .await
+        .unwrap();
+    updater
+        .execute(
+            sqlx::query(
+                "INSERT INTO account_resource_overrides (account_id, dimension, source, override_value, reason, expires_at, created_by, created_at) VALUES ($1, 'monthly_compute_gcu', 'admin_grant', $2, 'support', NULL, $1, $3)",
+            )
+            .bind(account_id)
+            .bind(NumericU64::new(granted_compute_gcu))
+            .bind(&date),
+        )
+        .await
+        .unwrap();
+    updater
+        .execute(
+            sqlx::query(
+                "INSERT INTO account_monthly_usage_modes (account_id, mode, revision, changed_by, changed_at) VALUES ($1, 'allow_overage', 1, $1, $2)",
+            )
+            .bind(account_id)
+            .bind(&date),
+        )
+        .await
+        .unwrap();
+
+    let reader = tokio::spawn({
+        let account_usage_repo = deps.account_usage_repo.clone();
+        async move { account_usage_repo.get(account_id, &date).await }
+    });
+    wait_for_postgres_lock(&pool, "SELECT account_id").await;
+    assert!(!reader.is_finished());
+    updater.commit().await.unwrap();
+
+    let resolved = tokio::time::timeout(std::time::Duration::from_secs(5), reader)
+        .await
+        .expect("monthly policy reader remained blocked")
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.monthly_policy_revision, 1);
+    assert_eq!(resolved.monthly_usage_mode_revision, 1);
+    assert_eq!(resolved.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
+    assert_eq!(resolved.plan.monthly_compute_gcu.get(), updated_compute_gcu);
+    assert_eq!(
+        resolved.admin_grant_values.monthly_compute_gcu,
+        Some(granted_compute_gcu)
+    );
+    assert_eq!(
+        resolved.monthly_plan_amounts().compute_gcu,
+        granted_compute_gcu
+    );
+}
+
 pub async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
     let account = deps.create_account().await;
     let account_id = AccountId(account.revision.account_id);
@@ -7469,6 +7904,7 @@ pub async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
                 ResourceUsageUpdate {
                     period: previous,
                     monthly_usage_mode_revision: 0,
+                    monthly_policy_revision: 0,
                     memory_byte_nanoseconds_remainder: 0,
                     durable_storage_byte_nanoseconds_remainder: 0,
                     ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8659,6 +9095,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8698,6 +9135,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8728,6 +9166,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8757,6 +9196,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8789,6 +9229,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8863,6 +9304,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8902,6 +9344,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8932,6 +9375,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8975,6 +9419,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -8992,6 +9437,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -9029,6 +9475,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -9046,6 +9493,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
         ResourceUsageUpdate {
             period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
             ephemeral_storage_byte_nanoseconds_remainder: 0,

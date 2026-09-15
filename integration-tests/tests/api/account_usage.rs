@@ -25,8 +25,8 @@ use golem_common::model::account_usage::{
     AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
     AdminResourceGrantReason, BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
     MemoryLimit, MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
-    MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource, SetAdminResourceGrant,
-    SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
+    MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource, PerAgentLimitUnit,
+    SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::model::auth::TokenCreation;
 use golem_service_base::clients::registry::{
@@ -175,6 +175,7 @@ async fn account_usage_reports_all_customer_dimensions(
                 ResourceUsageUpdate {
                     period: AccountUsagePeriod::current(),
                     monthly_usage_mode_revision: 0,
+                    monthly_policy_revision: 0,
                     memory_byte_nanoseconds_remainder: 0,
                     durable_storage_byte_nanoseconds_remainder: 0,
                     ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -231,7 +232,9 @@ async fn account_usage_reports_all_customer_dimensions(
     assert!(limits.overage_allowed_by_plan);
     assert!(limits.latest_owner_transition.is_none());
     assert_eq!(limits.monthly.compute_gcu.metering, MeteringStatus::Enabled);
-    assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.resolved_monthly_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.allow_overage_usage, Some(0.0));
     assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
     assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
     assert_eq!(limits.monthly.compute_gcu.unit, MonthlyComputeUnit::Gcu);
@@ -239,17 +242,22 @@ async fn account_usage_reports_all_customer_dimensions(
         limits.monthly.compute_gcu.behavior,
         Some(MonthlyLimitBehavior::HardLimit)
     );
-    assert_eq!(limits.monthly.memory_gb_seconds.monthly_amount, Some(50));
+    assert_eq!(limits.monthly.memory_gb_seconds.plan_amount, Some(50));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(50)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.allow_overage_usage,
+        Some(0.0)
+    );
     assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
     assert_eq!(limits.monthly.memory_gb_seconds.remaining, Some(36));
     assert_eq!(
         limits.monthly.memory_gb_seconds.unit,
         MonthlyMemoryUnit::GbSeconds
     );
-    assert_eq!(
-        limits.monthly.durable_storage_gb_month.monthly_amount,
-        Some(7)
-    );
+    assert_eq!(limits.monthly.durable_storage_gb_month.plan_amount, Some(7));
     assert_eq!(
         limits.monthly.durable_storage_gb_month.usage,
         Some(140.0 / byte_seconds_per_gb_month)
@@ -263,7 +271,7 @@ async fn account_usage_reports_all_customer_dimensions(
         MonthlyStorageUnit::GbMonth
     );
     assert_eq!(
-        limits.monthly.ephemeral_storage_gb_month.monthly_amount,
+        limits.monthly.ephemeral_storage_gb_month.plan_amount,
         Some(11)
     );
     assert_eq!(
@@ -282,6 +290,8 @@ async fn account_usage_reports_all_customer_dimensions(
         limits.max_memory_per_agent.effective_value,
         1024 * 1024 * 1024
     );
+    assert_eq!(limits.max_memory_per_agent.unit, PerAgentLimitUnit::Bytes);
+    assert_eq!(limits.max_storage_per_agent.unit, PerAgentLimitUnit::Bytes);
     assert!(!limits.max_storage_per_agent.enabled);
 
     let historical_period = previous_period(usage.usage.period);
@@ -334,6 +344,7 @@ async fn account_owner_explicitly_changes_monthly_usage_mode(
             ResourceUsageUpdate {
                 period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,
                 ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -552,6 +563,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
             ResourceUsageUpdate {
                 period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,
                 ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -593,6 +605,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
             ResourceUsageUpdate {
                 period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,
                 ephemeral_storage_byte_nanoseconds_remainder: 0,
@@ -715,6 +728,8 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     let client = deps.registry_service().client(&user.token).await;
     let expected_default = StorageLimit {
         enabled: true,
+        unit: PerAgentLimitUnit::Bytes,
+        active_admin_grant: None,
         effective_value: Some(5),
         plan_default: Some(5),
         override_value: None,
@@ -743,6 +758,8 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     );
 
     let expected_max_memory = MemoryLimit {
+        unit: PerAgentLimitUnit::Bytes,
+        active_admin_grant: None,
         effective_value: 10_000_000_000_000_000,
         plan_default: 10_000_000_000_000_000,
         override_value: None,
@@ -955,10 +972,18 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         granted_limits.monthly_usage_mode,
         MonthlyUsageMode::HardLimit
     );
-    assert_eq!(granted_limits.monthly.compute_gcu.monthly_amount, Some(9));
-    assert_eq!(granted_limits.admin_grants.len(), 1);
-    assert_eq!(granted_limits.admin_grants[0].dimension, dimension);
-    assert_eq!(granted_limits.admin_grants[0].value, 9);
+    assert_eq!(granted_limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(
+        granted_limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(9)
+    );
+    let active_grant = granted_limits
+        .monthly
+        .compute_gcu
+        .active_admin_grant
+        .expect("compute grant must be exposed on its dimension");
+    assert_eq!(active_grant.dimension, dimension);
+    assert_eq!(active_grant.value, 9);
 
     let cleared = admin_client
         .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
@@ -976,8 +1001,18 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         cleared_limits.monthly_usage_mode,
         MonthlyUsageMode::HardLimit
     );
-    assert_eq!(cleared_limits.monthly.compute_gcu.monthly_amount, Some(5));
-    assert!(cleared_limits.admin_grants.is_empty());
+    assert_eq!(cleared_limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(
+        cleared_limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(5)
+    );
+    assert!(
+        cleared_limits
+            .monthly
+            .compute_gcu
+            .active_admin_grant
+            .is_none()
+    );
 
     let error = admin_client
         .clear_account_admin_resource_grant(&user.account_id.0, &dimension)

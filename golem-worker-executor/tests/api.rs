@@ -175,6 +175,7 @@ fn resource_limits_response(
         oplog_writes_per_second: u64::MAX,
         usage_update_applied: true,
         monthly_usage_mode_revision,
+        monthly_policy_revision: monthly_usage_mode_revision,
     }
 }
 

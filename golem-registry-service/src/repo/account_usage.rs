@@ -19,6 +19,7 @@ use crate::repo::model::account_usage::{
     AccountMonthlyUsageMode, AccountUsage, AccountUsagePlan, AccountUsageRecord,
     MonthlyUsageModeStateRecord, MonthlyUsageModeTransitionRecord, MonthlyUsageTransitionBaseline,
     PersistedMonthlyUsageModeTransition, UsageGrouping, UsageTracking, UsageType,
+    billable_excess_delta, exact_usage_delta,
 };
 use async_trait::async_trait;
 use chrono::Datelike;
@@ -54,8 +55,229 @@ struct AccountUsageReportRow {
 struct MonthlyUsageBaselineRow {
     compute_fuel: NumericU64,
     memory_gb_seconds: NumericU64,
+    memory_byte_nanoseconds_remainder: NumericU64,
     durable_storage_byte_seconds: NumericU64,
+    durable_storage_byte_nanoseconds_remainder: NumericU64,
     ephemeral_storage_byte_seconds: NumericU64,
+    ephemeral_storage_byte_nanoseconds_remainder: NumericU64,
+}
+
+#[derive(sqlx::FromRow)]
+struct MonthlyPolicyRevisionRow {
+    revision: NumericU64,
+    period_year: i32,
+    period_month: i32,
+    mode: String,
+    resolved_compute_fuel: NumericU64,
+    resolved_memory_gb_seconds: NumericU64,
+    resolved_durable_storage_byte_seconds: NumericU64,
+    resolved_ephemeral_storage_byte_seconds: NumericU64,
+}
+
+#[derive(sqlx::FromRow)]
+struct MonthlyPolicyAttributionRow {
+    usage_key: String,
+    revision: NumericU64,
+    period_year: i32,
+    period_month: i32,
+    mode: String,
+    baseline_compute_fuel: NumericU64,
+    baseline_memory_gb_seconds: NumericU64,
+    baseline_memory_byte_nanoseconds_remainder: NumericU64,
+    baseline_durable_storage_byte_seconds: NumericU64,
+    baseline_durable_storage_byte_nanoseconds_remainder: NumericU64,
+    baseline_ephemeral_storage_byte_seconds: NumericU64,
+    baseline_ephemeral_storage_byte_nanoseconds_remainder: NumericU64,
+    resolved_compute_fuel: NumericU64,
+    resolved_memory_gb_seconds: NumericU64,
+    resolved_durable_storage_byte_seconds: NumericU64,
+    resolved_ephemeral_storage_byte_seconds: NumericU64,
+    compute_fuel_delta: i64,
+    memory_gb_seconds_delta: i64,
+    durable_storage_byte_seconds_delta: i64,
+    ephemeral_storage_byte_seconds_delta: i64,
+    memory_byte_nanoseconds_remainder: NumericU64,
+    durable_storage_byte_nanoseconds_remainder: NumericU64,
+    ephemeral_storage_byte_nanoseconds_remainder: NumericU64,
+    compute_metering_enabled: bool,
+    memory_metering_enabled: bool,
+    filesystem_metering_enabled: bool,
+}
+
+struct MonthlyPolicyAttributionAggregate {
+    period: AccountUsagePeriod,
+    mode: MonthlyUsageMode,
+    baseline_compute_fuel: u128,
+    baseline_memory_byte_nanoseconds: u128,
+    baseline_durable_storage_byte_nanoseconds: u128,
+    baseline_ephemeral_storage_byte_nanoseconds: u128,
+    resolved_compute_fuel: u128,
+    resolved_memory_byte_nanoseconds: u128,
+    resolved_durable_storage_byte_nanoseconds: u128,
+    resolved_ephemeral_storage_byte_nanoseconds: u128,
+    compute_fuel_delta: i128,
+    memory_byte_nanoseconds_delta: i128,
+    durable_storage_byte_nanoseconds_delta: i128,
+    ephemeral_storage_byte_nanoseconds_delta: i128,
+}
+
+impl MonthlyPolicyAttributionAggregate {
+    fn from_row(row: &MonthlyPolicyAttributionRow) -> RepoResult<Self> {
+        Ok(Self {
+            period: AccountUsagePeriod {
+                year: row.period_year,
+                month: row.period_month as u32,
+            },
+            mode: crate::repo::model::account_usage::monthly_usage_mode(&row.mode)?,
+            baseline_compute_fuel: row.baseline_compute_fuel.get() as u128,
+            baseline_memory_byte_nanoseconds: (row.baseline_memory_gb_seconds.get() as u128)
+                .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                .saturating_add(row.baseline_memory_byte_nanoseconds_remainder.get() as u128),
+            baseline_durable_storage_byte_nanoseconds: (row
+                .baseline_durable_storage_byte_seconds
+                .get() as u128)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(
+                    row.baseline_durable_storage_byte_nanoseconds_remainder
+                        .get() as u128,
+                ),
+            baseline_ephemeral_storage_byte_nanoseconds: (row
+                .baseline_ephemeral_storage_byte_seconds
+                .get() as u128)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(
+                    row.baseline_ephemeral_storage_byte_nanoseconds_remainder
+                        .get() as u128,
+                ),
+            resolved_compute_fuel: row.resolved_compute_fuel.get() as u128,
+            resolved_memory_byte_nanoseconds: (row.resolved_memory_gb_seconds.get() as u128)
+                .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND),
+            resolved_durable_storage_byte_nanoseconds: (row
+                .resolved_durable_storage_byte_seconds
+                .get() as u128)
+                .saturating_mul(1_000_000_000),
+            resolved_ephemeral_storage_byte_nanoseconds: (row
+                .resolved_ephemeral_storage_byte_seconds
+                .get() as u128)
+                .saturating_mul(1_000_000_000),
+            compute_fuel_delta: 0,
+            memory_byte_nanoseconds_delta: 0,
+            durable_storage_byte_nanoseconds_delta: 0,
+            ephemeral_storage_byte_nanoseconds_delta: 0,
+        })
+    }
+
+    fn add_row(&mut self, row: &MonthlyPolicyAttributionRow) {
+        if row.compute_metering_enabled {
+            self.compute_fuel_delta = self
+                .compute_fuel_delta
+                .saturating_add(row.compute_fuel_delta as i128);
+        }
+        if row.memory_metering_enabled {
+            self.memory_byte_nanoseconds_delta =
+                self.memory_byte_nanoseconds_delta
+                    .saturating_add(exact_usage_delta(
+                        row.memory_gb_seconds_delta,
+                        row.memory_byte_nanoseconds_remainder.get(),
+                        BYTE_NANOSECONDS_PER_GB_SECOND,
+                    ));
+        }
+        if row.filesystem_metering_enabled {
+            self.durable_storage_byte_nanoseconds_delta = self
+                .durable_storage_byte_nanoseconds_delta
+                .saturating_add(exact_usage_delta(
+                    row.durable_storage_byte_seconds_delta,
+                    row.durable_storage_byte_nanoseconds_remainder.get(),
+                    1_000_000_000,
+                ));
+            self.ephemeral_storage_byte_nanoseconds_delta = self
+                .ephemeral_storage_byte_nanoseconds_delta
+                .saturating_add(exact_usage_delta(
+                    row.ephemeral_storage_byte_seconds_delta,
+                    row.ephemeral_storage_byte_nanoseconds_remainder.get(),
+                    1_000_000_000,
+                ));
+        }
+    }
+}
+
+fn apply_billable_excess(
+    rows: Vec<MonthlyPolicyAttributionRow>,
+    report: &mut AccountUsageRecord,
+) -> RepoResult<()> {
+    let mut revisions = BTreeMap::<u64, MonthlyPolicyAttributionAggregate>::new();
+    for row in rows {
+        let revision = row.revision.get();
+        let aggregate = match revisions.entry(revision) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(MonthlyPolicyAttributionAggregate::from_row(&row)?)
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+        };
+        aggregate.add_row(&row);
+    }
+
+    let mut compute = 0i128;
+    let mut memory = 0i128;
+    let mut durable = 0i128;
+    let mut ephemeral = 0i128;
+    let mut baseline = revisions.values().next().map_or((0, 0, 0, 0), |revision| {
+        if revision.period == report.period {
+            (
+                revision.baseline_compute_fuel,
+                revision.baseline_memory_byte_nanoseconds,
+                revision.baseline_durable_storage_byte_nanoseconds,
+                revision.baseline_ephemeral_storage_byte_nanoseconds,
+            )
+        } else {
+            (0, 0, 0, 0)
+        }
+    });
+    for revision in revisions.values() {
+        if revision.mode == MonthlyUsageMode::AllowOverage {
+            compute = compute.saturating_add(billable_excess_delta(
+                baseline.0,
+                revision.resolved_compute_fuel,
+                revision.compute_fuel_delta,
+            ));
+            memory = memory.saturating_add(billable_excess_delta(
+                baseline.1,
+                revision.resolved_memory_byte_nanoseconds,
+                revision.memory_byte_nanoseconds_delta,
+            ));
+            durable = durable.saturating_add(billable_excess_delta(
+                baseline.2,
+                revision.resolved_durable_storage_byte_nanoseconds,
+                revision.durable_storage_byte_nanoseconds_delta,
+            ));
+            ephemeral = ephemeral.saturating_add(billable_excess_delta(
+                baseline.3,
+                revision.resolved_ephemeral_storage_byte_nanoseconds,
+                revision.ephemeral_storage_byte_nanoseconds_delta,
+            ));
+        }
+        baseline.0 = apply_usage_delta(baseline.0, revision.compute_fuel_delta);
+        baseline.1 = apply_usage_delta(baseline.1, revision.memory_byte_nanoseconds_delta);
+        baseline.2 = apply_usage_delta(baseline.2, revision.durable_storage_byte_nanoseconds_delta);
+        baseline.3 = apply_usage_delta(
+            baseline.3,
+            revision.ephemeral_storage_byte_nanoseconds_delta,
+        );
+    }
+
+    report.allow_overage_compute_fuel = compute.max(0).min(u64::MAX as i128) as u64;
+    report.allow_overage_memory_byte_nanoseconds = memory.max(0) as u128;
+    report.allow_overage_durable_storage_byte_nanoseconds = durable.max(0) as u128;
+    report.allow_overage_ephemeral_storage_byte_nanoseconds = ephemeral.max(0) as u128;
+    Ok(())
+}
+
+fn apply_usage_delta(usage: u128, delta: i128) -> u128 {
+    if delta >= 0 {
+        usage.saturating_add(delta as u128)
+    } else {
+        usage.saturating_sub(delta.unsigned_abs())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +294,17 @@ pub enum SetMonthlyUsageModeError {
     InvalidConsentActor,
     #[error(transparent)]
     Repo(#[from] RepoError),
+}
+
+pub struct ResolvedMonthlyPolicyRevision {
+    revision: u64,
+    account_plan: AccountUsagePlan,
+}
+
+impl ResolvedMonthlyPolicyRevision {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 impl AccountUsageReportRow {
@@ -146,6 +379,13 @@ pub trait AccountUsageRepo: Send + Sync {
         actor_account_id: Uuid,
         source: MonthlyUsageModeTransitionSource,
     ) -> Result<PersistedMonthlyUsageModeTransition, SetMonthlyUsageModeError>;
+
+    async fn get_or_create_monthly_policy_revision(
+        &self,
+        account_id: Uuid,
+        period: AccountUsagePeriod,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<ResolvedMonthlyPolicyRevision>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<u64>;
 }
@@ -255,6 +495,18 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
             .await
     }
 
+    async fn get_or_create_monthly_policy_revision(
+        &self,
+        account_id: Uuid,
+        period: AccountUsagePeriod,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<ResolvedMonthlyPolicyRevision> {
+        self.repo
+            .get_or_create_monthly_policy_revision(account_id, period, active_at)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<u64> {
         self.repo
             .add(account_usage)
@@ -299,6 +551,118 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbAccountUsageRepo<PostgresPool> {
+    async fn get_plan_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        account_id: Uuid,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsagePlan>> {
+        tx.fetch_optional_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT
+                    p.plan_id, p.name, p.max_memory_per_worker,
+                    p.max_memory_per_worker_ceiling, p.max_memory_per_worker_user_configurable,
+                    p.monthly_compute_gcu, p.monthly_memory_gb_seconds,
+                    p.monthly_durable_storage_gb_month, p.monthly_ephemeral_storage_gb_month,
+                    p.overage_eligible,
+                    COALESCE(mode.mode, 'hard_limit') AS monthly_usage_mode,
+                    COALESCE(mode.revision, 0) AS monthly_usage_mode_revision,
+                    p.max_table_elements_per_worker,
+                    p.max_disk_space_per_worker_enabled,
+                    p.max_disk_space_per_worker,
+                    storage_override.override_value AS storage_override_value,
+                    memory_override.override_value AS max_memory_override_value,
+                    compute_grant.override_value AS monthly_compute_grant_value,
+                    compute_grant.reason AS monthly_compute_grant_reason,
+                    compute_grant.expires_at AS monthly_compute_grant_expires_at,
+                    compute_grant.created_by AS monthly_compute_grant_created_by,
+                    compute_grant.created_at AS monthly_compute_grant_created_at,
+                    monthly_memory_grant.override_value AS monthly_memory_grant_value,
+                    monthly_memory_grant.reason AS monthly_memory_grant_reason,
+                    monthly_memory_grant.expires_at AS monthly_memory_grant_expires_at,
+                    monthly_memory_grant.created_by AS monthly_memory_grant_created_by,
+                    monthly_memory_grant.created_at AS monthly_memory_grant_created_at,
+                    durable_storage_grant.override_value AS monthly_durable_storage_grant_value,
+                    durable_storage_grant.reason AS monthly_durable_storage_grant_reason,
+                    durable_storage_grant.expires_at AS monthly_durable_storage_grant_expires_at,
+                    durable_storage_grant.created_by AS monthly_durable_storage_grant_created_by,
+                    durable_storage_grant.created_at AS monthly_durable_storage_grant_created_at,
+                    ephemeral_storage_grant.override_value AS monthly_ephemeral_storage_grant_value,
+                    ephemeral_storage_grant.reason AS monthly_ephemeral_storage_grant_reason,
+                    ephemeral_storage_grant.expires_at AS monthly_ephemeral_storage_grant_expires_at,
+                    ephemeral_storage_grant.created_by AS monthly_ephemeral_storage_grant_created_by,
+                    ephemeral_storage_grant.created_at AS monthly_ephemeral_storage_grant_created_at,
+                    memory_grant.override_value AS max_memory_grant_value,
+                    memory_grant.reason AS max_memory_grant_reason,
+                    memory_grant.expires_at AS max_memory_grant_expires_at,
+                    memory_grant.created_by AS max_memory_grant_created_by,
+                    memory_grant.created_at AS max_memory_grant_created_at,
+                    storage_grant.override_value AS storage_grant_value,
+                    storage_grant.reason AS storage_grant_reason,
+                    storage_grant.expires_at AS storage_grant_expires_at,
+                    storage_grant.created_by AS storage_grant_created_by,
+                    storage_grant.created_at AS storage_grant_created_at,
+                    p.max_disk_space_per_worker_ceiling, p.max_disk_space_per_worker_user_configurable,
+                    p.max_concurrent_agents_per_executor,
+                    p.total_app_count,
+                    p.total_env_count, p.total_component_count, p.total_worker_connection_count,
+                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
+                    p.per_invocation_http_call_limit, p.per_invocation_rpc_call_limit,
+                    p.monthly_http_call_limit, p.monthly_rpc_call_limit,
+                    p.oplog_writes_per_second
+                FROM accounts a
+                JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+                JOIN plans p ON p.plan_id = ar.plan_id
+                LEFT JOIN account_resource_overrides storage_override
+                    ON storage_override.account_id = a.account_id
+                    AND storage_override.dimension = $2 AND storage_override.source = $5
+                    AND (storage_override.expires_at IS NULL OR storage_override.expires_at > $4)
+                LEFT JOIN account_resource_overrides memory_override
+                    ON memory_override.account_id = a.account_id
+                    AND memory_override.dimension = $3 AND memory_override.source = $5
+                    AND (memory_override.expires_at IS NULL OR memory_override.expires_at > $4)
+                LEFT JOIN account_resource_overrides compute_grant
+                    ON compute_grant.account_id = a.account_id
+                    AND compute_grant.dimension = $7 AND compute_grant.source = $6
+                    AND (compute_grant.expires_at IS NULL OR compute_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides monthly_memory_grant
+                    ON monthly_memory_grant.account_id = a.account_id
+                    AND monthly_memory_grant.dimension = $8 AND monthly_memory_grant.source = $6
+                    AND (monthly_memory_grant.expires_at IS NULL OR monthly_memory_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides durable_storage_grant
+                    ON durable_storage_grant.account_id = a.account_id
+                    AND durable_storage_grant.dimension = $9 AND durable_storage_grant.source = $6
+                    AND (durable_storage_grant.expires_at IS NULL OR durable_storage_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides ephemeral_storage_grant
+                    ON ephemeral_storage_grant.account_id = a.account_id
+                    AND ephemeral_storage_grant.dimension = $10 AND ephemeral_storage_grant.source = $6
+                    AND (ephemeral_storage_grant.expires_at IS NULL OR ephemeral_storage_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides memory_grant
+                    ON memory_grant.account_id = a.account_id
+                    AND memory_grant.dimension = $11 AND memory_grant.source = $6
+                    AND (memory_grant.expires_at IS NULL OR memory_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides storage_grant
+                    ON storage_grant.account_id = a.account_id
+                    AND storage_grant.dimension = $12 AND storage_grant.source = $6
+                    AND (storage_grant.expires_at IS NULL OR storage_grant.expires_at > $4)
+                LEFT JOIN account_monthly_usage_modes mode ON mode.account_id = a.account_id
+                WHERE a.account_id = $1 AND a.deleted_at IS NULL
+            "#})
+            .bind(account_id)
+            .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str())
+            .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
+            .bind(active_at)
+            .bind(crate::repo::model::account_resource_override::AccountResourceOverrideSource::SelfService.as_str())
+            .bind(crate::repo::model::account_resource_override::AccountResourceOverrideSource::AdminGrant.as_str())
+            .bind(AccountResourceOverrideDimension::MonthlyComputeGcu.as_str())
+            .bind(AccountResourceOverrideDimension::MonthlyMemoryGbSeconds.as_str())
+            .bind(AccountResourceOverrideDimension::MonthlyDurableStorageGbMonth.as_str())
+            .bind(AccountResourceOverrideDimension::MonthlyEphemeralStorageGbMonth.as_str())
+            .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
+            .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str()),
+        )
+        .await
+    }
+
     async fn usage_baseline_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         account_id: Uuid,
@@ -309,8 +673,14 @@ impl DbAccountUsageRepo<PostgresPool> {
                 SELECT
                     COALESCE(MAX(CASE WHEN usage_type = $3 THEN value END), 0) AS compute_fuel,
                     COALESCE(MAX(CASE WHEN usage_type = $4 THEN value END), 0) AS memory_gb_seconds,
+                    COALESCE((SELECT byte_nanoseconds FROM account_monthly_memory_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) AS memory_byte_nanoseconds_remainder,
                     COALESCE(MAX(CASE WHEN usage_type = $5 THEN value END), 0) AS durable_storage_byte_seconds,
-                    COALESCE(MAX(CASE WHEN usage_type = $6 THEN value END), 0) AS ephemeral_storage_byte_seconds
+                    COALESCE((SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) AS durable_storage_byte_nanoseconds_remainder,
+                    COALESCE(MAX(CASE WHEN usage_type = $6 THEN value END), 0) AS ephemeral_storage_byte_seconds,
+                    COALESCE((SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) AS ephemeral_storage_byte_nanoseconds_remainder
                 FROM account_usage_stats
                 WHERE account_id = $1 AND usage_key = $2
             "#})
@@ -322,6 +692,95 @@ impl DbAccountUsageRepo<PostgresPool> {
             .bind(UsageType::MonthlyEphemeralStorageByteSeconds),
         )
         .await
+    }
+
+    async fn resolve_monthly_policy_revision_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        account_id: Uuid,
+        period: AccountUsagePeriod,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<ResolvedMonthlyPolicyRevision>> {
+        if DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(tx, account_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let account_plan = Self::get_plan_in_tx(tx, account_id, active_at)
+            .await?
+            .ok_or_else(|| {
+                RepoError::InternalError(anyhow::anyhow!(
+                    "Account {account_id} disappeared while resolving monthly policy"
+                ))
+            })?;
+        let snapshot = account_plan.monthly_policy_snapshot()?;
+        let current = Self::current_policy_revision_in_tx(tx, account_id).await?;
+        let mode = crate::repo::model::account_usage::monthly_usage_mode_str(snapshot.mode);
+        if let Some(current) = &current
+            && current.period_year == period.year
+            && current.period_month == period.month as i32
+            && current.mode == mode
+            && current.resolved_compute_fuel.get() == snapshot.resolved.compute_fuel
+            && current.resolved_memory_gb_seconds.get() == snapshot.resolved.memory_gb_seconds
+            && current.resolved_durable_storage_byte_seconds.get()
+                == snapshot.resolved.durable_storage_byte_seconds
+            && current.resolved_ephemeral_storage_byte_seconds.get()
+                == snapshot.resolved.ephemeral_storage_byte_seconds
+        {
+            return Ok(Some(ResolvedMonthlyPolicyRevision {
+                revision: current.revision.get(),
+                account_plan,
+            }));
+        }
+
+        let revision = match current {
+            Some(current) => current.revision.get().checked_add(1).ok_or_else(|| {
+                RepoError::InternalError(anyhow::anyhow!(
+                    "Monthly policy revision overflow for account {account_id}"
+                ))
+            })?,
+            None => 0,
+        };
+        let baseline = Self::usage_baseline_in_tx(tx, account_id, period).await?;
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO account_monthly_policy_revisions (
+                    account_id, revision, period_year, period_month, mode,
+                    baseline_compute_fuel, baseline_memory_gb_seconds,
+                    baseline_memory_byte_nanoseconds_remainder,
+                    baseline_durable_storage_byte_seconds,
+                    baseline_durable_storage_byte_nanoseconds_remainder,
+                    baseline_ephemeral_storage_byte_seconds,
+                    baseline_ephemeral_storage_byte_nanoseconds_remainder,
+                    resolved_compute_fuel, resolved_memory_gb_seconds,
+                    resolved_durable_storage_byte_seconds,
+                    resolved_ephemeral_storage_byte_seconds, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            "#})
+            .bind(account_id)
+            .bind(NumericU64::new(revision))
+            .bind(period.year)
+            .bind(period.month as i32)
+            .bind(mode)
+            .bind(baseline.compute_fuel)
+            .bind(baseline.memory_gb_seconds)
+            .bind(baseline.memory_byte_nanoseconds_remainder)
+            .bind(baseline.durable_storage_byte_seconds)
+            .bind(baseline.durable_storage_byte_nanoseconds_remainder)
+            .bind(baseline.ephemeral_storage_byte_seconds)
+            .bind(baseline.ephemeral_storage_byte_nanoseconds_remainder)
+            .bind(NumericU64::new(snapshot.resolved.compute_fuel))
+            .bind(NumericU64::new(snapshot.resolved.memory_gb_seconds))
+            .bind(NumericU64::new(snapshot.resolved.durable_storage_byte_seconds))
+            .bind(NumericU64::new(snapshot.resolved.ephemeral_storage_byte_seconds))
+            .bind(SqlDateTime::now()),
+        )
+        .await?;
+        Ok(Some(ResolvedMonthlyPolicyRevision {
+            revision,
+            account_plan,
+        }))
     }
 
     async fn current_mode_in_tx(
@@ -343,6 +802,26 @@ impl DbAccountUsageRepo<PostgresPool> {
             )),
             None => Ok((MonthlyUsageMode::HardLimit, 0)),
         }
+    }
+
+    async fn current_policy_revision_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        account_id: Uuid,
+    ) -> RepoResult<Option<MonthlyPolicyRevisionRow>> {
+        tx.fetch_optional_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT revision, period_year, period_month, mode,
+                       resolved_compute_fuel, resolved_memory_gb_seconds,
+                       resolved_durable_storage_byte_seconds,
+                       resolved_ephemeral_storage_byte_seconds
+                FROM account_monthly_policy_revisions
+                WHERE account_id = $1
+                ORDER BY revision DESC
+                LIMIT 1
+            "#})
+            .bind(account_id),
+        )
+        .await
     }
 
     async fn write_transition_in_tx(
@@ -469,14 +948,32 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         active_at: &SqlDateTime,
     ) -> RepoResult<Option<AccountUsage>> {
-        let Some(account_plan) = self.get_plan(account_id, active_at).await? else {
-            return Ok(None);
-        };
+        let date = date.clone();
+        let active_at = active_at.clone();
+        self.with_tx("get", |tx| {
+            async move {
+                let period = AccountUsagePeriod {
+                    year: date.as_utc().year(),
+                    month: date.as_utc().month(),
+                };
+                let Some(resolved_policy) = Self::resolve_monthly_policy_revision_in_tx(
+                    tx,
+                    account_id,
+                    period,
+                    &active_at,
+                )
+                .await?
+                else {
+                    return Ok(None);
+                };
+                let ResolvedMonthlyPolicyRevision {
+                    revision: monthly_policy_revision,
+                    account_plan,
+                } = resolved_policy;
 
-        let usage_rows = self
-            .with_ro("get")
-            .fetch_all(
-                sqlx::query(indoc! { r#"
+                let usage_rows = tx
+                    .fetch_all(
+                        sqlx::query(indoc! { r#"
                     WITH counts AS (
                         SELECT
                             CAST(COUNT(DISTINCT a.application_id) AS NUMERIC) AS total_apps,
@@ -523,72 +1020,78 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), durable_byte_nanoseconds, ephemeral_byte_nanoseconds
                     FROM account_monthly_storage_remainders
                     WHERE account_id = $1 AND usage_key = $2;
-                "#})
-                .bind(account_id)
-                .bind(date_to_usage_key(date))
-                .bind(USAGE_KEY_TOTAL)
-                .bind(UsageType::TotalAppCount)
-                .bind(UsageType::TotalEnvCount)
-                .bind(UsageType::TotalComponentCount)
-                .bind(UsageType::TotalComponentStorageBytes),
-            )
-            .await?;
+                        "#})
+                        .bind(account_id)
+                        .bind(date_to_usage_key(&date))
+                        .bind(USAGE_KEY_TOTAL)
+                        .bind(UsageType::TotalAppCount)
+                        .bind(UsageType::TotalEnvCount)
+                        .bind(UsageType::TotalComponentCount)
+                        .bind(UsageType::TotalComponentStorageBytes),
+                    )
+                    .await?;
 
-        let mut usage = BTreeMap::new();
-        let mut monthly_memory_byte_nanoseconds_remainder = 0u128;
-        let mut monthly_durable_storage_byte_nanoseconds_remainder = 0u128;
-        let mut monthly_ephemeral_storage_byte_nanoseconds_remainder = 0u128;
-        for row in usage_rows {
-            let usage_type = row.try_get::<Option<UsageType>, _>("usage_type")?;
-            let value = row.try_get::<Option<NumericU64>, _>("value")?;
-            if let (Some(usage_type), Some(value)) = (usage_type, value) {
-                usage.insert(usage_type, value.get());
-            }
-            if let Some(remainder) =
-                row.try_get::<Option<NumericU64>, _>("memory_byte_nanoseconds_remainder")?
-            {
-                monthly_memory_byte_nanoseconds_remainder =
-                    monthly_memory_byte_nanoseconds_remainder
-                        .saturating_add(remainder.get() as u128);
-            }
-            if let Some(remainder) =
-                row.try_get::<Option<NumericU64>, _>("durable_storage_byte_nanoseconds_remainder")?
-            {
-                monthly_durable_storage_byte_nanoseconds_remainder =
-                    monthly_durable_storage_byte_nanoseconds_remainder
-                        .saturating_add(remainder.get() as u128);
-            }
-            if let Some(remainder) = row
-                .try_get::<Option<NumericU64>, _>("ephemeral_storage_byte_nanoseconds_remainder")?
-            {
-                monthly_ephemeral_storage_byte_nanoseconds_remainder =
-                    monthly_ephemeral_storage_byte_nanoseconds_remainder
-                        .saturating_add(remainder.get() as u128);
-            }
-        }
+                let mut usage = BTreeMap::new();
+                let mut monthly_memory_byte_nanoseconds_remainder = 0u128;
+                let mut monthly_durable_storage_byte_nanoseconds_remainder = 0u128;
+                let mut monthly_ephemeral_storage_byte_nanoseconds_remainder = 0u128;
+                for row in usage_rows {
+                    let usage_type = row.try_get::<Option<UsageType>, _>("usage_type")?;
+                    let value = row.try_get::<Option<NumericU64>, _>("value")?;
+                    if let (Some(usage_type), Some(value)) = (usage_type, value) {
+                        usage.insert(usage_type, value.get());
+                    }
+                    if let Some(remainder) = row
+                        .try_get::<Option<NumericU64>, _>("memory_byte_nanoseconds_remainder")?
+                    {
+                        monthly_memory_byte_nanoseconds_remainder =
+                            monthly_memory_byte_nanoseconds_remainder
+                                .saturating_add(remainder.get() as u128);
+                    }
+                    if let Some(remainder) = row.try_get::<Option<NumericU64>, _>(
+                        "durable_storage_byte_nanoseconds_remainder",
+                    )? {
+                        monthly_durable_storage_byte_nanoseconds_remainder =
+                            monthly_durable_storage_byte_nanoseconds_remainder
+                                .saturating_add(remainder.get() as u128);
+                    }
+                    if let Some(remainder) = row.try_get::<Option<NumericU64>, _>(
+                        "ephemeral_storage_byte_nanoseconds_remainder",
+                    )? {
+                        monthly_ephemeral_storage_byte_nanoseconds_remainder =
+                            monthly_ephemeral_storage_byte_nanoseconds_remainder
+                                .saturating_add(remainder.get() as u128);
+                    }
+                }
 
-        let admin_grant_values = account_plan.admin_grant_values();
-        let admin_grants = account_plan.admin_grants()?;
-        let monthly_usage_mode = account_plan.monthly_usage_mode()?;
-        Ok(Some(AccountUsage {
-            account_id,
-            year: date.as_utc().year(),
-            month: date.as_utc().month(),
-            usage,
-            storage_limit: storage_limit(&account_plan),
-            max_memory_per_worker: max_memory_per_worker(&account_plan),
-            admin_grant_values,
-            admin_grants,
-            metering: None,
-            monthly_usage_mode,
-            monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
-            monthly_memory_byte_nanoseconds_remainder,
-            monthly_durable_storage_byte_nanoseconds_remainder,
-            monthly_ephemeral_storage_byte_nanoseconds_remainder,
-            monthly_usage_attribution: None,
-            plan: account_plan.plan,
-            changes: Default::default(),
-        }))
+                let admin_grant_values = account_plan.admin_grant_values();
+                let admin_grants = account_plan.admin_grants()?;
+                let monthly_usage_mode = account_plan.monthly_usage_mode()?;
+                let account_usage = AccountUsage {
+                    account_id,
+                    year: date.as_utc().year(),
+                    month: date.as_utc().month(),
+                    usage,
+                    storage_limit: storage_limit(&account_plan),
+                    max_memory_per_worker: max_memory_per_worker(&account_plan),
+                    admin_grant_values,
+                    admin_grants,
+                    metering: None,
+                    monthly_usage_mode,
+                    monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
+                    monthly_policy_revision,
+                    monthly_memory_byte_nanoseconds_remainder,
+                    monthly_durable_storage_byte_nanoseconds_remainder,
+                    monthly_ephemeral_storage_byte_nanoseconds_remainder,
+                    monthly_usage_attribution: None,
+                    plan: account_plan.plan,
+                    changes: Default::default(),
+                };
+                Ok(Some(account_usage))
+            }
+            .boxed()
+        })
+        .await
     }
 
     async fn get_for_type(
@@ -788,6 +1291,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             metering: None,
             monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
+            monthly_policy_revision: 0,
             monthly_memory_byte_nanoseconds_remainder,
             monthly_durable_storage_byte_nanoseconds_remainder,
             monthly_ephemeral_storage_byte_nanoseconds_remainder,
@@ -810,17 +1314,17 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         usage_type,
                         value,
                         updated_at,
-                        NULL AS compute_enabled,
-                        NULL AS memory_enabled,
-                        NULL AS filesystem_enabled
+                        CAST(NULL AS BOOLEAN) AS compute_enabled,
+                        CAST(NULL AS BOOLEAN) AS memory_enabled,
+                        CAST(NULL AS BOOLEAN) AS filesystem_enabled
                     FROM account_usage_stats
                     WHERE account_id = $1
                         AND usage_key = $2
                         AND usage_type IN ($3, $4, $5, $6)
                     UNION ALL
                     SELECT
-                        NULL AS usage_type,
-                        NULL AS value,
+                        CAST(NULL AS INTEGER) AS usage_type,
+                        CAST(NULL AS NUMERIC) AS value,
                         updated_at,
                         compute_enabled,
                         memory_enabled,
@@ -837,10 +1341,49 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             )
             .await?;
 
+        let attribution_rows = self
+            .with_ro("get_usage_report_attribution")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT attribution.usage_key, attribution.revision,
+                           policy.period_year, policy.period_month, policy.mode,
+                           policy.baseline_compute_fuel,
+                           policy.baseline_memory_gb_seconds,
+                           policy.baseline_memory_byte_nanoseconds_remainder,
+                           policy.baseline_durable_storage_byte_seconds,
+                           policy.baseline_durable_storage_byte_nanoseconds_remainder,
+                           policy.baseline_ephemeral_storage_byte_seconds,
+                           policy.baseline_ephemeral_storage_byte_nanoseconds_remainder,
+                           policy.resolved_compute_fuel,
+                           policy.resolved_memory_gb_seconds,
+                           policy.resolved_durable_storage_byte_seconds,
+                           policy.resolved_ephemeral_storage_byte_seconds,
+                           attribution.compute_fuel_delta,
+                           attribution.memory_gb_seconds_delta,
+                           attribution.durable_storage_byte_seconds_delta,
+                           attribution.ephemeral_storage_byte_seconds_delta,
+                           attribution.memory_byte_nanoseconds_remainder,
+                           attribution.durable_storage_byte_nanoseconds_remainder,
+                           attribution.ephemeral_storage_byte_nanoseconds_remainder,
+                           attribution.compute_metering_enabled,
+                           attribution.memory_metering_enabled,
+                           attribution.filesystem_metering_enabled
+                    FROM account_monthly_policy_attribution attribution
+                    JOIN account_monthly_policy_revisions policy
+                      ON policy.account_id = attribution.account_id
+                     AND policy.revision = attribution.revision
+                    WHERE attribution.account_id = $1 AND attribution.usage_key = $2
+                "#})
+                .bind(account_id)
+                .bind(year_and_month_to_usage_key(period.year, period.month)),
+            )
+            .await?;
+
         let mut report = AccountUsageRecord::new(period);
         for row in rows {
             AccountUsageReportRow::from_row(&row)?.apply_to(&mut report);
         }
+        apply_billable_excess(attribution_rows, &mut report)?;
         Ok(report)
     }
 
@@ -872,9 +1415,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         stats.usage_type,
                         stats.value,
                         stats.updated_at,
-                        NULL AS compute_enabled,
-                        NULL AS memory_enabled,
-                        NULL AS filesystem_enabled
+                        CAST(NULL AS BOOLEAN) AS compute_enabled,
+                        CAST(NULL AS BOOLEAN) AS memory_enabled,
+                        CAST(NULL AS BOOLEAN) AS filesystem_enabled,
+                        CAST(NULL AS NUMERIC) AS allow_overage_compute_fuel,
+                        CAST(NULL AS NUMERIC) AS allow_overage_memory_gb_seconds,
+                        CAST(NULL AS NUMERIC) AS allow_overage_durable_storage_byte_seconds,
+                        CAST(NULL AS NUMERIC) AS allow_overage_ephemeral_storage_byte_seconds
                     FROM account_usage_stats stats
                     JOIN periods ON periods.usage_key = stats.usage_key
                     WHERE stats.account_id = $1
@@ -882,16 +1429,77 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     UNION ALL
                     SELECT
                         state.usage_key,
-                        NULL AS usage_type,
-                        NULL AS value,
+                        CAST(NULL AS INTEGER) AS usage_type,
+                        CAST(NULL AS NUMERIC) AS value,
                         state.updated_at,
                         state.compute_enabled,
                         state.memory_enabled,
-                        state.filesystem_enabled
+                        state.filesystem_enabled,
+                        CAST(NULL AS NUMERIC) AS allow_overage_compute_fuel,
+                        CAST(NULL AS NUMERIC) AS allow_overage_memory_gb_seconds,
+                        CAST(NULL AS NUMERIC) AS allow_overage_durable_storage_byte_seconds,
+                        CAST(NULL AS NUMERIC) AS allow_overage_ephemeral_storage_byte_seconds
                     FROM account_usage_metering_state state
                     JOIN periods ON periods.usage_key = state.usage_key
                     WHERE state.account_id = $1
                     ORDER BY 1 DESC
+                "#})
+                .bind(account_id)
+                .bind(year_and_month_to_usage_key(before.year, before.month))
+                .bind(UsageType::MonthlyDurableAgentStorageByteSeconds)
+                .bind(UsageType::MonthlyEphemeralStorageByteSeconds)
+                .bind(UsageType::MonthlyGasLimit)
+                .bind(UsageType::MonthlyMemoryGbSeconds)
+                .bind(i64::try_from(last).unwrap_or(i64::MAX)),
+            )
+            .await?;
+
+        let attribution_rows: Vec<MonthlyPolicyAttributionRow> = self
+            .with_ro("get_usage_history_attribution")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    WITH periods AS (
+                        SELECT usage_key
+                        FROM account_usage_stats
+                        WHERE account_id = $1
+                            AND usage_key < $2
+                            AND usage_type IN ($3, $4, $5, $6)
+                        UNION
+                        SELECT usage_key
+                        FROM account_usage_metering_state
+                        WHERE account_id = $1 AND usage_key < $2
+                        ORDER BY 1 DESC
+                        LIMIT $7
+                    )
+                    SELECT attribution.usage_key, attribution.revision,
+                           policy.period_year, policy.period_month, policy.mode,
+                           policy.baseline_compute_fuel,
+                           policy.baseline_memory_gb_seconds,
+                           policy.baseline_memory_byte_nanoseconds_remainder,
+                           policy.baseline_durable_storage_byte_seconds,
+                           policy.baseline_durable_storage_byte_nanoseconds_remainder,
+                           policy.baseline_ephemeral_storage_byte_seconds,
+                           policy.baseline_ephemeral_storage_byte_nanoseconds_remainder,
+                           policy.resolved_compute_fuel,
+                           policy.resolved_memory_gb_seconds,
+                           policy.resolved_durable_storage_byte_seconds,
+                           policy.resolved_ephemeral_storage_byte_seconds,
+                           attribution.compute_fuel_delta,
+                           attribution.memory_gb_seconds_delta,
+                           attribution.durable_storage_byte_seconds_delta,
+                           attribution.ephemeral_storage_byte_seconds_delta,
+                           attribution.memory_byte_nanoseconds_remainder,
+                           attribution.durable_storage_byte_nanoseconds_remainder,
+                           attribution.ephemeral_storage_byte_nanoseconds_remainder,
+                           attribution.compute_metering_enabled,
+                           attribution.memory_metering_enabled,
+                           attribution.filesystem_metering_enabled
+                    FROM account_monthly_policy_attribution attribution
+                    JOIN periods ON periods.usage_key = attribution.usage_key
+                    JOIN account_monthly_policy_revisions policy
+                      ON policy.account_id = attribution.account_id
+                     AND policy.revision = attribution.revision
+                    WHERE attribution.account_id = $1
                 "#})
                 .bind(account_id)
                 .bind(year_and_month_to_usage_key(before.year, before.month))
@@ -917,6 +1525,26 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 .entry(period)
                 .or_insert_with(|| AccountUsageRecord::new(period));
             AccountUsageReportRow::from_row(&row)?.apply_to(report);
+        }
+
+        let mut attribution_by_period =
+            BTreeMap::<AccountUsagePeriod, Vec<MonthlyPolicyAttributionRow>>::new();
+        for row in attribution_rows {
+            let Some((year, month)) = row.usage_key.split_once('-') else {
+                continue;
+            };
+            let (Ok(year), Ok(month)) = (year.parse(), month.parse()) else {
+                continue;
+            };
+            attribution_by_period
+                .entry(AccountUsagePeriod { year, month })
+                .or_default()
+                .push(row);
+        }
+        for (period, attribution) in attribution_by_period {
+            if let Some(report) = periods.get_mut(&period) {
+                apply_billable_excess(attribution, report)?;
+            }
         }
 
         Ok(periods
@@ -1070,6 +1698,28 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             .await
     }
 
+    async fn get_or_create_monthly_policy_revision(
+        &self,
+        account_id: Uuid,
+        period: AccountUsagePeriod,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<ResolvedMonthlyPolicyRevision> {
+        let active_at = active_at.clone();
+        self.with_tx("get_or_create_monthly_policy_revision", |tx| {
+            async move {
+                Self::resolve_monthly_policy_revision_in_tx(tx, account_id, period, &active_at)
+                    .await?
+                    .ok_or_else(|| {
+                        RepoError::InternalError(anyhow::anyhow!(
+                            "Account {account_id} not found while registering monthly policy"
+                        ))
+                    })
+            }
+            .boxed()
+        })
+        .await
+    }
+
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<u64> {
         let account_id = account_usage.account_id;
         let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
@@ -1095,8 +1745,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         );
         let attribution = account_usage.monthly_usage_attribution;
         let attribution_revision = attribution
-            .map(|attribution| attribution.revision)
-            .unwrap_or(account_usage.monthly_usage_mode_revision);
+            .map(|attribution| attribution.policy_revision)
+            .unwrap_or(account_usage.monthly_policy_revision);
         let attributed_remainders = attribution.map_or((0, 0, 0), |attribution| {
             (
                 attribution.memory_byte_nanoseconds_remainder,
@@ -1104,16 +1754,27 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 attribution.ephemeral_storage_byte_nanoseconds_remainder,
             )
         });
+        let has_attribution =
+            attributed_usage != (0, 0, 0, 0) || attributed_remainders != (0, 0, 0);
         let metering = account_usage.metering;
+        let monthly_policy_revision = account_usage.monthly_policy_revision;
 
         self.with_tx("change_usage", |tx| {
             async move {
                 DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(tx, account_id)
                     .await?;
-                let (_, current_revision) = Self::current_mode_in_tx(tx, account_id).await?;
-                if attribution_revision > current_revision {
+                let current_policy_revision = Self::current_policy_revision_in_tx(tx, account_id)
+                    .await?
+                    .map(|revision| revision.revision.get());
+                if has_attribution && current_policy_revision.is_none() {
                     return Err(RepoError::InternalError(anyhow::anyhow!(
-                        "Resource usage references future monthly usage mode revision {attribution_revision} for account {account_id}; current revision is {current_revision}"
+                        "No monthly policy revision exists for account {account_id}"
+                    )));
+                }
+                if current_policy_revision.is_some_and(|current| attribution_revision > current) {
+                    return Err(RepoError::InternalError(anyhow::anyhow!(
+                        "Resource usage references future monthly policy revision {attribution_revision} for account {account_id}; current revision is {}",
+                        current_policy_revision.expect("checked above")
                     )));
                 }
                 let updated_at = SqlDateTime::now();
@@ -1290,10 +1951,10 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     tx.execute(query.build()).await?;
                 }
 
-                if attributed_usage != (0, 0, 0, 0) || attributed_remainders != (0, 0, 0) {
+                if has_attribution {
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            INSERT INTO account_monthly_usage_mode_attribution (
+                            INSERT INTO account_monthly_policy_attribution (
                                 usage_update_id, account_id, revision, usage_key,
                                 compute_fuel_delta, memory_gb_seconds_delta,
                                 durable_storage_byte_seconds_delta,
@@ -1301,8 +1962,10 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                 memory_byte_nanoseconds_remainder,
                                 durable_storage_byte_nanoseconds_remainder,
                                 ephemeral_storage_byte_nanoseconds_remainder,
+                                compute_metering_enabled, memory_metering_enabled,
+                                filesystem_metering_enabled,
                                 recorded_at
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                         "#})
                         .bind(Uuid::new_v4())
                         .bind(account_id)
@@ -1315,6 +1978,9 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .bind(NumericU64::new(attributed_remainders.0))
                         .bind(NumericU64::new(attributed_remainders.1))
                         .bind(NumericU64::new(attributed_remainders.2))
+                        .bind(metering.is_some_and(|metering| metering.compute))
+                        .bind(metering.is_some_and(|metering| metering.memory))
+                        .bind(metering.is_some_and(|metering| metering.filesystem))
                         .bind(&updated_at),
                     )
                     .await?;
@@ -1352,7 +2018,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     tx.execute(query.build()).await?;
                 }
 
-                Ok(current_revision)
+                Ok(current_policy_revision.unwrap_or(monthly_policy_revision))
             }
             .boxed()
         })

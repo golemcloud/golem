@@ -17785,46 +17785,60 @@ components:
     AccountResourcePolicy:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
-        adminGrants: []
         maxMemoryPerAgent:
           ceiling: 10737418240
           effectiveValue: 1073741824
-          overrideValue: null
           planDefault: 1073741824
+          unit: bytes
           userConfigurable: true
         maxStoragePerAgent:
+          activeAdminGrant:
+            actorAccountId: 00000000-0000-0000-0000-000000000002
+            dimension: maxStoragePerAgent
+            grantedAt: 2023-11-14T22:13:20+00:00
+            reason: support
+            value: 2147483648
           ceiling: 10737418240
-          effectiveValue: 1073741824
+          effectiveValue: 2147483648
           enabled: true
           planDefault: 1073741824
+          unit: bytes
           userConfigurable: true
         monthly:
           computeGcu:
+            allowOverageUsage: 0.0
             behavior: hardLimit
             metering: enabled
-            monthlyAmount: 100
+            planAmount: 100
             remaining: 75.0
+            resolvedMonthlyAmount: 100
             unit: GCU
             usage: 25.0
           durableStorageGbMonth:
+            allowOverageUsage: 0.0
             behavior: hardLimit
             metering: enabled
-            monthlyAmount: 50
+            planAmount: 50
             remaining: 37.5
+            resolvedMonthlyAmount: 50
             unit: GB-month
             usage: 12.5
           ephemeralStorageGbMonth:
+            allowOverageUsage: 0.0
             behavior: hardLimit
             metering: enabled
-            monthlyAmount: 25
+            planAmount: 25
             remaining: 20.0
+            resolvedMonthlyAmount: 25
             unit: GB-month
             usage: 5.0
           memoryGbSeconds:
+            allowOverageUsage: 0.0
             behavior: hardLimit
             metering: enabled
-            monthlyAmount: 10000
+            planAmount: 10000
             remaining: 7500
+            resolvedMonthlyAmount: 10000
             unit: GB-seconds
             usage: 2500
         monthlyUsageMode: hardLimit
@@ -17841,10 +17855,6 @@ components:
           type: boolean
         latestOwnerTransition:
           $ref: '#/components/schemas/MonthlyUsageModeTransition'
-        adminGrants:
-          type: array
-          items:
-            $ref: '#/components/schemas/AdminResourceGrant'
         monthly:
           $ref: '#/components/schemas/MonthlyResourceLimits'
         maxMemoryPerAgent:
@@ -17855,7 +17865,6 @@ components:
       - accountId
       - monthlyUsageMode
       - overageAllowedByPlan
-      - adminGrants
       - monthly
       - maxMemoryPerAgent
       - maxStoragePerAgent
@@ -20180,9 +20189,25 @@ components:
       required:
       - currentRevision
     MemoryLimit:
+      example:
+        activeAdminGrant:
+          actorAccountId: 00000000-0000-0000-0000-000000000002
+          dimension: maxMemoryPerAgent
+          grantedAt: 2023-11-14T22:13:20+00:00
+          reason: support
+          value: 2147483648
+        ceiling: 10737418240
+        effectiveValue: 2147483648
+        planDefault: 1073741824
+        unit: bytes
+        userConfigurable: true
       title: MemoryLimit
       type: object
       properties:
+        unit:
+          $ref: '#/components/schemas/PerAgentLimitUnit'
+        activeAdminGrant:
+          $ref: '#/components/schemas/AdminResourceGrant'
         effectiveValue:
           type: integer
           format: uint64
@@ -20198,6 +20223,7 @@ components:
         userConfigurable:
           type: boolean
       required:
+      - unit
       - effectiveValue
       - planDefault
       - ceiling
@@ -20214,13 +20240,22 @@ components:
       properties:
         metering:
           $ref: '#/components/schemas/MeteringStatus'
-        monthlyAmount:
+        planAmount:
+          type: integer
+          format: uint64
+        activeAdminGrant:
+          $ref: '#/components/schemas/AdminResourceGrant'
+        resolvedMonthlyAmount:
           type: integer
           format: uint64
         usage:
           type: number
           format: double
         remaining:
+          type: number
+          format: double
+        allowOverageUsage:
+          description: Usage above the applied revision's resolved allowance that accrued with overage enabled.
           type: number
           format: double
         unit:
@@ -20245,7 +20280,12 @@ components:
       properties:
         metering:
           $ref: '#/components/schemas/MeteringStatus'
-        monthlyAmount:
+        planAmount:
+          type: integer
+          format: uint64
+        activeAdminGrant:
+          $ref: '#/components/schemas/AdminResourceGrant'
+        resolvedMonthlyAmount:
           type: integer
           format: uint64
         usage:
@@ -20254,6 +20294,10 @@ components:
         remaining:
           type: integer
           format: uint64
+        allowOverageUsage:
+          description: Usage above the applied revision's resolved allowance that accrued with overage enabled.
+          type: number
+          format: double
         unit:
           $ref: '#/components/schemas/MonthlyMemoryUnit'
         behavior:
@@ -20288,13 +20332,22 @@ components:
       properties:
         metering:
           $ref: '#/components/schemas/MeteringStatus'
-        monthlyAmount:
+        planAmount:
+          type: integer
+          format: uint64
+        activeAdminGrant:
+          $ref: '#/components/schemas/AdminResourceGrant'
+        resolvedMonthlyAmount:
           type: integer
           format: uint64
         usage:
           type: number
           format: double
         remaining:
+          type: number
+          format: double
+        allowOverageUsage:
+          description: Usage above the applied revision's resolved allowance that accrued with overage enabled.
           type: number
           format: double
         unit:
@@ -20866,6 +20919,10 @@ components:
           type: string
       required:
       - variableName
+    PerAgentLimitUnit:
+      type: string
+      enum:
+      - bytes
     PermissionShare:
       title: PermissionShare
       type: object
@@ -21975,16 +22032,27 @@ components:
       - $ref: '#/components/schemas/SnapshottingConfig'
     StorageLimit:
       example:
+        activeAdminGrant:
+          actorAccountId: 00000000-0000-0000-0000-000000000002
+          dimension: maxStoragePerAgent
+          grantedAt: 2023-11-14T22:13:20+00:00
+          reason: support
+          value: 2147483648
         ceiling: 10737418240
-        effectiveValue: 1073741824
+        effectiveValue: 2147483648
         enabled: true
         planDefault: 1073741824
+        unit: bytes
         userConfigurable: true
       title: StorageLimit
       type: object
       properties:
         enabled:
           type: boolean
+        unit:
+          $ref: '#/components/schemas/PerAgentLimitUnit'
+        activeAdminGrant:
+          $ref: '#/components/schemas/AdminResourceGrant'
         effectiveValue:
           type: integer
           format: uint64
@@ -22003,6 +22071,7 @@ components:
           $ref: '#/components/schemas/StorageLimitDisabledReason'
       required:
       - enabled
+      - unit
       - userConfigurable
     StorageLimitDisabledReason:
       type: string

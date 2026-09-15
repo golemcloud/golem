@@ -40,6 +40,7 @@ message ResourceLimits {
   // True only when the registry applied the corresponding batch update.
   bool usage_update_applied = 11;
   uint64 monthly_usage_mode_revision = 12;
+  uint64 monthly_policy_revision = 13;
 }
 
 message AccountResourceLimitsEntry {

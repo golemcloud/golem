@@ -360,7 +360,6 @@
         "accountId",
         "monthlyUsageMode",
         "overageAllowedByPlan",
-        "adminGrants",
         "monthly",
         "maxStoragePerAgent",
         "maxMemoryPerAgent"
@@ -380,12 +379,6 @@
         },
         "latestOwnerTransition": {
           "$ref": "#/definitions/MonthlyUsageModeTransition"
-        },
-        "adminGrants": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/AdminResourceGrant"
-          }
         },
         "monthly": {
           "$ref": "#/definitions/MonthlyResourceLimits"
@@ -846,7 +839,14 @@
         "metering": {
           "$ref": "#/definitions/MeteringStatus"
         },
-        "monthlyAmount": {
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
           "type": "integer",
           "minimum": 0
         },
@@ -855,6 +855,11 @@
           "minimum": 0
         },
         "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
           "type": "number",
           "minimum": 0
         },
@@ -874,7 +879,14 @@
         "metering": {
           "$ref": "#/definitions/MeteringStatus"
         },
-        "monthlyAmount": {
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
           "type": "integer",
           "minimum": 0
         },
@@ -884,6 +896,11 @@
         },
         "remaining": {
           "type": "integer",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
+          "type": "number",
           "minimum": 0
         },
         "unit": {
@@ -902,7 +919,14 @@
         "metering": {
           "$ref": "#/definitions/MeteringStatus"
         },
-        "monthlyAmount": {
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
           "type": "integer",
           "minimum": 0
         },
@@ -911,6 +935,11 @@
           "minimum": 0
         },
         "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
           "type": "number",
           "minimum": 0
         },
@@ -1028,6 +1057,7 @@
         "planDefault",
         "overrideValue",
         "ceiling",
+        "unit",
         "userConfigurable"
       ],
       "properties": {
@@ -1047,6 +1077,12 @@
           "type": "integer",
           "minimum": 0
         },
+        "unit": {
+          "const": "bytes"
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
         "userConfigurable": {
           "type": "boolean"
         }
@@ -1055,7 +1091,7 @@
     },
     "StorageLimit": {
       "type": "object",
-      "required": ["enabled", "userConfigurable"],
+      "required": ["enabled", "unit", "userConfigurable"],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -1075,6 +1111,12 @@
         "ceiling": {
           "type": "integer",
           "minimum": 0
+        },
+        "unit": {
+          "const": "bytes"
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
         },
         "userConfigurable": {
           "type": "boolean"

@@ -52,7 +52,34 @@ CREATE INDEX account_monthly_usage_mode_transitions_account_time_idx
 CREATE UNIQUE INDEX account_monthly_usage_mode_transitions_account_revision_uk
     ON account_monthly_usage_mode_transitions (account_id, revision);
 
-CREATE TABLE account_monthly_usage_mode_attribution (
+CREATE TABLE account_monthly_policy_revisions (
+    account_id UUID NOT NULL,
+    revision NUMERIC NOT NULL,
+    period_year INTEGER NOT NULL,
+    period_month INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    baseline_compute_fuel NUMERIC NOT NULL,
+    baseline_memory_gb_seconds NUMERIC NOT NULL,
+    baseline_memory_byte_nanoseconds_remainder NUMERIC NOT NULL,
+    baseline_durable_storage_byte_seconds NUMERIC NOT NULL,
+    baseline_durable_storage_byte_nanoseconds_remainder NUMERIC NOT NULL,
+    baseline_ephemeral_storage_byte_seconds NUMERIC NOT NULL,
+    baseline_ephemeral_storage_byte_nanoseconds_remainder NUMERIC NOT NULL,
+    resolved_compute_fuel NUMERIC NOT NULL,
+    resolved_memory_gb_seconds NUMERIC NOT NULL,
+    resolved_durable_storage_byte_seconds NUMERIC NOT NULL,
+    resolved_ephemeral_storage_byte_seconds NUMERIC NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    CONSTRAINT account_monthly_policy_revisions_pk PRIMARY KEY (account_id, revision),
+    CONSTRAINT account_monthly_policy_revisions_account_id_fk FOREIGN KEY (account_id)
+        REFERENCES accounts (account_id),
+    CONSTRAINT account_monthly_policy_revisions_mode_check
+        CHECK (mode IN ('hard_limit', 'allow_overage')),
+    CONSTRAINT account_monthly_policy_revisions_period_month_check
+        CHECK (period_month BETWEEN 1 AND 12)
+);
+
+CREATE TABLE account_monthly_policy_attribution (
     usage_update_id UUID NOT NULL,
     account_id UUID NOT NULL,
     revision NUMERIC NOT NULL,
@@ -64,11 +91,17 @@ CREATE TABLE account_monthly_usage_mode_attribution (
     memory_byte_nanoseconds_remainder NUMERIC NOT NULL,
     durable_storage_byte_nanoseconds_remainder NUMERIC NOT NULL,
     ephemeral_storage_byte_nanoseconds_remainder NUMERIC NOT NULL,
+    compute_metering_enabled BOOLEAN NOT NULL,
+    memory_metering_enabled BOOLEAN NOT NULL,
+    filesystem_metering_enabled BOOLEAN NOT NULL,
     recorded_at TIMESTAMP NOT NULL,
-    CONSTRAINT account_monthly_usage_mode_attribution_pk PRIMARY KEY (usage_update_id),
-    CONSTRAINT account_monthly_usage_mode_attribution_account_id_fk FOREIGN KEY (account_id)
-        REFERENCES accounts (account_id)
+    CONSTRAINT account_monthly_policy_attribution_pk PRIMARY KEY (usage_update_id),
+    CONSTRAINT account_monthly_policy_attribution_account_id_fk FOREIGN KEY (account_id)
+        REFERENCES accounts (account_id),
+    CONSTRAINT account_monthly_policy_attribution_policy_revision_fk
+        FOREIGN KEY (account_id, revision)
+        REFERENCES account_monthly_policy_revisions (account_id, revision)
 );
 
-CREATE INDEX account_monthly_usage_mode_attribution_account_revision_idx
-    ON account_monthly_usage_mode_attribution (account_id, revision, usage_key);
+CREATE INDEX account_monthly_policy_attribution_account_revision_idx
+    ON account_monthly_policy_attribution (account_id, revision, usage_key);

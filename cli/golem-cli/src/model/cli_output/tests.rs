@@ -1331,6 +1331,32 @@ fn cli_output_schema_validates_registered_examples() {
     }
 }
 
+#[test]
+fn cli_output_schema_accepts_fractional_memory_billable_excess() {
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let example = arb_account_limits_result()
+        .new_tree(&mut runner)
+        .expect("account limits strategy should produce a value")
+        .current();
+    assert_eq!(
+        example["monthly"]["memoryGbSeconds"]["allowOverageUsage"],
+        json!(0.5)
+    );
+
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    assert!(
+        validator.is_valid(&example),
+        "account limits schema should accept fractional memory billable excess: {:?}",
+        validator
+            .iter_errors(&example)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
 proptest! {
     #[test]
     fn cli_output_schema_accepts_registered_generated_examples(value in arb_registered_output_document()) {
@@ -3285,9 +3311,11 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     grant_reason,
                     metering,
                 )| {
-                    let storage = if storage_enabled {
+                    let mut storage = if storage_enabled {
                         golem_common::model::account_usage::StorageLimit {
                             enabled: true,
+                            unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
+                            active_admin_grant: None,
                             effective_value: Some(effective_value),
                             plan_default: Some(plan_default),
                             override_value,
@@ -3298,6 +3326,8 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     } else {
                         golem_common::model::account_usage::StorageLimit {
                             enabled: false,
+                            unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
+                            active_admin_grant: None,
                             effective_value: None,
                             plan_default: None,
                             override_value: None,
@@ -3308,27 +3338,61 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                             ),
                         }
                     };
-                    let memory = golem_common::model::account_usage::MemoryLimit {
+                    let mut memory = golem_common::model::account_usage::MemoryLimit {
+                        unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
+                        active_admin_grant: None,
                         effective_value,
                         plan_default,
                         override_value,
                         ceiling,
                         user_configurable,
                     };
-                    let (monthly_amount, usage, remaining, behavior) = match metering {
+                    let (plan_amount, resolved_monthly_amount, usage, remaining, allow_overage_usage, behavior) = match metering {
                         golem_common::model::account_usage::MeteringStatus::Enabled => (
+                            Some(plan_default),
                             Some(plan_default),
                             Some(effective_value as f64),
                             Some(ceiling as f64),
+                            Some(0.5),
                             Some(golem_common::model::account_usage::MonthlyLimitBehavior::IncludedAllowance),
                         ),
                         golem_common::model::account_usage::MeteringStatus::Disabled => {
-                            (None, None, None, None)
+                            (None, None, None, None, None, None)
                         }
                         golem_common::model::account_usage::MeteringStatus::Unknown => {
-                            (Some(plan_default), None, None, None)
+                            (None, None, None, None, None, None)
                         }
                     };
+                    let grant = golem_common::model::account_usage::AdminResourceGrant {
+                        dimension: grant_dimension,
+                        value: effective_value,
+                        reason: grant_reason,
+                        actor_account_id:
+                            golem_common::model::account::AccountId(account_id),
+                        granted_at: chrono::DateTime::from_timestamp(
+                            1_700_000_000,
+                            0,
+                        )
+                        .unwrap(),
+                        expires_at: Some(
+                            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+                        ),
+                    };
+                    let active_grant = |dimension| {
+                        (metering == golem_common::model::account_usage::MeteringStatus::Enabled
+                            && grant_dimension == dimension)
+                            .then(|| grant.clone())
+                    };
+                    memory.active_admin_grant =
+                        (grant_dimension
+                            == golem_common::model::account_usage::AdminResourceGrantDimension::MaxMemoryPerAgent)
+                            .then(|| grant.clone());
+                    if storage.enabled {
+                        storage.active_admin_grant =
+                            (grant_dimension
+                                == golem_common::model::account_usage::AdminResourceGrantDimension::MaxStoragePerAgent)
+                                .then(|| grant.clone());
+                    }
                     crate::model::account::AccountLimitsView::new(
                         golem_common::model::account_usage::AccountResourcePolicy {
                             account_id: golem_common::model::account::AccountId(account_id),
@@ -3343,53 +3407,48 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                                     new_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
                                 },
                             ),
-                            admin_grants: vec![
-                                golem_common::model::account_usage::AdminResourceGrant {
-                                    dimension: grant_dimension,
-                                    value: effective_value,
-                                    reason: grant_reason,
-                                    actor_account_id:
-                                        golem_common::model::account::AccountId(account_id),
-                                    granted_at: chrono::DateTime::from_timestamp(
-                                        1_700_000_000,
-                                        0,
-                                    )
-                                    .unwrap(),
-                                    expires_at: Some(
-                                        chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
-                                    ),
-                                },
-                            ],
                             monthly: golem_common::model::account_usage::MonthlyResourceLimits {
                                 compute_gcu: golem_common::model::account_usage::MonthlyComputeLimit {
                                     metering,
-                                    monthly_amount,
+                                    plan_amount,
+                                    active_admin_grant: active_grant(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyComputeGcu),
+                                    resolved_monthly_amount,
                                     usage,
                                     remaining,
+                                    allow_overage_usage,
                                     unit: golem_common::model::account_usage::MonthlyComputeUnit::Gcu,
                                     behavior,
                                 },
                                 memory_gb_seconds: golem_common::model::account_usage::MonthlyMemoryLimit {
                                     metering,
-                                    monthly_amount,
+                                    plan_amount,
+                                    active_admin_grant: active_grant(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyMemoryGbSeconds),
+                                    resolved_monthly_amount,
                                     usage: usage.map(|value| value as u64),
                                     remaining: remaining.map(|value| value as u64),
+                                    allow_overage_usage,
                                     unit: golem_common::model::account_usage::MonthlyMemoryUnit::GbSeconds,
                                     behavior,
                                 },
                                 durable_storage_gb_month: golem_common::model::account_usage::MonthlyStorageLimit {
                                     metering,
-                                    monthly_amount,
+                                    plan_amount,
+                                    active_admin_grant: active_grant(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyDurableStorageGbMonth),
+                                    resolved_monthly_amount,
                                     usage,
                                     remaining,
+                                    allow_overage_usage,
                                     unit: golem_common::model::account_usage::MonthlyStorageUnit::GbMonth,
                                     behavior,
                                 },
                                 ephemeral_storage_gb_month: golem_common::model::account_usage::MonthlyStorageLimit {
                                     metering,
-                                    monthly_amount,
+                                    plan_amount,
+                                    active_admin_grant: active_grant(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth),
+                                    resolved_monthly_amount,
                                     usage,
                                     remaining,
+                                    allow_overage_usage,
                                     unit: golem_common::model::account_usage::MonthlyStorageUnit::GbMonth,
                                     behavior,
                                 },
