@@ -73,7 +73,9 @@ use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
@@ -627,6 +629,49 @@ impl TestWorkerExecutor {
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
             .fail_next_oplog_download(agent_id.clone());
+    }
+
+    /// Rejects one linear-memory growth after the next RPC creation completes.
+    pub fn fail_memory_growth_after_rpc_creation(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                RpcMemoryFailure::new(RpcMemoryBoundary::CreationCompleted),
+            );
+    }
+
+    pub fn fail_memory_growth_after_rpc_completion(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                RpcMemoryFailure::new(RpcMemoryBoundary::InvocationCompleted),
+            );
+    }
+
+    pub fn fail_memory_growth_after_rpc_delivery(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                RpcMemoryFailure::new(RpcMemoryBoundary::CompletionDelivered),
+            );
+    }
+
+    pub fn rpc_memory_failure_triggered(&self, agent_id: &AgentId) -> bool {
+        self.additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .is_some_and(|failure| failure.triggered)
     }
 
     pub fn fail_snapshot_download_once(&self, agent_id: &AgentId, snapshot_index: OplogIndex) {
@@ -2452,6 +2497,27 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             kind
         );
 
+        if kind == MemoryKind::LinearMemory && desired > current {
+            let rejected = {
+                let mut failures = self
+                    .additional_test_deps
+                    .rpc_memory_failures
+                    .lock()
+                    .unwrap();
+                failures.get_mut(&self.agent_id).is_some_and(|failure| {
+                    if failure.armed && !failure.triggered {
+                        failure.triggered = true;
+                        true
+                    } else {
+                        false
+                    }
+                })
+            };
+            if rejected {
+                self.durable_ctx.unshared_memory_growth_failed();
+                return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
+            }
+        }
         self.durable_memory_growing(current, desired, maximum, kind)
             .await
     }
@@ -3624,6 +3690,58 @@ struct TestOplog {
 }
 
 impl TestOplog {
+    fn observe_rpc_memory_end(&self, start_index: OplogIndex) {
+        let mut failures = self
+            .additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap();
+        if let Some(failure) = failures.get_mut(&self.owned_agent_id.agent_id)
+            && failure.boundary != RpcMemoryBoundary::CompletionDelivered
+            && failure.start_index == Some(start_index)
+        {
+            failure.armed = true;
+        }
+    }
+
+    fn observe_rpc_memory_delivery(&self, start_index: OplogIndex) {
+        let mut failures = self
+            .additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap();
+        if let Some(failure) = failures.get_mut(&self.owned_agent_id.agent_id)
+            && failure.boundary == RpcMemoryBoundary::CompletionDelivered
+            && failure.start_index == Some(start_index)
+        {
+            failure.armed = true;
+        }
+    }
+
+    fn observe_rpc_memory_boundary(&self, index: OplogIndex, entry: &OplogEntry) {
+        let mut failures = self
+            .additional_test_deps
+            .rpc_memory_failures
+            .lock()
+            .unwrap();
+        if let Some(failure) = failures.get_mut(&self.owned_agent_id.agent_id) {
+            let expected_start = match failure.boundary {
+                RpcMemoryBoundary::CreationCompleted => HostFunctionName::GolemRpcWasmRpcNew,
+                RpcMemoryBoundary::InvocationCompleted | RpcMemoryBoundary::CompletionDelivered => {
+                    HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
+                }
+            };
+            match entry {
+                OplogEntry::Start { function_name, .. }
+                    if !failure.armed && *function_name == expected_start =>
+                {
+                    failure.start_index = Some(index);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn new(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -3867,7 +3985,21 @@ impl Oplog for TestOplog {
         }
         let track_scope_start = Self::is_consume_body_scope_start(&entry);
         let gated = self.is_consume_body_chunk_data_end(&entry);
+        let ended_start = match &entry {
+            OplogEntry::End { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
+        let delivered_start = match &entry {
+            OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
         let index = self.oplog.add(entry.clone()).await;
+        if let Some(start_index) = ended_start {
+            self.observe_rpc_memory_end(start_index);
+        }
+        if let Some(start_index) = delivered_start {
+            self.observe_rpc_memory_delivery(start_index);
+        }
         self.pause_after_fire_and_forget_rpc_checkpoint(index, &entry)
             .await;
         if track_scope_start
@@ -3887,10 +4019,26 @@ impl Oplog for TestOplog {
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let gated = self.is_consume_body_chunk_data_end(&entry);
+        let ended_start = match &entry {
+            OplogEntry::End { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
+        let delivered_start = match &entry {
+            OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
         let pending = self.oplog.enqueue_add(entry);
+        // Delivery hands its receipt to the drain queue and resumes the guest immediately.
+        // Arm at enqueue time so the guest's next memory growth cannot race receipt polling.
+        if let Some(start_index) = delivered_start {
+            self.observe_rpc_memory_delivery(start_index);
+        }
         let this = self.clone();
         Box::pin(async move {
             let index = pending.await;
+            if let Some(start_index) = ended_start {
+                this.observe_rpc_memory_end(start_index);
+            }
             if gated {
                 this.pause_at_consume_body_chunk_end_gate().await;
             }
@@ -4058,6 +4206,7 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await?;
+        self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
@@ -4088,6 +4237,7 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
+        self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
@@ -4325,8 +4475,34 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum RpcMemoryBoundary {
+    CreationCompleted,
+    InvocationCompleted,
+    CompletionDelivered,
+}
+
+struct RpcMemoryFailure {
+    boundary: RpcMemoryBoundary,
+    start_index: Option<OplogIndex>,
+    armed: bool,
+    triggered: bool,
+}
+
+impl RpcMemoryFailure {
+    fn new(boundary: RpcMemoryBoundary) -> Self {
+        Self {
+            boundary,
+            start_index: None,
+            armed: false,
+            triggered: false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
+    rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
@@ -4377,6 +4553,7 @@ impl AdditionalTestDeps {
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
+            rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),

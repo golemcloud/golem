@@ -22,6 +22,15 @@ pub async fn invoke(
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @common.ToolError] {
   let stdin = stdin.map(@tool.byte_stream)
+  match @tool.validate_tool_stdout(tool_name, command_path, stdout is Some(_)) {
+    Err(error) => {
+      if stdout is Some(writer) {
+        writer.drop()
+      }
+      return @tool.reject_wire_invocation(input, stdin, error)
+    }
+    Ok(_) => ()
+  }
   match stdout {
     None =>
       @tool.invoke_registered_tool(
@@ -34,19 +43,16 @@ pub async fn invoke(
       )
     Some(writer) => {
       let stdout = @tool.provider_stdout(writer)
-      defer stdout.drop()
-      let result = @tool.invoke_registered_tool(
-        tool_name,
-        command_path,
-        input,
-        stdin,
-        Some(stdout),
-        principal,
-      )
-      stdout.finish() catch {
-        _ => ()
-      }
-      result
+      @tool.invoke_with_stdout(stdout, () => {
+        @tool.invoke_registered_tool(
+          tool_name,
+          command_path,
+          input,
+          stdin,
+          Some(stdout),
+          principal,
+        )
+      })
     }
   }
 }
