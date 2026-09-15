@@ -480,6 +480,12 @@ async fn revert_across_two_successful_manual_updates(
             std::time::Duration::from_secs(30),
         )
         .await?;
+    let revision_two_target = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
 
     let revision_three = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -528,6 +534,39 @@ async fn revert_across_two_successful_manual_updates(
         before_failed_cut,
         "an invalid update-boundary cut must not append Revert"
     );
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: revision_two_target,
+            }),
+        )
+        .await?;
+
+    let after_middle_revert = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(after_middle_revert.into_typed::<u32>()?, 1);
+    assert_eq!(metadata.component_revision, revision_two.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    executor.simulated_crash(&worker_id).await?;
+    let middle_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(middle_after_restart.into_typed::<u32>()?, 1);
 
     executor
         .revert(

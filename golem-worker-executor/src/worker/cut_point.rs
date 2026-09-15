@@ -51,16 +51,15 @@ impl Display for RevertUpdateBoundaryError {
     }
 }
 
-/// Validates snapshot-update boundaries and reports whether the cut fully crosses at least one
-/// successful snapshot-based update. Update outcomes are paired with pending updates in oplog
-/// order, matching the status reducer.
-pub fn crosses_successful_snapshot_update(
+/// Validates snapshot-update boundaries. Update outcomes are paired with pending updates in oplog
+/// order, matching the status reducer. A cut may remove an update entirely or retain it entirely,
+/// including a pending update that does not have an outcome yet.
+pub fn validate_snapshot_update_boundaries(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     cut_point: OplogIndex,
     deleted_regions: &DeletedRegions,
-) -> Result<bool, RevertUpdateBoundaryError> {
+) -> Result<(), RevertUpdateBoundaryError> {
     let mut pending_updates = VecDeque::new();
-    let mut crosses_successful_snapshot_update = false;
 
     for (idx, entry) in entries {
         if deleted_regions.is_in_deleted_region(*idx) {
@@ -73,16 +72,14 @@ pub fn crosses_successful_snapshot_update(
                 matches!(description, UpdateDescription::SnapshotBased { .. }),
             )),
             OplogEntry::SuccessfulUpdate { .. } => {
-                if let Some((pending_index, true)) = pending_updates.pop_front() {
-                    if pending_index <= cut_point && cut_point < *idx {
-                        return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
-                            pending_index,
-                            outcome_index: *idx,
-                        });
-                    }
-                    if cut_point < pending_index {
-                        crosses_successful_snapshot_update = true;
-                    }
+                if let Some((pending_index, true)) = pending_updates.pop_front()
+                    && pending_index <= cut_point
+                    && cut_point < *idx
+                {
+                    return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                        pending_index,
+                        outcome_index: *idx,
+                    });
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
@@ -100,7 +97,7 @@ pub fn crosses_successful_snapshot_update(
         }
     }
 
-    Ok(crosses_successful_snapshot_update)
+    Ok(())
 }
 
 /// A paired durable construct whose two halves lie on opposite sides of a cut point.
@@ -406,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_snapshot_update_boundary_is_classified() {
+    fn successful_snapshot_update_boundary_is_validated() {
         let update = snapshot_update(2);
         let entries = BTreeMap::from([
             (idx(3), OplogEntry::pending_update(update.clone())),
@@ -422,26 +419,26 @@ mod tests {
         ]);
 
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(2), &DeletedRegions::new()),
-            Ok(true)
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
         );
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(3), &DeletedRegions::new()),
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
             Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
                 pending_index: idx(3),
                 outcome_index: idx(5),
             })
         );
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(4), &DeletedRegions::new()),
+            validate_snapshot_update_boundaries(&entries, idx(4), &DeletedRegions::new()),
             Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
                 pending_index: idx(3),
                 outcome_index: idx(5),
             })
         );
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(5), &DeletedRegions::new()),
-            Ok(false)
+            validate_snapshot_update_boundaries(&entries, idx(5), &DeletedRegions::new()),
+            Ok(())
         );
     }
 
@@ -457,11 +454,26 @@ mod tests {
         ]);
 
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(3), &DeletedRegions::new()),
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
             Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
                 pending_index: idx(3),
                 outcome_index: idx(5),
             })
+        );
+    }
+
+    #[test]
+    fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update))]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Ok(())
         );
     }
 
@@ -495,8 +507,8 @@ mod tests {
         ]);
 
         assert_eq!(
-            crosses_successful_snapshot_update(&entries, idx(1), &deleted(vec![(2, 3)])),
-            Ok(false)
+            validate_snapshot_update_boundaries(&entries, idx(1), &deleted(vec![(2, 3)])),
+            Ok(())
         );
     }
 

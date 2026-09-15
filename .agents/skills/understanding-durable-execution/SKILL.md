@@ -356,7 +356,9 @@ A revert may cross a completed snapshot-based update only when its cut is before
 `PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted together. The
 status fold then removes that migration's skipped-history contribution and derives the surviving
 component revision and snapshot baseline normally. A cut that keeps `PendingUpdate` but deletes
-its outcome is rejected. Revert validation reconstructs skip provenance: removing a migration
+its outcome is rejected. A pending update without an outcome may be either retained or removed
+entirely; when retained, its component and snapshot payload are included in preflight. Revert
+validation reconstructs skip provenance: removing a migration
 baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the resulting mask is
 also used to detect durable constructs spanning the cut. Before committing, the executor verifies
 that the restored component, retained manual snapshot payload, replay metadata and initial files

@@ -5407,9 +5407,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             start: region_start,
             end: region_end,
         };
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await;
 
         if let Some(stream_index) = cut_point::find_stream_history_in_range(
-            |idx| self.oplog.read(idx),
+            |idx| {
+                std::future::ready(
+                    entries
+                        .get(&idx)
+                        .expect("read_exact must return every requested oplog entry")
+                        .clone(),
+                )
+            },
             OplogIndex::INITIAL,
             region_end,
         )
@@ -5419,11 +5430,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot revert worker to oplog index {last_oplog_index}: durable stream history exists at oplog index {stream_index}"
             )))
         } else {
-            let entries = self
-                .oplog
-                .read_exact(OplogIndex::INITIAL, region_end.as_u64())
-                .await;
-            let crosses_snapshot_update = cut_point::crosses_successful_snapshot_update(
+            cut_point::validate_snapshot_update_boundaries(
                 &entries,
                 last_oplog_index,
                 &last_known_status.deleted_regions,
@@ -5434,11 +5441,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ))
             })?;
 
-            let validation_regions = if crosses_snapshot_update {
-                calculate_revert_validation_regions(&entries, &dropped_region)
-            } else {
-                last_known_status.skipped_regions.clone()
-            };
+            let validation_regions = calculate_revert_validation_regions(&entries, &dropped_region);
 
             if validation_regions.is_in_deleted_region(region_start) {
                 return Err(WorkerExecutorError::invalid_request(format!(
@@ -5447,7 +5450,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
-                |idx| self.oplog.read(idx),
+                |idx| {
+                    std::future::ready(
+                        entries
+                            .get(&idx)
+                            .expect("read_exact must return every requested oplog entry")
+                            .clone(),
+                    )
+                },
                 last_oplog_index,
                 region_end,
                 &validation_regions,
@@ -5540,7 +5550,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .fetch_max(rejected.into(), Ordering::AcqRel);
         }
 
-        let replay_revision = component_revision_for_revert_preflight(
+        let replay_revision = component_revision_for_replay(
             status,
             pending_update.is_some(),
             self.rejected_periodic_snapshot_through
@@ -5555,22 +5565,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         if let Some(snapshot_index) = status.last_manual_update_snapshot_index {
-            match self.oplog.read(snapshot_index).await {
-                OplogEntry::PendingUpdate {
-                    description: UpdateDescription::SnapshotBased { payload, .. },
-                    ..
-                } => {
-                    self.oplog
-                        .download_payload(payload)
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
-                }
-                _ => {
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
-                    )));
-                }
-            }
+            self.preflight_snapshot_update_payload(snapshot_index)
+                .await?;
+        }
+        if let Some(pending_update) = pending_update
+            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
+        {
+            self.preflight_snapshot_update_payload(pending_update.oplog_index)
+                .await?;
         }
 
         let initial_files = self
@@ -5593,6 +5596,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         Ok(active_component)
+    }
+
+    async fn preflight_snapshot_update_payload(
+        &self,
+        snapshot_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self.oplog.read(snapshot_index).await {
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { payload, .. },
+                ..
+            } => {
+                self.oplog
+                    .download_payload(payload)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
+            _ => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn wait_for_invocation_result(
@@ -8347,18 +8373,6 @@ fn component_revision_for_replay(
     )
 }
 
-fn component_revision_for_revert_preflight(
-    status: &AgentStatusRecord,
-    has_pending_update: bool,
-    rejected_periodic_snapshot_through: u64,
-) -> ComponentRevision {
-    component_revision_for_replay(
-        status,
-        has_pending_update,
-        rejected_periodic_snapshot_through,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8402,36 +8416,6 @@ mod tests {
         assert_eq!(
             component_revision_for_replay(&status, false, u64::from(snapshot_index) - 1),
             active_revision
-        );
-    }
-
-    #[test]
-    fn revert_preflight_ignores_temporary_unavailable_snapshot_watermark() {
-        let active_revision = ComponentRevision::new(3).unwrap();
-        let replay_revision = ComponentRevision::new(2).unwrap();
-        let snapshot_index = OplogIndex::from_u64(10);
-        let status = AgentStatusRecord {
-            component_revision: active_revision,
-            component_revision_for_replay: replay_revision,
-            last_automatic_snapshot_index: Some(snapshot_index),
-            last_automatic_snapshot_component_revision: Some(active_revision),
-            ..Default::default()
-        };
-        let rejected_snapshot_through = 0;
-        let stale_unavailable_snapshot_through = u64::from(snapshot_index);
-
-        assert_eq!(
-            component_revision_for_revert_preflight(&status, false, rejected_snapshot_through),
-            active_revision
-        );
-        assert_eq!(
-            component_revision_for_replay(
-                &status,
-                false,
-                rejected_snapshot_through.max(stale_unavailable_snapshot_through)
-            ),
-            replay_revision,
-            "a stale within-attempt watermark would select the wrong preflight revision"
         );
     }
 

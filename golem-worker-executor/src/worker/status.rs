@@ -897,19 +897,12 @@ fn calculate_skipped_regions(
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
-    calculate_skipped_regions_with_deleted_regions(
-        initial_skipped,
-        deleted_regions,
-        deleted_regions,
-        None,
-        entries,
-    )
+    calculate_skipped_regions_with_deleted_regions(initial_skipped, deleted_regions, None, entries)
 }
 
 fn calculate_skipped_regions_with_deleted_regions(
     initial_skipped: DeletedRegions,
-    deleted_regions_for_filtering: &DeletedRegions,
-    deleted_regions_to_include: &DeletedRegions,
+    deleted_regions: &DeletedRegions,
     ignored_snapshot_update_region: Option<&OplogRegion>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
@@ -924,7 +917,7 @@ fn calculate_skipped_regions_with_deleted_regions(
         DeletedRegionsBuilder::from_regions(skipped_without_override.into_regions());
     for (idx, entry) in entries {
         // Skipping deleted regions (by revert) from constructing the skipped regions
-        if deleted_regions_for_filtering.is_in_deleted_region(*idx) {
+        if deleted_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
@@ -973,7 +966,7 @@ fn calculate_skipped_regions_with_deleted_regions(
         }
     }
 
-    for deleted_region in deleted_regions_to_include.regions() {
+    for deleted_region in deleted_regions.regions() {
         skipped_builder.add(deleted_region.clone());
     }
 
@@ -996,7 +989,6 @@ pub(crate) fn calculate_revert_validation_regions(
 
     calculate_skipped_regions_with_deleted_regions(
         DeletedRegions::new(),
-        &existing_deleted,
         &existing_deleted,
         Some(dropped_region),
         entries,
@@ -2454,6 +2446,27 @@ mod test {
         assert!(regions.is_in_deleted_region(OplogIndex::from_u64(10)));
         assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(11)));
         assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(20)));
+    }
+
+    #[test]
+    fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
+        let update = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let entries =
+            BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::pending_update(update))]);
+
+        let regions = calculate_revert_validation_regions(
+            &entries,
+            &OplogRegion {
+                start: OplogIndex::from_u64(2),
+                end: OplogIndex::from_u64(3),
+            },
+        );
+
+        assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
     }
 
     #[test]
