@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use super::call_agent::CallAgentHandler;
-use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
+use super::cors::{
+    apply_cors_outgoing_middleware, denied_preflight, handle_selected_preflight, is_cors_preflight,
+    requested_preflight_method,
+};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
 use super::mounted_dispatch::{PendingMountBackend, dispatch_mount};
 use super::oidc::handler::OidcHandler;
-use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
+use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RichRouteSecurity, RouteExecutionResult};
@@ -74,6 +77,9 @@ impl RequestHandler {
     pub async fn handle_request(&self, request: Request) -> Result<Response, RequestFailure> {
         debug!("Begin http request handling for request {request:?}");
 
+        if is_cors_preflight(&request) {
+            return handle_preflight(&self.route_resolver, request).await;
+        }
         let matching_route = self
             .route_resolver
             .resolve_matching_route(&request)
@@ -130,9 +136,9 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::CorsPreflight(cors_preflight) => {
-                handle_cors_preflight_behaviour(request, cors_preflight)
-            }
+            RichRouteBehaviour::CorsPreflight(_) => Err(RequestHandlerError::invariant_violated(
+                "OpenAPI preflight projection selected for dispatch",
+            )),
 
             RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
                 self.oidc_handler
@@ -166,6 +172,22 @@ impl RequestHandler {
             }
         }
     }
+}
+
+pub(super) async fn handle_preflight(
+    resolver: &RouteResolver,
+    request: Request,
+) -> Result<Response, RequestFailure> {
+    let method = requested_preflight_method(&request)?;
+    let result = match resolver
+        .resolve_matching_route_for_method(&request, &method)
+        .await
+    {
+        Ok(selected) => handle_selected_preflight(&RichRequest::new(request), &selected)?,
+        Err(RouteResolverError::NoMatchingRoute) => denied_preflight(),
+        Err(error) => return Err(RequestHandlerError::from(error).into()),
+    };
+    route_execution_result_to_response(result).map_err(Into::into)
 }
 
 async fn require_available_security(
@@ -284,6 +306,74 @@ mod tests {
     };
     use poem::IntoResponse;
     use test_r::test;
+
+    struct UnknownSiteLookup;
+
+    #[async_trait::async_trait]
+    impl crate::custom_api::api_definition_lookup::HttpApiDefinitionsLookup for UnknownSiteLookup {
+        async fn get(
+            &self,
+            domain: &golem_common::model::domain_registration::Domain,
+        ) -> Result<
+            golem_service_base::custom_api::CompiledRoutes,
+            crate::custom_api::api_definition_lookup::ApiDefinitionLookupError,
+        > {
+            Err(
+                crate::custom_api::api_definition_lookup::ApiDefinitionLookupError::UnknownSite(
+                    domain.clone(),
+                ),
+            )
+        }
+    }
+
+    #[test]
+    async fn preflight_terminal_responses_do_not_poll_body_or_authenticate() {
+        let mut route = test_route(1, "/files", None, "filesystem");
+        route.security = RouteSecurity::Unavailable;
+        route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+        let resolver = test_resolver(vec![route]);
+        let unknown = RouteResolver::new(
+            &crate::config::RouteResolverConfig::default(),
+            Arc::new(UnknownSiteLookup),
+        );
+        for (resolver, method, path, status) in [
+            (&resolver, "GET", "/files/x", 204),
+            (&resolver, "HEAD", "/files/x", 204),
+            (&resolver, "POST", "/files/x", 403),
+            (&resolver, "GET", "/missing", 403),
+            (&resolver, "GET POST", "/files/x", 400),
+            (&resolver, "GET", "/files/%2fprivate", 400),
+            (&unknown, "GET", "/files/x", 404),
+        ] {
+            let body = poem::Body::from_bytes_stream(futures::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                    panic!("Preflight must not consume a request body")
+                },
+            ));
+            let request = Request::builder()
+                .method(http::Method::OPTIONS)
+                .uri(path.parse().unwrap())
+                .header("host", "example.com")
+                .header("origin", "https://client.example")
+                .header("access-control-request-method", method)
+                .body(body);
+            let response = handle_preflight(resolver, request)
+                .await
+                .unwrap_or_else(|e| ApiEndpointError::from(e.error).into_response());
+            assert_eq!(response.status().as_u16(), status, "{method} {path}");
+            if status == 403 {
+                assert_eq!(
+                    response.headers()[http::header::VARY],
+                    "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+                );
+                assert!(
+                    !response
+                        .headers()
+                        .contains_key(http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                );
+            }
+        }
+    }
 
     #[test]
     async fn unavailable_security_keeps_selected_barrier_and_cors_without_polling_dispatch() {

@@ -450,9 +450,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
                 Self::conflict(api::error_code::OIDC_SCHEME_MISMATCH, value)
             }
 
-            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
-                Self::not_found(api::error_code::ROUTE_NOT_FOUND, value)
-            }
+            RequestHandlerError::ResolvingRouteFailed(
+                RouteResolverError::NoMatchingRoute | RouteResolverError::UnknownSite,
+            ) => Self::not_found(api::error_code::ROUTE_NOT_FOUND, value),
 
             RequestHandlerError::OidcTokenExchangeFailed => {
                 Self::forbidden(api::error_code::OIDC_TOKEN_EXCHANGE_FAILED, value)

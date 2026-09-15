@@ -1350,6 +1350,9 @@ fn validate_final_http_api_router(
             errors.push(invalid(&compiled_route.path, error));
             continue;
         }
+        if matches!(compiled_route.behaviour, RouteBehaviour::CorsPreflight(_)) {
+            continue;
+        }
         if matches!(compiled_route.route_match, RouteMatch::MountPrefix) {
             if mounts.iter().any(|other| {
                 other.path.len() == compiled_route.path.len()

@@ -427,8 +427,19 @@ pub fn add_cors_preflight_http_routes(
         }
     }
 
-    // Generate synthetic OPTIONS routes for preflight requests
+    // These entries project preflight policy into OpenAPI, not the runtime router.
     for (path_segments, PreflightMapEntry { method_policies }) in preflight_map {
+        if compiled_routes.iter().any(|route| {
+            route.path == path_segments
+                && route
+                    .route_match
+                    .method()
+                    .cloned()
+                    .and_then(|m| http::Method::try_from(m).ok())
+                    == Some(http::Method::OPTIONS)
+        }) {
+            continue;
+        }
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
@@ -457,43 +468,19 @@ pub fn add_cors_preflight_http_routes(
 }
 
 fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTreeSet<String> {
-    let mut headers = BTreeSet::new();
-
-    if let RouteBehaviour::CallAgent(CallAgentBehaviour {
-        method_parameters, ..
-    }) = &compiled_route.behaviour
-    {
-        headers.extend(
-            method_parameters
-                .iter()
-                .filter_map(|parameter| match parameter {
-                    MethodParameter::Header { header_name, .. } => {
-                        Some(normalize_header_name(header_name))
-                    }
-                    _ => None,
-                }),
-        );
-    }
-
-    if !matches!(compiled_route.body, RequestBodySchema::Unused) {
-        headers.insert(http::header::CONTENT_TYPE.as_str().to_string());
-    }
-
-    if let UnboundRouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity { header_name }) =
-        &compiled_route.security
-    {
-        headers.insert(normalize_header_name(header_name));
-    }
-
-    headers
-}
-
-fn normalize_header_name(header_name: &str) -> String {
-    let trimmed = header_name.trim();
-
-    http::HeaderName::from_bytes(trimmed.as_bytes())
-        .map(|header_name| header_name.as_str().to_string())
-        .unwrap_or_else(|_| trimmed.to_ascii_lowercase())
+    let parameters = match &compiled_route.behaviour {
+        RouteBehaviour::CallAgent(agent) => agent.method_parameters.as_slice(),
+        _ => &[],
+    };
+    let session = match &compiled_route.security {
+        UnboundRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
+        _ => None,
+    };
+    golem_service_base::custom_api::cors_allowed_request_headers(
+        &compiled_route.body,
+        parameters,
+        session,
+    )
 }
 
 pub fn add_webhook_callback_routes(
@@ -1238,11 +1225,11 @@ mod tests {
         add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
 
         let preflight = compiled_routes
-            .into_iter()
+            .iter()
             .find(|route| matches!(route.behaviour, RouteBehaviour::CorsPreflight(_)))
             .expect("expected generated preflight route");
 
-        let RouteBehaviour::CorsPreflight(preflight) = preflight.behaviour else {
+        let RouteBehaviour::CorsPreflight(preflight) = &preflight.behaviour else {
             panic!("expected preflight route");
         };
 
@@ -1275,6 +1262,22 @@ mod tests {
             post_policy.allowed_headers,
             BTreeSet::from(["content-type".to_string(), "x-session".to_string(),])
         );
+        compiled_routes
+            .retain(|route| !matches!(route.behaviour, RouteBehaviour::CorsPreflight(_)));
+        for method in [
+            HttpMethod::Options(Empty {}),
+            HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+                value: "OPTIONS".into(),
+            }),
+        ] {
+            compiled_routes[0].route_match = method.into();
+            add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
+            assert_eq!(
+                compiled_routes.len(),
+                2,
+                "Explicit OPTIONS must retain its OpenAPI operation"
+            );
+        }
     }
 
     #[test]

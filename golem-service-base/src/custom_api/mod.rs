@@ -592,6 +592,26 @@ pub struct CorsPreflightMethodPolicy {
     pub allowed_headers: BTreeSet<String>,
 }
 
+pub fn cors_allowed_request_headers(
+    body: &RequestBodySchema,
+    method_parameters: &[MethodParameter],
+    session_header: Option<&str>,
+) -> BTreeSet<String> {
+    let mut headers = BTreeSet::new();
+    for parameter in method_parameters {
+        if let MethodParameter::Header { header_name, .. } = parameter {
+            headers.insert(header_name.trim().to_ascii_lowercase());
+        }
+    }
+    if !matches!(body, RequestBodySchema::Unused) {
+        headers.insert("content-type".into());
+    }
+    if let Some(header) = session_header {
+        headers.insert(header.trim().to_ascii_lowercase());
+    }
+    headers
+}
+
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {

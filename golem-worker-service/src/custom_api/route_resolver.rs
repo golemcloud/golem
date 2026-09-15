@@ -52,6 +52,8 @@ pub enum RouteResolverError {
     CouldNotBuildRouter,
     #[error("No matching route for request")]
     NoMatchingRoute,
+    #[error("No deployment for domain")]
+    UnknownSite,
     #[error("Could not decode request path: {0}")]
     MalformedPath(String),
 }
@@ -90,6 +92,15 @@ impl RouteResolver {
         &self,
         request: &poem::Request,
     ) -> Result<ResolvedRouteEntry, RouteResolverError> {
+        self.resolve_matching_route_for_method(request, request.method())
+            .await
+    }
+
+    pub async fn resolve_matching_route_for_method(
+        &self,
+        request: &poem::Request,
+        method: &http::Method,
+    ) -> Result<ResolvedRouteEntry, RouteResolverError> {
         let request_target = HttpRequestTarget::parse(
             request
                 .uri()
@@ -103,6 +114,9 @@ impl RouteResolver {
         debug!("Resolving router for domain: {domain}");
 
         let domain_api = self.get_or_build_domain_api(&domain).await?;
+        if !domain_api.domain_exists {
+            return Err(RouteResolverError::UnknownSite);
+        }
 
         let path_segments: Vec<&str> = request_target
             .segments()
@@ -111,11 +125,7 @@ impl RouteResolver {
             .collect();
 
         let (route_entry, captured_path_parameters) = domain_api
-            .select(
-                request.method(),
-                &path_segments,
-                request_target.trailing_slash(),
-            )
+            .select(method, &path_segments, request_target.trailing_slash())
             .ok_or(RouteResolverError::NoMatchingRoute)?;
 
         debug!("Resolved route entry: {route_entry:?}");
@@ -168,6 +178,7 @@ impl RouteResolver {
             Ok(value) => value,
             Err(ApiDefinitionLookupError::UnknownSite(_)) => {
                 return Ok(DomainHttpApi {
+                    domain_exists: false,
                     environment_id: EnvironmentId(uuid::Uuid::nil()),
                     reserved: [Router::new(), Router::new()],
                     typed: [Router::new(), Router::new()],
@@ -200,6 +211,7 @@ impl RouteResolver {
 
         let (mounts, concrete_routes): (Vec<_>, Vec<_>) = finalized_routes
             .into_iter()
+            .filter(|route| !matches!(route.behavior, RichRouteBehaviour::CorsPreflight(_)))
             .partition(|route| matches!(route.route_match, RouteMatch::MountPrefix));
         let (reserved, typed): (Vec<_>, Vec<_>) = concrete_routes.into_iter().partition(|route| {
             matches!(
@@ -213,6 +225,7 @@ impl RouteResolver {
         mounts.sort_by(|a, b| mount_specificity(&b.path).cmp(mount_specificity(&a.path)));
 
         Ok(DomainHttpApi {
+            domain_exists: true,
             environment_id,
             reserved: build_router(reserved)?,
             typed: build_router(typed)?,
@@ -368,6 +381,7 @@ fn mount_specificity(path: &[PathSegment]) -> impl Iterator<Item = bool> + '_ {
 
 #[derive(Clone)]
 struct DomainHttpApi {
+    domain_exists: bool,
     environment_id: EnvironmentId,
     reserved: [Router<Arc<RichCompiledRoute>>; 2],
     typed: [Router<Arc<RichCompiledRoute>>; 2],
