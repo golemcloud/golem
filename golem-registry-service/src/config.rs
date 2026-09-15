@@ -52,6 +52,23 @@ pub struct RegistryServiceConfig {
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
+    pub router_file_index: RouterFileIndexConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RouterFileIndexConfig {
+    #[serde(with = "humantime_serde")]
+    pub timeout: std::time::Duration,
+    pub max_concurrent_builds: usize,
+}
+
+impl Default for RouterFileIndexConfig {
+    fn default() -> Self {
+        Self {
+            timeout: std::time::Duration::from_secs(45),
+            max_concurrent_builds: 2,
+        }
+    }
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -117,6 +134,11 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "security scheme: strict_issuer_url_validation={}",
             self.security_scheme.strict_issuer_url_validation
+        );
+        let _ = writeln!(
+            &mut result,
+            "router file index: timeout={:?}, max_concurrent_builds={}",
+            self.router_file_index.timeout, self.router_file_index.max_concurrent_builds
         );
 
         result
@@ -228,6 +250,7 @@ impl Default for RegistryServiceConfig {
             builtin_plugins: BuiltinPluginsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
+            router_file_index: RouterFileIndexConfig::default(),
         }
     }
 }

@@ -1679,6 +1679,146 @@ mod tests {
     }
 
     #[test]
+    async fn router_index_preparation_pins_policy_and_releases_admission() {
+        use super::super::router_file_index::RouterFileIndexBuilder;
+        use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
+        use golem_common::model::component_metadata::AgentTypeProvisionConfig;
+        use golem_common::model::path::AgentFilePath;
+        use golem_service_base::custom_api::RouteBehaviour;
+        use golem_service_base::replayable_stream::ReplayableStream;
+        use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
+        use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+        use std::sync::Arc;
+        let files = Arc::new(InitialAgentFilesService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let mut context = http_context(vec![router_agent("selected", "/")]);
+        let key = files
+            .put_if_not_exists(
+                context.environment.id,
+                b"abc"
+                    .to_vec()
+                    .map_item(|item| item.map_err(anyhow::Error::from))
+                    .map_error(anyhow::Error::from),
+            )
+            .await
+            .unwrap();
+        let file = InitialAgentFile {
+            path: AgentFilePath::from_abs_str("/public/a").unwrap(),
+            content_hash: key,
+            permissions: AgentFilePermissions::ReadOnly,
+            size: 3,
+        };
+        let provision = |file| AgentTypeProvisionConfig {
+            files: vec![file],
+            env: BTreeMap::new(),
+            config: vec![],
+            plugins: vec![],
+            initial_permissions: golem_common::model::card::PolymorphicCard {
+                card_id: golem_common::model::card::CardId::new(),
+                parent_ids: vec![],
+                lower_positive: vec![],
+                lower_negative: vec![],
+                upper_positive: vec![],
+                upper_negative: vec![],
+                created_at: chrono::Utc::now(),
+                expires_at: None,
+                system_card: false,
+            },
+        };
+        let mut component = test_tool_component("component", BTreeMap::new());
+        component.environment_id = context.environment.id;
+        let implementer = &mut context
+            .registered_agent_types
+            .get_mut(&AgentTypeName("selected".into()))
+            .unwrap()
+            .implemented_by;
+        implementer.component_id = component.id;
+        implementer.component_revision = component.revision;
+        let mut other_file = file.clone();
+        other_file.path = AgentFilePath::from_abs_str("/private/other").unwrap();
+        component.metadata = ComponentMetadata::default().with_provision_configs(BTreeMap::from([
+            (AgentTypeName("selected".into()), provision(file)),
+            (AgentTypeName("other".into()), provision(other_file)),
+        ]));
+        context
+            .components
+            .insert(component.component_name.clone(), component.clone());
+        let mut errors = vec![];
+        let mut routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        assert!(errors.is_empty(), "{errors:?}");
+        let builder = RouterFileIndexBuilder::new(
+            files.clone(),
+            crate::config::RouterFileIndexConfig {
+                max_concurrent_builds: 1,
+                ..Default::default()
+            },
+        );
+        builder.prepare(&context, &mut routes).await.unwrap();
+        let RouteBehaviour::HttpRouter(router) = &routes[0].behaviour else {
+            unreachable!()
+        };
+        assert_eq!(
+            router
+                .file_index
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/public/a"]
+        );
+        assert_eq!(router.component_revision, component.revision);
+
+        let bytes = desert_rust::serialize_to_byte_vec(&routes).unwrap();
+        let mut concurrent_routes: Vec<UnboundCompiledRoute> =
+            desert_rust::deserialize(&bytes).unwrap();
+        let mut pending = Box::pin(builder.prepare(&context, &mut routes));
+        assert!(futures::poll!(&mut pending).is_pending());
+        assert!(matches!(
+            builder.prepare(&context, &mut concurrent_routes).await,
+            Err(DeploymentWriteError::RouterFileIndexBusy)
+        ));
+        drop(pending);
+        builder.prepare(&context, &mut routes).await.unwrap();
+
+        let timeout_builder = RouterFileIndexBuilder::new(
+            files,
+            crate::config::RouterFileIndexConfig {
+                max_concurrent_builds: 1,
+                timeout: std::time::Duration::from_millis(5),
+            },
+        );
+        for _ in 0..2 {
+            let mut pending = Box::pin(timeout_builder.prepare(&context, &mut routes));
+            assert!(futures::poll!(&mut pending).is_pending());
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            assert!(matches!(
+                pending.await,
+                Err(DeploymentWriteError::RouterFileIndexTimeout)
+            ));
+        }
+        context
+            .components
+            .get_mut(&component.component_name)
+            .unwrap()
+            .revision = ComponentRevision::try_from(99u64).unwrap();
+        assert!(builder.prepare(&context, &mut routes).await.is_err());
+        let mut provisions = component.metadata.agent_type_provision_configs().clone();
+        provisions
+            .get_mut(&AgentTypeName("selected".into()))
+            .unwrap()
+            .files[0]
+            .path = AgentFilePath::from_abs_str("/public/bad\\name").unwrap();
+        component.metadata = component.metadata.with_provision_configs(provisions);
+        context
+            .components
+            .insert(component.component_name.clone(), component);
+        assert!(matches!(
+            builder.prepare(&context, &mut routes).await,
+            Err(DeploymentWriteError::DeploymentValidationFailed(_))
+        ));
+    }
+
+    #[test]
     fn http_mount_compilation_provider_limit_and_order() {
         let agents = (0..65)
             .map(|index| {
