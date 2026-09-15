@@ -440,10 +440,9 @@ impl RouteMatch {
                     return Err("Router method name must not be empty".into());
                 }
                 if let (Some(handler), Some(provider)) = (&router.handler, &router.openapi_provider)
+                    && handler.method_name == provider.method_name
                 {
-                    if handler.method_name == provider.method_name {
-                        return Err("Router handler and provider must be distinct methods".into());
-                    }
+                    return Err("Router handler and provider must be distinct methods".into());
                 }
                 FileMapping::validate_list(&router.static_bindings)?;
                 let mut paths = BTreeSet::new();

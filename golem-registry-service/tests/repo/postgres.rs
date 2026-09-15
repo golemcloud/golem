@@ -587,6 +587,11 @@ async fn test_resolve_agent_type_no_deployment_returns_none(
 }
 
 #[test]
+async fn missing_security_retains_active_route_barrier(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
+}
+
+#[test]
 async fn test_resolve_agent_type_nonexistent_revision_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

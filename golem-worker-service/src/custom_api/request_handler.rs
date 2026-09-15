@@ -307,6 +307,119 @@ mod tests {
     use poem::IntoResponse;
     use test_r::test;
 
+    #[test]
+    async fn shared_auth_and_unsafe_path_corpus_through_request_handler() {
+        use crate::custom_api::oidc::{DefaultIdentityProvider, session_store::SqliteSessionStore};
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+        use golem_common::schema::{AgentConstructorSchema, InputSchema, SchemaValue};
+        use golem_service_base::custom_api::{RouteBehaviour, RouterFileIndexEntry};
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let pool = golem_service_base::db::sqlite::SqlitePool::configured(
+            &golem_common::config::DbSqliteConfig {
+                database: db.path().to_string_lossy().into_owned(),
+                max_connections: 1,
+                foreign_keys: false,
+            },
+        )
+        .await
+        .unwrap();
+        let oidc = Arc::new(OidcHandler::new(
+            Arc::new(
+                SqliteSessionStore::new(pool, 60, std::time::Duration::from_secs(60))
+                    .await
+                    .unwrap(),
+            ),
+            Arc::new(DefaultIdentityProvider),
+        ));
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![],
+        );
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        for id in ["route-auth-before-file", "route-unsafe-before-auth"] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .unwrap();
+            let input = &case["input"];
+            let mount = &input["mounts"][0];
+            let mut route = test_route(1, mount["path"].as_str().unwrap(), None, "router");
+            route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                header_name: "x-session".into(),
+            });
+            let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+                unreachable!()
+            };
+            router.static_bindings = golem_common::model::agent::FileMapping::compile_list(
+                mount["mappings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| (m[0].as_str().unwrap(), m[1].as_str().unwrap())),
+            )
+            .unwrap();
+            if let Some(files) = input["files"].as_object() {
+                for (path, state) in files {
+                    assert_eq!(state, "found", "{id}");
+                    router.file_index.push(RouterFileIndexEntry {
+                        path: path.clone(),
+                        blob_key: golem_common::model::agent::AgentFileContentHash(
+                            golem_common::model::diff::Hash::empty(),
+                        ),
+                        size: 3,
+                        sha256: [1; 32],
+                    });
+                }
+            }
+            let handler = RequestHandler::new(
+                Arc::new(test_resolver(vec![route])),
+                Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+                oidc.clone(),
+                Arc::new(WebhookCallbackHandler::new(
+                    harness.worker_service.clone(),
+                    vec![],
+                )),
+            );
+            let request = Request::builder()
+                .uri(input["target"].as_str().unwrap().parse().unwrap())
+                .method(input["method"].as_str().unwrap().parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let response = handler
+                .handle_request(request)
+                .await
+                .unwrap_or_else(|e| ApiEndpointError::from(e.error).into_response());
+            assert_eq!(
+                u64::from(response.status().as_u16()),
+                case["expect"]["status"].as_u64().unwrap(),
+                "{id}"
+            );
+        }
+    }
+
     struct UnknownSiteLookup;
 
     #[async_trait::async_trait]

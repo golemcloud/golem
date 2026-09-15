@@ -7562,3 +7562,282 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
         "a2 should not appear in RPC response"
     );
 }
+
+pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
+    use golem_registry_service::model::api_definition::{
+        UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
+    };
+    use golem_registry_service::repo::deployment::DeploymentRepo;
+    use golem_registry_service::repo::domain_registration::{
+        DbDomainRegistrationRepo, DomainRegistrationRepo,
+    };
+    use golem_registry_service::repo::model::audit::ImmutableAuditFields;
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentCompiledRouteRecord, DeploymentRevisionCreationRecord,
+    };
+    use golem_registry_service::repo::model::domain_registration::DomainRegistrationRecord;
+    use golem_registry_service::repo::model::hash::SqlBlake3Hash;
+    use golem_registry_service::services::deployment::DeployedRoutesService;
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use golem_service_base::custom_api::{
+        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RequestBodySchema,
+        RouteBehaviour, RouteMatch, RouteSecurity,
+    };
+    use golem_service_base::repo::Blob;
+    use std::sync::Arc;
+    let (repo, domains, schemes): (
+        Arc<dyn DeploymentRepo>,
+        Box<dyn DomainRegistrationRepo>,
+        Box<dyn SecuritySchemeRepo>,
+    ) = match &deps.test_db {
+        TestDb::Sqlite(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+        TestDb::Postgres(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let domain = format!("{}.example.com", new_repo_uuid());
+    domains
+        .create(DomainRegistrationRecord {
+            domain_registration_id: new_repo_uuid(),
+            environment_id: env.revision.environment_id,
+            domain: domain.clone(),
+            audit: ImmutableAuditFields::new(owner.revision.account_id),
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let routes = [false, true]
+        .into_iter()
+        .enumerate()
+        .map(|(id, protected)| {
+            let route = UnboundCompiledRoute {
+                domain: Domain(domain.clone()),
+                route_id: id as i32,
+                route_match: RouteMatch::MountPrefix,
+                path: if protected {
+                    vec![PathSegment::Literal {
+                        value: "private".into(),
+                    }]
+                } else {
+                    vec![]
+                },
+                body: RequestBodySchema::Unused,
+                behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+                    component_id: ComponentId(new_repo_uuid()),
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: AgentTypeName(format!("router{id}")),
+                    constructor_input: CompiledInputSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    handler: None,
+                    openapi_provider: None,
+                    static_bindings: if protected {
+                        vec![]
+                    } else {
+                        golem_common::base_model::agent::FileMapping::compile_list([(
+                            "/assets/*",
+                            "/public/$1",
+                        )])
+                        .unwrap()
+                    },
+                    file_index: if protected {
+                        vec![]
+                    } else {
+                        vec![RouterFileIndexEntry {
+                            path: "/public/index.html".into(),
+                            blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
+                                blake3::hash(b"gol556-router-blob"),
+                            )),
+                            size: 556,
+                            sha256: [0x56; 32],
+                        }]
+                    },
+                }),
+                security: if protected {
+                    UnboundRouteSecurity::SecurityScheme(UnboundSecuritySchemeRouteSecurity {
+                        security_scheme: SecuritySchemeName("deleted".into()),
+                    })
+                } else {
+                    UnboundRouteSecurity::None
+                },
+                cors: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+            };
+            DeploymentCompiledRouteRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id: 1,
+                domain: domain.clone(),
+                route_id: route.route_id,
+                security_scheme: route.security_scheme().map(|s| s.0),
+                compiled_route: Blob::new(route),
+            }
+        })
+        .collect();
+    repo.deploy(
+        DeploymentRevisionCreationRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id: 1,
+            version: "test".into(),
+            hash: SqlBlake3Hash::empty(),
+            components: vec![],
+            http_api_deployments: vec![],
+            mcp_deployments: vec![],
+            compiled_routes: routes,
+            compiled_mcp: vec![],
+            registered_agent_types: vec![],
+            registered_tools: vec![],
+            agent_tool_bindings: vec![],
+            tool_releases: vec![],
+            created_agent_secrets: vec![],
+            updated_agent_secrets: vec![],
+            replaced_agent_secrets: vec![],
+            created_resource_definitions: vec![],
+            created_retry_policies: vec![],
+            user_account_id: owner.revision.account_id,
+        },
+        false,
+    )
+    .await
+    .unwrap()
+    .signal_new_events_available(&deps.test_registry_change_notifier());
+    for expected_activation in [1, 2] {
+        let activation = repo
+            .set_current_deployment(owner.revision.account_id, env.revision.environment_id, 1)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        assert_eq!(activation.revision_id, expected_activation);
+    }
+    let records = repo
+        .list_active_compiled_routes_for_domain(&domain)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(!records[0].security_scheme_missing);
+    assert!(records[1].security_scheme_missing);
+    let service = DeployedRoutesService::new(repo);
+    let routes = service
+        .get_currently_active_compiled_routes(&Domain(domain.clone()))
+        .await
+        .unwrap();
+    assert_eq!(routes.routes.len(), 2);
+    assert!(matches!(routes.routes[0].security, RouteSecurity::None));
+    let RouteBehaviour::HttpRouter(router) = &routes.routes[0].behavior else {
+        panic!("expected router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(router.file_index[0].sha256, [0x56; 32]);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    let grpc: golem_api_grpc::proto::golem::customapi::CompiledRoutes = routes.into();
+    let grpc_roundtrip: golem_service_base::custom_api::CompiledRoutes = grpc.try_into().unwrap();
+    let RouteBehaviour::HttpRouter(router) = &grpc_roundtrip.routes[0].behavior else {
+        panic!("expected gRPC router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(router.file_index[0].sha256, [0x56; 32]);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    assert!(matches!(
+        grpc_roundtrip.routes[1].security,
+        RouteSecurity::Unavailable
+    ));
+    use golem_common::model::agent::AgentFileContentHash;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_service_base::custom_api::RouterFileIndexEntry;
+    for _ in 0..2 {
+        let id = SecuritySchemeId::new();
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(golem_common::base_model::Empty {}),
+            "test".into(),
+            "test".into(),
+            &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
+            &[],
+            golem_common::model::account::AccountId(owner.revision.account_id),
+        );
+        schemes
+            .create(
+                env.revision.environment_id,
+                "deleted".into(),
+                revision.clone(),
+            )
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(
+            matches!(&routes.routes[1].security, RouteSecurity::SecurityScheme(s) if s.security_scheme_id == id)
+        );
+        assert!(routes.security_schemes.contains_key(&id));
+        revision.revision_id += 1;
+        revision.audit.deleted = true;
+        schemes
+            .delete(env.revision.environment_id, revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(matches!(
+            routes.routes[1].security,
+            RouteSecurity::Unavailable
+        ));
+        assert!(routes.security_schemes.is_empty());
+    }
+}

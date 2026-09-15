@@ -226,7 +226,7 @@ mod tests {
             };
             let mut cache = HashMap::new();
             let index = builder
-                .build(environment, &[file.clone()], &mut cache)
+                .build(environment, std::slice::from_ref(&file), &mut cache)
                 .await
                 .unwrap();
             assert_eq!(index[0].size, size);
@@ -249,7 +249,11 @@ mod tests {
             );
             assert!(
                 builder
-                    .build(EnvironmentId::new(), &[file.clone()], &mut HashMap::new())
+                    .build(
+                        EnvironmentId::new(),
+                        std::slice::from_ref(&file),
+                        &mut HashMap::new()
+                    )
                     .await
                     .is_err()
             );

@@ -41,9 +41,9 @@ use golem_common::schema::{
 use golem_service_base::custom_api::{
     AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
     CompiledSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, HttpRouterBehaviour, MethodParameter, OpenApiSpecBehaviour,
-    OpenApiSpecFormat, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch,
-    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -828,10 +828,10 @@ pub fn validate_path_segments(
     domain: &Domain,
 ) -> Result<(), &'static str> {
     for segment in segments {
-        if let PathSegment::Literal { value } = segment {
-            if !golem_common::model::agent::http_files::valid_decoded_segment(value) {
-                return Err("Invalid decoded path segment");
-            }
+        if let PathSegment::Literal { value } = segment
+            && !golem_common::model::agent::http_files::valid_decoded_segment(value)
+        {
+            return Err("Invalid decoded path segment");
         }
     }
     let url_to_validate = format!("http://{}/", domain.0);
@@ -870,6 +870,7 @@ mod tests {
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
+    use golem_service_base::custom_api::MethodParameter;
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
