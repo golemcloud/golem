@@ -3403,9 +3403,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
     }
 
-    /// Starts a conditional `ActiveAgents` retirement if this worker is
-    /// exactly unloaded. The returned guard rolls the marker back unless the
-    /// cache removal commits.
+    /// Starts a conditional ordinary `ActiveAgents` retirement unless deletion already owns it.
+    /// The returned guard rolls the marker back unless the cache removal commits.
     pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
         if self
             .cache_retirement_in_progress
@@ -3420,9 +3419,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             committed: false,
         };
         let instance = self.instance.lock().await;
-        if matches!(&*instance, WorkerInstance::Unloaded { .. })
-            && !instance.deletion_owns_retirement()
-        {
+        if !instance.deletion_owns_retirement() {
             Some(retirement)
         } else {
             None
