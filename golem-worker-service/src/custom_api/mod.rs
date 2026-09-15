@@ -17,6 +17,7 @@ pub mod call_agent;
 mod cors;
 pub mod error;
 pub mod model;
+mod mounted_dispatch;
 pub mod oidc;
 mod openapi;
 pub mod poem_endpoint;

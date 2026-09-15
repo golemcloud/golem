@@ -413,7 +413,7 @@ impl DomainHttpApi {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -423,7 +423,12 @@ mod tests {
     use golem_service_base::custom_api::{CompiledRoute, RouteBehaviour, WebhookCallbackBehaviour};
     use test_r::test;
 
-    fn test_route(id: i32, path: &str, method: Option<&str>, kind: &str) -> CompiledRoute {
+    pub(in crate::custom_api) fn test_route(
+        id: i32,
+        path: &str,
+        method: Option<&str>,
+        kind: &str,
+    ) -> CompiledRoute {
         use golem_common::model::agent::{AgentMode, AgentTypeName};
         use golem_common::model::component::ComponentRevision;
         use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
@@ -542,7 +547,7 @@ mod tests {
         }
     }
 
-    fn test_resolver(routes: Vec<CompiledRoute>) -> RouteResolver {
+    pub(in crate::custom_api) fn test_resolver(routes: Vec<CompiledRoute>) -> RouteResolver {
         RouteResolver::new(
             &RouteResolverConfig::default(),
             Arc::new(RoutesLookup(std::sync::Mutex::new(Some(CompiledRoutes {

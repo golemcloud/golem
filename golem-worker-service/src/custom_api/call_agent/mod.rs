@@ -72,7 +72,14 @@ impl CallAgentHandler {
             None
         };
 
-        let agent_id = self.build_agent_id(resolved_route, behaviour, phantom_id)?;
+        let agent_id = Self::build_agent_id(
+            resolved_route,
+            behaviour.component_id,
+            &behaviour.agent_type,
+            &behaviour.constructor_input,
+            &behaviour.constructor_parameters,
+            phantom_id,
+        )?;
 
         let request_method = request.underlying.method().clone();
 
@@ -268,20 +275,14 @@ impl CallAgentHandler {
         }
     }
 
-    fn build_agent_id(
-        &self,
+    pub(super) fn build_agent_id(
         resolved_route: &ResolvedRouteEntry,
-        behaviour: &CallAgentBehaviour,
+        component_id: golem_common::model::component::ComponentId,
+        agent_type: &golem_common::model::agent::AgentTypeName,
+        constructor_input: &golem_service_base::custom_api::CompiledInputSchema,
+        constructor_parameters: &[ConstructorParameter],
         phantom_id: Option<Uuid>,
     ) -> Result<AgentId, RequestHandlerError> {
-        let CallAgentBehaviour {
-            component_id,
-            agent_type,
-            constructor_input,
-            constructor_parameters,
-            ..
-        } = behaviour;
-
         let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
@@ -311,7 +312,7 @@ impl CallAgentHandler {
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
-            component_id: *component_id,
+            component_id,
             agent_id: agent_id.to_string(),
         })
     }

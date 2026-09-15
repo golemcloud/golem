@@ -16,6 +16,7 @@ use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
+use super::mounted_dispatch::{PendingMountBackend, dispatch_mount};
 use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
@@ -148,11 +149,7 @@ impl RequestHandler {
                     .await
             }
             RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
-                Ok(RouteExecutionResult {
-                    status: StatusCode::NOT_IMPLEMENTED,
-                    headers: HashMap::new(),
-                    body: ResponseBody::NoBody,
-                })
+                dispatch_mount(request, resolved_route, &mut PendingMountBackend).await
             }
         }
     }
