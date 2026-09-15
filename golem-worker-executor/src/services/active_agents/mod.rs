@@ -52,7 +52,8 @@ use crate::services::golem_config::{
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
 use crate::worker::entity_invocation::{
-    EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
+    EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
+    start_native_entity_invocation, start_pre_acquired_entity_invocation,
 };
 use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
 use crate::worker::entity_slot::EntitySlot;
@@ -444,6 +445,57 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             scope,
             mode,
             invoke,
+            finalize,
+        )
+    }
+
+    pub(crate) fn start_native_entity_invocation<R, Run, Finalize, Finalized>(
+        &self,
+        parent: Option<OwnerInvocationId>,
+        scope: EntityInvocationScope,
+        mode: EntityCallMode,
+        run: Run,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        Run: Send + 'static,
+        Run: for<'a> FnOnce(
+            EntityInvocationScope,
+            &'a crate::worker::entity_slot::EntitySlotRegistration,
+            tokio_util::sync::CancellationToken,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = (
+                            Result<R, WorkerExecutorError>,
+                            Option<Box<dyn RetainedEntityStore>>,
+                        ),
+                    > + Send
+                    + 'a,
+            >,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        if !self.accepting_entities.load(Ordering::Acquire) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity admission is fenced by owner lifecycle",
+            ));
+        }
+        if scope.owner_id() != &self.owner_id {
+            return Err(WorkerExecutorError::runtime(
+                "Entity invocation scope does not belong to the active owner",
+            ));
+        }
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        start_native_entity_invocation(
+            slot,
+            self.execution.lane(),
+            parent,
+            scope,
+            mode,
+            run,
             finalize,
         )
     }

@@ -1,0 +1,22 @@
+[package]
+name = "golem-native-tool"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+harness = false
+
+[[test]]
+name = "native_tool"
+harness = false
+
+[dependencies]
+anyhow = { workspace = true }
+golem-common = { workspace = true, features = ["full"] }
+golem-rust-macro = { workspace = true }
+golem-schema = { workspace = true, features = ["derive", "full"] }
+golem-tool-metadata = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

@@ -188,7 +188,7 @@ object Guest {
   ): js.Promise[JsInvocationResult] = {
     val inputOwnership = new AgentStreamOwnership
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
-    val scalaStdout    = stdout.toOption.map(new JsToolOutputStream(_))
+    var scalaStdout    = Option.empty[JsToolOutputStream]
     val invoked        =
       try {
         val decodedInput =
@@ -203,8 +203,23 @@ object Guest {
             ToolRegistry.getInvoker(toolName) match {
               case None          => Future.successful(Left(WitToolError.InvalidToolName(toolName)))
               case Some(invoker) =>
-                val scalaPrincipal = PrincipalConverter.fromJs(principal)
-                invoker(commandPath.toList, in, scalaStdin, scalaStdout, scalaPrincipal)
+                val path = commandPath.toList
+                val body = ToolRegistry.getExtendedTool(toolName).flatMap { tool =>
+                  tool.commandIndexByPath(path).flatMap(index => tool.commands(index).body)
+                }
+                body match {
+                  case None                                                          => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
+                  case Some(selected) if selected.stdout.isEmpty && stdout.isDefined =>
+                    Future.successful(Left(WitToolError.InvalidInput("unexpected stdout stream")))
+                  case Some(selected) if selected.stdout.exists(_.required) && stdout.isEmpty =>
+                    Future.successful(
+                      Left(WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
+                    )
+                  case Some(_) =>
+                    val scalaPrincipal = PrincipalConverter.fromJs(principal)
+                    scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
+                    invoker(path, in, scalaStdin, scalaStdout, scalaPrincipal)
+                }
             }
         }
       } catch {
@@ -223,7 +238,13 @@ object Guest {
     val cleanup = List(
       () => inputOwnership.close(),
       () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
-      () => scalaStdout.map(_.close()).getOrElse(Future.successful(()))
+      () =>
+        scalaStdout match {
+          case Some(stream) => stream.close()
+          case None         =>
+            stdout.toOption.foreach(JsToolOutputStream.dispose)
+            Future.successful(())
+        }
     )
     val completed = encoded.transformWith { result =>
       Future

@@ -48,6 +48,11 @@ const AGENT_FUNCTION_NAME: &str = "discover-agent-types";
 const TOOL_INTERFACE_NAME: &str = "golem:tool/guest@0.1.0";
 const TOOL_FUNCTION_NAME: &str = "discover-tools";
 
+enum ComponentSource<'a> {
+    Path(&'a Path),
+    Bytes(&'a [u8]),
+}
+
 /// Metadata discovered from a WASM component in a single instantiation:
 /// the agent types returned by `golem:agent/guest.discover-agent-types` and
 /// the tools returned by `golem:tool/guest.discover-tools`. Either list is
@@ -119,7 +124,7 @@ pub async fn extract_component_metadata_with_streams(
     enable_fs_cache: bool,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
     extract_component_metadata_impl(
-        wasm_path,
+        ComponentSource::Path(wasm_path),
         stdout,
         stderr,
         fail_on_missing_discover_method,
@@ -146,8 +151,43 @@ pub async fn extract_component_metadata(
     .await
 }
 
+/// Same as [`extract_component_metadata`], but extracts metadata directly from
+/// an in-memory component binary.
+pub async fn extract_component_metadata_from_bytes(
+    wasm_bytes: &[u8],
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_from_bytes_with_streams(
+        wasm_bytes,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+    )
+    .await
+}
+
+pub async fn extract_component_metadata_from_bytes_with_streams(
+    wasm_bytes: &[u8],
+    stdout: Option<impl StdoutStream + 'static>,
+    stderr: Option<impl StdoutStream + 'static>,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_impl(
+        ComponentSource::Bytes(wasm_bytes),
+        stdout,
+        stderr,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+        true,
+    )
+    .await
+}
+
 async fn extract_component_metadata_impl(
-    wasm_path: &Path,
+    wasm: ComponentSource<'_>,
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
     fail_on_missing_discover_method: bool,
@@ -201,7 +241,10 @@ async fn extract_component_metadata_impl(
         wasi_http: WasiHttpCtx::new(),
     };
 
-    let component = Component::from_file(&engine, wasm_path)?;
+    let component = match wasm {
+        ComponentSource::Path(path) => Component::from_file(&engine, path)?,
+        ComponentSource::Bytes(bytes) => Component::new(&engine, bytes)?,
+    };
     let mut store = Store::new(&engine, host);
     store.set_fuel(u64::MAX)?;
     store.set_epoch_deadline(u64::MAX);
@@ -282,7 +325,7 @@ pub async fn extract_agent_type_schemas_with_streams(
     let metadata: Pin<
         Box<dyn Future<Output = anyhow::Result<ExtractedComponentMetadata>> + Send + '_>,
     > = Box::pin(extract_component_metadata_impl(
-        wasm_path,
+        ComponentSource::Path(wasm_path),
         stdout,
         stderr,
         fail_on_missing_discover_method,

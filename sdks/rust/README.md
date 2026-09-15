@@ -7,12 +7,8 @@ This repository contains Rust crates that help writing [Golem](https://golem.clo
 The `golem-rust` crate contains Rust wrappers for Golem's runtime API, including
 the [transaction API](https://learn.golem.cloud/docs/transaction-api).
 
-## golem-rust-macro
-
-The `golem-rust-macro` crate contains Rust macros for agent definitions, agent
-implementations, multimodal schema declarations, and configuration schemas. The
-component-model value conversion derives are re-exported from `golem-schema` as
-`IntoSchema` and `FromSchema`.
+The `golem-rust` crate uses the shared `golem-rust-macro` and
+`golem-tool-metadata` authoring crates from the repository's root workspace.
 
 ## Agent implementations
 
