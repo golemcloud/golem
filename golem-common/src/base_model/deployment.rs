@@ -127,11 +127,11 @@ declare_structs! {
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
         pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
         pub published_tools: Vec<ToolName>,
-        /// Registry-owned ambient tool catalog inputs. These are read-only deployment inputs;
-        /// applications neither declare nor receive grants for them.
-        // Auxiliary metadata for constructing the proposed deployment, not staged contents.
-        // Excluded from the staged hash and diff; releases and effective bindings are
-        // represented in remote_tools instead.
+        /// Registry-owned ambient tools available for the proposed deployment.
+        ///
+        /// Applications cannot declare ambient tools and do not need grants to use them. These
+        /// entries are not staged and therefore do not contribute to the deployment hash or diff;
+        /// selected releases and their effective bindings are represented in `remote_tools`.
         pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
     }
 
