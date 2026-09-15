@@ -144,6 +144,10 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
 Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
 `Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
 after reading the worker's memory requirement succeeds and before changing the resident state to
