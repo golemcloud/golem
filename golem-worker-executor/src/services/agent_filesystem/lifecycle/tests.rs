@@ -828,7 +828,7 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
 }
 
 #[test]
-async fn initial_files_are_seeded_as_one_file_entry_each_that_fails_on_an_existing_target() {
+async fn initial_files_are_seeded_as_one_file_entry_each_that_creates_a_new_path() {
     let id = agent_id();
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),
@@ -878,7 +878,7 @@ async fn initial_files_are_seeded_as_one_file_entry_each_that_fails_on_an_existi
         seeds,
         [("read-only", "ReadOnly"), ("read-write", "ReadWrite")].map(|(target, access)| {
             format!(
-                "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"{target}\" }}, access={access}, existing=Fail}}])",
+                "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"{target}\" }}, access={access}, placement=CreateNew}}])",
                 source.display()
             )
         })

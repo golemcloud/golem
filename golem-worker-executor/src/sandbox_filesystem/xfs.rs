@@ -1757,7 +1757,7 @@ mod tests {
                 source: source.clone(),
                 target: SandboxPath::at_root("copied"),
                 access: SeedAccess::ReadWrite,
-                existing: OnExisting::Fail,
+                placement: SeedPlacement::CreateNew,
             }]),
         )
         .await
@@ -2354,7 +2354,7 @@ mod tests {
     #[test]
     #[ignore = "requires the privileged managed XFS test runner"]
     #[timeout("120s")]
-    async fn managed_xfs_seed_charges_the_project_and_follows_the_existing_rule() {
+    async fn managed_xfs_seed_charges_the_project_and_follows_the_placement() {
         let root = managed_test_root();
         let provisioning =
             SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
@@ -2380,11 +2380,11 @@ mod tests {
             .child(std::ffi::OsStr::new("replacement"))
             .unwrap();
         std::fs::write(replacement.as_path(), vec![0x33; 128 * 1024]).unwrap();
-        let entry = |source: &HostPath, target: &str, access, existing| SeedEntry {
+        let entry = |source: &HostPath, target: &str, access, placement| SeedEntry {
             source: source.clone(),
             target: SandboxPath::at_root(target),
             access,
-            existing,
+            placement,
         };
 
         let filesystem = provisioning
@@ -2396,7 +2396,12 @@ mod tests {
 
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
-            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+            Box::new([entry(
+                &tree,
+                "",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            )]),
         )
         .await
         .unwrap();
@@ -2432,7 +2437,12 @@ mod tests {
 
         let existing = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
-            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+            Box::new([entry(
+                &tree,
+                "",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            )]),
         )
         .await
         .unwrap_err();
@@ -2445,7 +2455,7 @@ mod tests {
                 &replacement,
                 "data/small",
                 SeedAccess::ReadOnly,
-                OnExisting::Replace,
+                SeedPlacement::Replace,
             )]),
         )
         .await
@@ -2486,7 +2496,7 @@ mod tests {
                 &tree,
                 "",
                 SeedAccess::FromSource,
-                OnExisting::Replace,
+                SeedPlacement::Replace,
             )]),
         )
         .await
@@ -2529,7 +2539,12 @@ mod tests {
             .unwrap();
         let exhausted = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &limited,
-            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+            Box::new([entry(
+                &tree,
+                "",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            )]),
         )
         .await
         .unwrap_err();

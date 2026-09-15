@@ -17,13 +17,14 @@ use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecover
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
     FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits, LinkGroup,
-    OnExisting, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
+    SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
     SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
     SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
     SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
     SandboxOpenOptions, SandboxOpened, SandboxPath, SandboxReadRange,
     SandboxResolvedNamespaceTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
-    SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, TreeExclusions,
+    SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
+    TreeExclusions,
 };
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{FileLoader, InitialFileSource};
@@ -630,9 +631,12 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
 ///
 /// Update handling calls this through a valid generation handle. The call applies the initial-file
 /// rule from the current declarations to the declarations of the new revision and the provisioned
-/// declarations. It replaces or removes only the files that the lifecycle installed for the
-/// current declarations. A conflict fails the call with an error that names the path, and changes
-/// nothing. A failure after the plan passes and the sources load invalidates the generation.
+/// declarations. At a path whose declaration changes, the call expects Golem's file where the
+/// current declarations have the path, and nothing where they do not. It puts the new file there,
+/// or removes Golem's file. An empty path that the new declarations do not have stays empty.
+/// Anything else at such a path is a conflict. A conflict fails the call with an error that names
+/// the path, and changes nothing. A failure after the plan passes and the sources load invalidates
+/// the generation.
 /// Admission errors are immediate, and loading or sandbox failures are produced by the returned
 /// call.
 pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(

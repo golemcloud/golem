@@ -482,14 +482,14 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
     );
     assert!(
         calls[0].contains(&format!(
-            "source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, existing=Fail",
+            "source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, placement=CreateNew",
             into.join("tree").display()
         )),
         "{}",
         calls[0]
     );
     assert!(
-        calls[2].contains(r#"path: "kept" }, access=ReadOnly, existing=Fail"#),
+        calls[2].contains(r#"path: "kept" }, access=ReadOnly, placement=CreateNew"#),
         "{}",
         calls[2]
     );
@@ -570,7 +570,7 @@ async fn a_manual_update_from_a_restore_seeds_the_old_left_out_file_before_the_r
     };
     assert_eq!(seeds.len(), 3, "{seeds:#?}");
     assert!(
-        seeds[1].contains(r#"path: "config" }, access=ReadOnly, existing=Fail"#),
+        seeds[1].contains(r#"path: "config" }, access=ReadOnly, placement=CreateNew"#),
         "{}",
         seeds[1]
     );
@@ -579,7 +579,7 @@ async fn a_manual_update_from_a_restore_seeds_the_old_left_out_file_before_the_r
         Some(old_source.path().as_path().display().to_string())
     );
     assert!(
-        seeds[2].contains(r#"path: "config" }, access=ReadOnly, existing=Replace"#),
+        seeds[2].contains(r#"path: "config" }, access=ReadOnly, placement=Replace"#),
         "{}",
         seeds[2]
     );
@@ -705,6 +705,12 @@ async fn an_update_reads_only_what_the_initial_file_rule_needs() {
     control.push_get_attributes(Ok(object(SandboxObjectKind::File, 0)));
     control.push_get_attributes(Ok(object(SandboxObjectKind::Directory, old_directory.size)));
     control.push_get_attributes(Ok(object(SandboxObjectKind::File, old_same_size.size)));
+    // Only the file with the declared size needs a read of its content. It holds other content.
+    control.push_open(Ok(SandboxOpened::scripted_file(5)));
+    control.push_read(Ok(Bytes::from_static(b"agent")));
+    control.push_read(Ok(Bytes::new()));
+    control.push_close(Ok(()));
+    let seeds_before = call_count(&control, "seed(");
 
     let updated = update_initial_files(
         &resident_generation_handle(&resident),
@@ -716,15 +722,23 @@ async fn an_update_reads_only_what_the_initial_file_rule_needs() {
     .await;
 
     assert!(
-        updated.is_ok(),
-        "an update that keeps every path must read only the paths and the first object above a \
-         path that is not a directory: {updated:?}"
+        updated.as_ref().is_err_and(|error| error
+            .to_string()
+            .contains(&format!("{CONFLICT_ERROR_START}blocked/sub/file.txt"))),
+        "the file above blocked/sub/file.txt must be the first conflict: {updated:?}"
     );
     assert_eq!(
         call_count(&control, "get_path_attributes(") - reads_before,
-        3
+        3,
+        "the update must read each path and only the first object above a path that is not a \
+         directory"
     );
-    assert!(!has_call(&control, "open("));
+    assert_eq!(
+        call_count(&control, "open("),
+        1,
+        "the update must read the content only of a file with the declared size"
+    );
+    assert_eq!(call_count(&control, "seed("), seeds_before);
     delete_scripted_resident(&control, resident).await;
 }
 
@@ -1042,16 +1056,16 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
     let writable = store
         .declare("/config", AgentFilePermissions::ReadWrite, b"installed")
         .await;
-    // A name, the files of the update, and whether the update must fail with a conflict.
-    type AgentFileCase = (&'static str, Vec<InitialAgentFile>, bool);
-    let cases: [AgentFileCase; 3] = [
-        ("a read-only update", vec![changed], true),
-        ("a read-write update", vec![writable], false),
-        ("an update that drops the path", vec![], false),
+    // A name, and the files of an update. Each update must fail with a conflict, because the path
+    // does not hold Golem's file of the old declaration.
+    let cases: [(&'static str, Vec<InitialAgentFile>); 3] = [
+        ("a read-only update", vec![changed]),
+        ("a read-write update", vec![writable]),
+        ("an update that drops the path", vec![]),
     ];
 
     futures::stream::iter(cases)
-        .for_each(|(name, files, conflict)| {
+        .for_each(|(name, files)| {
             let store = &store;
             let installed = installed.clone();
             async move {
@@ -1081,16 +1095,14 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 .unwrap()
                 .await;
 
-                match (conflict, &updated) {
-                    (true, Err(error)) => assert!(
-                        error.to_string().contains(
-                            "install a read-only initial file over other data at filesystem \
-                             config"
-                        ),
+                match &updated {
+                    Err(error) => assert!(
+                        error
+                            .to_string()
+                            .contains(&format!("{CONFLICT_ERROR_START}config")),
                         "{name}: {error}"
                     ),
-                    (true, Ok(())) => panic!("{name}: the update must fail with a conflict"),
-                    (false, result) => assert!(result.is_ok(), "{name}: {result:?}"),
+                    Ok(()) => panic!("{name}: the update must fail with a conflict"),
                 }
                 assert_eq!(
                     call_count(&control, "seed(") + call_count(&control, "unlink_file("),
@@ -1400,21 +1412,20 @@ async fn a_left_out_file_above_a_new_declaration_gives_automatic_and_manual_upda
     let config = [store
         .declare("/config", AgentFilePermissions::ReadOnly, b"config")
         .await];
-    let read_only_app = [store
-        .declare("/config/app.toml", AgentFilePermissions::ReadOnly, b"app")
-        .await];
-    let writable_app = [store
-        .declare("/config/app.toml", AgentFilePermissions::ReadWrite, b"app")
-        .await];
-    let update = |filesystem: &ResidentFilesystem, files: &[InitialAgentFile]| {
-        update_initial_files(
-            &resident_generation_handle(filesystem),
-            Arc::clone(&agents.store.loader),
-            agents.store.environment_id,
-            files.to_vec(),
-        )
-        .unwrap()
-    };
+    let apps = [
+        (
+            "read-only",
+            store
+                .declare("/config/app.toml", AgentFilePermissions::ReadOnly, b"app")
+                .await,
+        ),
+        (
+            "read-write",
+            store
+                .declare("/config/app.toml", AgentFilePermissions::ReadWrite, b"app")
+                .await,
+        ),
+    ];
     let source = agents
         .start(&agents.agent("source"), &config, NO_RESTORE)
         .await
@@ -1424,67 +1435,71 @@ async fn a_left_out_file_above_a_new_declaration_gives_automatic_and_manual_upda
         !captured.directory().join("tree").join("config").exists(),
         "the capture must leave out the bytes of config"
     );
+    let conflict = format!("{CONFLICT_ERROR_START}config/app.toml");
 
-    let automatic_read_only = agents
-        .start(&agents.agent("automatic-read-only"), &config, NO_RESTORE)
-        .await
-        .unwrap();
-    let automatic_error = update(&automatic_read_only, &read_only_app)
-        .await
-        .unwrap_err();
-    let manual_error = match agents
-        .start(
-            &agents.agent("manual-read-only"),
-            &read_only_app,
-            Some(copying_restore(&captured)),
-        )
-        .await
-    {
-        Ok(manual) => {
-            delete(seal(manual)).await.unwrap();
-            panic!("the manual update must fail as the automatic update fails: {automatic_error}");
-        }
-        Err(error) => error,
-    };
-    let conflict = "install a read-only initial file over other data at filesystem config/app.toml";
-    assert!(
-        automatic_error.to_string().contains(conflict),
-        "{automatic_error}"
-    );
-    assert!(
-        manual_error.to_string().contains(conflict),
-        "{manual_error}"
-    );
+    futures::stream::iter(apps)
+        .for_each(|(name, app)| {
+            let agents = &agents;
+            let config = &config;
+            let captured = &captured;
+            let conflict = &conflict;
+            async move {
+                let automatic_agent = agents.agent(&format!("automatic-{name}"));
+                let automatic = agents
+                    .start(&automatic_agent, config, NO_RESTORE)
+                    .await
+                    .unwrap();
+                let automatic_error = update_initial_files(
+                    &resident_generation_handle(&automatic),
+                    Arc::clone(&agents.store.loader),
+                    agents.store.environment_id,
+                    vec![app.clone()],
+                )
+                .unwrap()
+                .await
+                .unwrap_err();
+                let manual_error = match agents
+                    .start(
+                        &agents.agent(&format!("manual-{name}")),
+                        std::slice::from_ref(&app),
+                        Some(copying_restore(captured)),
+                    )
+                    .await
+                {
+                    Ok(manual) => {
+                        delete(seal(manual)).await.unwrap();
+                        panic!(
+                            "{name}: the manual update must fail as the automatic update fails: \
+                             {automatic_error}"
+                        );
+                    }
+                    Err(error) => error,
+                };
 
-    let automatic_writable_agent = agents.agent("automatic-read-write");
-    let automatic_writable = agents
-        .start(&automatic_writable_agent, &config, NO_RESTORE)
-        .await
-        .unwrap();
-    update(&automatic_writable, &writable_app).await.unwrap();
-    let manual_writable_agent = agents.agent("manual-read-write");
-    let manual_writable = agents
-        .start(
-            &manual_writable_agent,
-            &writable_app,
-            Some(copying_restore(&captured)),
-        )
-        .await
-        .unwrap();
-    let automatic_tree = read_tree(&agents.root(&automatic_writable_agent));
-    assert_eq!(
-        read_tree(&agents.root(&manual_writable_agent)),
-        automatic_tree
-    );
-    assert!(
-        automatic_tree.nodes.is_empty(),
-        "the update removes config and keeps config/app.toml out: {automatic_tree:?}"
-    );
+                assert!(
+                    automatic_error.to_string().contains(conflict),
+                    "{name}: {automatic_error}"
+                );
+                assert!(
+                    manual_error.to_string().contains(conflict),
+                    "{name}: {manual_error}"
+                );
+                let tree = read_tree(&agents.root(&automatic_agent));
+                assert!(
+                    tree.nodes.len() == 1
+                        && matches!(
+                            tree.nodes.get("config"),
+                            Some(Node::File { mode, content })
+                                if mode & 0o222 == 0 && content == b"config"
+                        ),
+                    "{name}: the failed update must change nothing: {tree:?}"
+                );
+                delete(seal(automatic)).await.unwrap();
+            }
+        })
+        .await;
     captured.discard().await.unwrap();
     delete(seal(source)).await.unwrap();
-    delete(seal(automatic_read_only)).await.unwrap();
-    delete(seal(automatic_writable)).await.unwrap();
-    delete(seal(manual_writable)).await.unwrap();
 }
 
 #[test]
@@ -1855,25 +1870,136 @@ fn round_trip() -> impl proptest::strategy::Strategy<Value = RoundTrip> {
     ]
 }
 
+/// Generates the declarations of a revision that changes `initial`. Each declaration of `initial`
+/// stays, gets a content, gets the other permission, or goes. The revision can also declare other
+/// paths. A revision never declares a path under another path that it declares.
+fn revised_files(
+    initial: Box<[DeclaredFile]>,
+) -> impl proptest::strategy::Strategy<Value = Box<[DeclaredFile]>> {
+    use proptest::strategy::Strategy as _;
+    let count = initial.len();
+    (
+        proptest::collection::vec((0..5_u8, 0..CONTENTS.len()), count),
+        declared_files(),
+    )
+        .prop_map(move |(changes, added)| {
+            let files = initial
+                .iter()
+                .zip(changes)
+                .filter_map(|(file, (change, content))| match change {
+                    0 | 1 => Some(file.clone()),
+                    2 => Some(DeclaredFile {
+                        content,
+                        ..file.clone()
+                    }),
+                    3 => Some(DeclaredFile {
+                        read_only: !file.read_only,
+                        ..file.clone()
+                    }),
+                    _ => None,
+                })
+                .chain(added.iter().cloned())
+                .fold(BTreeMap::new(), |mut files, file| {
+                    files.entry(file.path).or_insert(file);
+                    files
+                });
+            files
+                .values()
+                .filter(|file| {
+                    !files
+                        .keys()
+                        .any(|other| file.path.starts_with(&format!("{other}/")))
+                })
+                .cloned()
+                .collect()
+        })
+}
+
+/// Generates one or two steps of a history whose first declarations are `initial`: a step of
+/// [`history_step`], an update to a revision of `initial`, or a removal of a file followed by a new
+/// file, a new directory or a new symlink at the same place.
+fn history_steps(
+    initial: Box<[DeclaredFile]>,
+) -> impl proptest::strategy::Strategy<Value = Vec<HistoryStep>> {
+    use proptest::strategy::Strategy as _;
+    // The places that are file places and also places where a step makes a directory.
+    let file_and_directory_places: &'static [&'static str] = &["h", "d/h", "e/h"];
+    let position = |places: &[&str], place: &str| {
+        places
+            .iter()
+            .position(|candidate| *candidate == place)
+            .expect("the place is in the list of places")
+    };
+    proptest::prop_oneof![
+        7 => history_step().prop_map(|step| vec![step]),
+        2 => revised_files(initial).prop_map(|files| vec![HistoryStep::Update { files }]),
+        2 => (0..FILE_PLACES.len(), 0..CONTENTS.len()).prop_map(|(file, content)| {
+            vec![
+                HistoryStep::RemoveFile { file },
+                HistoryStep::Write { file, content },
+            ]
+        }),
+        1 => proptest::sample::select(file_and_directory_places).prop_map(move |place| {
+            vec![
+                HistoryStep::RemoveFile {
+                    file: position(&FILE_PLACES, place),
+                },
+                HistoryStep::CreateDirectory {
+                    directory: position(&NEW_DIRECTORY_PLACES, place),
+                },
+            ]
+        }),
+        1 => (0..FILE_PLACES.len(), 0..SYMLINK_TARGETS.len()).prop_map(|(file, target)| {
+            vec![
+                HistoryStep::RemoveFile { file },
+                HistoryStep::Symlink { file, target },
+            ]
+        }),
+    ]
+}
+
 /// Generates histories. About half of them move a read-only file of the first declarations, or the
-/// directory above one, away just before the capture and back just after it.
+/// directory above one, away just before the capture and back just after it. Most of the others
+/// update to a revision of the first declarations just after the capture, so that a manual update
+/// from a restore meets the changes of the steps before the capture.
 fn histories() -> impl proptest::strategy::Strategy<Value = History> {
     use proptest::strategy::Strategy as _;
-    (
-        declared_files(),
-        proptest::collection::vec(history_step(), 0..12),
-        proptest::arbitrary::any::<proptest::sample::Index>(),
-        proptest::option::of(round_trip()),
-    )
-        .prop_map(|(initial, steps, capture, round_trip)| {
+    declared_files()
+        .prop_flat_map(|initial| {
+            (
+                proptest::strategy::Just(initial.clone()),
+                proptest::collection::vec(history_steps(initial.clone()), 0..14),
+                proptest::arbitrary::any::<proptest::sample::Index>(),
+                proptest::option::of(round_trip()),
+                proptest::option::weighted(0.8, revised_files(initial)),
+            )
+        })
+        .prop_map(|(initial, steps, capture, round_trip, revision)| {
+            let steps = steps.into_iter().flatten().collect::<Vec<_>>();
             let capture = capture.index(steps.len() + 1);
-            match round_trip.and_then(|round_trip| round_trip.steps(&initial)) {
-                None => History {
+            match (
+                round_trip.and_then(|round_trip| round_trip.steps(&initial)),
+                revision,
+            ) {
+                (None, None) => History {
                     initial,
                     steps: steps.into_boxed_slice(),
                     capture,
                 },
-                Some((away, back)) => {
+                (None, Some(files)) => {
+                    let (before, after) = steps.split_at(capture);
+                    History {
+                        steps: before
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(HistoryStep::Update { files }))
+                            .chain(after.iter().cloned())
+                            .collect(),
+                        initial,
+                        capture,
+                    }
+                }
+                (Some((away, back)), _) => {
                     let (before, after) = steps.split_at(capture);
                     History {
                         capture: capture + away.len(),
@@ -1941,7 +2067,7 @@ fn error_outcome(error: Error) -> StepOutcome {
         Error::Sandbox(error)
             if error
                 .to_string()
-                .contains("install a read-only initial file over other data at") =>
+                .contains("install initial files because of a conflict at") =>
         {
             StepOutcome::Conflict(error.to_string())
         }
@@ -2282,7 +2408,7 @@ enum ResultClass {
 
 /// The start of the error that a conflicting install gives. The conflicting path follows it.
 const CONFLICT_ERROR_START: &str =
-    "failed to install a read-only initial file over other data at filesystem ";
+    "failed to install initial files because of a conflict at filesystem ";
 
 /// Gives the class of a lifecycle step result. This is the only function that maps lifecycle
 /// errors to the classes of the reference model.
@@ -2388,8 +2514,8 @@ impl ReferenceModel {
         self.paths.insert(path.to_string(), self.objects.len() - 1);
     }
 
-    /// Tells whether an object above `path` is not a directory. An install then counts the path as
-    /// holding other data, because an install never removes data that invocations made.
+    /// Tells whether an object above `path` is not a directory. An install then does not count the
+    /// path as empty, because an install never removes data that invocations made.
     fn blocked(&self, path: &str) -> bool {
         Self::ancestors(path).iter().any(|ancestor| {
             self.object_at(ancestor)
@@ -2685,9 +2811,14 @@ impl ReferenceModel {
     /// Applies the initial-file rule of the issue from the current declarations to the declarations
     /// of `component` and `provisioned` together.
     ///
-    /// The three parts apply at each path where the two declarations differ, in path order, and an
-    /// equal declaration changes nothing. Each part reads the tree as it is before the install. A
-    /// conflict fails the whole install, changes nothing, and names the first conflicting path.
+    /// The rule applies at each path where the two declarations differ, in path order, and an equal
+    /// declaration changes nothing. At such a path the install expects what the current
+    /// declarations left there: Golem's file where they declare the path, and nothing where they do
+    /// not. A path that holds what the install expects gets what the new declarations give there:
+    /// the new file, or nothing. A path that holds nothing, and that the new declarations do not
+    /// have, stays as it is. Anything else is a conflict. Each decision reads the tree as it is
+    /// before the install. A conflict fails the whole install, changes nothing, and names the first
+    /// conflicting path.
     fn install_declarations(
         &mut self,
         component: BTreeMap<String, ModelDeclaration>,
@@ -2710,24 +2841,17 @@ impl ReferenceModel {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|path| {
-                let previous = old.get(path);
-                let replaceable = !self.blocked(path)
-                    && (!self.paths.contains_key(path) || self.holds_golem_file(path, previous));
-                let decision = match (previous, new.get(path)) {
-                    (_, Some(declared)) if declared.read_only && replaceable => {
-                        ModelInstall::Seed(*declared)
-                    }
-                    (_, Some(declared)) if declared.read_only => return Err(path.clone()),
-                    (Some(previous), Some(_)) if !previous.read_only => ModelInstall::Keep,
-                    (_, Some(declared)) if replaceable => ModelInstall::Seed(*declared),
-                    (Some(previous), None)
-                        if previous.read_only && self.holds_golem_file(path, Some(previous)) =>
-                    {
-                        ModelInstall::Remove
-                    }
-                    _ => ModelInstall::Keep,
+                let empty = !self.blocked(path) && !self.paths.contains_key(path);
+                let expected = match old.get(path) {
+                    Some(previous) => self.holds_golem_file(path, Some(previous)),
+                    None => empty,
                 };
-                Ok((path.clone(), decision))
+                match (expected, new.get(path)) {
+                    (true, Some(declared)) => Ok((path.clone(), ModelInstall::Seed(*declared))),
+                    (true, None) => Ok((path.clone(), ModelInstall::Remove)),
+                    (false, None) if empty => Ok((path.clone(), ModelInstall::Keep)),
+                    (false, _) => Err(path.clone()),
+                }
             })
             .collect::<Result<Vec<_>, String>>();
         match decisions {

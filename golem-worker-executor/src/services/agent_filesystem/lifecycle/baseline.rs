@@ -515,7 +515,7 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
             source: tree,
             target: SandboxPath::at_root(""),
             access: SeedAccess::FromSource,
-            existing: OnExisting::Fail,
+            placement: SeedPlacement::CreateNew,
         },
     )
     .await?;

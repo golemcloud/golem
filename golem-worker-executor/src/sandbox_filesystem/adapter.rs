@@ -590,8 +590,8 @@ pub(crate) struct SeedEntry {
     pub target: SandboxPath,
     /// The write permission of the files that the entry makes.
     pub access: SeedAccess,
-    /// What the entry does with a target path that is already there.
-    pub existing: OnExisting,
+    /// Where the entry puts the source: at a path that holds nothing, or in place of what is there.
+    pub placement: SeedPlacement,
 }
 
 /// The write permission of the files that a seed entry makes.
@@ -605,18 +605,19 @@ pub(crate) enum SeedAccess {
     ReadWrite,
 }
 
-/// What a seed entry does with a target path that is already there.
+/// Where a seed entry puts its source, and what it does with a target path that is already there.
 ///
 /// A directory entry merges into a directory that is already at its target. Below it, each path
-/// that is already there follows the rule, unless that path is a directory in both the source and
-/// the sandbox: such a directory merges too. A file where the source has a directory, or a
+/// that is already there follows the placement, unless that path is a directory in both the source
+/// and the sandbox: such a directory merges too. A file where the source has a directory, or a
 /// directory where the source has a file, is a path that is already there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OnExisting {
-    /// The entry fails with an `AlreadyExists` error at the first path that is already there.
-    Fail,
-    /// What is there goes away, together with all that is under it, and the source takes its
-    /// place.
+pub(crate) enum SeedPlacement {
+    /// The entry puts the source at a path that holds nothing. At the first path that is already
+    /// there, the entry gives an `AlreadyExists` error.
+    CreateNew,
+    /// The source takes the place of what is at the path. What is there goes away, together with
+    /// all that is under it.
     Replace,
 }
 
@@ -911,6 +912,9 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
     /// Creates a hard link from `source` to `destination`.
+    ///
+    /// A symlink at `source` is not followed, so the new name refers to the symlink itself. This is
+    /// the POSIX `linkat` behaviour without `AT_SYMLINK_FOLLOW`.
     fn hard_link(
         &self,
         source: SandboxPath,
@@ -957,7 +961,7 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// Each source is read without following a symlink. A file becomes one file, a directory
     /// brings all that is under it, and a symlink becomes a symlink. Directories and symlinks are
     /// made again, and permissions and modification times are copied. `access` sets the write
-    /// permission of seeded files, or keeps the permissions of the source. `existing` decides
+    /// permission of seeded files, or keeps the permissions of the source. `placement` decides
     /// what happens to a target path that is already there. On managed XFS each file is one
     /// reflink into the project of this filesystem, so the quota is charged here, and EDQUOT and
     /// ENOSPC appear here. On unmanaged storage each file is copied. Nothing is written outside
@@ -1701,7 +1705,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                         mode,
                         quota_authority,
                         access: entry.access,
-                        existing: entry.existing,
+                        placement: entry.placement,
                     };
                     directory_for(&root_directory, &entry.target)
                         .and_then(|base| {
@@ -2904,11 +2908,11 @@ mod scripted {
                 .iter()
                 .map(|entry| {
                     format!(
-                        "{{source={}, target={:?}, access={:?}, existing={:?}}}",
+                        "{{source={}, target={:?}, access={:?}, placement={:?}}}",
                         entry.source.as_path().display(),
                         entry.target,
                         entry.access,
-                        entry.existing
+                        entry.placement
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3208,13 +3212,13 @@ mod tests {
         source: HostPath,
         target: impl Into<PathBuf>,
         access: SeedAccess,
-        existing: OnExisting,
+        placement: SeedPlacement,
     ) -> SeedEntry {
         SeedEntry {
             source,
             target: SandboxPath::at_root(target),
             access,
-            existing,
+            placement,
         }
     }
 
@@ -3380,7 +3384,7 @@ mod tests {
         let seed_directory = host_directory_at(seed_parent.path(), ".seed-source").await;
         let seed_source = host_child(&seed_directory, "seed-source");
         let seed_call = format!(
-            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"seed-destination\" }}, access=ReadWrite, existing=Fail}}])",
+            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"seed-destination\" }}, access=ReadWrite, placement=CreateNew}}])",
             seed_source.as_path().display()
         );
         let file = SandboxFile::scripted(7);
@@ -3543,7 +3547,7 @@ mod tests {
                 seed_source,
                 "seed-destination",
                 SeedAccess::ReadWrite,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             )]))
             .await
             .unwrap();
@@ -4099,13 +4103,13 @@ mod tests {
                     host_child(&sources, "tree"),
                     "",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "file"),
                     "lib/file",
                     SeedAccess::ReadOnly,
-                    OnExisting::Replace,
+                    SeedPlacement::Replace,
                 ),
             ])
         };
@@ -4133,7 +4137,7 @@ mod tests {
             "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
         );
         let call = format!(
-            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, existing=Fail}}, {{source={}, target=SandboxPath {{ base: Root, path: \"lib/file\" }}, access=ReadOnly, existing=Replace}}])",
+            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, placement=CreateNew}}, {{source={}, target=SandboxPath {{ base: Root, path: \"lib/file\" }}, access=ReadOnly, placement=Replace}}])",
             sources.path().as_path().join("tree").display(),
             sources.path().as_path().join("file").display()
         );
@@ -4167,25 +4171,25 @@ mod tests {
                     host_child(&sources, "file"),
                     "nested/file",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "link"),
                     "nested/link",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "after"),
                     "nested/file",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "after"),
                     "after",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
             ]),
         )
@@ -4249,25 +4253,25 @@ mod tests {
                     host_child(&sources, "tool"),
                     "tool",
                     SeedAccess::ReadOnly,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "locked"),
                     "locked",
                     SeedAccess::ReadWrite,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "private"),
                     "private",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "writable"),
                     "writable",
                     SeedAccess::ReadWrite,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
             ]),
         )
@@ -4331,13 +4335,13 @@ mod tests {
                     host_child(&sources, "tree"),
                     "made",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "tree"),
                     "merged",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
             ]),
         )
@@ -4392,7 +4396,7 @@ mod tests {
                 host_child(&sources, "tree"),
                 "locked/new",
                 SeedAccess::FromSource,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             ),
         )
         .await
@@ -4411,7 +4415,7 @@ mod tests {
     }
 
     #[test]
-    async fn seed_file_entries_follow_the_existing_rule() {
+    async fn seed_file_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
         let sources = host_directory_at(parent.path(), ".sources").await;
         std::fs::write(sources.path().as_path().join("new"), b"new").unwrap();
@@ -4420,7 +4424,7 @@ mod tests {
             .await
             .unwrap();
         let root = filesystem.root().to_path_buf();
-        ["fail", "replace"].into_iter().for_each(|name| {
+        ["create-new", "replace"].into_iter().for_each(|name| {
             std::fs::write(root.join(name), b"old").unwrap();
         });
         std::fs::create_dir(root.join("directory")).unwrap();
@@ -4429,25 +4433,45 @@ mod tests {
 
         let failed = seed_one(
             &filesystem,
-            seed_entry(new(), "fail", SeedAccess::ReadWrite, OnExisting::Fail),
+            seed_entry(
+                new(),
+                "create-new",
+                SeedAccess::ReadWrite,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap_err();
         seed_one(
             &filesystem,
-            seed_entry(new(), "absent", SeedAccess::ReadWrite, OnExisting::Fail),
+            seed_entry(
+                new(),
+                "absent",
+                SeedAccess::ReadWrite,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap();
         seed_one(
             &filesystem,
-            seed_entry(new(), "replace", SeedAccess::ReadOnly, OnExisting::Replace),
+            seed_entry(
+                new(),
+                "replace",
+                SeedAccess::ReadOnly,
+                SeedPlacement::Replace,
+            ),
         )
         .await
         .unwrap();
         let failed_over_directory = seed_one(
             &filesystem,
-            seed_entry(new(), "directory", SeedAccess::ReadWrite, OnExisting::Fail),
+            seed_entry(
+                new(),
+                "directory",
+                SeedAccess::ReadWrite,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap_err();
@@ -4458,14 +4482,14 @@ mod tests {
                 new(),
                 "directory",
                 SeedAccess::ReadWrite,
-                OnExisting::Replace,
+                SeedPlacement::Replace,
             ),
         )
         .await
         .unwrap();
 
         assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        assert_eq!(std::fs::read(root.join("fail")).unwrap(), b"old");
+        assert_eq!(std::fs::read(root.join("create-new")).unwrap(), b"old");
         assert_eq!(std::fs::read(root.join("absent")).unwrap(), b"new");
         assert_eq!(std::fs::read(root.join("replace")).unwrap(), b"new");
         assert_eq!(mode(&root.join("replace")) & 0o222, 0);
@@ -4488,7 +4512,7 @@ mod tests {
     }
 
     #[test]
-    async fn seed_symlink_entries_follow_the_existing_rule() {
+    async fn seed_symlink_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
         let sources = host_directory_at(parent.path(), ".sources").await;
         std::os::unix::fs::symlink("new-target", sources.path().as_path().join("link")).unwrap();
@@ -4497,7 +4521,7 @@ mod tests {
             .await
             .unwrap();
         let root = filesystem.root().to_path_buf();
-        ["fail", "replace"].into_iter().for_each(|name| {
+        ["create-new", "replace"].into_iter().for_each(|name| {
             std::os::unix::fs::symlink("old-target", root.join(name)).unwrap();
         });
         std::fs::create_dir(root.join("directory")).unwrap();
@@ -4506,7 +4530,12 @@ mod tests {
 
         let failed = seed_one(
             &filesystem,
-            seed_entry(link(), "fail", SeedAccess::FromSource, OnExisting::Fail),
+            seed_entry(
+                link(),
+                "create-new",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap_err();
@@ -4517,14 +4546,19 @@ mod tests {
                 link(),
                 "replace",
                 SeedAccess::FromSource,
-                OnExisting::Replace,
+                SeedPlacement::Replace,
             ),
         )
         .await
         .unwrap();
         seed_one(
             &filesystem,
-            seed_entry(link(), "absent", SeedAccess::FromSource, OnExisting::Fail),
+            seed_entry(
+                link(),
+                "absent",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap();
@@ -4534,7 +4568,7 @@ mod tests {
                 link(),
                 "directory",
                 SeedAccess::FromSource,
-                OnExisting::Replace,
+                SeedPlacement::Replace,
             ),
         )
         .await
@@ -4542,7 +4576,7 @@ mod tests {
 
         assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
         [
-            ("fail", "old-target"),
+            ("create-new", "old-target"),
             ("replace", "new-target"),
             ("absent", "new-target"),
             ("directory", "new-target"),
@@ -4594,13 +4628,13 @@ mod tests {
                     host_child(&sources, "alias"),
                     "alias",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
                 seed_entry(
                     host_child(&sources, "outside"),
                     "outside",
                     SeedAccess::FromSource,
-                    OnExisting::Fail,
+                    SeedPlacement::CreateNew,
                 ),
             ]),
         )
@@ -4649,32 +4683,32 @@ mod tests {
 
         let errors = futures::future::join_all(
             [
-                ("file", "../escaped", OnExisting::Fail),
-                ("file", "data/file", OnExisting::Fail),
-                ("file", "data/file", OnExisting::Replace),
-                ("file", "data/nested/file", OnExisting::Fail),
-                ("link", "data/link", OnExisting::Fail),
-                ("link", "data/link", OnExisting::Replace),
+                ("file", "../escaped", SeedPlacement::CreateNew),
+                ("file", "data/file", SeedPlacement::CreateNew),
+                ("file", "data/file", SeedPlacement::Replace),
+                ("file", "data/nested/file", SeedPlacement::CreateNew),
+                ("link", "data/link", SeedPlacement::CreateNew),
+                ("link", "data/link", SeedPlacement::Replace),
             ]
             .into_iter()
-            .map(|(source, target, existing)| {
+            .map(|(source, target, placement)| {
                 let entry = seed_entry(
                     host_child(&sources, source),
                     target,
                     SeedAccess::FromSource,
-                    existing,
+                    placement,
                 );
                 let filesystem = &filesystem;
-                async move { (target, existing, seed_one(filesystem, entry).await) }
+                async move { (target, placement, seed_one(filesystem, entry).await) }
             }),
         )
         .await;
 
-        errors.into_iter().for_each(|(target, existing, result)| {
+        errors.into_iter().for_each(|(target, placement, result)| {
             assert_eq!(
                 result.unwrap_err().io_kind(),
                 Some(std::io::ErrorKind::PermissionDenied),
-                "seed to {target} with {existing:?} must be refused"
+                "seed to {target} with {placement:?} must be refused"
             );
         });
         let tree = host_child(&sources, "tree");
@@ -4682,7 +4716,12 @@ mod tests {
         std::fs::write(tree.as_path().join("data/nested/file"), b"file").unwrap();
         let fail = seed_one(
             &filesystem,
-            seed_entry(tree.clone(), "", SeedAccess::FromSource, OnExisting::Fail),
+            seed_entry(
+                tree.clone(),
+                "",
+                SeedAccess::FromSource,
+                SeedPlacement::CreateNew,
+            ),
         )
         .await
         .unwrap_err();
@@ -4695,7 +4734,7 @@ mod tests {
         );
         seed_one(
             &filesystem,
-            seed_entry(tree, "", SeedAccess::FromSource, OnExisting::Replace),
+            seed_entry(tree, "", SeedAccess::FromSource, SeedPlacement::Replace),
         )
         .await
         .unwrap();
@@ -4717,7 +4756,7 @@ mod tests {
     }
 
     #[test]
-    async fn seed_directory_entries_merge_and_follow_the_existing_rule() {
+    async fn seed_directory_entries_merge_and_follow_the_placement() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = tempfile::tempdir().unwrap();
@@ -4741,8 +4780,8 @@ mod tests {
             .await
             .unwrap();
         let root = filesystem.root().to_path_buf();
-        ["fail", "replace"].into_iter().for_each(|rule| {
-            let target = root.join(rule);
+        ["create-new", "replace"].into_iter().for_each(|placement| {
+            let target = root.join(placement);
             std::fs::create_dir_all(target.join("data")).unwrap();
             std::fs::set_permissions(target.join("data"), std::fs::Permissions::from_mode(0o700))
                 .unwrap();
@@ -4754,34 +4793,41 @@ mod tests {
             std::fs::write(target.join("was-file"), b"file").unwrap();
         });
         std::fs::write(root.join("top-file"), b"top").unwrap();
-        let seed = |target: &'static str, existing| {
+        let seed = |target: &'static str, placement| {
             let entry = seed_entry(
                 host_child(&sources, "tree"),
                 target,
                 SeedAccess::FromSource,
-                existing,
+                placement,
             );
             let filesystem = &filesystem;
             async move { seed_one(filesystem, entry).await }
         };
 
-        let failed = seed("fail", OnExisting::Fail).await.unwrap_err();
+        let failed = seed("create-new", SeedPlacement::CreateNew)
+            .await
+            .unwrap_err();
 
-        seed("replace", OnExisting::Replace).await.unwrap();
-        seed("absent", OnExisting::Fail).await.unwrap();
-        let failed_top = seed("top-file", OnExisting::Fail).await.unwrap_err();
+        seed("replace", SeedPlacement::Replace).await.unwrap();
+        seed("absent", SeedPlacement::CreateNew).await.unwrap();
+        let failed_top = seed("top-file", SeedPlacement::CreateNew)
+            .await
+            .unwrap_err();
         assert_eq!(std::fs::read(root.join("top-file")).unwrap(), b"top");
-        seed("top-file", OnExisting::Replace).await.unwrap();
+        seed("top-file", SeedPlacement::Replace).await.unwrap();
 
         assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        assert_eq!(std::fs::read(root.join("fail/data/same")).unwrap(), b"old");
         assert_eq!(
-            std::fs::read(root.join("fail/data/added")).unwrap(),
+            std::fs::read(root.join("create-new/data/same")).unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(root.join("create-new/data/added")).unwrap(),
             b"added",
             "a path before the failed path must stay"
         );
         assert!(
-            !root.join("fail/fresh").exists(),
+            !root.join("create-new/fresh").exists(),
             "a path after the failed path must not be seeded"
         );
         assert_eq!(
@@ -5009,7 +5055,7 @@ mod tests {
                 host_child(&seed_sources, "file"),
                 "seeded",
                 SeedAccess::ReadWrite,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             ),
         )
         .await
@@ -5247,7 +5293,7 @@ mod tests {
                 source: source.clone(),
                 target: SandboxPath::at(pinned.clone(), "destination"),
                 access: SeedAccess::ReadOnly,
-                existing: OnExisting::Fail,
+                placement: SeedPlacement::CreateNew,
             },
         )
         .await
@@ -5270,7 +5316,7 @@ mod tests {
                 source,
                 target: SandboxPath::at(pinned, "destination"),
                 access: SeedAccess::ReadOnly,
-                existing: OnExisting::Fail,
+                placement: SeedPlacement::CreateNew,
             },
         )
         .await
@@ -5434,7 +5480,7 @@ mod tests {
                 source(),
                 "destination",
                 SeedAccess::ReadOnly,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             ),
         )
         .await
@@ -5462,7 +5508,7 @@ mod tests {
                 source(),
                 "destination",
                 SeedAccess::ReadWrite,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             ),
         )
         .await
@@ -5479,7 +5525,7 @@ mod tests {
                 source(),
                 "../escaped-seed",
                 SeedAccess::ReadWrite,
-                OnExisting::Fail,
+                SeedPlacement::CreateNew,
             ),
         )
         .await

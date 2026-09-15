@@ -70,13 +70,14 @@ impl InstalledFile {
     }
 }
 
-/// What an install finds at a declared path.
+/// What an install finds at a path whose declaration changes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PathState {
-    /// Nothing is at the path.
+    /// Nothing is at the path, or a directory above the path is missing.
     Absent,
-    /// The path holds Golem's file: a regular file with the content of the old declaration, and
-    /// without write permission where the old declaration is read-only.
+    /// The path holds Golem's file of the old declaration: a regular file with the content of that
+    /// declaration and, where that declaration is read-only, without write permission. Only a path
+    /// that the old declarations have can hold Golem's file.
     Golem,
     /// Another object is at the path, or an object above the path is not a directory.
     Other,
@@ -85,12 +86,12 @@ pub(super) enum PathState {
 /// One change of an install.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Step<'a> {
-    /// Puts the declared file at the path. `existing` is `Fail` where the path holds nothing, and
-    /// `Replace` where it holds Golem's file.
+    /// Puts the declared file at the path. `placement` is `CreateNew` where the path holds
+    /// nothing, and `Replace` where it holds Golem's file.
     Seed {
         path: &'a Path,
         file: &'a InitialAgentFile,
-        existing: OnExisting,
+        placement: SeedPlacement,
     },
     /// Removes Golem's file from the path.
     Unlink { path: &'a Path },
@@ -110,16 +111,16 @@ impl<'a> Step<'a> {
 /// gives what is at a path.
 ///
 /// A path whose declarations in `old` and `new` are equal keeps what is at it. Two declarations
-/// are equal when their content hash, path, permissions and size are equal. Every other path
-/// follows one of three rules:
+/// are equal when their content hash, path, permissions and size are equal. At every other path,
+/// the install expects what `old` left there: Golem's file where `old` declares the path, and
+/// nothing where `old` does not declare it. Read-only and read-write declarations follow the same
+/// rules. Each such path follows one of three rules:
 ///
-/// 1. A path that is read-only in `new` gets the new file if it holds nothing or Golem's file.
-///    Anything else at the path is a conflict.
-/// 2. A path that is read-write in `new` and in `old` stays as it is. Another path that is
-///    read-write in `new` gets the new file if it holds nothing or Golem's file. Anything else at
-///    the path stays.
-/// 3. A path that `new` does not declare loses Golem's file if `old` declared it read-only.
-///    Anything else at the path stays.
+/// 1. A path that holds what the install expects gets what `new` declares. The new file goes on a
+///    path that holds nothing, or in place of Golem's file. Golem's file goes away where `new` does
+///    not declare the path.
+/// 2. A path that holds nothing, and that `new` does not declare, stays as it is.
+/// 3. Anything else at the path is a conflict.
 ///
 /// The result gives the steps in path order, or the first path in path order that has a conflict.
 pub(super) fn plan<'a>(
@@ -135,10 +136,10 @@ pub(super) fn plan<'a>(
         .try_fold(Vec::new(), |mut steps, path| {
             match rule(old.get(path), new.get(path), state(path)) {
                 Decision::Keep => {}
-                Decision::Seed(file, existing) => steps.push(Step::Seed {
+                Decision::Seed(file, placement) => steps.push(Step::Seed {
                     path,
                     file,
-                    existing,
+                    placement,
                 }),
                 Decision::Unlink => steps.push(Step::Unlink { path }),
                 Decision::Conflict => return Err(path),
@@ -152,7 +153,7 @@ pub(super) fn plan<'a>(
 #[derive(Debug, Eq, PartialEq)]
 enum Decision<'a> {
     Keep,
-    Seed(&'a InitialAgentFile, OnExisting),
+    Seed(&'a InitialAgentFile, SeedPlacement),
     Unlink,
     Conflict,
 }
@@ -163,37 +164,24 @@ fn rule<'a>(
     new: Option<&'a InitialAgentFile>,
     state: PathState,
 ) -> Decision<'a> {
-    match (old, new) {
-        (Some(old), Some(new)) if old == new => Decision::Keep,
-        (_, Some(new)) if new.permissions == AgentFilePermissions::ReadOnly => match state {
-            PathState::Absent => Decision::Seed(new, OnExisting::Fail),
-            PathState::Golem => Decision::Seed(new, OnExisting::Replace),
-            PathState::Other => Decision::Conflict,
-        },
-        (Some(old), Some(_)) if old.permissions == AgentFilePermissions::ReadWrite => {
-            Decision::Keep
-        }
-        (_, Some(new)) => match state {
-            PathState::Absent => Decision::Seed(new, OnExisting::Fail),
-            PathState::Golem => Decision::Seed(new, OnExisting::Replace),
-            PathState::Other => Decision::Keep,
-        },
-        (Some(old), None)
-            if old.permissions == AgentFilePermissions::ReadOnly && state == PathState::Golem =>
-        {
-            Decision::Unlink
-        }
-        (_, None) => Decision::Keep,
+    match (old, new, state) {
+        (old, new, _) if old == new => Decision::Keep,
+        (None, Some(new), PathState::Absent) => Decision::Seed(new, SeedPlacement::CreateNew),
+        (Some(_), Some(new), PathState::Golem) => Decision::Seed(new, SeedPlacement::Replace),
+        (Some(_), None, PathState::Golem) => Decision::Unlink,
+        (_, None, PathState::Absent) => Decision::Keep,
+        _ => Decision::Conflict,
     }
 }
 
 /// Installs the initial files of `new` in place of the files of `old`.
 ///
 /// `installed` holds the files that the lifecycle installed for `old`. `states` gives what is at
-/// the paths, as [`plan`] needs it. A path without a state holds nothing. The install loads every
-/// source before its first change, so a conflict or a failed load changes nothing. A failure after
-/// the plan passes and the sources load invalidates the generation. The result gives the files that
-/// the lifecycle installed for `new`.
+/// the paths, as [`plan`] needs it. A path without a state holds nothing. A conflict fails the
+/// install with an error that names the conflicting path. The install loads every source before
+/// its first change, so a conflict or a failed load changes nothing. A failure after the plan
+/// passes and the sources load invalidates the generation. The result gives the files that the
+/// lifecycle installed for `new`.
 pub(super) async fn install<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
@@ -208,7 +196,7 @@ pub(super) async fn install<Adapter: SandboxFilesystemAdapter>(
     })
     .map_err(|path| {
         Error::Sandbox(FilesystemStorageError::verification(
-            "install a read-only initial file over other data at",
+            "install initial files because of a conflict at",
             path,
         ))
     })?;
@@ -237,8 +225,8 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
                 Step::Seed {
                     path,
                     file,
-                    existing,
-                } => seeds.push((path, file, existing)),
+                    placement,
+                } => seeds.push((path, file, placement)),
             }
             (unlinks, seeds)
         },
@@ -256,7 +244,7 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
         .map(Ok)
         .try_fold(
             Vec::new(),
-            |mut recorded, (path, file, existing)| async move {
+            |mut recorded, (path, file, placement)| async move {
                 let read_only = file.permissions == AgentFilePermissions::ReadOnly;
                 let entry = SeedEntry {
                     source: sources.path(file, path)?,
@@ -266,7 +254,7 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
                     } else {
                         SeedAccess::ReadWrite
                     },
-                    existing,
+                    placement,
                 };
                 seed_with_retry(generation, sandbox, entry).await?;
                 if read_only {
@@ -455,9 +443,10 @@ impl PreparedInitialFiles {
 
 /// Finds what is at each path whose declaration differs between `old` and `new`.
 ///
-/// `installed` holds the files that the lifecycle installed for `old`. The function checks for
-/// Golem's file only where a rule depends on it: where `old` declares the path read-only, and where
-/// `old` declares it read-write and `new` makes it read-only.
+/// `installed` holds the files that the lifecycle installed for `old`. At each path that `old`
+/// declares, the function checks whether the path holds Golem's file of that declaration. A path
+/// that `old` does not declare never holds Golem's file. The function reads no path whose
+/// declarations in `old` and `new` are equal.
 pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     old: &Declarations,
@@ -478,13 +467,7 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
                 let (reader, lookup) = reader.read(sandbox, path).await?;
                 let state = match (lookup, old.get(path)) {
                     (PathLookup::Absent, _) => PathState::Absent,
-                    (PathLookup::Blocked, _) => PathState::Other,
-                    (PathLookup::Found(attributes), Some(declared))
-                        if declared.permissions == AgentFilePermissions::ReadOnly
-                            || new.get(path).is_some_and(|new| {
-                                new.permissions == AgentFilePermissions::ReadOnly
-                            }) =>
-                    {
+                    (PathLookup::Found(attributes), Some(declared)) => {
                         if holds_golem_file(
                             sandbox,
                             path,
@@ -499,7 +482,7 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
                             PathState::Other
                         }
                     }
-                    (PathLookup::Found(_), _) => PathState::Other,
+                    (PathLookup::Found(_) | PathLookup::Blocked, _) => PathState::Other,
                 };
                 states.insert(Box::from(path), state);
                 Ok((reader, states))
@@ -826,7 +809,7 @@ mod tests {
         let steps = [Step::Seed {
             path: Path::new("seeded"),
             file: seeded,
-            existing: OnExisting::Fail,
+            placement: SeedPlacement::CreateNew,
         }];
 
         let installed = installed_after(

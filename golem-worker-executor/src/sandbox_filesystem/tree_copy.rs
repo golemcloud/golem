@@ -358,7 +358,7 @@ pub(super) struct SeedContext {
     pub(super) mode: FileCopyMode,
     pub(super) quota_authority: QuotaAuthority,
     pub(super) access: SeedAccess,
-    pub(super) existing: OnExisting,
+    pub(super) placement: SeedPlacement,
 }
 
 /// Puts the host object at `source` into the sandbox at `destination` under `base`.
@@ -389,7 +389,7 @@ pub(super) fn seed_entry(
             destination,
             link_target,
             entry.modified,
-            context.existing,
+            context.placement,
         ),
         TreeEntryKind::Directory => seed_directory(
             context,
@@ -434,9 +434,9 @@ fn seed_file(
     if let Some(modified) = source.modified {
         temporary_file.set_modified(modified)?;
     }
-    match context.existing {
-        OnExisting::Fail => temporary.persist_noclobber(&name)?,
-        OnExisting::Replace => temporary.persist_replacing(&name)?,
+    match context.placement {
+        SeedPlacement::CreateNew => temporary.persist_noclobber(&name)?,
+        SeedPlacement::Replace => temporary.persist_replacing(&name)?,
     }
     Ok(())
 }
@@ -450,13 +450,13 @@ fn seed_symlink(
     destination: &Path,
     link_target: &Path,
     modified: Option<SystemTime>,
-    existing: OnExisting,
+    placement: SeedPlacement,
 ) -> std::io::Result<()> {
     let (parent, name) = create_capability_copy_parent(directory, destination)?;
     let parent = parent.as_dir();
-    match existing {
-        OnExisting::Fail => make_symlink(parent, link_target, &name, modified),
-        OnExisting::Replace => {
+    match placement {
+        SeedPlacement::CreateNew => make_symlink(parent, link_target, &name, modified),
+        SeedPlacement::Replace => {
             let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
             make_symlink(parent, link_target, &temporary, modified)
                 .and_then(|()| remove_directory_in_the_way(parent, &name))
@@ -500,7 +500,7 @@ fn seed_directory(
         return seed_directory_contents(context, source, base);
     }
     let (parent, name) = create_capability_copy_parent(base, destination)?;
-    let seeded = seed_directory_at(parent.as_dir(), &name, context.existing)?;
+    let seeded = seed_directory_at(parent.as_dir(), &name, context.placement)?;
     seed_directory_contents(context, source, &parent.as_dir().open_dir_nofollow(&name)?)?;
     if seeded == SeededDirectory::Made {
         set_seeded_directory_attributes(parent.as_dir(), &name, source_entry)
@@ -540,7 +540,7 @@ fn seed_listed_entry<'a>(
 ) -> std::io::Result<Vec<&'a TreeEntry>> {
     match &entry.kind {
         TreeEntryKind::Directory => {
-            if seed_directory_at(target, &entry.relative, context.existing)?
+            if seed_directory_at(target, &entry.relative, context.placement)?
                 == SeededDirectory::Made
             {
                 made.push(entry);
@@ -552,7 +552,7 @@ fn seed_listed_entry<'a>(
             &entry.relative,
             link_target,
             entry.modified,
-            context.existing,
+            context.placement,
         )?,
     }
     Ok(made)
@@ -569,21 +569,21 @@ enum SeededDirectory {
 
 /// Makes the directory at `path` in `directory` for a directory in a seed source.
 ///
-/// A directory that is already there merges under every rule. Another kind of object at the path
-/// follows `existing`: `Fail` gives an `AlreadyExists` error, and `Replace` removes the object and
-/// makes the directory.
+/// A directory that is already there merges under every placement. Another kind of object at the
+/// path follows `placement`: `CreateNew` gives an `AlreadyExists` error, and `Replace` removes the
+/// object and makes the directory.
 fn seed_directory_at(
     directory: &cap_std::fs::Dir,
     path: &Path,
-    existing: OnExisting,
+    placement: SeedPlacement,
 ) -> std::io::Result<SeededDirectory> {
     match directory.create_dir(path) {
         Ok(()) => Ok(SeededDirectory::Made),
         Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
-        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), existing) {
+        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), placement) {
             (true, _) => Ok(SeededDirectory::Merged),
-            (false, OnExisting::Fail) => Err(error),
-            (false, OnExisting::Replace) => {
+            (false, SeedPlacement::CreateNew) => Err(error),
+            (false, SeedPlacement::Replace) => {
                 directory.remove_file(path)?;
                 directory.create_dir(path)?;
                 Ok(SeededDirectory::Made)
@@ -813,12 +813,12 @@ mod tests {
         cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
     }
 
-    fn buffered_seed(existing: OnExisting) -> SeedContext {
+    fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
             mode: FileCopyMode::Buffered,
             quota_authority: QuotaAuthority::Unsupported,
             access: SeedAccess::FromSource,
-            existing,
+            placement,
         }
     }
 
@@ -1058,7 +1058,7 @@ mod tests {
         let destination = tempfile::tempdir().unwrap();
 
         seed_entry(
-            buffered_seed(OnExisting::Fail),
+            buffered_seed(SeedPlacement::CreateNew),
             &open(destination.path()),
             source.path(),
             Path::new(""),
@@ -1108,7 +1108,7 @@ mod tests {
         std::fs::write(destination.path().join("data/file"), b"old").unwrap();
 
         let error = seed_entry(
-            buffered_seed(OnExisting::Fail),
+            buffered_seed(SeedPlacement::CreateNew),
             &open(destination.path()),
             source.path(),
             Path::new(""),
