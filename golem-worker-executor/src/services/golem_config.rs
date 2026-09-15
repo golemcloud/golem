@@ -965,7 +965,6 @@ pub struct OplogConfig {
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
     /// Controls the background sweep that archives the oplogs of agents which have gone quiet.
-    #[serde(default)]
     pub sweep: OplogSweepConfig,
 }
 
