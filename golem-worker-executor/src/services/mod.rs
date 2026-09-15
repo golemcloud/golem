@@ -27,7 +27,7 @@ pub mod direct_invocation_auth;
 pub mod environment_state;
 pub mod events;
 pub mod file_loader;
-pub(crate) mod file_read_admission;
+pub mod file_read_admission;
 pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;

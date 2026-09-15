@@ -21,7 +21,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, timeout_at};
 
 /// Executor-local admission, shared by all requests, including requests for absent agents.
-pub(crate) struct FileReadAdmission {
+#[derive(Debug)]
+pub struct FileReadAdmission {
     state: Mutex<State>,
     /// Queued requests beyond the single active turn.
     max_queued_per_agent: usize,
@@ -29,19 +30,21 @@ pub(crate) struct FileReadAdmission {
     duration: Duration,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct State {
     agents: HashMap<OwnedAgentId, AgentReads>,
     outstanding: usize,
 }
 
+#[derive(Debug)]
 struct AgentReads {
     outstanding: usize,
     active: Arc<Semaphore>,
 }
 
 /// A bounded reservation made before any activation or initialization work is polled.
-pub(crate) struct FileReadReservation {
+#[derive(Debug)]
+pub struct FileReadReservation {
     admission: Arc<FileReadAdmission>,
     agent: OwnedAgentId,
     active: Arc<Semaphore>,
@@ -61,6 +64,12 @@ impl Default for FileReadAdmission {
 }
 
 impl FileReadAdmission {
+    pub(crate) fn deadline(&self, arrival: Instant) -> Result<Instant, FileReadError> {
+        arrival
+            .checked_add(self.duration)
+            .ok_or(FileReadError::DeadlineExceeded)
+    }
+
     pub(crate) fn new(
         max_queued_per_agent: usize,
         max_outstanding: usize,
@@ -79,14 +88,12 @@ impl FileReadAdmission {
     /// `arrival` is captured at the executor boundary, before validation and worker lookup. Keep
     /// the returned reservation through all asynchronous work and reuse its deadline, never a
     /// fresh duration after acquiring the agent's turn.
-    pub(crate) fn reserve(
+    pub fn reserve(
         self: &Arc<Self>,
         agent: OwnedAgentId,
         arrival: Instant,
     ) -> Result<FileReadReservation, FileReadError> {
-        let deadline = arrival
-            .checked_add(self.duration)
-            .ok_or(FileReadError::DeadlineExceeded)?;
+        let deadline = self.deadline(arrival)?;
         let mut state = self.state.lock().unwrap();
         if Instant::now() >= deadline {
             return Err(FileReadError::DeadlineExceeded);

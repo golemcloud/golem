@@ -287,6 +287,14 @@ pub struct FileReadResponse {
     pub body: Pin<Box<dyn Stream<Item = Result<Bytes, FileReadError>> + Send + 'static>>,
 }
 
+impl std::fmt::Debug for FileReadResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileReadResponse")
+            .field("head", &self.head)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComponentFileSystemNodeDetails {
     File {

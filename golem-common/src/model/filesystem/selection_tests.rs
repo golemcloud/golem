@@ -372,3 +372,25 @@ fn file_read_heads_omit_unrepresentable_optional_timestamp() {
         );
     }
 }
+
+#[test]
+fn file_read_errors_roundtrip_and_unknown_codes_fail_closed() {
+    for error in [
+        FileReadError::InvalidTarget,
+        FileReadError::InvalidSelection,
+        FileReadError::ResourceExhausted,
+        FileReadError::DeadlineExceeded,
+        FileReadError::Lifecycle,
+        FileReadError::Storage,
+        FileReadError::InvalidResponse,
+    ] {
+        let wire = proto::FileReadError::from(error) as i32;
+        assert_eq!(FileReadError::try_from(wire), Ok(error));
+    }
+    for code in [0, -1, 8, i32::MAX] {
+        assert_eq!(
+            FileReadError::try_from(code),
+            Err(FileReadError::InvalidResponse)
+        );
+    }
+}

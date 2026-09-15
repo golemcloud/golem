@@ -50,9 +50,7 @@ use crate::durable_host::{
     recover_stderr_logs,
 };
 use crate::metrics::workers::AdmissionPhase;
-use crate::model::{
-    AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, SnapshotSource, TrapType,
-};
+use crate::model::{AgentConfig, ExecutionStatus, LookupResult, SnapshotSource, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
     MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
@@ -68,6 +66,7 @@ use crate::services::agent_filesystem::{
 };
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
+use crate::services::file_read_admission::FileReadReservation;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -122,6 +121,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
     ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -142,6 +142,7 @@ use golem_common::read_only_lock;
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -3607,48 +3608,64 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn read_file(
         self: &Arc<Self>,
-        path: CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker().await;
-
-        if instance_guard.is_deleting() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot access filesystem of a deleting worker",
-            ));
-        };
-
-        if let Some(err) = instance_guard.startup_failure() {
-            return Err(err.clone());
+        target: FileReadTarget,
+        selection: FileByteSelection,
+        reservation: FileReadReservation,
+    ) -> Result<FileReadResponse, FileReadError> {
+        target
+            .validate()
+            .map_err(|_| FileReadError::InvalidTarget)?;
+        selection.validate()?;
+        let deadline = reservation.deadline();
+        if tokio::time::Instant::now() >= deadline {
+            return Err(FileReadError::DeadlineExceeded);
         }
+        tokio::time::timeout_at(deadline, async {
+            let instance_guard = self.lock_non_stopping_worker().await;
 
-        let status = self.get_attached_last_known_status().await;
-        self.ensure_inspection_not_failed(&status).await?;
-        let order = InspectionOrder::new(&status);
-        let _queued = QueuedInspectionGuard::new(self.queue.clone(), &order);
-        let (sender, receiver) = oneshot::channel();
+            if instance_guard.is_deleting() {
+                return Err(FileReadError::Lifecycle);
+            };
 
-        self.queue
-            .lock()
-            .unwrap()
-            .push_back(QueuedWorkerInvocation::ReadFile {
-                path,
-                order,
-                sender,
-            });
+            if instance_guard.startup_failure().is_some() {
+                return Err(FileReadError::Lifecycle);
+            }
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
-        };
+            let status = self.get_attached_last_known_status().await;
+            self.ensure_inspection_not_failed(&status)
+                .await
+                .map_err(|_| FileReadError::Lifecycle)?;
+            let order = InspectionOrder::new(&status);
+            let _queued = QueuedInspectionGuard::new(self.queue.clone(), &order);
+            let (sender, receiver) = tokio::sync::oneshot::channel();
 
-        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
-        drop(instance_guard);
-        if needs_start {
-            Self::start_if_needed(self.clone()).await?;
-        }
+            self.queue
+                .lock()
+                .unwrap()
+                .push_back(QueuedWorkerInvocation::ReadFile {
+                    target,
+                    selection,
+                    reservation,
+                    order,
+                    sender,
+                });
 
-        receiver
-            .await
-            .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
+            if let WorkerInstance::Running(running) = &*instance_guard {
+                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+            };
+
+            let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
+            drop(instance_guard);
+            if needs_start {
+                Self::start_if_needed(self.clone())
+                    .await
+                    .map_err(|_| FileReadError::Lifecycle)?;
+            }
+
+            receiver.await.map_err(|_| FileReadError::Lifecycle)?
+        })
+        .await
+        .map_err(|_| FileReadError::DeadlineExceeded)?
     }
 
     async fn ensure_inspection_not_failed(
@@ -6163,7 +6180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::ReadFile { sender, .. } => {
-                    let _ = sender.send(Err(error.clone()));
+                    let _ = sender.send(Err(FileReadError::Lifecycle));
                 }
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                     let _ = sender.send(Err(error.clone()));
@@ -9256,11 +9273,13 @@ pub enum QueuedWorkerInvocation {
     GetWalletCards {
         sender: oneshot::Sender<Result<Vec<StoredCard>, WorkerExecutorError>>,
     },
-    // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
+    // Owns admission until the bounded producer observes EOF, cancellation, or failure.
     ReadFile {
-        path: CanonicalFilePath,
+        target: FileReadTarget,
+        selection: FileByteSelection,
+        reservation: FileReadReservation,
         order: InspectionOrder,
-        sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
+        sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     },
     // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
     // The sender will be called with Ok if the worker is in a running state.

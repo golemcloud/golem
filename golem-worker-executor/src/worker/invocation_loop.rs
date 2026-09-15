@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
-use crate::model::{LookupResult, ReadFileResult, TrapType};
+use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     LimitTransition, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
     drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
+use crate::services::file_read_admission::FileReadReservation;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
@@ -37,12 +38,11 @@ use crate::worker::{
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
-use drop_stream::DropStream;
 use futures::FutureExt;
-use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
@@ -54,6 +54,7 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
@@ -2046,8 +2047,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(wallet);
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::ReadFile { path, sender, .. } => {
-                self.read_file(path, sender).await;
+            QueuedWorkerInvocation::ReadFile {
+                target,
+                selection,
+                reservation,
+                sender,
+                ..
+            } => {
+                self.read_file(target, selection, reservation, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
@@ -2742,40 +2749,54 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// that may modify them.
     async fn read_file(
         &self,
-        path: CanonicalFilePath,
-        sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
+        target: FileReadTarget,
+        selection: FileByteSelection,
+        reservation: FileReadReservation,
+        mut sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     ) {
-        let _filesystem_access = match self
-            .store
-            .data()
-            .durable_ctx()
-            .acquire_owner_filesystem_inspection()
-            .await
-        {
+        let deadline = reservation.deadline();
+        let permit = tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
+            _ = sender.closed() => return,
+            result = reservation.acquire() => result,
+        };
+        let _permit = match permit {
+            Ok(permit) => permit,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
+        let deadline = _permit.deadline();
+        let access = tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
+            _ = sender.closed() => return,
+            result = self.store.data().durable_ctx().acquire_owner_filesystem_inspection() => {
+                result.map_err(|_| FileReadError::Lifecycle)
+            }
+        };
+        let _filesystem_access = match access {
             Ok(access) => access,
             Err(error) => {
                 let _ = sender.send(Err(error));
                 return;
             }
         };
-        let result = self.store.data().read_file(&path).await;
-        match result {
-            Ok(ReadFileResult::Ok(stream)) => {
-                // special case. We need to wait until the stream is consumed to avoid corruption
-                //
-                // This will delay processing of the next invocation and is quite unfortunate.
-                // A possible improvement would be to check whether we are on a copy-on-write filesystem
-                // if yes, we can make a cheap copy of the file here and serve the read from that copy.
-
-                let (latch, latch_receiver) = oneshot::channel();
-                let drop_stream = DropStream::new(stream, || latch.send(()).unwrap());
-                let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(drop_stream))));
-                latch_receiver.await.unwrap();
-            }
-            other => {
-                let _ = sender.send(other);
-            }
-        };
+        let generation = self
+            .store
+            .data()
+            .durable_ctx()
+            .filesystem_generation_handle();
+        crate::services::agent_filesystem::produce_file_read(
+            &generation,
+            &target,
+            selection,
+            deadline,
+            sender,
+        )
+        .await;
     }
 
     /// Records an attempted worker update as failed

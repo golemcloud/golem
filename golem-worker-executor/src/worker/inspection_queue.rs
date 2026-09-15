@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::QueuedWorkerInvocation;
+use golem_common::model::filesystem::FileReadError;
 use golem_common::model::{AgentStatusRecord, OplogIndex};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::VecDeque;
@@ -106,7 +107,7 @@ pub(super) fn fail_inspections(
     for item in items {
         match item {
             QueuedWorkerInvocation::ReadFile { sender, .. } => {
-                let _ = sender.send(Err(error.clone()));
+                let _ = sender.send(Err(FileReadError::Lifecycle));
             }
             QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
                 let _ = sender.send(Err(error.clone()));
@@ -119,10 +120,12 @@ pub(super) fn fail_inspections(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ReadFileResult;
+    use crate::services::file_read_admission::FileReadAdmission;
     use futures::channel::oneshot;
     use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+    use golem_common::model::filesystem::{FileByteSelection, FileReadTarget};
     use golem_common::model::{IdempotencyKey, PendingInvocationRef, Timestamp};
+    use golem_service_base::model::FileReadResponse;
     use test_r::test;
 
     fn status(indices: &[u64]) -> AgentStatusRecord {
@@ -144,12 +147,27 @@ mod tests {
         status: &AgentStatusRecord,
     ) -> (
         QueuedWorkerInvocation,
-        oneshot::Receiver<Result<ReadFileResult, WorkerExecutorError>>,
+        tokio::sync::oneshot::Receiver<Result<FileReadResponse, FileReadError>>,
     ) {
-        let (sender, receiver) = oneshot::channel();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let agent = golem_common::model::OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId::new(),
+            &golem_common::model::AgentId::from_agent_name_string(
+                golem_common::model::component::ComponentId::new(),
+                "test",
+            )
+            .unwrap(),
+        );
+        let reservation = Arc::new(FileReadAdmission::default())
+            .reserve(agent, tokio::time::Instant::now())
+            .unwrap();
         (
             QueuedWorkerInvocation::ReadFile {
-                path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+                target: FileReadTarget::Exact {
+                    file_path: "/file".into(),
+                },
+                selection: FileByteSelection::Full,
+                reservation,
                 order: InspectionOrder::new(status),
                 sender,
             },
@@ -262,7 +280,7 @@ mod tests {
         fail_inspections(&mut queue, &WorkerExecutorError::PreviousInvocationExited);
         assert!(matches!(
             read_receiver.try_recv(),
-            Ok(Some(Err(WorkerExecutorError::PreviousInvocationExited)))
+            Ok(Err(FileReadError::Lifecycle))
         ));
         assert!(matches!(
             list_receiver.try_recv(),

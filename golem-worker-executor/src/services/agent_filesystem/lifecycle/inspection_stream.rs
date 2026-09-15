@@ -20,7 +20,8 @@ use bytes::Bytes;
 use futures::Stream;
 use futures::task::AtomicWaker;
 use golem_common::model::filesystem::{
-    FileByteSelection, FileReadError, FileReadExtent, FileReadHead, FileReadTarget,
+    FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
+    FileReadTarget,
 };
 use golem_service_base::model::FileReadResponse;
 use std::pin::Pin;
@@ -28,8 +29,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
-
-pub(crate) const FILE_READ_CHUNK_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {

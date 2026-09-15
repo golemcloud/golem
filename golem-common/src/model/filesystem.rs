@@ -19,6 +19,8 @@ use golem_api_grpc::proto::golem::worker as proto;
 #[cfg(test)]
 mod selection_tests;
 
+pub const FILE_READ_CHUNK_SIZE: usize = 64 * 1024;
+
 /// A filesystem target, independent of URI syntax and public route mappings.
 ///
 /// Validate before joining any paths. The executor filesystem boundary must validate again,
@@ -144,6 +146,65 @@ pub enum FileReadError {
     Storage,
     #[error("Invalid filesystem read response")]
     InvalidResponse,
+}
+
+impl crate::metrics::api::ApiErrorDetails for FileReadError {
+    fn trace_error_kind(&self) -> &'static str {
+        match self {
+            Self::InvalidTarget => "InvalidTarget",
+            Self::InvalidSelection => "InvalidSelection",
+            Self::ResourceExhausted => "ResourceExhausted",
+            Self::DeadlineExceeded => "DeadlineExceeded",
+            Self::Lifecycle => "Lifecycle",
+            Self::Storage => "Storage",
+            Self::InvalidResponse => "InvalidResponse",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidTarget
+                | Self::InvalidSelection
+                | Self::ResourceExhausted
+                | Self::DeadlineExceeded
+        )
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
+    }
+}
+
+impl From<FileReadError> for proto::FileReadError {
+    fn from(value: FileReadError) -> Self {
+        match value {
+            FileReadError::InvalidTarget => Self::InvalidTarget,
+            FileReadError::InvalidSelection => Self::InvalidSelection,
+            FileReadError::ResourceExhausted => Self::ResourceExhausted,
+            FileReadError::DeadlineExceeded => Self::DeadlineExceeded,
+            FileReadError::Lifecycle => Self::Lifecycle,
+            FileReadError::Storage => Self::Storage,
+            FileReadError::InvalidResponse => Self::InvalidResponse,
+        }
+    }
+}
+
+impl TryFrom<i32> for FileReadError {
+    type Error = FileReadError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match proto::FileReadError::try_from(value) {
+            Ok(proto::FileReadError::InvalidTarget) => Ok(Self::InvalidTarget),
+            Ok(proto::FileReadError::InvalidSelection) => Ok(Self::InvalidSelection),
+            Ok(proto::FileReadError::ResourceExhausted) => Ok(Self::ResourceExhausted),
+            Ok(proto::FileReadError::DeadlineExceeded) => Ok(Self::DeadlineExceeded),
+            Ok(proto::FileReadError::Lifecycle) => Ok(Self::Lifecycle),
+            Ok(proto::FileReadError::Storage) => Ok(Self::Storage),
+            Ok(proto::FileReadError::InvalidResponse) => Ok(Self::InvalidResponse),
+            _ => Err(Self::InvalidResponse),
+        }
+    }
 }
 
 impl FileByteSelection {

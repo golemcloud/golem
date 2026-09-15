@@ -2350,15 +2350,26 @@ async fn initial_file_reading_through_api(
         assert!(!executor.worker_is_loaded(&owned_agent_id).await);
 
         if read_contents {
+            let admission = Arc::new(
+                golem_worker_executor::services::file_read_admission::FileReadAdmission::default(),
+            );
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
-                worker.read_file(CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap()),
+                worker.read_file(
+                    golem_common::model::filesystem::FileReadTarget::Exact {
+                        file_path: "/bar/baz.txt".into(),
+                    },
+                    golem_common::model::filesystem::FileByteSelection::Full,
+                    admission.reserve(owned_agent_id.clone(), Instant::now())?,
+                ),
             )
             .await
             .expect("read through unloaded handle did not restore")?;
-            let golem_worker_executor::model::ReadFileResult::Ok(mut body) = result else {
-                panic!("expected restored regular file");
-            };
+            assert!(matches!(
+                result.head,
+                golem_common::model::filesystem::FileReadHead::File(_)
+            ));
+            let mut body = result.body;
             let mut contents = Vec::new();
             while let Some(chunk) = body.next().await {
                 contents.extend_from_slice(&chunk?);
