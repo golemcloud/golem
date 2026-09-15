@@ -162,8 +162,13 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::Error(params) => {
             let _ = writeln!(result, "ERROR");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}kind:              {:?}", params.kind);
             let _ = writeln!(result, "{pad}error:             {}", params.error);
             let _ = writeln!(result, "{pad}retry from:        {}", params.retry_from);
+        }
+        PublicOplogEntry::RecoverySucceeded(params) => {
+            let _ = writeln!(result, "RECOVERY SUCCEEDED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
         PublicOplogEntry::NoOp(params) => {
             let _ = writeln!(result, "NOP");

@@ -84,6 +84,7 @@ message OplogEntry {
     DurableStreamRecordParameters StreamCancel = 63;
     DurableStreamRecordParameters StreamSession = 64;
     TimestampParameter Resumed = 65;
+    TimestampParameter RecoverySucceeded = 66;
   }
 }
 
@@ -297,12 +298,18 @@ message RetryPolicyStatePair {
   RetryPolicyState second = 2;
 }
 
+enum OplogErrorKind {
+  INVOCATION = 0;
+  RECOVERY = 1;
+}
+
 message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
   bool inside_atomic_region = 4;
   optional RetryPolicyState retry_policy_state = 5;
+  OplogErrorKind kind = 6;
 }
 
 message JumpParameters {
