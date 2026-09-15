@@ -2587,7 +2587,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 {
                     Ok(update_description) => {
                         // Enqueue the update
-                        self.parent.enqueue_update(update_description).await;
+                        let _ = self.parent.enqueue_update(update_description).await;
 
                         // Reactivate the worker
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)

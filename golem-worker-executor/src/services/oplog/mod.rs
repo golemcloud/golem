@@ -500,6 +500,13 @@ pub struct RawDurableStreamSessionStatus {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
+    /// Retires this open handle after its worker's durable state has been deleted.
+    ///
+    /// Cached implementations unregister the exact handle and propagate retirement through
+    /// wrapper layers. The retired object may remain alive through stale worker references, but
+    /// it must no longer be returned when a new worker with the same identity opens its oplog.
+    fn retire(&self) {}
+
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         self.enqueue_add(entry).await

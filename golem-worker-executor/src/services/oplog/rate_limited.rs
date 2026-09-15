@@ -174,6 +174,10 @@ impl Debug for RateLimitedOplog {
 
 #[async_trait]
 impl Oplog for RateLimitedOplog {
+    fn retire(&self) {
+        self.inner.retire();
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         // Reserve the inner oplog position synchronously, then apply back-pressure only while the
         // returned receipt is awaited. This preserves ordering without bypassing write limiting.

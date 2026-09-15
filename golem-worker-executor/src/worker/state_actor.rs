@@ -35,15 +35,15 @@
 //!
 //! * The **status queue** serializes the oplog-commit + status-fold transaction (previously
 //!   guarded by the `update_state_lock` mutex). Its task must never await anything completed by
-//!   a store event loop and must never take the worker's `instance` lock: callers holding the
-//!   instance lock await status jobs (e.g. `Worker::add_and_commit_oplog_internal`), so taking
-//!   that lock here would deadlock. It only performs oplog-actor roundtrips, storage/network IO,
-//!   and lock-free status publication.
+//!   a store event loop and must never take the worker lifecycle lock: callers holding that lock
+//!   await status jobs (e.g. `Worker::add_and_commit_oplog_internal`), so taking it here would
+//!   deadlock. It only performs oplog-actor roundtrips, storage/network IO, and lock-free status
+//!   publication.
 //! * The **lifecycle queue** runs notification and memory-accounting jobs. Jobs that take the
-//!   `instance` lock are fire-and-forget. Ordered oplog entries are awaitable but never take that
-//!   lock, so an instance-lock holder never waits on a lifecycle operation that needs the same
-//!   lock. A cancellation-safe status transaction may own guards acquired by its caller, but the
-//!   status task never acquires those locks itself.
+//!   worker lifecycle-state lock are fire-and-forget. Ordered oplog entries are awaitable but
+//!   never take that lock, so a lifecycle-state-lock holder never waits on a lifecycle operation
+//!   that needs the same lock. A cancellation-safe status transaction may own guards acquired by
+//!   its caller, but the status task never acquires those locks itself.
 //!
 //! The status task is also the **only writer** of the worker's published status
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
@@ -91,8 +91,8 @@ pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
 /// Owner-scoped handle for serializing oplog commits with status publication.
 ///
 /// The controller communicates with the independently-polled status actor and never acquires the
-/// primary Store or the worker instance lock. Primary and entity Stores can therefore commit the
-/// shared owner oplog while another Store is suspended in a guest call.
+/// primary Store or the worker lifecycle-state lock. Primary and entity Stores can therefore
+/// commit the shared owner oplog while another Store is suspended in a guest call.
 pub(crate) struct OwnerCommitController {
     status_jobs: mpsc::UnboundedSender<StatusJob>,
     owned_agent_id: OwnedAgentId,
@@ -105,7 +105,7 @@ pub(crate) struct OwnerCommitController {
 enum StatusJob {
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed.
-    /// The reply deliberately does not depend on the instance lock; if the caller wants the
+    /// The reply deliberately does not depend on the worker lifecycle lock; if the caller wants the
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
@@ -214,7 +214,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
         published_authority_generation: Arc<AtomicU64>,
-        instance: Arc<Mutex<WorkerInstance>>,
+        lifecycle: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let state = StatusState {
             deps,
@@ -330,9 +330,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             while let Some(job) = lifecycle_rx.recv().await {
                 match job {
                     LifecycleJob::NotifyStatusChanged => {
-                        let instance_guard = instance.lock().await;
+                        let lifecycle_guard = lifecycle.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
-                        if let WorkerInstance::Running(running) = &*instance_guard {
+                        if let WorkerInstance::Running(running) = &*lifecycle_guard {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
@@ -475,7 +475,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
     /// forget: never blocks, and safe to call from store-polled futures and store-keeping
-    /// fibers alike, because the instance lock is only taken on the lifecycle task.
+    /// fibers alike, because the worker lifecycle lock is only taken on the lifecycle task.
     pub fn notify_status_changed(&self) {
         if !self.notification_queued.swap(true, Ordering::AcqRel)
             && self

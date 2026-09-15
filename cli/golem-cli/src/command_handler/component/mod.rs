@@ -1943,7 +1943,7 @@ impl ComponentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .component
+            .component_upload
             .create_component(
                 &environment.environment_id.0,
                 &ComponentCreation {
@@ -2048,7 +2048,7 @@ impl ComponentCommandHandler {
             .golem_clients()
             .await
             .map_err(UpdateStagedComponentError::Other)?
-            .component
+            .component_upload
             .update_component(
                 &component.id.0,
                 &ComponentUpdate {
