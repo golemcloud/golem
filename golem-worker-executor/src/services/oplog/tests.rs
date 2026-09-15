@@ -46,7 +46,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
 };
 use nonempty_collections::nev;
 use std::collections::{HashSet, VecDeque};
@@ -1036,6 +1036,19 @@ impl BlobStorage for ReadCountingBlobStorage {
         self.count_read();
         self.inner
             .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
             .await
     }
 
