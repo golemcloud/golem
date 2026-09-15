@@ -119,6 +119,8 @@ pub struct AccountUsage {
     pub plan: PlanRecord,
     pub storage_limit: StorageLimit,
     pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
+    pub max_disk_space_per_worker_value: u64,
+    pub max_memory_per_worker_value: u64,
     pub admin_grant_values: AdminResourceGrantValues,
     pub admin_grants: Vec<AdminResourceGrant>,
     pub metering: Option<ResourceUsageMetering>,
@@ -212,6 +214,18 @@ pub struct AdminResourceGrantValues {
     pub max_disk_space_per_worker: Option<u64>,
 }
 
+fn resolved_per_agent_value(
+    plan_default: u64,
+    override_value: Option<u64>,
+    ceiling: u64,
+    user_configurable: bool,
+) -> u64 {
+    override_value
+        .filter(|_| user_configurable)
+        .filter(|value| (plan_default..=ceiling).contains(value))
+        .unwrap_or(plan_default)
+}
+
 impl AccountUsagePlan {
     pub fn monthly_usage_mode(&self) -> RepoResult<MonthlyUsageMode> {
         let persisted_mode = monthly_usage_mode(&self.monthly_usage_mode)?;
@@ -242,6 +256,38 @@ impl AccountUsagePlan {
                 .map(NumericU64::get),
             max_memory_per_worker: self.max_memory_grant_value.as_ref().map(NumericU64::get),
             max_disk_space_per_worker: self.storage_grant_value.as_ref().map(NumericU64::get),
+        }
+    }
+
+    pub fn max_memory_per_worker_value(&self) -> u64 {
+        self.max_memory_grant_value
+            .as_ref()
+            .map(NumericU64::get)
+            .unwrap_or_else(|| {
+                resolved_per_agent_value(
+                    self.plan.max_memory_per_worker.get(),
+                    self.max_memory_override_value.as_ref().map(NumericU64::get),
+                    self.plan.max_memory_per_worker_ceiling.get(),
+                    self.plan.max_memory_per_worker_user_configurable,
+                )
+            })
+    }
+
+    pub fn max_disk_space_per_worker_value(&self) -> u64 {
+        if self.plan.max_disk_space_per_worker_enabled {
+            self.storage_grant_value
+                .as_ref()
+                .map(NumericU64::get)
+                .unwrap_or_else(|| {
+                    resolved_per_agent_value(
+                        self.plan.max_disk_space_per_worker.get(),
+                        self.storage_override_value.as_ref().map(NumericU64::get),
+                        self.plan.max_disk_space_per_worker_ceiling.get(),
+                        self.plan.max_disk_space_per_worker_user_configurable,
+                    )
+                })
+        } else {
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
         }
     }
 
@@ -686,9 +732,9 @@ impl AccountUsage {
                 available_ephemeral_storage_byte_nanoseconds_remainder:
                     (available_ephemeral_storage_byte_nanoseconds % 1_000_000_000) as u64,
             },
-            max_memory_per_worker: self.max_memory_per_worker.effective_value,
+            max_memory_per_worker: self.max_memory_per_worker_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
-            max_disk_space_per_worker: self.storage_limit.executor_value(),
+            max_disk_space_per_worker: self.max_disk_space_per_worker_value,
             per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
@@ -703,9 +749,10 @@ impl AccountUsage {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsage, AccountUsageRecord, AdminResourceGrantValues, MonthlyUsageModeStateRecord,
-        MonthlyUsageModeTransitionRecord, UsageType, billable_excess_delta, exact_usage_delta,
-        monthly_usage_mode, monthly_usage_mode_transition_source,
+        AccountUsage, AccountUsagePlan, AccountUsageRecord, AdminResourceGrantValues,
+        MonthlyUsageModeStateRecord, MonthlyUsageModeTransitionRecord, UsageType,
+        billable_excess_delta, exact_usage_delta, monthly_usage_mode,
+        monthly_usage_mode_transition_source, resolved_per_agent_value,
     };
     use crate::repo::model::plan::PlanRecord;
     use chrono::{DateTime, Utc};
@@ -720,6 +767,79 @@ mod tests {
 
     fn timestamp(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
+    }
+
+    fn test_plan() -> PlanRecord {
+        PlanRecord {
+            plan_id: Uuid::new_v4(),
+            name: "resource-limits".to_string(),
+            max_memory_per_worker: NumericU64::new(u64::MAX),
+            max_memory_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_memory_per_worker_user_configurable: false,
+            monthly_compute_gcu: NumericU64::new(0),
+            monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
+            monthly_durable_storage_gb_month: NumericU64::new(1),
+            monthly_ephemeral_storage_gb_month: NumericU64::new(2),
+            overage_eligible: false,
+            max_table_elements_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_enabled: false,
+            max_disk_space_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_user_configurable: false,
+            max_concurrent_agents_per_executor: NumericU64::new(u64::MAX),
+            total_app_count: NumericU64::new(u64::MAX),
+            total_env_count: NumericU64::new(u64::MAX),
+            total_component_count: NumericU64::new(u64::MAX),
+            total_worker_connection_count: NumericU64::new(u64::MAX),
+            total_component_storage_bytes: NumericU64::new(u64::MAX),
+            monthly_gas_limit: NumericU64::new(u64::MAX),
+            monthly_component_upload_limit_bytes: NumericU64::new(u64::MAX),
+            per_invocation_http_call_limit: NumericU64::new(u64::MAX),
+            per_invocation_rpc_call_limit: NumericU64::new(u64::MAX),
+            monthly_http_call_limit: NumericU64::new(u64::MAX),
+            monthly_rpc_call_limit: NumericU64::new(u64::MAX),
+            oplog_writes_per_second: NumericU64::new(u64::MAX),
+        }
+    }
+
+    fn account_usage_plan(plan: PlanRecord) -> AccountUsagePlan {
+        AccountUsagePlan {
+            plan,
+            storage_override_value: None,
+            max_memory_override_value: None,
+            monthly_compute_grant_value: None,
+            monthly_compute_grant_reason: None,
+            monthly_compute_grant_expires_at: None,
+            monthly_compute_grant_created_by: None,
+            monthly_compute_grant_created_at: None,
+            monthly_memory_grant_value: None,
+            monthly_memory_grant_reason: None,
+            monthly_memory_grant_expires_at: None,
+            monthly_memory_grant_created_by: None,
+            monthly_memory_grant_created_at: None,
+            monthly_durable_storage_grant_value: None,
+            monthly_durable_storage_grant_reason: None,
+            monthly_durable_storage_grant_expires_at: None,
+            monthly_durable_storage_grant_created_by: None,
+            monthly_durable_storage_grant_created_at: None,
+            monthly_ephemeral_storage_grant_value: None,
+            monthly_ephemeral_storage_grant_reason: None,
+            monthly_ephemeral_storage_grant_expires_at: None,
+            monthly_ephemeral_storage_grant_created_by: None,
+            monthly_ephemeral_storage_grant_created_at: None,
+            max_memory_grant_value: None,
+            max_memory_grant_reason: None,
+            max_memory_grant_expires_at: None,
+            max_memory_grant_created_by: None,
+            max_memory_grant_created_at: None,
+            storage_grant_value: None,
+            storage_grant_reason: None,
+            storage_grant_expires_at: None,
+            storage_grant_created_by: None,
+            storage_grant_created_at: None,
+            monthly_usage_mode: "hard_limit".to_string(),
+            monthly_usage_mode_revision: NumericU64::new(0),
+        }
     }
 
     #[test]
@@ -776,41 +896,53 @@ mod tests {
     }
 
     #[test]
-    fn resource_limits_preserve_storage_whole_seconds_and_remainders() {
-        let plan = PlanRecord {
-            plan_id: Uuid::new_v4(),
-            name: "storage-conversion".to_string(),
-            max_memory_per_worker: NumericU64::new(u64::MAX),
-            max_memory_per_worker_ceiling: NumericU64::new(u64::MAX),
-            max_memory_per_worker_user_configurable: false,
-            monthly_compute_gcu: NumericU64::new(0),
-            monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
-            monthly_durable_storage_gb_month: NumericU64::new(1),
-            monthly_ephemeral_storage_gb_month: NumericU64::new(2),
-            overage_eligible: false,
-            max_table_elements_per_worker: NumericU64::new(u64::MAX),
-            max_disk_space_per_worker_enabled: false,
-            max_disk_space_per_worker: NumericU64::new(u64::MAX),
-            max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
-            max_disk_space_per_worker_user_configurable: false,
-            max_concurrent_agents_per_executor: NumericU64::new(u64::MAX),
-            total_app_count: NumericU64::new(u64::MAX),
-            total_env_count: NumericU64::new(u64::MAX),
-            total_component_count: NumericU64::new(u64::MAX),
-            total_worker_connection_count: NumericU64::new(u64::MAX),
-            total_component_storage_bytes: NumericU64::new(u64::MAX),
-            monthly_gas_limit: NumericU64::new(u64::MAX),
-            monthly_component_upload_limit_bytes: NumericU64::new(u64::MAX),
-            per_invocation_http_call_limit: NumericU64::new(u64::MAX),
-            per_invocation_rpc_call_limit: NumericU64::new(u64::MAX),
-            monthly_http_call_limit: NumericU64::new(u64::MAX),
-            monthly_rpc_call_limit: NumericU64::new(u64::MAX),
-            oplog_writes_per_second: NumericU64::new(u64::MAX),
-        };
+    fn per_agent_resolution_preserves_internal_unlimited_values() {
+        for value in [
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+            u64::MAX,
+        ] {
+            assert_eq!(resolved_per_agent_value(value, None, value, false), value);
+        }
+    }
+
+    #[test]
+    fn account_usage_plan_resolves_raw_per_agent_values() {
+        let mut plan = test_plan();
+        plan.max_memory_per_worker_user_configurable = true;
+        plan.max_disk_space_per_worker_enabled = true;
+        plan.max_disk_space_per_worker = NumericU64::new(50);
+        plan.max_disk_space_per_worker_ceiling = NumericU64::new(200);
+        plan.max_disk_space_per_worker_user_configurable = true;
+        let mut account_plan = account_usage_plan(plan);
+
+        assert_eq!(account_plan.max_memory_per_worker_value(), u64::MAX);
+        assert_eq!(account_plan.max_disk_space_per_worker_value(), 50);
+
+        account_plan.plan.max_memory_per_worker = NumericU64::new(50);
+        account_plan.max_memory_override_value = Some(NumericU64::new(75));
+        account_plan.storage_override_value = Some(NumericU64::new(75));
+        assert_eq!(account_plan.max_memory_per_worker_value(), 75);
+        assert_eq!(account_plan.max_disk_space_per_worker_value(), 75);
+
+        account_plan.max_memory_grant_value = Some(NumericU64::new(125));
+        account_plan.storage_grant_value = Some(NumericU64::new(150));
+        assert_eq!(account_plan.max_memory_per_worker_value(), 125);
+        assert_eq!(account_plan.max_disk_space_per_worker_value(), 150);
+
+        account_plan.plan.max_disk_space_per_worker_enabled = false;
+        assert_eq!(
+            account_plan.max_disk_space_per_worker_value(),
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
+        );
+    }
+
+    #[test]
+    fn resource_limits_preserve_internal_per_agent_values_and_storage_remainders() {
+        let plan = test_plan();
         let mut usage_values = BTreeMap::new();
         usage_values.insert(UsageType::MonthlyDurableAgentStorageByteSeconds, 3);
         usage_values.insert(UsageType::MonthlyEphemeralStorageByteSeconds, 5);
-        let usage = AccountUsage {
+        let mut usage = AccountUsage {
             account_id: Uuid::new_v4(),
             year: 2026,
             month: 4,
@@ -818,6 +950,9 @@ mod tests {
             plan,
             storage_limit: StorageLimit::resolve(false, 0, None, 0, false),
             max_memory_per_worker: MemoryLimit::resolve(u64::MAX, None, u64::MAX, false),
+            max_disk_space_per_worker_value:
+                golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+            max_memory_per_worker_value: u64::MAX,
             admin_grant_values: AdminResourceGrantValues::default(),
             admin_grants: Vec::new(),
             metering: None,
@@ -857,6 +992,27 @@ mod tests {
         assert_eq!(
             policy.available_ephemeral_storage_byte_nanoseconds_remainder,
             750_000_000
+        );
+        assert_eq!(
+            usage.resource_limits().unwrap().max_memory_per_worker,
+            u64::MAX
+        );
+        usage.max_memory_per_worker_value =
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT;
+        assert_eq!(
+            usage.resource_limits().unwrap().max_memory_per_worker,
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT
+        );
+
+        usage.plan.monthly_memory_gb_seconds = NumericU64::new(10);
+        usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 3);
+        usage.monthly_memory_byte_nanoseconds_remainder =
+            golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND / 4;
+        let memory_policy = usage.resource_limits().unwrap().monthly_policy;
+        assert_eq!(memory_policy.available_memory_gb_seconds, 6);
+        assert_eq!(
+            memory_policy.available_memory_byte_nanoseconds_remainder,
+            (golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND * 3 / 4) as u64
         );
     }
 

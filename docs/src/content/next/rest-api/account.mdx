@@ -137,33 +137,42 @@ Path|Method|Protected
 
 ```json copy
 {
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
-  "name": "string",
-  "appLimit": 0,
-  "envLimit": 0,
-  "componentLimit": 0,
-  "workerConnectionLimit": 0,
-  "storageLimit": 0,
-  "monthlyUploadLimit": 0,
-  "monthlyComputeGcu": 0,
-  "monthlyMemoryGbSeconds": 0,
-  "monthlyDurableStorageGbMonth": 0,
-  "monthlyEphemeralStorageGbMonth": 0,
-  "overageAllowedByPlan": true,
-  "maxMemoryPerAgent": 0,
-  "maxMemoryPerAgentCeiling": 0,
-  "maxMemoryPerAgentUserConfigurable": true,
-  "maxTableElementsPerWorker": 0,
-  "maxStoragePerAgentEnabled": true,
-  "maxStoragePerAgent": 0,
-  "maxStoragePerAgentCeiling": 0,
-  "maxStoragePerAgentUserConfigurable": true,
-  "perInvocationHttpCallLimit": 0,
-  "perInvocationRpcCallLimit": 0,
-  "monthlyHttpCallLimit": 0,
-  "monthlyRpcCallLimit": 0,
-  "maxConcurrentAgentsPerExecutor": 0,
-  "oplogWritesPerSecond": 0
+  "appLimit": 10,
+  "componentLimit": 100,
+  "envLimit": 40,
+  "maxConcurrentAgentsPerExecutor": 100,
+  "maxMemoryPerAgent": {
+    "type": "unlimited"
+  },
+  "maxMemoryPerAgentCeiling": {
+    "type": "unlimited"
+  },
+  "maxMemoryPerAgentUserConfigurable": false,
+  "maxStoragePerAgent": {
+    "reason": "managedFilesystemUnavailable",
+    "type": "disabled"
+  },
+  "maxStoragePerAgentCeiling": {
+    "reason": "managedFilesystemUnavailable",
+    "type": "disabled"
+  },
+  "maxStoragePerAgentUserConfigurable": false,
+  "maxTableElementsPerWorker": 16384,
+  "monthlyComputeGcu": 100,
+  "monthlyDurableStorageGbMonth": 50,
+  "monthlyEphemeralStorageGbMonth": 25,
+  "monthlyHttpCallLimit": 10000,
+  "monthlyMemoryGbSeconds": 10000,
+  "monthlyRpcCallLimit": 10000,
+  "monthlyUploadLimit": 1000000000,
+  "name": "default",
+  "oplogWritesPerSecond": 1000,
+  "overageAllowedByPlan": false,
+  "perInvocationHttpCallLimit": 1000,
+  "perInvocationRpcCallLimit": 1000,
+  "planId": "00000000-0000-0000-0000-000000000001",
+  "storageLimit": 500000000,
+  "workerConnectionLimit": 100
 }
 ```
 
@@ -368,26 +377,33 @@ GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
 {
   "accountId": "00000000-0000-0000-0000-000000000001",
   "maxMemoryPerAgent": {
-    "ceiling": 10737418240,
-    "effectiveValue": 1073741824,
-    "planDefault": 1073741824,
+    "ceiling": {
+      "type": "unlimited"
+    },
+    "effectiveValue": {
+      "type": "unlimited"
+    },
+    "planDefault": {
+      "type": "unlimited"
+    },
     "unit": "bytes",
-    "userConfigurable": true
+    "userConfigurable": false
   },
   "maxStoragePerAgent": {
-    "activeAdminGrant": {
-      "actorAccountId": "00000000-0000-0000-0000-000000000002",
-      "dimension": "maxStoragePerAgent",
-      "grantedAt": "2023-11-14T22:13:20+00:00",
-      "reason": "support",
-      "value": 2147483648
+    "ceiling": {
+      "type": "finite",
+      "value": 10737418240
     },
-    "ceiling": 10737418240,
-    "effectiveValue": 2147483648,
-    "enabled": true,
-    "planDefault": 1073741824,
+    "effectiveValue": {
+      "reason": "managedFilesystemUnavailable",
+      "type": "disabled"
+    },
+    "planDefault": {
+      "type": "finite",
+      "value": 1073741824
+    },
     "unit": "bytes",
-    "userConfigurable": true
+    "userConfigurable": false
   },
   "monthly": {
     "computeGcu": {
@@ -494,10 +510,18 @@ Path|Method|Protected
     "reason": "support",
     "value": 2147483648
   },
-  "ceiling": 10737418240,
-  "effectiveValue": 2147483648,
-  "enabled": true,
-  "planDefault": 1073741824,
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
   "unit": "bytes",
   "userConfigurable": true
 }
@@ -525,10 +549,18 @@ Path|Method|Protected
     "reason": "support",
     "value": 2147483648
   },
-  "ceiling": 10737418240,
-  "effectiveValue": 2147483648,
-  "enabled": true,
-  "planDefault": 1073741824,
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
   "unit": "bytes",
   "userConfigurable": true
 }
@@ -561,9 +593,18 @@ Path|Method|Protected
     "reason": "support",
     "value": 2147483648
   },
-  "ceiling": 10737418240,
-  "effectiveValue": 2147483648,
-  "planDefault": 1073741824,
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
   "unit": "bytes",
   "userConfigurable": true
 }
@@ -591,9 +632,18 @@ Path|Method|Protected
     "reason": "support",
     "value": 2147483648
   },
-  "ceiling": 10737418240,
-  "effectiveValue": 2147483648,
-  "planDefault": 1073741824,
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
   "unit": "bytes",
   "userConfigurable": true
 }
@@ -626,7 +676,10 @@ expiry. Grants do not change the account's paid-overage consent.
   "changedAt": "2023-11-14T22:13:20+00:00",
   "dimension": "monthlyComputeGcu",
   "eventType": "override_granted",
-  "newValue": 10,
+  "newValue": {
+    "type": "finite",
+    "value": 10
+  },
   "oldValue": 5,
   "reason": "support"
 }
@@ -652,7 +705,10 @@ Path|Method|Protected
   "changedAt": "2023-11-14T22:13:20+00:00",
   "dimension": "monthlyComputeGcu",
   "eventType": "override_cleared",
-  "newValue": 5,
+  "newValue": {
+    "type": "finite",
+    "value": 5
+  },
   "oldValue": 10,
   "reason": "support"
 }

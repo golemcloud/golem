@@ -9091,24 +9091,26 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         maxMemoryPerAgent:
-          ceiling: 10737418240
-          effectiveValue: 1073741824
-          planDefault: 1073741824
+          ceiling:
+            type: unlimited
+          effectiveValue:
+            type: unlimited
+          planDefault:
+            type: unlimited
           unit: bytes
-          userConfigurable: true
+          userConfigurable: false
         maxStoragePerAgent:
-          activeAdminGrant:
-            actorAccountId: 00000000-0000-0000-0000-000000000002
-            dimension: maxStoragePerAgent
-            grantedAt: 2023-11-14T22:13:20+00:00
-            reason: support
-            value: 2147483648
-          ceiling: 10737418240
-          effectiveValue: 2147483648
-          enabled: true
-          planDefault: 1073741824
+          ceiling:
+            type: finite
+            value: 10737418240
+          effectiveValue:
+            reason: managedFilesystemUnavailable
+            type: disabled
+          planDefault:
+            type: finite
+            value: 1073741824
           unit: bytes
-          userConfigurable: true
+          userConfigurable: false
         monthly:
           computeGcu:
             allowOverageUsage: 0.0
@@ -9310,6 +9312,7 @@ components:
         value:
           type: integer
           format: uint64
+          description: The finite grant amount in the unit associated with `dimension`.
         reason:
           $ref: '#/components/schemas/AdminResourceGrantReason'
         actorAccountId:
@@ -9352,9 +9355,9 @@ components:
         oldValue:
           type: integer
           format: uint64
+          description: The previous finite amount in the unit associated with `dimension`.
         newValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/AdminResourceGrantChangeValue'
         expiresAt:
           type: string
           format: date-time
@@ -9364,9 +9367,59 @@ components:
         changedAt: 2023-11-14T22:13:20+00:00
         dimension: monthlyComputeGcu
         eventType: override_granted
-        newValue: 10
+        newValue:
+          type: finite
+          value: 10
         oldValue: 5
         reason: support
+    AdminResourceGrantChangeValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AdminResourceGrantChangeValue_FiniteResourceLimit'
+      - $ref: '#/components/schemas/AdminResourceGrantChangeValue_UnlimitedResourceLimit'
+      - $ref: '#/components/schemas/AdminResourceGrantChangeValue_DisabledResourceLimit'
+      discriminator:
+        propertyName: type
+        mapping:
+          finite: '#/components/schemas/AdminResourceGrantChangeValue_FiniteResourceLimit'
+          unlimited: '#/components/schemas/AdminResourceGrantChangeValue_UnlimitedResourceLimit'
+          disabled: '#/components/schemas/AdminResourceGrantChangeValue_DisabledResourceLimit'
+    AdminResourceGrantChangeValue_DisabledResourceLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - disabled
+            example: disabled
+      - $ref: '#/components/schemas/DisabledResourceLimit'
+    AdminResourceGrantChangeValue_FiniteResourceLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - finite
+            example: finite
+      - $ref: '#/components/schemas/FiniteResourceLimit'
+    AdminResourceGrantChangeValue_UnlimitedResourceLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - unlimited
+            example: unlimited
+      - $ref: '#/components/schemas/UnlimitedResourceLimit'
     AdminResourceGrantDimension:
       type: string
       enum:
@@ -10744,8 +10797,7 @@ components:
           type: integer
           format: uint64
         newValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/AdminResourceGrantChangeValue'
         expiresAt:
           type: string
           format: date-time
@@ -10755,7 +10807,9 @@ components:
         changedAt: 2023-11-14T22:13:20+00:00
         dimension: monthlyComputeGcu
         eventType: override_cleared
-        newValue: 5
+        newValue:
+          type: finite
+          value: 5
         oldValue: 10
         reason: support
     CommandAnnotations:
@@ -11452,6 +11506,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+    DisabledResourceLimit:
+      type: object
+      title: DisabledResourceLimit
+      description: A storage limit that cannot be enforced because managed filesystem quotas are unavailable.
+      required:
+      - reason
+      properties:
+        reason:
+          $ref: '#/components/schemas/StorageLimitDisabledReason'
     DiscriminatorRule:
       type: object
       oneOf:
@@ -11921,6 +11984,16 @@ components:
             - auto-injected
           value:
             $ref: '#/components/schemas/AutoInjectedKind'
+    FiniteResourceLimit:
+      type: object
+      title: FiniteResourceLimit
+      description: A finite customer-visible resource limit.
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: uint64
     FlagShape:
       type: object
       oneOf:
@@ -12514,17 +12587,13 @@ components:
         activeAdminGrant:
           $ref: '#/components/schemas/AdminResourceGrant'
         effectiveValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         planDefault:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         overrideValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         ceiling:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         userConfigurable:
           type: boolean
       example:
@@ -12534,9 +12603,15 @@ components:
           grantedAt: 2023-11-14T22:13:20+00:00
           reason: support
           value: 2147483648
-        ceiling: 10737418240
-        effectiveValue: 2147483648
-        planDefault: 1073741824
+        ceiling:
+          type: finite
+          value: 10737418240
+        effectiveValue:
+          type: finite
+          value: 2147483648
+        planDefault:
+          type: finite
+          value: 1073741824
         unit: bytes
         userConfigurable: true
     MetadataEnvelope:
@@ -13489,7 +13564,6 @@ components:
       - maxMemoryPerAgentCeiling
       - maxMemoryPerAgentUserConfigurable
       - maxTableElementsPerWorker
-      - maxStoragePerAgentEnabled
       - maxStoragePerAgent
       - maxStoragePerAgentCeiling
       - maxStoragePerAgentUserConfigurable
@@ -13538,24 +13612,24 @@ components:
         overageAllowedByPlan:
           type: boolean
         maxMemoryPerAgent:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         maxMemoryPerAgentCeiling:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         maxMemoryPerAgentUserConfigurable:
           type: boolean
         maxTableElementsPerWorker:
           type: integer
           format: uint64
-        maxStoragePerAgentEnabled:
-          type: boolean
         maxStoragePerAgent:
-          type: integer
-          format: uint64
+          description: The default storage limit, or disabled when managed filesystem quotas are unavailable.
+          allOf:
+          - $ref: '#/components/schemas/StorageResourceLimitValue'
+          - description: The default storage limit, or disabled when managed filesystem quotas are unavailable.
         maxStoragePerAgentCeiling:
-          type: integer
-          format: uint64
+          description: The storage ceiling, or disabled when managed filesystem quotas are unavailable.
+          allOf:
+          - $ref: '#/components/schemas/StorageResourceLimitValue'
+          - description: The storage ceiling, or disabled when managed filesystem quotas are unavailable.
         maxStoragePerAgentUserConfigurable:
           type: boolean
         perInvocationHttpCallLimit:
@@ -13576,6 +13650,39 @@ components:
         oplogWritesPerSecond:
           type: integer
           format: uint64
+      example:
+        appLimit: 10
+        componentLimit: 100
+        envLimit: 40
+        maxConcurrentAgentsPerExecutor: 100
+        maxMemoryPerAgent:
+          type: unlimited
+        maxMemoryPerAgentCeiling:
+          type: unlimited
+        maxMemoryPerAgentUserConfigurable: false
+        maxStoragePerAgent:
+          reason: managedFilesystemUnavailable
+          type: disabled
+        maxStoragePerAgentCeiling:
+          reason: managedFilesystemUnavailable
+          type: disabled
+        maxStoragePerAgentUserConfigurable: false
+        maxTableElementsPerWorker: 16384
+        monthlyComputeGcu: 100
+        monthlyDurableStorageGbMonth: 50
+        monthlyEphemeralStorageGbMonth: 25
+        monthlyHttpCallLimit: 10000
+        monthlyMemoryGbSeconds: 10000
+        monthlyRpcCallLimit: 10000
+        monthlyUploadLimit: 1000000000
+        name: default
+        oplogWritesPerSecond: 1000
+        overageAllowedByPlan: false
+        perInvocationHttpCallLimit: 1000
+        perInvocationRpcCallLimit: 1000
+        planId: 00000000-0000-0000-0000-000000000001
+        storageLimit: 500000000
+        workerConnectionLimit: 100
     PluginInstallation:
       type: object
       title: PluginInstallation
@@ -14210,6 +14317,40 @@ components:
           Rate: '#/components/schemas/ResourceLimit_ResourceRateLimit'
           Capacity: '#/components/schemas/ResourceLimit_ResourceCapacityLimit'
           Concurrency: '#/components/schemas/ResourceLimit_ResourceConcurrencyLimit'
+    ResourceLimitValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ResourceLimitValue_FiniteResourceLimit'
+      - $ref: '#/components/schemas/ResourceLimitValue_UnlimitedResourceLimit'
+      discriminator:
+        propertyName: type
+        mapping:
+          finite: '#/components/schemas/ResourceLimitValue_FiniteResourceLimit'
+          unlimited: '#/components/schemas/ResourceLimitValue_UnlimitedResourceLimit'
+    ResourceLimitValue_FiniteResourceLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - finite
+            example: finite
+      - $ref: '#/components/schemas/FiniteResourceLimit'
+    ResourceLimitValue_UnlimitedResourceLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - unlimited
+            example: unlimited
+      - $ref: '#/components/schemas/UnlimitedResourceLimit'
     ResourceLimit_ResourceCapacityLimit:
       allOf:
       - type: object
@@ -15879,32 +16020,26 @@ components:
       type: object
       title: StorageLimit
       required:
-      - enabled
       - unit
+      - effectiveValue
+      - planDefault
+      - ceiling
       - userConfigurable
       properties:
-        enabled:
-          type: boolean
         unit:
           $ref: '#/components/schemas/PerAgentLimitUnit'
         activeAdminGrant:
           $ref: '#/components/schemas/AdminResourceGrant'
         effectiveValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/StorageResourceLimitValue'
         planDefault:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         overrideValue:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         ceiling:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ResourceLimitValue'
         userConfigurable:
           type: boolean
-        disabledReason:
-          $ref: '#/components/schemas/StorageLimitDisabledReason'
       example:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
@@ -15912,16 +16047,73 @@ components:
           grantedAt: 2023-11-14T22:13:20+00:00
           reason: support
           value: 2147483648
-        ceiling: 10737418240
-        effectiveValue: 2147483648
-        enabled: true
-        planDefault: 1073741824
+        ceiling:
+          type: finite
+          value: 10737418240
+        effectiveValue:
+          type: finite
+          value: 2147483648
+        planDefault:
+          type: finite
+          value: 1073741824
         unit: bytes
         userConfigurable: true
     StorageLimitDisabledReason:
       type: string
       enum:
       - managedFilesystemUnavailable
+    StorageResourceLimitValue:
+      type: object
+      description: A customer-visible storage limit, including unavailable managed filesystem quotas.
+      oneOf:
+      - $ref: '#/components/schemas/StorageResourceLimitValue_FiniteResourceLimit'
+      - $ref: '#/components/schemas/StorageResourceLimitValue_UnlimitedResourceLimit'
+      - $ref: '#/components/schemas/StorageResourceLimitValue_DisabledResourceLimit'
+      discriminator:
+        propertyName: type
+        mapping:
+          finite: '#/components/schemas/StorageResourceLimitValue_FiniteResourceLimit'
+          unlimited: '#/components/schemas/StorageResourceLimitValue_UnlimitedResourceLimit'
+          disabled: '#/components/schemas/StorageResourceLimitValue_DisabledResourceLimit'
+    StorageResourceLimitValue_DisabledResourceLimit:
+      description: A customer-visible storage limit, including unavailable managed filesystem quotas.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - disabled
+            example: disabled
+      - $ref: '#/components/schemas/DisabledResourceLimit'
+    StorageResourceLimitValue_FiniteResourceLimit:
+      description: A customer-visible storage limit, including unavailable managed filesystem quotas.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - finite
+            example: finite
+      - $ref: '#/components/schemas/FiniteResourceLimit'
+    StorageResourceLimitValue_UnlimitedResourceLimit:
+      description: A customer-visible storage limit, including unavailable managed filesystem quotas.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - unlimited
+            example: unlimited
+      - $ref: '#/components/schemas/UnlimitedResourceLimit'
     StoredCard:
       type: object
       oneOf:
@@ -16386,6 +16578,10 @@ components:
           type: string
         body:
           $ref: '#/components/schemas/SchemaValue'
+    UnlimitedResourceLimit:
+      type: object
+      title: UnlimitedResourceLimit
+      description: A customer-visible resource limit with no finite bound.
     UntypedJsonBody:
       type: object
       description: A json body without a static schema

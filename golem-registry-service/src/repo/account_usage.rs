@@ -1074,6 +1074,9 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     usage,
                     storage_limit: storage_limit(&account_plan),
                     max_memory_per_worker: max_memory_per_worker(&account_plan),
+                    max_disk_space_per_worker_value: account_plan
+                        .max_disk_space_per_worker_value(),
+                    max_memory_per_worker_value: account_plan.max_memory_per_worker_value(),
                     admin_grant_values,
                     admin_grants,
                     metering: None,
@@ -1286,6 +1289,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
+            max_disk_space_per_worker_value: account_plan.max_disk_space_per_worker_value(),
+            max_memory_per_worker_value: account_plan.max_memory_per_worker_value(),
             admin_grant_values,
             admin_grants,
             metering: None,
@@ -2182,13 +2187,16 @@ fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
             .plan
             .max_disk_space_per_worker_user_configurable,
     );
-    if limit.enabled
+    if account_plan.plan.max_disk_space_per_worker_enabled
         && let Some(value) = account_plan
             .storage_grant_value
             .as_ref()
             .map(NumericU64::get)
     {
-        limit.effective_value = Some(value);
+        limit.effective_value =
+            golem_common::model::account_usage::StorageResourceLimitValue::from_storage_value(
+                value,
+            );
     }
     limit
 }
@@ -2208,7 +2216,8 @@ fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
         .as_ref()
         .map(NumericU64::get)
     {
-        limit.effective_value = value;
+        limit.effective_value =
+            golem_common::model::account_usage::ResourceLimitValue::from_memory_value(value);
     }
     limit
 }

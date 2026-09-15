@@ -21,10 +21,10 @@ use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountResourcePolicy, AccountUsage, AdminResourceGrantChange, AdminResourceGrantDimension,
-    AdminResourceGrantEventType, AdminResourceGrantReason, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS,
-    MemoryLimit, MonthlyUsageModeTransition, SetAdminResourceGrant, SetMemoryLimit,
-    SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, AdminResourceGrantChange, AdminResourceGrantChangeValue,
+    AdminResourceGrantDimension, AdminResourceGrantEventType, AdminResourceGrantReason,
+    DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, MonthlyUsageModeTransition,
+    SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -53,7 +53,7 @@ struct ClearedAdminResourceGrantChange {
     actor_account_id: AccountId,
     changed_at: DateTime<Utc>,
     old_value: u64,
-    new_value: u64,
+    new_value: AdminResourceGrantChangeValue,
     expires_at: Option<DateTime<Utc>>,
 }
 
@@ -68,7 +68,10 @@ impl poem_openapi::types::Example for ClearedAdminResourceGrantChange {
             changed_at: DateTime::from_timestamp(1_700_000_000, 0)
                 .expect("example timestamp is valid"),
             old_value: 10,
-            new_value: 5,
+            new_value: AdminResourceGrantChangeValue::from_raw(
+                AdminResourceGrantDimension::MonthlyComputeGcu,
+                5,
+            ),
             expires_at: None,
         }
     }

@@ -1055,27 +1055,22 @@
       "required": [
         "effectiveValue",
         "planDefault",
-        "overrideValue",
         "ceiling",
         "unit",
         "userConfigurable"
       ],
       "properties": {
         "effectiveValue": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "planDefault": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "overrideValue": {
-          "type": ["integer", "null"],
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "ceiling": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "unit": {
           "const": "bytes"
@@ -1091,26 +1086,25 @@
     },
     "StorageLimit": {
       "type": "object",
-      "required": ["enabled", "unit", "userConfigurable"],
+      "required": [
+        "effectiveValue",
+        "planDefault",
+        "ceiling",
+        "unit",
+        "userConfigurable"
+      ],
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
         "effectiveValue": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/StorageResourceLimitValue"
         },
         "planDefault": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "overrideValue": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "ceiling": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "unit": {
           "const": "bytes"
@@ -1120,13 +1114,57 @@
         },
         "userConfigurable": {
           "type": "boolean"
-        },
-        "disabledReason": {
-          "type": "string",
-          "enum": ["managedFilesystemUnavailable"]
         }
       },
       "additionalProperties": false
+    },
+    "ResourceLimitValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": {
+              "const": "finite"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "const": "unlimited"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "StorageResourceLimitValue": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        {
+          "type": "object",
+          "required": ["type", "reason"],
+          "properties": {
+            "type": {
+              "const": "disabled"
+            },
+            "reason": {
+              "const": "managedFilesystemUnavailable"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "PermissionShare": {
       "type": "object",

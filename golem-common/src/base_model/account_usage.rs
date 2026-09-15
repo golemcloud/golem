@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::{declare_enums, declare_structs};
+use crate::{declare_enums, declare_structs, declare_unions};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -23,6 +23,7 @@ pub const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024) * 1_0
 pub const FUEL_PER_GCU: u64 = 1_000_000;
 pub const DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS: usize = 6;
 pub const EFFECTIVELY_UNLIMITED_STORAGE_LIMIT: u64 = 10_000_000_000_000_000;
+pub const EFFECTIVELY_UNLIMITED_MEMORY_LIMIT: u64 = 1_000_000_000_000_000_000;
 const PERIOD_FORMAT_ERROR: &str = "period must use YYYY-MM format";
 
 declare_enums! {
@@ -182,6 +183,22 @@ impl Display for MonthlyStorageUnit {
 }
 
 declare_structs! {
+    #[derive(Copy, Eq)]
+    /// A finite customer-visible resource limit.
+    pub struct FiniteResourceLimit {
+        pub value: u64,
+    }
+
+    #[derive(Copy, Eq)]
+    /// A customer-visible resource limit with no finite bound.
+    pub struct UnlimitedResourceLimit {}
+
+    #[derive(Copy, Eq)]
+    /// A storage limit that cannot be enforced because managed filesystem quotas are unavailable.
+    pub struct DisabledResourceLimit {
+        pub reason: StorageLimitDisabledReason,
+    }
+
     #[derive(Copy, Eq, PartialOrd, Ord)]
     pub struct AccountUsagePeriod {
         pub year: i32,
@@ -309,21 +326,15 @@ declare_structs! {
     #[derive(Eq)]
     #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
     pub struct StorageLimit {
-        pub enabled: bool,
         pub unit: PerAgentLimitUnit,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub active_admin_grant: Option<AdminResourceGrant>,
+        pub effective_value: StorageResourceLimitValue,
+        pub plan_default: ResourceLimitValue,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub effective_value: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub plan_default: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub override_value: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub ceiling: Option<u64>,
+        pub override_value: Option<ResourceLimitValue>,
+        pub ceiling: ResourceLimitValue,
         pub user_configurable: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub disabled_reason: Option<StorageLimitDisabledReason>,
     }
 
     pub struct SetStorageLimit {
@@ -336,10 +347,11 @@ declare_structs! {
         pub unit: PerAgentLimitUnit,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub active_admin_grant: Option<AdminResourceGrant>,
-        pub effective_value: u64,
-        pub plan_default: u64,
-        pub override_value: Option<u64>,
-        pub ceiling: u64,
+        pub effective_value: ResourceLimitValue,
+        pub plan_default: ResourceLimitValue,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub override_value: Option<ResourceLimitValue>,
+        pub ceiling: ResourceLimitValue,
         pub user_configurable: bool,
     }
 
@@ -351,6 +363,7 @@ declare_structs! {
     #[derive(Eq)]
     pub struct AdminResourceGrant {
         pub dimension: AdminResourceGrantDimension,
+        /// The finite grant amount in the unit associated with `dimension`.
         pub value: u64,
         pub reason: AdminResourceGrantReason,
         pub actor_account_id: AccountId,
@@ -375,10 +388,116 @@ declare_structs! {
         pub reason: AdminResourceGrantReason,
         pub actor_account_id: AccountId,
         pub changed_at: DateTime<Utc>,
+        /// The previous finite amount in the unit associated with `dimension`.
         pub old_value: u64,
-        pub new_value: u64,
+        pub new_value: AdminResourceGrantChangeValue,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub expires_at: Option<DateTime<Utc>>,
+    }
+}
+
+declare_unions! {
+    #[derive(Copy, Eq)]
+    #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+    #[serde(rename_all = "camelCase")]
+    pub enum ResourceLimitValue {
+        Finite(FiniteResourceLimit),
+        Unlimited(UnlimitedResourceLimit),
+    }
+
+    #[derive(Copy, Eq)]
+    #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+    #[serde(rename_all = "camelCase")]
+    /// A customer-visible storage limit, including unavailable managed filesystem quotas.
+    pub enum StorageResourceLimitValue {
+        Finite(FiniteResourceLimit),
+        Unlimited(UnlimitedResourceLimit),
+        Disabled(DisabledResourceLimit),
+    }
+
+    #[derive(Copy, Eq)]
+    #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+    #[serde(rename_all = "camelCase")]
+    pub enum AdminResourceGrantChangeValue {
+        Finite(FiniteResourceLimit),
+        Unlimited(UnlimitedResourceLimit),
+        Disabled(DisabledResourceLimit),
+    }
+}
+
+impl ResourceLimitValue {
+    pub fn from_memory_value(value: u64) -> Self {
+        if value == u64::MAX || value == EFFECTIVELY_UNLIMITED_MEMORY_LIMIT {
+            Self::Unlimited(UnlimitedResourceLimit {})
+        } else {
+            Self::finite(value)
+        }
+    }
+
+    pub fn from_storage_value(value: u64) -> Self {
+        if value >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT {
+            Self::Unlimited(UnlimitedResourceLimit {})
+        } else {
+            Self::finite(value)
+        }
+    }
+
+    fn finite(value: u64) -> Self {
+        Self::Finite(FiniteResourceLimit { value })
+    }
+}
+
+impl Display for ResourceLimitValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Finite(value) => Display::fmt(&value.value, f),
+            Self::Unlimited(_) => f.write_str("unlimited"),
+        }
+    }
+}
+
+impl StorageResourceLimitValue {
+    pub fn from_storage_value(value: u64) -> Self {
+        match ResourceLimitValue::from_storage_value(value) {
+            ResourceLimitValue::Finite(value) => Self::Finite(value),
+            ResourceLimitValue::Unlimited(value) => Self::Unlimited(value),
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self::Disabled(DisabledResourceLimit {
+            reason: StorageLimitDisabledReason::ManagedFilesystemUnavailable,
+        })
+    }
+}
+
+impl AdminResourceGrantChangeValue {
+    pub fn from_raw(dimension: AdminResourceGrantDimension, value: u64) -> Self {
+        match dimension {
+            AdminResourceGrantDimension::MaxMemoryPerAgent
+                if value == u64::MAX || value == EFFECTIVELY_UNLIMITED_MEMORY_LIMIT =>
+            {
+                Self::Unlimited(UnlimitedResourceLimit {})
+            }
+            AdminResourceGrantDimension::MaxStoragePerAgent
+                if value >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT =>
+            {
+                Self::Disabled(DisabledResourceLimit {
+                    reason: StorageLimitDisabledReason::ManagedFilesystemUnavailable,
+                })
+            }
+            _ => Self::Finite(FiniteResourceLimit { value }),
+        }
+    }
+}
+
+impl Display for StorageResourceLimitValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Finite(value) => Display::fmt(&value.value, f),
+            Self::Unlimited(_) => f.write_str("unlimited"),
+            Self::Disabled(_) => f.write_str("disabled"),
+        }
     }
 }
 
@@ -457,34 +576,27 @@ impl StorageLimit {
                 .filter(|_| user_configurable)
                 .filter(|value| (plan_default..=ceiling).contains(value));
             Self {
-                enabled: true,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: Some(override_value.unwrap_or(plan_default)),
-                plan_default: Some(plan_default),
-                override_value,
-                ceiling: Some(ceiling),
+                effective_value: StorageResourceLimitValue::from_storage_value(
+                    override_value.unwrap_or(plan_default),
+                ),
+                plan_default: ResourceLimitValue::from_storage_value(plan_default),
+                override_value: override_value.map(ResourceLimitValue::from_storage_value),
+                ceiling: ResourceLimitValue::from_storage_value(ceiling),
                 user_configurable,
-                disabled_reason: None,
             }
         } else {
             Self {
-                enabled: false,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: None,
-                plan_default: None,
+                effective_value: StorageResourceLimitValue::disabled(),
+                plan_default: ResourceLimitValue::from_storage_value(plan_default),
                 override_value: None,
-                ceiling: None,
+                ceiling: ResourceLimitValue::from_storage_value(ceiling),
                 user_configurable: false,
-                disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
             }
         }
-    }
-
-    pub fn executor_value(&self) -> u64 {
-        self.effective_value
-            .unwrap_or(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
     }
 }
 
@@ -556,13 +668,14 @@ impl poem_openapi::types::Example for AccountResourcePolicy {
                     behavior: Some(MonthlyLimitBehavior::HardLimit),
                 },
             },
-            max_memory_per_agent: MemoryLimit::resolve(
+            max_memory_per_agent: MemoryLimit::resolve(u64::MAX, None, u64::MAX, false),
+            max_storage_per_agent: StorageLimit::resolve(
+                false,
                 1024 * 1024 * 1024,
                 None,
                 10 * 1024 * 1024 * 1024,
-                true,
+                false,
             ),
-            max_storage_per_agent: <StorageLimit as poem_openapi::types::Example>::example(),
         }
     }
 }
@@ -590,7 +703,10 @@ impl poem_openapi::types::Example for AdminResourceGrantChange {
             changed_at: DateTime::from_timestamp(1_700_000_000, 0)
                 .expect("example timestamp is valid"),
             old_value: 5,
-            new_value: 10,
+            new_value: AdminResourceGrantChangeValue::from_raw(
+                AdminResourceGrantDimension::MonthlyComputeGcu,
+                10,
+            ),
             expires_at: None,
         }
     }
@@ -606,7 +722,8 @@ impl poem_openapi::types::Example for StorageLimit {
             10 * 1024 * 1024 * 1024,
             true,
         );
-        limit.effective_value = Some(2 * 1024 * 1024 * 1024);
+        limit.effective_value =
+            StorageResourceLimitValue::from_storage_value(2 * 1024 * 1024 * 1024);
         limit.active_admin_grant = Some(AdminResourceGrant {
             dimension: AdminResourceGrantDimension::MaxStoragePerAgent,
             value: 2 * 1024 * 1024 * 1024,
@@ -624,7 +741,7 @@ impl poem_openapi::types::Example for StorageLimit {
 impl poem_openapi::types::Example for MemoryLimit {
     fn example() -> Self {
         let mut limit = Self::resolve(1024 * 1024 * 1024, None, 10 * 1024 * 1024 * 1024, true);
-        limit.effective_value = 2 * 1024 * 1024 * 1024;
+        limit.effective_value = ResourceLimitValue::from_memory_value(2 * 1024 * 1024 * 1024);
         limit.active_admin_grant = Some(AdminResourceGrant {
             dimension: AdminResourceGrantDimension::MaxMemoryPerAgent,
             value: 2 * 1024 * 1024 * 1024,
@@ -651,10 +768,12 @@ impl MemoryLimit {
         Self {
             unit: PerAgentLimitUnit::Bytes,
             active_admin_grant: None,
-            effective_value: override_value.unwrap_or(plan_default),
-            plan_default,
-            override_value,
-            ceiling,
+            effective_value: ResourceLimitValue::from_memory_value(
+                override_value.unwrap_or(plan_default),
+            ),
+            plan_default: ResourceLimitValue::from_memory_value(plan_default),
+            override_value: override_value.map(ResourceLimitValue::from_memory_value),
+            ceiling: ResourceLimitValue::from_memory_value(ceiling),
             user_configurable,
         }
     }
@@ -729,13 +848,15 @@ fn format_metered(value: impl Display, unit: &str, status: MeteringStatus) -> St
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, AdminResourceGrantReason,
-        BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit,
-        MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
-        MonthlyPlanAmountError, MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode,
-        MonthlyUsageModeTransitionSource, PERIOD_FORMAT_ERROR, PerAgentLimitUnit,
-        ResolvedMonthlyPlanAmounts, SetAdminResourceGrant, StorageLimit,
-        StorageLimitDisabledReason, byte_seconds_to_gb_month, fuel_to_gcu,
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
+        AdminResourceGrantChangeValue, AdminResourceGrantDimension, AdminResourceGrantReason,
+        BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+        EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit, MeteringStatus,
+        MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyPlanAmountError,
+        MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+        PERIOD_FORMAT_ERROR, PerAgentLimitUnit, ResolvedMonthlyPlanAmounts, ResourceLimitValue,
+        SetAdminResourceGrant, StorageLimit, StorageResourceLimitValue, byte_seconds_to_gb_month,
+        fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -777,10 +898,10 @@ mod tests {
             MemoryLimit {
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: 150,
-                plan_default: 100,
-                override_value: Some(150),
-                ceiling: 200,
+                effective_value: ResourceLimitValue::from_memory_value(150),
+                plan_default: ResourceLimitValue::from_memory_value(100),
+                override_value: Some(ResourceLimitValue::from_memory_value(150)),
+                ceiling: ResourceLimitValue::from_memory_value(200),
                 user_configurable: true,
             }
         );
@@ -797,10 +918,10 @@ mod tests {
             MemoryLimit {
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: 100,
-                plan_default: 100,
+                effective_value: ResourceLimitValue::from_memory_value(100),
+                plan_default: ResourceLimitValue::from_memory_value(100),
                 override_value: None,
-                ceiling: 200,
+                ceiling: ResourceLimitValue::from_memory_value(200),
                 user_configurable: false,
             }
         );
@@ -811,15 +932,13 @@ mod tests {
         assert_eq!(
             StorageLimit::resolve(true, 100, Some(150), 200, true),
             StorageLimit {
-                enabled: true,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: Some(150),
-                plan_default: Some(100),
-                override_value: Some(150),
-                ceiling: Some(200),
+                effective_value: StorageResourceLimitValue::from_storage_value(150),
+                plan_default: ResourceLimitValue::from_storage_value(100),
+                override_value: Some(ResourceLimitValue::from_storage_value(150)),
+                ceiling: ResourceLimitValue::from_storage_value(200),
                 user_configurable: true,
-                disabled_reason: None,
             }
         );
         assert_eq!(
@@ -833,38 +952,33 @@ mod tests {
         assert_eq!(
             StorageLimit::resolve(true, 100, Some(150), 200, false),
             StorageLimit {
-                enabled: true,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: Some(100),
-                plan_default: Some(100),
+                effective_value: StorageResourceLimitValue::from_storage_value(100),
+                plan_default: ResourceLimitValue::from_storage_value(100),
                 override_value: None,
-                ceiling: Some(200),
+                ceiling: ResourceLimitValue::from_storage_value(200),
                 user_configurable: false,
-                disabled_reason: None,
             }
         );
     }
 
     #[test]
-    fn disabled_storage_limit_hides_values_and_resolves_to_unlimited_for_executor() {
+    fn disabled_storage_limit_hides_override_and_configurability() {
         let limit = StorageLimit::resolve(false, 100, Some(300), 200, true);
 
         assert_eq!(
             limit,
             StorageLimit {
-                enabled: false,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: None,
-                plan_default: None,
+                effective_value: StorageResourceLimitValue::disabled(),
+                plan_default: ResourceLimitValue::from_storage_value(100),
                 override_value: None,
-                ceiling: None,
+                ceiling: ResourceLimitValue::from_storage_value(200),
                 user_configurable: false,
-                disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
             }
         );
-        assert_eq!(limit.executor_value(), EFFECTIVELY_UNLIMITED_STORAGE_LIMIT);
     }
 
     #[cfg(feature = "full")]
@@ -875,7 +989,6 @@ mod tests {
         assert_eq!(
             <StorageLimit as poem_openapi::types::ToJSON>::to_json(&example),
             Some(serde_json::json!({
-                "enabled": true,
                 "unit": "bytes",
                 "activeAdminGrant": {
                     "dimension": "maxStoragePerAgent",
@@ -884,19 +997,32 @@ mod tests {
                     "actorAccountId": "00000000-0000-0000-0000-000000000002",
                     "grantedAt": "2023-11-14T22:13:20+00:00",
                 },
-                "effectiveValue": 2 * 1024 * 1024 * 1024_u64,
-                "planDefault": 1024 * 1024 * 1024_u64,
-                "ceiling": 10 * 1024 * 1024 * 1024_u64,
+                "effectiveValue": {
+                    "type": "finite",
+                    "value": 2 * 1024 * 1024 * 1024_u64,
+                },
+                "planDefault": {
+                    "type": "finite",
+                    "value": 1024 * 1024 * 1024_u64,
+                },
+                "ceiling": {
+                    "type": "finite",
+                    "value": 10 * 1024 * 1024 * 1024_u64,
+                },
                 "userConfigurable": true,
             }))
         );
 
         let disabled = StorageLimit::resolve(false, 1, Some(2), 3, true);
         let expected = serde_json::json!({
-            "enabled": false,
             "unit": "bytes",
+            "effectiveValue": {
+                "type": "disabled",
+                "reason": "managedFilesystemUnavailable",
+            },
+            "planDefault": { "type": "finite", "value": 1 },
+            "ceiling": { "type": "finite", "value": 3 },
             "userConfigurable": false,
-            "disabledReason": "managedFilesystemUnavailable",
         });
         assert_eq!(
             <StorageLimit as poem_openapi::types::ToJSON>::to_json(&disabled),
@@ -917,8 +1043,119 @@ mod tests {
         );
         assert_eq!(
             json["effectiveValue"],
-            serde_json::json!(2 * 1024 * 1024 * 1024_u64)
+            serde_json::json!({
+                "type": "finite",
+                "value": 2 * 1024 * 1024 * 1024_u64,
+            })
         );
+    }
+
+    #[test]
+    fn resource_limit_values_serialize_without_sentinels() {
+        let finite = ResourceLimitValue::from_memory_value(1024);
+        let unlimited_memory = ResourceLimitValue::from_memory_value(u64::MAX);
+        let effectively_unlimited_memory =
+            ResourceLimitValue::from_memory_value(EFFECTIVELY_UNLIMITED_MEMORY_LIMIT);
+        let unlimited_storage =
+            ResourceLimitValue::from_storage_value(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT);
+        let disabled_storage = StorageResourceLimitValue::disabled();
+
+        assert_eq!(
+            serde_json::to_value(finite).unwrap(),
+            serde_json::json!({ "type": "finite", "value": 1024 })
+        );
+        assert_eq!(
+            serde_json::to_value(unlimited_memory).unwrap(),
+            serde_json::json!({ "type": "unlimited" })
+        );
+        assert_eq!(
+            serde_json::to_value(disabled_storage).unwrap(),
+            serde_json::json!({
+                "type": "disabled",
+                "reason": "managedFilesystemUnavailable",
+            })
+        );
+        assert_eq!(finite.to_string(), "1024");
+        assert_eq!(unlimited_memory.to_string(), "unlimited");
+        assert_eq!(disabled_storage.to_string(), "disabled");
+        assert!(
+            serde_json::from_value::<ResourceLimitValue>(serde_json::json!({
+                "type": "disabled",
+                "reason": "managedFilesystemUnavailable",
+            }))
+            .is_err()
+        );
+        assert!(matches!(
+            effectively_unlimited_memory,
+            ResourceLimitValue::Unlimited(_)
+        ));
+        assert!(
+            !serde_json::to_string(&unlimited_memory)
+                .unwrap()
+                .contains(&u64::MAX.to_string())
+        );
+        assert!(
+            !serde_json::to_string(&unlimited_storage)
+                .unwrap()
+                .contains(&EFFECTIVELY_UNLIMITED_STORAGE_LIMIT.to_string())
+        );
+    }
+
+    #[test]
+    fn admin_grant_change_values_use_one_tagged_representation() {
+        let finite = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MonthlyComputeGcu,
+            10,
+        );
+        let finite_memory = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MaxMemoryPerAgent,
+            10,
+        );
+        let finite_storage = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MaxStoragePerAgent,
+            10,
+        );
+        let effectively_unlimited_memory = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MaxMemoryPerAgent,
+            EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+        );
+        let unlimited_memory = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MaxMemoryPerAgent,
+            u64::MAX,
+        );
+        let disabled = AdminResourceGrantChangeValue::from_raw(
+            AdminResourceGrantDimension::MaxStoragePerAgent,
+            EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+        );
+
+        assert_eq!(
+            serde_json::to_value(finite).unwrap(),
+            serde_json::json!({ "type": "finite", "value": 10 })
+        );
+        for value in [finite_memory, finite_storage] {
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                serde_json::json!({ "type": "finite", "value": 10 })
+            );
+        }
+        for value in [effectively_unlimited_memory, unlimited_memory] {
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                serde_json::json!({ "type": "unlimited" })
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap(),
+            serde_json::json!({
+                "type": "disabled",
+                "reason": "managedFilesystemUnavailable",
+            })
+        );
+        for value in [effectively_unlimited_memory, unlimited_memory, disabled] {
+            let json = serde_json::to_string(&value).unwrap();
+            assert!(!json.contains(&u64::MAX.to_string()));
+            assert!(!json.contains(&EFFECTIVELY_UNLIMITED_STORAGE_LIMIT.to_string()));
+        }
     }
 
     #[cfg(feature = "full")]

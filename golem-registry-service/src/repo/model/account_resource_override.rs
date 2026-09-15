@@ -14,8 +14,9 @@
 
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AdminResourceGrant, AdminResourceGrantChange, AdminResourceGrantDimension,
-    AdminResourceGrantEventType, AdminResourceGrantReason,
+    AdminResourceGrant, AdminResourceGrantChange, AdminResourceGrantChangeValue,
+    AdminResourceGrantDimension, AdminResourceGrantEventType, AdminResourceGrantReason,
+    EFFECTIVELY_UNLIMITED_MEMORY_LIMIT, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
 };
 use golem_service_base::repo::{NumericU64, RepoError, RepoResult, SqlDateTime};
 use uuid::Uuid;
@@ -147,9 +148,11 @@ pub struct AccountResourceOverrideDbRecord {
 
 impl AccountResourceOverrideDbRecord {
     pub fn into_admin_grant(self) -> RepoResult<AdminResourceGrant> {
+        let dimension: AdminResourceGrantDimension = persisted_dimension(&self.dimension)?.into();
+        let value = finite_grant_value(dimension, self.override_value.get())?;
         Ok(AdminResourceGrant {
-            dimension: persisted_dimension(&self.dimension)?.into(),
-            value: self.override_value.get(),
+            dimension,
+            value,
             reason: persisted_admin_reason(&self.reason)?,
             actor_account_id: AccountId(self.created_by),
             granted_at: self.created_at.into_utc(),
@@ -173,18 +176,44 @@ pub struct AccountResourceOverrideEventRecord {
 
 impl AccountResourceOverrideEventRecord {
     pub fn into_public(self) -> RepoResult<AdminResourceGrantChange> {
+        let dimension: AdminResourceGrantDimension = persisted_dimension(&self.dimension)?.into();
+        let new_value = self.new_value.get();
         Ok(AdminResourceGrantChange {
             account_id: AccountId(self.account_id),
-            dimension: persisted_dimension(&self.dimension)?.into(),
+            dimension,
             event_type: persisted_event_type(&self.event_type)?,
             reason: persisted_admin_reason(&self.reason)?,
             actor_account_id: AccountId(self.actor_account_id),
             changed_at: self.changed_at.into_utc(),
-            old_value: self.old_value.get(),
-            new_value: self.new_value.get(),
+            old_value: finite_grant_value(dimension, self.old_value.get())?,
+            new_value: AdminResourceGrantChangeValue::from_raw(dimension, new_value),
             expires_at: self.expires_at.map(SqlDateTime::into_utc),
         })
     }
+}
+
+fn finite_grant_value(dimension: AdminResourceGrantDimension, value: u64) -> RepoResult<u64> {
+    let is_sentinel = match dimension {
+        AdminResourceGrantDimension::MaxMemoryPerAgent => is_unlimited_memory(value),
+        AdminResourceGrantDimension::MaxStoragePerAgent => {
+            value >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
+        }
+        AdminResourceGrantDimension::MonthlyComputeGcu
+        | AdminResourceGrantDimension::MonthlyMemoryGbSeconds
+        | AdminResourceGrantDimension::MonthlyDurableStorageGbMonth
+        | AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth => false,
+    };
+    if is_sentinel {
+        Err(RepoError::InternalError(anyhow::anyhow!(
+            "Persisted {dimension} admin grant contains an unlimited sentinel"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+fn is_unlimited_memory(value: u64) -> bool {
+    value == u64::MAX || value == EFFECTIVELY_UNLIMITED_MEMORY_LIMIT
 }
 
 pub fn persisted_dimension(value: &str) -> RepoResult<AccountResourceOverrideDimension> {
@@ -238,6 +267,10 @@ fn persisted_event_type(value: &str) -> RepoResult<AdminResourceGrantEventType> 
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use golem_common::model::account_usage::{
+        DisabledResourceLimit, FiniteResourceLimit, StorageLimitDisabledReason,
+        UnlimitedResourceLimit,
+    };
     use test_r::test;
 
     fn timestamp(seconds: i64) -> DateTime<Utc> {
@@ -376,6 +409,20 @@ mod tests {
         assert_eq!(grant.granted_at, granted_at);
         assert_eq!(grant.expires_at, Some(expires_at));
 
+        for value in [EFFECTIVELY_UNLIMITED_MEMORY_LIMIT, u64::MAX] {
+            let invalid_grant = AccountResourceOverrideDbRecord {
+                account_id,
+                dimension: "max_memory_per_worker".to_string(),
+                override_value: NumericU64::new(value),
+                reason: "support".to_string(),
+                expires_at: None,
+                created_by: actor_account_id,
+                created_at: SqlDateTime::new(granted_at),
+            }
+            .into_admin_grant();
+            assert!(invalid_grant.is_err());
+        }
+
         let change = AccountResourceOverrideEventRecord {
             account_id,
             dimension: "monthly_compute_gcu".to_string(),
@@ -403,7 +450,64 @@ mod tests {
         assert_eq!(change.actor_account_id, AccountId(actor_account_id));
         assert_eq!(change.changed_at, granted_at);
         assert_eq!(change.old_value, 10);
-        assert_eq!(change.new_value, 20);
+        assert_eq!(
+            change.new_value,
+            AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value: 20 })
+        );
         assert_eq!(change.expires_at, Some(expires_at));
+
+        let restored_unlimited_memory = AccountResourceOverrideEventRecord {
+            dimension: "max_memory_per_worker".to_string(),
+            event_type: "override_cleared".to_string(),
+            old_value: NumericU64::new(512),
+            new_value: NumericU64::new(u64::MAX),
+            ..AccountResourceOverrideEventRecord {
+                account_id,
+                dimension: String::new(),
+                event_type: String::new(),
+                reason: "support".to_string(),
+                actor_account_id,
+                changed_at: SqlDateTime::new(granted_at),
+                old_value: NumericU64::new(0),
+                new_value: NumericU64::new(0),
+                expires_at: None,
+            }
+        }
+        .into_public()
+        .unwrap();
+        assert_eq!(
+            restored_unlimited_memory.new_value,
+            AdminResourceGrantChangeValue::Unlimited(UnlimitedResourceLimit {})
+        );
+        assert!(
+            !serde_json::to_string(&restored_unlimited_memory)
+                .unwrap()
+                .contains(&u64::MAX.to_string())
+        );
+
+        let restored_disabled_storage = AccountResourceOverrideEventRecord {
+            account_id,
+            dimension: "max_disk_space_per_worker".to_string(),
+            event_type: "override_expired".to_string(),
+            reason: "support".to_string(),
+            actor_account_id,
+            changed_at: SqlDateTime::new(granted_at),
+            old_value: NumericU64::new(512),
+            new_value: NumericU64::new(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT),
+            expires_at: None,
+        }
+        .into_public()
+        .unwrap();
+        assert_eq!(
+            restored_disabled_storage.new_value,
+            AdminResourceGrantChangeValue::Disabled(DisabledResourceLimit {
+                reason: StorageLimitDisabledReason::ManagedFilesystemUnavailable,
+            })
+        );
+        assert!(
+            !serde_json::to_string(&restored_disabled_storage)
+                .unwrap()
+                .contains(&EFFECTIVELY_UNLIMITED_STORAGE_LIMIT.to_string())
+        );
     }
 }

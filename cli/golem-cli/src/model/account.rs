@@ -21,7 +21,7 @@ use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, AccountUsageMetrics, MemoryLimit, MeteringStatus,
-    MonthlyLimitBehavior,
+    MonthlyLimitBehavior, ResourceLimitValue, StorageResourceLimitValue,
 };
 use golem_common::model::permission_share::PermissionShareId;
 use serde::{Deserialize, Serialize};
@@ -337,15 +337,20 @@ impl MessageWithFields for AccountLimitsView {
             self.policy.monthly.ephemeral_storage_gb_month.unit,
             self.policy.monthly.ephemeral_storage_gb_month.behavior,
         );
-        if limit.enabled {
+        if let StorageResourceLimitValue::Disabled(disabled) = limit.effective_value {
+            fields.field("Max storage per agent", &"disabled").field(
+                "Max storage per agent disabled reason",
+                &disabled.reason.to_string(),
+            );
+        } else {
             fields
                 .field(
                     "Max storage per agent",
-                    &format_optional_limit(limit.effective_value, &limit.unit.to_string()),
+                    &format_storage_limit(&limit.effective_value, &limit.unit.to_string()),
                 )
                 .field(
                     "Max storage per agent plan default",
-                    &format_optional_limit(limit.plan_default, &limit.unit.to_string()),
+                    &format_limit(&limit.plan_default, &limit.unit.to_string()),
                 )
                 .field(
                     "Max storage per agent override",
@@ -353,7 +358,7 @@ impl MessageWithFields for AccountLimitsView {
                 )
                 .field(
                     "Max storage per agent ceiling",
-                    &format_optional_limit(limit.ceiling, &limit.unit.to_string()),
+                    &format_limit(&limit.ceiling, &limit.unit.to_string()),
                 )
                 .field(
                     "Max storage per agent user configurable",
@@ -364,14 +369,6 @@ impl MessageWithFields for AccountLimitsView {
                 "Max storage per agent",
                 limit.active_admin_grant.as_ref(),
                 &limit.unit.to_string(),
-            );
-        } else {
-            fields.field("Max storage per agent", &"disabled").field(
-                "Max storage per agent disabled reason",
-                &limit
-                    .disabled_reason
-                    .map(|reason| reason.to_string())
-                    .unwrap_or_else(|| "unspecified".to_string()),
             );
         }
         add_memory_limit_fields(
@@ -471,30 +468,42 @@ fn add_admin_grant_fields(
     }
 }
 
-fn format_optional_limit(value: Option<u64>, unit: &str) -> String {
+fn format_optional_limit(value: Option<ResourceLimitValue>, unit: &str) -> String {
     value
-        .map(|value| format!("{value} {unit}"))
+        .map(|value| format_limit(&value, unit))
         .unwrap_or_else(|| "(none)".to_string())
+}
+
+fn format_limit(value: &ResourceLimitValue, unit: &str) -> String {
+    match value {
+        ResourceLimitValue::Finite(value) => format!("{} {unit}", value.value),
+        ResourceLimitValue::Unlimited(_) => "unlimited".to_string(),
+    }
+}
+
+fn format_storage_limit(value: &StorageResourceLimitValue, unit: &str) -> String {
+    match value {
+        StorageResourceLimitValue::Finite(value) => format!("{} {unit}", value.value),
+        StorageResourceLimitValue::Unlimited(_) => "unlimited".to_string(),
+        StorageResourceLimitValue::Disabled(_) => "disabled".to_string(),
+    }
 }
 
 fn add_memory_limit_fields(fields: &mut FieldsBuilder, label: &str, limit: &MemoryLimit) {
     let unit = limit.unit.to_string();
     fields
-        .field(label, &format!("{} {unit}", limit.effective_value))
+        .field(label, &format_limit(&limit.effective_value, &unit))
         .field(
             &format!("{label} plan default"),
-            &format!("{} {unit}", limit.plan_default),
+            &format_limit(&limit.plan_default, &unit),
         )
         .field(
             &format!("{label} override"),
-            &limit
-                .override_value
-                .map(|value| format!("{value} {unit}"))
-                .unwrap_or_else(|| "(none)".to_string()),
+            &format_optional_limit(limit.override_value, &unit),
         )
         .field(
             &format!("{label} ceiling"),
-            &format!("{} {unit}", limit.ceiling),
+            &format_limit(&limit.ceiling, &unit),
         )
         .field(
             &format!("{label} user configurable"),
@@ -656,14 +665,18 @@ impl StructuredOutput for PermissionShareListView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields};
+    use super::{
+        ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields, format_limit,
+        format_optional_limit, format_storage_limit,
+    };
     use chrono::{TimeZone, Utc};
     use golem_common::model::account_usage::{
         AccountResourcePolicy, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
         AdminResourceGrant, AdminResourceGrantDimension, AdminResourceGrantReason, MemoryLimit,
         MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit, MonthlyLimitBehavior,
         MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits, MonthlyStorageLimit,
-        MonthlyStorageUnit, MonthlyUsageMode, PerAgentLimitUnit, StorageLimit,
+        MonthlyStorageUnit, MonthlyUsageMode, PerAgentLimitUnit, ResourceLimitValue, StorageLimit,
+        StorageResourceLimitValue,
     };
     use proptest::prelude::*;
     use test_r::test;
@@ -831,15 +844,13 @@ mod tests {
                 },
             },
             max_storage_per_agent: StorageLimit {
-                enabled: true,
                 unit: PerAgentLimitUnit::Bytes,
                 active_admin_grant: None,
-                effective_value: Some(10),
-                plan_default: Some(5),
+                effective_value: StorageResourceLimitValue::from_storage_value(10),
+                plan_default: ResourceLimitValue::from_storage_value(5),
                 override_value: None,
-                ceiling: Some(20),
+                ceiling: ResourceLimitValue::from_storage_value(20),
                 user_configurable: true,
-                disabled_reason: None,
             },
             max_memory_per_agent: MemoryLimit {
                 unit: PerAgentLimitUnit::Bytes,
@@ -853,10 +864,10 @@ mod tests {
                     granted_at: Utc.with_ymd_and_hms(2026, 4, 1, 2, 3, 4).unwrap(),
                     expires_at: None,
                 }),
-                effective_value: 30,
-                plan_default: 25,
-                override_value: Some(30),
-                ceiling: 40,
+                effective_value: ResourceLimitValue::from_memory_value(30),
+                plan_default: ResourceLimitValue::from_memory_value(25),
+                override_value: Some(ResourceLimitValue::from_memory_value(30)),
+                ceiling: ResourceLimitValue::from_memory_value(40),
                 user_configurable: true,
             },
         });
@@ -912,6 +923,39 @@ mod tests {
                 "missing field {expected:?} in {fields:?}"
             );
         }
+    }
+
+    #[test]
+    fn special_per_agent_limits_render_without_units() {
+        assert_eq!(format_optional_limit(None, "bytes"), "(none)");
+        assert_eq!(
+            format_optional_limit(Some(ResourceLimitValue::from_memory_value(10)), "bytes"),
+            "10 bytes"
+        );
+        assert_eq!(
+            format_optional_limit(
+                Some(ResourceLimitValue::from_memory_value(u64::MAX)),
+                "bytes",
+            ),
+            "unlimited"
+        );
+        assert_eq!(
+            format_limit(&ResourceLimitValue::from_memory_value(u64::MAX), "bytes"),
+            "unlimited"
+        );
+        assert_eq!(
+            format_storage_limit(
+                &StorageResourceLimitValue::from_storage_value(
+                    golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+                ),
+                "bytes",
+            ),
+            "unlimited"
+        );
+        assert_eq!(
+            format_storage_limit(&StorageResourceLimitValue::disabled(), "bytes"),
+            "disabled"
+        );
     }
 
     proptest! {

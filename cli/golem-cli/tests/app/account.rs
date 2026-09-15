@@ -4,9 +4,9 @@ use chrono::{DateTime, Datelike, Utc};
 use golem_cli::{fs, versions};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, MonthlyLimitBehavior,
-    MonthlyResourceLimits, MonthlyUsageMode, PerAgentLimitUnit, StorageLimit,
-    StorageLimitDisabledReason,
+    AccountUsageMetering, AccountUsagePeriod, EFFECTIVELY_UNLIMITED_MEMORY_LIMIT, MemoryLimit,
+    MeteringStatus, MonthlyLimitBehavior, MonthlyResourceLimits, MonthlyUsageMode,
+    ResourceLimitValue, StorageLimit,
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
@@ -311,17 +311,13 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     );
     assert_eq!(
         limits.max_storage_per_agent,
-        StorageLimit {
-            enabled: false,
-            unit: PerAgentLimitUnit::Bytes,
-            active_admin_grant: None,
-            effective_value: None,
-            plan_default: None,
-            override_value: None,
-            ceiling: None,
-            user_configurable: false,
-            disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
-        }
+        StorageLimit::resolve(
+            false,
+            EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+            None,
+            EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+            false,
+        )
     );
 
     let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
@@ -375,8 +371,20 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits set produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.max_memory_per_agent.effective_value, u64::MAX);
-    assert_eq!(limits.max_memory_per_agent.override_value, Some(u64::MAX));
+    assert!(matches!(
+        limits.max_memory_per_agent.effective_value,
+        ResourceLimitValue::Unlimited(_)
+    ));
+    assert!(matches!(
+        limits.max_memory_per_agent.override_value,
+        Some(ResourceLimitValue::Unlimited(_))
+    ));
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains("Max memory per agent:"));
+    assert!(output.stdout_contains("unlimited"));
+    assert!(!output.stdout_contains("unlimited bytes"));
 
     let output = ctx
         .cli([
@@ -395,7 +403,10 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits unset produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.max_memory_per_agent.effective_value, u64::MAX);
+    assert!(matches!(
+        limits.max_memory_per_agent.effective_value,
+        ResourceLimitValue::Unlimited(_)
+    ));
     assert_eq!(limits.max_memory_per_agent.override_value, None);
 }
 

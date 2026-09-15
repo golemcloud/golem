@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::account_usage::UsageType;
+use golem_common::model::account_usage::{ResourceLimitValue, StorageResourceLimitValue};
 use golem_common::model::plan::{Plan, PlanId, PlanName};
 use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
@@ -86,15 +87,29 @@ impl From<PlanRecord> for Plan {
             monthly_durable_storage_gb_month: value.monthly_durable_storage_gb_month.get(),
             monthly_ephemeral_storage_gb_month: value.monthly_ephemeral_storage_gb_month.get(),
             overage_allowed_by_plan: value.overage_eligible,
-            max_memory_per_agent: value.max_memory_per_worker.get(),
-            max_memory_per_agent_ceiling: value.max_memory_per_worker_ceiling.get(),
+            max_memory_per_agent: ResourceLimitValue::from_memory_value(
+                value.max_memory_per_worker.get(),
+            ),
+            max_memory_per_agent_ceiling: ResourceLimitValue::from_memory_value(
+                value.max_memory_per_worker_ceiling.get(),
+            ),
             max_memory_per_agent_user_configurable: value.max_memory_per_worker_user_configurable,
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
-            max_storage_per_agent_enabled: value.max_disk_space_per_worker_enabled,
-            max_storage_per_agent: value.max_disk_space_per_worker.get(),
-            max_storage_per_agent_ceiling: value.max_disk_space_per_worker_ceiling.get(),
+            max_storage_per_agent: if value.max_disk_space_per_worker_enabled {
+                StorageResourceLimitValue::from_storage_value(value.max_disk_space_per_worker.get())
+            } else {
+                StorageResourceLimitValue::disabled()
+            },
+            max_storage_per_agent_ceiling: if value.max_disk_space_per_worker_enabled {
+                StorageResourceLimitValue::from_storage_value(
+                    value.max_disk_space_per_worker_ceiling.get(),
+                )
+            } else {
+                StorageResourceLimitValue::disabled()
+            },
             max_storage_per_agent_user_configurable: value
-                .max_disk_space_per_worker_user_configurable,
+                .max_disk_space_per_worker_user_configurable
+                && value.max_disk_space_per_worker_enabled,
             per_invocation_http_call_limit: value.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit.get(),
             monthly_http_call_limit: value.monthly_http_call_limit.get(),

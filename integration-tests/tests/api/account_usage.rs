@@ -22,11 +22,13 @@ use golem_client::api::{
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
-    AdminResourceGrantReason, BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
-    MemoryLimit, MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
-    MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource, PerAgentLimitUnit,
+    AccountUsagePeriod, AdminResourceGrantChangeValue, AdminResourceGrantDimension,
+    AdminResourceGrantEventType, AdminResourceGrantReason, BYTE_SECONDS_PER_GB_MONTH,
+    EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FiniteResourceLimit, MemoryLimit, MeteringStatus,
+    MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit,
+    MonthlyUsageMode, MonthlyUsageModeTransitionSource, PerAgentLimitUnit, ResourceLimitValue,
     SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
+    StorageResourceLimitValue,
 };
 use golem_common::model::auth::TokenCreation;
 use golem_service_base::clients::registry::{
@@ -288,11 +290,14 @@ async fn account_usage_reports_all_customer_dimensions(
     );
     assert_eq!(
         limits.max_memory_per_agent.effective_value,
-        1024 * 1024 * 1024
+        ResourceLimitValue::from_memory_value(1024 * 1024 * 1024)
     );
     assert_eq!(limits.max_memory_per_agent.unit, PerAgentLimitUnit::Bytes);
     assert_eq!(limits.max_storage_per_agent.unit, PerAgentLimitUnit::Bytes);
-    assert!(!limits.max_storage_per_agent.enabled);
+    assert!(matches!(
+        limits.max_storage_per_agent.effective_value,
+        StorageResourceLimitValue::Disabled(_)
+    ));
 
     let historical_period = previous_period(usage.usage.period);
     let historical_as_of =
@@ -727,15 +732,13 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
 
     let client = deps.registry_service().client(&user.token).await;
     let expected_default = StorageLimit {
-        enabled: true,
         unit: PerAgentLimitUnit::Bytes,
         active_admin_grant: None,
-        effective_value: Some(5),
-        plan_default: Some(5),
+        effective_value: StorageResourceLimitValue::from_storage_value(5),
+        plan_default: ResourceLimitValue::from_storage_value(5),
         override_value: None,
-        ceiling: Some(20),
+        ceiling: ResourceLimitValue::from_storage_value(20),
         user_configurable: true,
-        disabled_reason: None,
     };
     assert_eq!(
         client
@@ -746,8 +749,8 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     );
 
     let expected_override = StorageLimit {
-        effective_value: Some(12),
-        override_value: Some(12),
+        effective_value: StorageResourceLimitValue::from_storage_value(12),
+        override_value: Some(ResourceLimitValue::from_storage_value(12)),
         ..expected_default.clone()
     };
     assert_eq!(
@@ -760,10 +763,10 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     let expected_max_memory = MemoryLimit {
         unit: PerAgentLimitUnit::Bytes,
         active_admin_grant: None,
-        effective_value: 10_000_000_000_000_000,
-        plan_default: 10_000_000_000_000_000,
+        effective_value: ResourceLimitValue::from_memory_value(10_000_000_000_000_000),
+        plan_default: ResourceLimitValue::from_memory_value(10_000_000_000_000_000),
         override_value: None,
-        ceiling: 20_000_000_000_000_000,
+        ceiling: ResourceLimitValue::from_memory_value(20_000_000_000_000_000),
         user_configurable: true,
     };
     assert_eq!(
@@ -783,7 +786,9 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
         .await?;
     assert_eq!(
         max_memory_override.override_value,
-        Some(12_000_000_000_000_000)
+        Some(ResourceLimitValue::from_memory_value(
+            12_000_000_000_000_000
+        ))
     );
     assert_eq!(
         client
@@ -911,6 +916,26 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let user_client = deps.registry_service().client(&user.token).await;
+    registry_client(deps)
+        .batch_update_resource_usage(HashMap::from([(
+            user.account_id,
+            ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
+                monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
+                fuel_delta: 0,
+                http_call_count_delta: 0,
+                rpc_call_count_delta: 0,
+                durable_storage_byte_seconds_delta: 0,
+                ephemeral_storage_byte_seconds_delta: 0,
+                memory_gb_seconds_delta: 0,
+                metering: ResourceUsageMetering::all_enabled(),
+            },
+        )]))
+        .await?;
     let dimension = AdminResourceGrantDimension::MonthlyComputeGcu;
     let request = SetAdminResourceGrant {
         value: 9,
@@ -964,7 +989,10 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
     assert_eq!(granted.reason, AdminResourceGrantReason::Support);
     assert_eq!(granted.actor_account_id, admin.account_id);
     assert_eq!(granted.old_value, 5);
-    assert_eq!(granted.new_value, 9);
+    assert_eq!(
+        granted.new_value,
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value: 9 })
+    );
     assert_eq!(granted.expires_at, None);
 
     let granted_limits = user_client.get_account_limits(&user.account_id.0).await?;
@@ -994,7 +1022,10 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
     );
     assert_eq!(cleared.actor_account_id, admin.account_id);
     assert_eq!(cleared.old_value, 9);
-    assert_eq!(cleared.new_value, 5);
+    assert_eq!(
+        cleared.new_value,
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value: 5 })
+    );
 
     let cleared_limits = user_client.get_account_limits(&user.account_id.0).await?;
     assert_eq!(

@@ -144,13 +144,16 @@ impl AccountResourceOverrideService {
         auth: &AuthCtx,
     ) -> Result<StorageLimit, AccountResourceOverrideError> {
         self.authorize_owner(account_id, auth).await?;
-        let plan = self.account_service.get_plan(account_id, auth).await?;
-        if !plan.max_storage_per_agent_enabled {
+        let plan = self
+            .account_service
+            .get_plan_record(account_id, auth)
+            .await?;
+        if !plan.max_disk_space_per_worker_enabled {
             return Err(AccountResourceOverrideError::FeatureDisabled(
                 "Maximum storage per agent",
             ));
         }
-        if !plan.max_storage_per_agent_user_configurable {
+        if !plan.max_disk_space_per_worker_user_configurable {
             return Err(AccountResourceOverrideError::NotUserConfigurable(
                 "Maximum storage per agent",
             ));
@@ -231,7 +234,7 @@ impl AccountResourceOverrideService {
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
         let plan = self
             .account_service
-            .get_plan(account_id, &AuthCtx::System)
+            .get_plan_record(account_id, &AuthCtx::System)
             .await?;
         let override_value = self
             .repo
@@ -249,13 +252,16 @@ impl AccountResourceOverrideService {
             .into_iter()
             .find(|grant| grant.dimension == AdminResourceGrantDimension::MaxMemoryPerAgent);
         let mut limit = MemoryLimit::resolve(
-            plan.max_memory_per_agent,
+            plan.max_memory_per_worker.get(),
             override_value,
-            plan.max_memory_per_agent_ceiling,
-            plan.max_memory_per_agent_user_configurable,
+            plan.max_memory_per_worker_ceiling.get(),
+            plan.max_memory_per_worker_user_configurable,
         );
         if let Some(grant) = admin_grant {
-            limit.effective_value = grant.value;
+            limit.effective_value =
+                golem_common::model::account_usage::ResourceLimitValue::from_memory_value(
+                    grant.value,
+                );
         }
         Ok(limit)
     }
@@ -266,7 +272,7 @@ impl AccountResourceOverrideService {
     ) -> Result<StorageLimit, AccountResourceOverrideError> {
         let plan = self
             .account_service
-            .get_plan(account_id, &AuthCtx::System)
+            .get_plan_record(account_id, &AuthCtx::System)
             .await?;
         let override_value = self
             .repo
@@ -284,16 +290,19 @@ impl AccountResourceOverrideService {
             .into_iter()
             .find(|grant| grant.dimension == AdminResourceGrantDimension::MaxStoragePerAgent);
         let mut limit = StorageLimit::resolve(
-            plan.max_storage_per_agent_enabled,
-            plan.max_storage_per_agent,
+            plan.max_disk_space_per_worker_enabled,
+            plan.max_disk_space_per_worker.get(),
             override_value,
-            plan.max_storage_per_agent_ceiling,
-            plan.max_storage_per_agent_user_configurable,
+            plan.max_disk_space_per_worker_ceiling.get(),
+            plan.max_disk_space_per_worker_user_configurable,
         );
-        if limit.enabled
+        if plan.max_disk_space_per_worker_enabled
             && let Some(grant) = admin_grant
         {
-            limit.effective_value = Some(grant.value);
+            limit.effective_value =
+                golem_common::model::account_usage::StorageResourceLimitValue::from_storage_value(
+                    grant.value,
+                );
         }
         Ok(limit)
     }

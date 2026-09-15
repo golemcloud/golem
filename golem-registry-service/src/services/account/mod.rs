@@ -22,6 +22,7 @@ use crate::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::model::plan::PlanRecord;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -261,6 +262,23 @@ impl AccountService {
             .get(&account.plan_id, &AuthCtx::System)
             .await
             .map_err(|e| match e {
+                PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
+                other => other.into(),
+            })
+    }
+
+    pub(crate) async fn get_plan_record(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<PlanRecord, AccountError> {
+        let account = self.get(account_id, auth).await?;
+        authorize_account_permission(auth, &account.email, AccountVerb::ViewPlan)?;
+
+        self.plan_service
+            .get_record(&account.plan_id, &AuthCtx::System)
+            .await
+            .map_err(|error| match error {
                 PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
                 other => other.into(),
             })

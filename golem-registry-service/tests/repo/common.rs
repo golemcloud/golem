@@ -21,9 +21,11 @@ use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
-    AdminResourceGrantReason, BYTE_NANOSECONDS_PER_GB_SECOND, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
-    FUEL_PER_GCU, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+    AccountUsagePeriod, AdminResourceGrantChangeValue, AdminResourceGrantDimension,
+    AdminResourceGrantEventType, AdminResourceGrantReason, BYTE_NANOSECONDS_PER_GB_SECOND,
+    DisabledResourceLimit, FUEL_PER_GCU, FiniteResourceLimit, MonthlyUsageMode,
+    MonthlyUsageModeTransitionSource, ResourceLimitValue, StorageLimitDisabledReason,
+    StorageResourceLimitValue,
 };
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -136,6 +138,18 @@ use std::default::Default;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+
+fn finite_limit(value: u64) -> ResourceLimitValue {
+    ResourceLimitValue::from_memory_value(value)
+}
+
+fn finite_storage_limit(value: u64) -> StorageResourceLimitValue {
+    StorageResourceLimitValue::from_storage_value(value)
+}
+
+fn finite_change_value(value: u64) -> AdminResourceGrantChangeValue {
+    AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value })
+}
 // Common test cases -------------------------------------------------------------------------------
 
 fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
@@ -3809,8 +3823,14 @@ pub async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps
     let limits = usage.resource_limits().unwrap();
     assert_eq!(limits.max_memory_per_worker, 500);
     assert_eq!(limits.max_disk_space_per_worker, 1_500);
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(500));
-    assert_eq!(usage.storage_limit.override_value, Some(1_500));
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(500))
+    );
+    assert_eq!(
+        usage.storage_limit.override_value,
+        Some(finite_limit(1_500))
+    );
 
     for dimension in [
         AccountResourceOverrideDimension::MaxMemoryPerWorker,
@@ -3886,8 +3906,11 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
-    assert_eq!(usage.storage_limit.effective_value, Some(1073741824));
-    assert_eq!(usage.storage_limit.plan_default, Some(1073741824));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(1073741824)
+    );
+    assert_eq!(usage.storage_limit.plan_default, finite_limit(1073741824));
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
     assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
@@ -3938,7 +3961,10 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
-    assert_eq!(usage.storage_limit.effective_value, Some(1073741824));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(1073741824)
+    );
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
     assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
@@ -4041,7 +4067,7 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
             change.event_type,
             AdminResourceGrantEventType::OverrideGranted
         );
-        assert_eq!(change.new_value, value);
+        assert_eq!(change.new_value, finite_change_value(value));
     }
 
     let mut updated_plan = deps.plan_repo.get_by_id(plan_id).await.unwrap().unwrap();
@@ -4051,16 +4077,34 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
     updated_plan.monthly_ephemeral_storage_gb_month = 5.into();
     deps.plan_repo.create_or_update(updated_plan).await.unwrap();
 
+    let mut current_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    current_usage.metering = Some(ResourceUsageMetering::all_enabled());
+    deps.account_usage_repo.add(&current_usage).await.unwrap();
+
     let usage = deps
         .account_usage_repo
         .get(account_id, &SqlDateTime::now())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(150));
-    assert_eq!(usage.max_memory_per_worker.effective_value, 300);
-    assert_eq!(usage.storage_limit.override_value, Some(150));
-    assert_eq!(usage.storage_limit.effective_value, Some(300));
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(150))
+    );
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(300)
+    );
+    assert_eq!(usage.storage_limit.override_value, Some(finite_limit(150)));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(300)
+    );
     assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 300);
     assert_eq!(
         usage.resource_limits().unwrap().max_disk_space_per_worker,
@@ -4155,15 +4199,21 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
         AdminResourceGrantEventType::OverrideCleared
     );
     assert_eq!(clear.old_value, 350);
-    assert_eq!(clear.new_value, 300);
+    assert_eq!(clear.new_value, finite_change_value(300));
     let usage = deps
         .account_usage_repo
         .get(account_id, &SqlDateTime::now())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(300));
-    assert_eq!(usage.max_memory_per_worker.effective_value, 300);
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(300))
+    );
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(300)
+    );
 
     for (dimension, value) in grants {
         if dimension == AccountResourceOverrideDimension::MaxMemoryPerWorker {
@@ -4194,8 +4244,11 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.storage_limit.override_value, Some(150));
-    assert_eq!(usage.storage_limit.effective_value, Some(150));
+    assert_eq!(usage.storage_limit.override_value, Some(finite_limit(150)));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(150)
+    );
     let policy = deps
         .account_usage_service()
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
@@ -4287,7 +4340,10 @@ pub async fn test_replacing_admin_grant_must_raise_current_grant(deps: &Deps) {
         )
         .await
         .unwrap();
-    assert_eq!((change.old_value, change.new_value), (5, 6));
+    assert_eq!(
+        (change.old_value, change.new_value),
+        (5, finite_change_value(6))
+    );
 }
 
 pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempotent(deps: &Deps) {
@@ -4349,8 +4405,14 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(6000));
-    assert_eq!(usage.max_memory_per_worker.effective_value, 6000);
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(6000))
+    );
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(6000)
+    );
 
     assert_eq!(
         deps.account_resource_override_repo
@@ -4388,7 +4450,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         granted.changed_at.timestamp_micros()
     );
     assert_eq!(events[0].old_value, 5000);
-    assert_eq!(events[0].new_value, 7000);
+    assert_eq!(events[0].new_value, finite_change_value(7000));
     assert_eq!(
         events[0].expires_at.map(|value| value.timestamp_micros()),
         Some(expires_at.as_utc().timestamp_micros())
@@ -4399,7 +4461,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     );
     assert_eq!(events[1].reason, AdminResourceGrantReason::Promotional);
     assert_eq!(events[1].old_value, 7000);
-    assert_eq!(events[1].new_value, 6000);
+    assert_eq!(events[1].new_value, finite_change_value(6000));
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
         events[1].changed_at.timestamp_micros(),
@@ -4548,7 +4610,7 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         .await
         .unwrap();
     assert_eq!(replacement.old_value, 2);
-    assert_eq!(replacement.new_value, 4);
+    assert_eq!(replacement.new_value, finite_change_value(4));
 
     let events = deps
         .account_resource_override_repo
@@ -4567,9 +4629,18 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
             AdminResourceGrantEventType::OverrideGranted,
         ]
     );
-    assert_eq!((events[0].old_value, events[0].new_value), (2, 3));
-    assert_eq!((events[1].old_value, events[1].new_value), (3, 2));
-    assert_eq!((events[2].old_value, events[2].new_value), (2, 4));
+    assert_eq!(
+        (events[0].old_value, events[0].new_value),
+        (2, finite_change_value(3))
+    );
+    assert_eq!(
+        (events[1].old_value, events[1].new_value),
+        (3, finite_change_value(2))
+    );
+    assert_eq!(
+        (events[2].old_value, events[2].new_value),
+        (2, finite_change_value(4))
+    );
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
         events[1].changed_at.timestamp_micros(),
@@ -4677,7 +4748,10 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
         .expect("admin grant replacement remained blocked")
         .unwrap()
         .unwrap();
-    assert_eq!((replacement.old_value, replacement.new_value), (2, 4));
+    assert_eq!(
+        (replacement.old_value, replacement.new_value),
+        (2, finite_change_value(4))
+    );
     assert!(replacement.changed_at >= *expires_at.as_utc());
     assert!(matches!(
         tokio::time::timeout(std::time::Duration::from_secs(5), clear_task)
@@ -4800,7 +4874,10 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
                 && event.event_type == AdminResourceGrantEventType::OverrideExpired
         })
         .unwrap();
-    assert_eq!((monthly_expiry.old_value, monthly_expiry.new_value), (3, 2));
+    assert_eq!(
+        (monthly_expiry.old_value, monthly_expiry.new_value),
+        (3, finite_change_value(2))
+    );
     assert_eq!(monthly_expiry.actor_account_id, AccountId::SYSTEM);
     assert_eq!(
         monthly_expiry.changed_at.timestamp_micros(),
@@ -4821,7 +4898,12 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
         .unwrap();
     assert_eq!(
         (storage_expiry.old_value, storage_expiry.new_value),
-        (2_000_000_000, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
+        (
+            2_000_000_000,
+            AdminResourceGrantChangeValue::Disabled(DisabledResourceLimit {
+                reason: StorageLimitDisabledReason::ManagedFilesystemUnavailable,
+            }),
+        )
     );
 }
 
@@ -4889,6 +4971,15 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
+    let mut current_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    current_usage.metering = Some(ResourceUsageMetering::all_enabled());
+    deps.account_usage_repo.add(&current_usage).await.unwrap();
+
     plan.monthly_compute_gcu = 4.into();
     plan.max_memory_per_worker = 400.into();
     plan.max_disk_space_per_worker_enabled = false;
@@ -4918,7 +5009,10 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(!disabled_usage.storage_limit.enabled);
+    assert!(matches!(
+        disabled_usage.storage_limit.effective_value,
+        StorageResourceLimitValue::Disabled(_)
+    ));
     let policy = deps
         .account_usage_service()
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
@@ -4927,7 +5021,10 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
     assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(4));
     assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
     assert!(policy.monthly.compute_gcu.active_admin_grant.is_some());
-    assert_eq!(policy.max_memory_per_agent.effective_value, 300);
+    assert_eq!(
+        policy.max_memory_per_agent.effective_value,
+        finite_limit(300)
+    );
 
     plan.monthly_compute_gcu = 2.into();
     plan.max_memory_per_worker = 100.into();
@@ -4946,8 +5043,14 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
         .unwrap();
     assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(2));
     assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
-    assert_eq!(policy.max_memory_per_agent.effective_value, 300);
-    assert_eq!(policy.max_storage_per_agent.effective_value, Some(300));
+    assert_eq!(
+        policy.max_memory_per_agent.effective_value,
+        finite_limit(300)
+    );
+    assert_eq!(
+        policy.max_storage_per_agent.effective_value,
+        finite_storage_limit(300)
+    );
 }
 
 pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
@@ -5008,6 +5111,15 @@ pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
+    let mut current_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    current_usage.metering = Some(ResourceUsageMetering::all_enabled());
+    deps.account_usage_repo.add(&current_usage).await.unwrap();
+
     deps.account_service()
         .set_plan(
             AccountId(account_id),
@@ -5046,7 +5158,10 @@ pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
         .unwrap();
     assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(4));
     assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
-    assert_eq!(policy.max_memory_per_agent.effective_value, 5000);
+    assert_eq!(
+        policy.max_memory_per_agent.effective_value,
+        finite_limit(5000)
+    );
 
     destination.monthly_compute_gcu = 2.into();
     destination.max_memory_per_worker = 4000.into();
@@ -5066,7 +5181,10 @@ pub async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
         .unwrap();
     assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(2));
     assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(3));
-    assert_eq!(policy.max_memory_per_agent.effective_value, 5000);
+    assert_eq!(
+        policy.max_memory_per_agent.effective_value,
+        finite_limit(5000)
+    );
 }
 
 pub async fn test_self_service_clear_serializes_with_account_plan_change(deps: &Deps) {
@@ -5288,10 +5406,13 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.storage_limit.plan_default, Some(500));
+    assert_eq!(usage.storage_limit.plan_default, finite_limit(500));
     assert_eq!(usage.storage_limit.override_value, None);
-    assert_eq!(usage.storage_limit.ceiling, Some(1000));
-    assert_eq!(usage.storage_limit.effective_value, Some(500));
+    assert_eq!(usage.storage_limit.ceiling, finite_limit(1000));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(500)
+    );
     assert_eq!(usage.plan.max_disk_space_per_worker.get(), 500);
     assert_eq!(
         usage.resource_limits().unwrap().max_disk_space_per_worker,
@@ -5313,7 +5434,7 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
         .unwrap()
         .storage_limit;
     assert_eq!(storage_limit.override_value, None);
-    assert_eq!(storage_limit.effective_value, Some(500));
+    assert_eq!(storage_limit.effective_value, finite_storage_limit(500));
 
     let mut plan = deps
         .plan_repo
@@ -5330,10 +5451,10 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
         .await
         .unwrap()
         .unwrap();
-    assert!(!usage.storage_limit.enabled);
-    assert_eq!(usage.storage_limit.effective_value, None);
-    assert_eq!(usage.storage_limit.plan_default, None);
-    assert_eq!(usage.storage_limit.ceiling, None);
+    assert!(matches!(
+        usage.storage_limit.effective_value,
+        StorageResourceLimitValue::Disabled(_)
+    ));
     assert_eq!(
         usage.resource_limits().unwrap().max_disk_space_per_worker,
         golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
@@ -5420,9 +5541,15 @@ pub async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(
         .unwrap()
         .unwrap();
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.max_memory_per_worker.effective_value, 100);
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(100)
+    );
     assert_eq!(usage.storage_limit.override_value, None);
-    assert_eq!(usage.storage_limit.effective_value, Some(125));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(125)
+    );
 
     plan.max_memory_per_agent_user_configurable = true;
     plan.max_storage_per_agent_user_configurable = true;
@@ -5438,9 +5565,15 @@ pub async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(
         .unwrap()
         .unwrap();
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.max_memory_per_worker.effective_value, 100);
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(100)
+    );
     assert_eq!(usage.storage_limit.override_value, None);
-    assert_eq!(usage.storage_limit.effective_value, Some(125));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(125)
+    );
 }
 
 pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
@@ -5628,10 +5761,19 @@ pub async fn test_plan_reseed_clamps_overrides_before_range_expansion(deps: &Dep
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(100));
-    assert_eq!(usage.max_memory_per_worker.effective_value, 100);
-    assert_eq!(usage.storage_limit.override_value, Some(250));
-    assert_eq!(usage.storage_limit.effective_value, Some(250));
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(100))
+    );
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(100)
+    );
+    assert_eq!(usage.storage_limit.override_value, Some(finite_limit(250)));
+    assert_eq!(
+        usage.storage_limit.effective_value,
+        finite_storage_limit(250)
+    );
 }
 
 pub async fn test_atomic_user_override_set_validates_current_policy(deps: &Deps) {
@@ -6033,16 +6175,22 @@ pub async fn test_plan_change_clamps_disk_override(deps: &Deps) {
         .unwrap()
         .unwrap()
         .storage_limit;
-    assert_eq!(storage_limit.override_value, Some(1024));
-    assert_eq!(storage_limit.effective_value, Some(1024));
+    assert_eq!(storage_limit.override_value, Some(finite_limit(1024)));
+    assert_eq!(storage_limit.effective_value, finite_storage_limit(1024));
     let usage = deps
         .account_usage_repo
         .get(account.revision.account_id, &SqlDateTime::now())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(usage.max_memory_per_worker.override_value, Some(2048));
-    assert_eq!(usage.max_memory_per_worker.effective_value, 2048);
+    assert_eq!(
+        usage.max_memory_per_worker.override_value,
+        Some(finite_limit(2048))
+    );
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(2048)
+    );
 }
 
 pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
@@ -6070,7 +6218,7 @@ pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
         .unwrap()
         .storage_limit;
     assert_eq!(storage_limit.override_value, None);
-    assert_eq!(storage_limit.effective_value, Some(1024));
+    assert_eq!(storage_limit.effective_value, finite_storage_limit(1024));
     let usage = deps
         .account_usage_repo
         .get(account.revision.account_id, &SqlDateTime::now())
@@ -6078,7 +6226,10 @@ pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.max_memory_per_worker.effective_value, 1024);
+    assert_eq!(
+        usage.max_memory_per_worker.effective_value,
+        finite_limit(1024)
+    );
 }
 
 pub async fn test_account_usage(deps: &Deps) {

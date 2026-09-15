@@ -3311,42 +3311,19 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     grant_reason,
                     metering,
                 )| {
-                    let mut storage = if storage_enabled {
-                        golem_common::model::account_usage::StorageLimit {
-                            enabled: true,
-                            unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
-                            active_admin_grant: None,
-                            effective_value: Some(effective_value),
-                            plan_default: Some(plan_default),
-                            override_value,
-                            ceiling: Some(ceiling),
-                            user_configurable,
-                            disabled_reason: None,
-                        }
-                    } else {
-                        golem_common::model::account_usage::StorageLimit {
-                            enabled: false,
-                            unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
-                            active_admin_grant: None,
-                            effective_value: None,
-                            plan_default: None,
-                            override_value: None,
-                            ceiling: None,
-                            user_configurable: false,
-                            disabled_reason: Some(
-                                golem_common::model::account_usage::StorageLimitDisabledReason::ManagedFilesystemUnavailable,
-                            ),
-                        }
-                    };
-                    let mut memory = golem_common::model::account_usage::MemoryLimit {
-                        unit: golem_common::model::account_usage::PerAgentLimitUnit::Bytes,
-                        active_admin_grant: None,
-                        effective_value,
+                    let mut storage = golem_common::model::account_usage::StorageLimit::resolve(
+                        storage_enabled,
                         plan_default,
                         override_value,
                         ceiling,
                         user_configurable,
-                    };
+                    );
+                    let mut memory = golem_common::model::account_usage::MemoryLimit::resolve(
+                        plan_default,
+                        override_value,
+                        ceiling,
+                        user_configurable,
+                    );
                     let (plan_amount, resolved_monthly_amount, usage, remaining, allow_overage_usage, behavior) = match metering {
                         golem_common::model::account_usage::MeteringStatus::Enabled => (
                             Some(plan_default),
@@ -3387,7 +3364,7 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                         (grant_dimension
                             == golem_common::model::account_usage::AdminResourceGrantDimension::MaxMemoryPerAgent)
                             .then(|| grant.clone());
-                    if storage.enabled {
+                    if storage_enabled {
                         storage.active_admin_grant =
                             (grant_dimension
                                 == golem_common::model::account_usage::AdminResourceGrantDimension::MaxStoragePerAgent)

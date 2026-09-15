@@ -569,7 +569,10 @@ impl AccountUsageService {
             AdminResourceGrantDimension::MaxMemoryPerAgent,
         );
         let mut max_storage_per_agent = account_usage.storage_limit.clone();
-        if max_storage_per_agent.enabled {
+        if !matches!(
+            max_storage_per_agent.effective_value,
+            golem_common::model::account_usage::StorageResourceLimitValue::Disabled(_)
+        ) {
             max_storage_per_agent.active_admin_grant = active_grant(
                 &account_usage.admin_grants,
                 AdminResourceGrantDimension::MaxStoragePerAgent,
@@ -973,7 +976,7 @@ mod tests {
     use crate::repo::model::plan::PlanRecord;
     use golem_common::model::account_usage::{
         AdminResourceGrant, BYTE_NANOSECONDS_PER_GB_SECOND, BYTE_SECONDS_PER_GB_MONTH,
-        FUEL_PER_GCU, MemoryLimit, PerAgentLimitUnit, StorageLimit,
+        FUEL_PER_GCU, MemoryLimit, StorageLimit,
     };
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
@@ -1020,28 +1023,11 @@ mod tests {
             month: 1,
             usage,
             plan,
-            storage_limit: StorageLimit {
-                enabled: false,
-                unit: PerAgentLimitUnit::Bytes,
-                active_admin_grant: None,
-                effective_value: None,
-                plan_default: None,
-                override_value: None,
-                ceiling: None,
-                user_configurable: false,
-                disabled_reason: Some(
-                    golem_common::model::account_usage::StorageLimitDisabledReason::ManagedFilesystemUnavailable,
-                ),
-            },
-            max_memory_per_worker: golem_common::model::account_usage::MemoryLimit {
-                unit: PerAgentLimitUnit::Bytes,
-                active_admin_grant: None,
-                effective_value: u64::MAX,
-                plan_default: u64::MAX,
-                override_value: None,
-                ceiling: u64::MAX,
-                user_configurable: false,
-            },
+            storage_limit: StorageLimit::resolve(false, u64::MAX, None, u64::MAX, false),
+            max_memory_per_worker: MemoryLimit::resolve(u64::MAX, None, u64::MAX, false),
+            max_disk_space_per_worker_value:
+                golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+            max_memory_per_worker_value: u64::MAX,
             admin_grant_values: Default::default(),
             admin_grants: Vec::new(),
             metering: None,
@@ -1064,6 +1050,8 @@ mod tests {
         usage.plan.monthly_ephemeral_storage_gb_month = NumericU64::new(11);
         usage.storage_limit = StorageLimit::resolve(true, 5, Some(12), 20, true);
         usage.max_memory_per_worker = MemoryLimit::resolve(100, Some(150), 200, true);
+        usage.max_disk_space_per_worker_value = 12;
+        usage.max_memory_per_worker_value = 150;
         usage
     }
 
@@ -1240,7 +1228,7 @@ mod tests {
         let mut usage = make_policy_usage();
         let memory_grant = AdminResourceGrant {
             dimension: AdminResourceGrantDimension::MaxMemoryPerAgent,
-            value: usage.max_memory_per_worker.effective_value,
+            value: usage.max_memory_per_worker_value,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
             granted_at: Utc::now(),
@@ -1248,7 +1236,7 @@ mod tests {
         };
         let storage_grant = AdminResourceGrant {
             dimension: AdminResourceGrantDimension::MaxStoragePerAgent,
-            value: usage.storage_limit.effective_value.unwrap(),
+            value: usage.max_disk_space_per_worker_value,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
             granted_at: Utc::now(),

@@ -25,8 +25,9 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AdminResourceGrant, AdminResourceGrantChange, AdminResourceGrantEventType,
-    AdminResourceGrantReason, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyPlanAmounts,
+    AdminResourceGrant, AdminResourceGrantChange, AdminResourceGrantChangeValue,
+    AdminResourceGrantEventType, AdminResourceGrantReason, EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+    EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyPlanAmounts,
 };
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -992,6 +993,8 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
     async fn insert_admin_event_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         change: &AdminResourceGrantChange,
+        old_value: u64,
+        new_value: u64,
     ) -> RepoResult<()> {
         tx.execute(
             sqlx::query(indoc! { r#"
@@ -1007,8 +1010,8 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
             .bind(AccountResourceOverrideReason::from(change.reason).as_str())
             .bind(change.actor_account_id.0)
             .bind(SqlDateTime::new(change.changed_at))
-            .bind(NumericU64::new(change.old_value))
-            .bind(NumericU64::new(change.new_value))
+            .bind(NumericU64::new(old_value))
+            .bind(NumericU64::new(new_value))
             .bind(change.expires_at.map(SqlDateTime::new)),
         )
         .await?;
@@ -1027,15 +1030,16 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
                 "Expired admin resource grant has no expiry"
             ))
         })?;
+        let public_dimension = dimension.into();
         Ok(AdminResourceGrantChange {
             account_id: AccountId(account_id),
-            dimension: dimension.into(),
+            dimension: public_dimension,
             event_type: AdminResourceGrantEventType::OverrideExpired,
             reason: persisted_admin_reason(&grant.reason)?,
             actor_account_id: AccountId::SYSTEM,
             changed_at: processed_at.clone().into_utc(),
             old_value: grant.override_value.get(),
-            new_value: fallback,
+            new_value: AdminResourceGrantChangeValue::from_raw(public_dimension, fallback),
             expires_at: Some(expires_at.into_utc()),
         })
     }
@@ -1048,15 +1052,16 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
         actor_account_id: AccountId,
         changed_at: &SqlDateTime,
     ) -> RepoResult<AdminResourceGrantChange> {
+        let public_dimension = dimension.into();
         Ok(AdminResourceGrantChange {
             account_id: AccountId(account_id),
-            dimension: dimension.into(),
+            dimension: public_dimension,
             event_type: AdminResourceGrantEventType::OverrideCleared,
             reason: persisted_admin_reason(&grant.reason)?,
             actor_account_id,
             changed_at: changed_at.clone().into_utc(),
             old_value: grant.override_value.get(),
-            new_value: fallback,
+            new_value: AdminResourceGrantChangeValue::from_raw(public_dimension, fallback),
             expires_at: grant.expires_at.map(SqlDateTime::into_utc),
         })
     }
@@ -1072,8 +1077,10 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
         if !policy.enabled {
             return Err(AdminResourceGrantRepoError::FeatureDisabled);
         }
-        if policy.dimension == AccountResourceOverrideDimension::MaxDiskSpacePerWorker
-            && value >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
+        if (policy.dimension == AccountResourceOverrideDimension::MaxDiskSpacePerWorker
+            && value >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
+            || (policy.dimension == AccountResourceOverrideDimension::MaxMemoryPerWorker
+                && is_unlimited_memory(value))
         {
             return Err(AdminResourceGrantRepoError::ValueOverflow);
         }
@@ -1271,7 +1278,13 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                         let expired = Self::expired_admin_grant_change(
                             account_id, dimension, grant, fallback, &now,
                         )?;
-                        Self::insert_admin_event_in_tx(tx, &expired).await?;
+                        Self::insert_admin_event_in_tx(
+                            tx,
+                            &expired,
+                            grant.override_value.get(),
+                            fallback,
+                        )
+                        .await?;
                     }
                     Self::upsert_in_tx(
                         tx,
@@ -1295,10 +1308,10 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                         actor_account_id: AccountId(actor_account_id),
                         changed_at: now.into_utc(),
                         old_value,
-                        new_value: value,
+                        new_value: AdminResourceGrantChangeValue::from_raw(dimension.into(), value),
                         expires_at: expires_at.map(SqlDateTime::into_utc),
                     };
-                    Self::insert_admin_event_in_tx(tx, &change).await?;
+                    Self::insert_admin_event_in_tx(tx, &change, old_value, value).await?;
                     Ok(change)
                 }
                 .boxed()
@@ -1331,6 +1344,7 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                     let grant = Self::active_admin_grant_in_tx(tx, account_id, dimension, &now)
                         .await?
                         .ok_or(AdminResourceGrantRepoError::GrantNotFound)?;
+                    let old_value = grant.override_value.get();
                     tx.execute(
                         sqlx::query(indoc! { r#"
                             DELETE FROM account_resource_overrides
@@ -1349,7 +1363,7 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                         AccountId(actor_account_id),
                         &now,
                     )?;
-                    Self::insert_admin_event_in_tx(tx, &change).await?;
+                    Self::insert_admin_event_in_tx(tx, &change, old_value, fallback).await?;
                     Ok(change)
                 }
                 .boxed()
@@ -1469,7 +1483,13 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                         let change = Self::expired_admin_grant_change(
                             account_id, dimension, &grant, fallback, &now,
                         )?;
-                        Self::insert_admin_event_in_tx(tx, &change).await?;
+                        Self::insert_admin_event_in_tx(
+                            tx,
+                            &change,
+                            grant.override_value.get(),
+                            fallback,
+                        )
+                        .await?;
                         Ok(true)
                     }
                     .boxed()
@@ -1479,6 +1499,10 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
         }
         Ok(cleaned)
     }
+}
+
+fn is_unlimited_memory(value: u64) -> bool {
+    value == u64::MAX || value == EFFECTIVELY_UNLIMITED_MEMORY_LIMIT
 }
 
 #[cfg(test)]
@@ -1666,6 +1690,26 @@ mod tests {
                     storage_policy,
                     value,
                     EFFECTIVELY_UNLIMITED_STORAGE_LIMIT + 2,
+                    AdminResourceGrantReason::Support,
+                    None,
+                    &now,
+                ),
+                Err(AdminResourceGrantRepoError::ValueOverflow)
+            ));
+        }
+    }
+
+    #[test]
+    fn admin_grant_policy_rejects_unlimited_memory_sentinels() {
+        let now = SqlDateTime::new(chrono::Utc::now());
+        let memory_policy = OverridePolicy::memory(10, u64::MAX, true);
+
+        for value in [EFFECTIVELY_UNLIMITED_MEMORY_LIMIT, u64::MAX] {
+            assert!(matches!(
+                DbAccountResourceOverrideRepo::<SqlitePool>::validate_admin_grant(
+                    memory_policy,
+                    value,
+                    10,
                     AdminResourceGrantReason::Support,
                     None,
                     &now,

@@ -68,37 +68,7 @@ impl PlanService {
     ) -> Result<(), PlanError> {
         for (name, plan) in plans {
             validate_plan_policy(plan)?;
-            let desired_plan = Plan {
-                plan_id: plan.plan_id,
-                name: plan.plan_name.clone(),
-                app_limit: plan.app_limit,
-                env_limit: plan.env_limit,
-                component_limit: plan.component_limit,
-                worker_connection_limit: plan.worker_connection_limit,
-                storage_limit: plan.storage_limit,
-                monthly_upload_limit: plan.monthly_upload_limit,
-                monthly_compute_gcu: plan.monthly_compute_gcu,
-                monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds,
-                monthly_durable_storage_gb_month: plan.monthly_durable_storage_gb_month,
-                monthly_ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month,
-                overage_allowed_by_plan: plan.overage_eligible,
-                max_memory_per_agent: plan.max_memory_per_agent,
-                max_memory_per_agent_ceiling: plan.max_memory_per_agent_ceiling,
-                max_memory_per_agent_user_configurable: plan.max_memory_per_agent_user_configurable,
-                max_table_elements_per_worker: plan.max_table_elements_per_worker,
-                max_storage_per_agent_enabled: plan.max_storage_per_agent_enabled,
-                max_storage_per_agent: plan.max_storage_per_agent,
-                max_storage_per_agent_ceiling: plan.resolved_max_storage_per_agent_ceiling(),
-                max_storage_per_agent_user_configurable: plan
-                    .max_storage_per_agent_user_configurable,
-                per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
-                per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
-                monthly_http_call_limit: plan.monthly_http_call_limit,
-                monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
-                max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
-                oplog_writes_per_second: plan.oplog_writes_per_second,
-            };
-            let desired_record = plan_record(desired_plan, plan.monthly_gas_limit);
+            let desired_record = plan_record(plan);
 
             let needs_update = match self.plan_repo.get_by_id(plan.plan_id.0).await? {
                 Some(existing_plan) => {
@@ -129,6 +99,14 @@ impl PlanService {
     }
 
     pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {
+        Ok(self.get_record(plan_id, auth).await?.into())
+    }
+
+    pub(crate) async fn get_record(
+        &self,
+        plan_id: &PlanId,
+        auth: &AuthCtx,
+    ) -> Result<PlanRecord, PlanError> {
         authorize_plan_permission(auth, PlanVerb::View, plan_resource(*plan_id))
             .map_err(|_| PlanError::PlanNotFound(*plan_id))?;
 
@@ -140,7 +118,7 @@ impl PlanService {
             .await?
             .ok_or(PlanError::PlanNotFound(*plan_id))?;
 
-        Ok(result.into())
+        Ok(result)
     }
 
     async fn create_or_update_plan(
@@ -198,9 +176,9 @@ fn validate_plan_policy(plan: &PrecreatedPlan) -> Result<(), PlanError> {
     Ok(())
 }
 
-fn plan_record(plan: Plan, executor_monthly_gas_limit: u64) -> PlanRecord {
+fn plan_record(plan: &PrecreatedPlan) -> PlanRecord {
     PlanRecord {
-        name: plan.name.0,
+        name: plan.plan_name.0.clone(),
         plan_id: plan.plan_id.0,
         max_memory_per_worker: plan.max_memory_per_agent.into(),
         max_memory_per_worker_ceiling: plan.max_memory_per_agent_ceiling.into(),
@@ -209,11 +187,11 @@ fn plan_record(plan: Plan, executor_monthly_gas_limit: u64) -> PlanRecord {
         monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
         monthly_durable_storage_gb_month: plan.monthly_durable_storage_gb_month.into(),
         monthly_ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month.into(),
-        overage_eligible: plan.overage_allowed_by_plan,
+        overage_eligible: plan.overage_eligible,
         max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
         max_disk_space_per_worker_enabled: plan.max_storage_per_agent_enabled,
         max_disk_space_per_worker: plan.max_storage_per_agent.into(),
-        max_disk_space_per_worker_ceiling: plan.max_storage_per_agent_ceiling.into(),
+        max_disk_space_per_worker_ceiling: plan.resolved_max_storage_per_agent_ceiling().into(),
         max_disk_space_per_worker_user_configurable: plan.max_storage_per_agent_user_configurable,
         max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
         total_app_count: plan.app_limit.into(),
@@ -222,7 +200,7 @@ fn plan_record(plan: Plan, executor_monthly_gas_limit: u64) -> PlanRecord {
         total_component_storage_bytes: plan.storage_limit.into(),
         total_worker_connection_count: plan.worker_connection_limit.into(),
         monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
-        monthly_gas_limit: executor_monthly_gas_limit.into(),
+        monthly_gas_limit: plan.monthly_gas_limit.into(),
         per_invocation_http_call_limit: plan.per_invocation_http_call_limit.into(),
         per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
         monthly_http_call_limit: plan.monthly_http_call_limit.into(),
@@ -253,6 +231,7 @@ mod tests {
     use crate::config::RegistryServiceConfig;
     use crate::repo::model::plan::PlanRecord;
     use async_trait::async_trait;
+    use golem_common::model::account_usage::StorageResourceLimitValue;
     use golem_service_base::repo::RepoResult;
     use std::sync::Mutex;
     use test_r::test;
@@ -292,6 +271,7 @@ mod tests {
         plan.max_storage_per_agent_enabled = true;
         plan.max_storage_per_agent = 5;
         plan.max_storage_per_agent_ceiling = Some(20);
+        plan.max_storage_per_agent_user_configurable = true;
         plan.monthly_compute_gcu = 2;
         plan.monthly_memory_gb_seconds = 3;
         plan.monthly_durable_storage_gb_month = 5;
@@ -308,7 +288,13 @@ mod tests {
         assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
         assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
         assert!(seeded.overage_eligible);
-        assert!(Plan::from(seeded).overage_allowed_by_plan);
+        let public = Plan::from(seeded);
+        assert!(public.overage_allowed_by_plan);
+        assert!(matches!(
+            public.max_storage_per_agent,
+            StorageResourceLimitValue::Finite(_)
+        ));
+        assert!(public.max_storage_per_agent_user_configurable);
 
         plan.max_storage_per_agent_enabled = false;
         plan.monthly_compute_gcu = 11;
@@ -327,6 +313,16 @@ mod tests {
         assert_eq!(updated.monthly_durable_storage_gb_month.get(), 17);
         assert_eq!(updated.monthly_ephemeral_storage_gb_month.get(), 19);
         assert!(!updated.overage_eligible);
+        let public = Plan::from(updated);
+        assert!(matches!(
+            public.max_storage_per_agent,
+            StorageResourceLimitValue::Disabled(_)
+        ));
+        assert!(matches!(
+            public.max_storage_per_agent_ceiling,
+            StorageResourceLimitValue::Disabled(_)
+        ));
+        assert!(!public.max_storage_per_agent_user_configurable);
     }
 
     #[test]

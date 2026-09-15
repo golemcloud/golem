@@ -75,6 +75,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::AdminResourceGrantChange",
             ),
             (
+                "AdminResourceGrantChangeValue",
+                "golem_common::model::account_usage::AdminResourceGrantChangeValue",
+            ),
+            (
                 "ClearedAdminResourceGrantChange",
                 "golem_common::model::account_usage::AdminResourceGrantChange",
             ),
@@ -161,6 +165,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "MemoryLimit",
                 "golem_common::model::account_usage::MemoryLimit",
+            ),
+            (
+                "ResourceLimitValue",
+                "golem_common::model::account_usage::ResourceLimitValue",
+            ),
+            (
+                "StorageResourceLimitValue",
+                "golem_common::model::account_usage::StorageResourceLimitValue",
             ),
             (
                 "SetMemoryLimit",
