@@ -626,6 +626,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .oplog
                 .add(OplogEntry::no_op(self.entity_parent_start_index()))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -766,6 +767,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                 ))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -889,7 +891,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     begin_index,
                 ))
-                .await;
+                .await?;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }

@@ -185,6 +185,28 @@ impl SpawnedWorkerExecutor {
         }
         let _logger = self.logger.lock().unwrap().take();
     }
+
+    #[cfg(unix)]
+    fn signal_child(&self, signal: libc::c_int, action: &str) {
+        let child = self.child.lock().unwrap();
+        let child = child.as_ref().unwrap_or_else(|| {
+            panic!(
+                "Cannot {action} golem-worker-executor {}: it is not running",
+                self.grpc_port
+            )
+        });
+        let pid = libc::pid_t::try_from(child.id()).expect("child pid does not fit into pid_t");
+        // SAFETY: `kill` has no memory-safety preconditions. The pid belongs to a child this struct
+        // spawned and has not reaped, so it cannot have been reused by another process.
+        let result = unsafe { libc::kill(pid, signal) };
+        assert_eq!(
+            result,
+            0,
+            "Failed to {action} golem-worker-executor {}: {}",
+            self.grpc_port,
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 #[async_trait]
@@ -256,6 +278,18 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         } else {
             false
         }
+    }
+
+    #[cfg(unix)]
+    async fn pause(&self) {
+        info!("Pausing golem-worker-executor {}", self.grpc_port);
+        self.signal_child(libc::SIGSTOP, "pause");
+    }
+
+    #[cfg(unix)]
+    async fn resume(&self) {
+        info!("Resuming golem-worker-executor {}", self.grpc_port);
+        self.signal_child(libc::SIGCONT, "resume");
     }
 }
 

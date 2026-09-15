@@ -1782,7 +1782,7 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
@@ -1850,6 +1850,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -1862,6 +1863,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -1874,6 +1876,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -2003,6 +2006,7 @@ mod tests {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
+                shard_epoch: None,
             },
         );
         entries.insert(
@@ -2840,6 +2844,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -2852,6 +2857,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -2864,6 +2870,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }

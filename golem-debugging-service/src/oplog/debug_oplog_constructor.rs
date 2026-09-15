@@ -74,6 +74,9 @@ impl OplogConstructor for CreateDebugOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    // A debugging session discards every write, so it asserts no epoch and
+                    // never touches the agent's ownership record.
+                    None,
                 )
                 .await
         } else {
@@ -85,6 +88,9 @@ impl OplogConstructor for CreateDebugOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    // A debugging session discards every write, so it asserts no epoch and
+                    // never touches the agent's ownership record.
+                    None,
                 )
                 .await
         };

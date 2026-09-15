@@ -1539,6 +1539,7 @@ mod tests {
                             timestamp: Timestamp::now_utc(),
                         },
                     ))),
+                    None,
                 )
                 .await;
             let service = Arc::new(DefaultWorkerService::new(
@@ -1562,7 +1563,10 @@ mod tests {
             let commit: DurableStreamCommit = Arc::new(move |published| {
                 let oplog = oplog.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog
+                        .commit(CommitLevel::Always)
+                        .await
+                        .expect("oplog write");
                     if let Some(published) = published {
                         let _ = published.send(());
                     }
@@ -1599,7 +1603,10 @@ mod tests {
 
         async fn persist(&self) {
             let owner = OwnedAgentId::new(self.identity.environment_id, &self.identity.agent_id);
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog write");
             self.service
                 .lookup_durable_stream_producer_metadata(
                     &owner,
@@ -1805,7 +1812,11 @@ mod tests {
             offsets.push(outcome.value[0]);
         }
         for _ in 0..2100 {
-            fixture.oplog.add(OplogEntry::interrupted()).await;
+            fixture
+                .oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         fixture.persist().await;
         drop(producer);
@@ -2135,7 +2146,11 @@ mod tests {
             .unwrap()
             .value;
         for _ in 0..1021 {
-            fixture.oplog.add(OplogEntry::interrupted()).await;
+            fixture
+                .oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         assert_eq!(fixture.oplog.current_oplog_index().await.as_u64(), 1023);
         let nested = registration(
@@ -2159,7 +2174,11 @@ mod tests {
             .await
             .unwrap();
         let nested_handles = producer.nested_handles(handle.stream_id, 0).await.unwrap();
-        fixture.oplog.commit(CommitLevel::Always).await;
+        fixture
+            .oplog
+            .commit(CommitLevel::Always)
+            .await
+            .expect("oplog write");
         MultiLayerOplog::try_archive_blocking(&fixture.oplog)
             .await
             .expect("archive layer");

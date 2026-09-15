@@ -504,7 +504,7 @@ impl OplogArchive for CompressedOplogArchive {
                     let chunk = compressed_chunk.clone();
                     async move {
                         is.with_entity("compressed_oplog", "append", "compressed_entry")
-                            .append(ns, &key, last_id_val, &chunk)
+                            .append(ns, &key, last_id_val, &chunk, None)
                             .await
                     }
                 })
