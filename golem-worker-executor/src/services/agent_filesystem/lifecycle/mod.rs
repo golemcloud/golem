@@ -3201,10 +3201,6 @@ async fn execute_create_directory<Adapter: SandboxFilesystemAdapter>(
                 .await
             {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3252,10 +3248,6 @@ async fn execute_create_symlink<Adapter: SandboxFilesystemAdapter>(
         } else {
             match symlink_postcondition(&generation, target.clone(), &desired).await {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3303,10 +3295,6 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
                 Ok(destination_after) => {
                     hard_link_postcondition_evidence(&destination_before, &destination_after)
                 }
-                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3352,12 +3340,6 @@ async fn execute_rename<Adapter: SandboxFilesystemAdapter>(
             match (source_after, destination_after) {
                 (Ok(source_after), Ok(destination_after)) => {
                     move_postcondition_evidence(&source_before, &source_after, &destination_after)
-                }
-                (Err(postcondition_error), _) | (_, Err(postcondition_error))
-                    if invalidates_generation(&postcondition_error) =>
-                {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
                 }
                 _ => EffectEvidence::Unknown {
                     known_completed_prefix: 0,
@@ -3421,10 +3403,6 @@ async fn execute_remove<Adapter: SandboxFilesystemAdapter>(
         } else {
             match namespace_path_state(&generation, target.clone()).await {
                 Ok(after) => remove_postcondition_evidence(&before, &after, expected),
-                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3689,6 +3667,11 @@ async fn execute_close<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
+/// Gives the evidence of a mutation that failed, when the read of its postcondition failed too.
+///
+/// The read runs only when the error of the mutation does not prove that nothing changed. The
+/// evidence is then unknown, and an unknown effect invalidates the generation. So a read that
+/// fails needs no check of its own.
 fn mutation_failure_evidence(error: &FilesystemStorageError) -> EffectEvidence {
     if error_proves_no_effect(error) {
         EffectEvidence::NoEffect

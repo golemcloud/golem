@@ -2718,6 +2718,43 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
 }
 
 #[test]
+#[timeout("10s")]
+async fn a_creating_open_whose_postcondition_read_fails_terminally_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // The error of the open proves that it changed nothing, but the read of the postcondition
+    // finds broken storage, so the lifecycle cannot trust the filesystem any more.
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::NotFound)));
+    control.push_get_attributes(Err(sandbox_error(
+        "open postcondition",
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    )));
+
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "created").unwrap(),
+            OpenOptions::File {
+                access: AccessMode::ReadWrite,
+                disposition: FileDisposition::CreateIfMissing,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap()
+        .await,
+        Err(Error::RuntimeInvalidated)
+    ));
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn unknown_mutating_open_effect_invalidates_without_retry() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -3317,6 +3354,131 @@ async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_
     );
     assert!(!has_call(&control, "set_node_times("));
     assert!(!has_call(&control, "set_path_times("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_starts_again_when_the_open_finds_another_kind() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // The first open refuses the kind that the read gave, because the object behind alias changed
+    // between the read and the open. The change starts again and finds a regular file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::InvalidInput)));
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_file(730)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_set_times(Ok(()));
+
+    set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    assert_eq!(call_count(&control, "open("), 2);
+    assert!(has_call(&control, "set_node_times("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_stops_after_two_restarts() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Every open refuses the kind of the read. The change starts again twice, and then the caller
+    // gets the error of the open.
+    (0..3).for_each(|_| {
+        control.push_read_only_resolution(1, "alias", false, false);
+        control.push_read_only_resolution(1, "alias", false, false);
+        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+        control.push_open(Err(sandbox_error("open", std::io::ErrorKind::InvalidInput)));
+    });
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(&changed, Err(Error::Sandbox(error))
+            if error.io_kind() == Some(std::io::ErrorKind::InvalidInput)),
+        "{changed:?}"
+    );
+    assert_eq!(call_count(&control, "open("), 3);
+    assert!(!has_call(&control, "set_node_times("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_returns_an_open_error_that_is_not_a_kind_mismatch() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Only a kind mismatch starts the change again. Another error of the open goes to the caller.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::NotFound)));
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(&changed, Err(Error::Sandbox(error))
+            if error.io_kind() == Some(std::io::ErrorKind::NotFound)),
+        "{changed:?}"
+    );
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
