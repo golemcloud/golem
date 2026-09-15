@@ -500,6 +500,13 @@ pub struct RawDurableStreamSessionStatus {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
+    /// Retires this open handle after its worker's durable state has been deleted.
+    ///
+    /// Cached implementations unregister the exact handle and propagate retirement through
+    /// wrapper layers. The retired object may remain alive through stale worker references, but
+    /// it must no longer be returned when a new worker with the same identity opens its oplog.
+    fn retire(&self) {}
+
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         self.enqueue_add(entry).await
@@ -1075,15 +1082,13 @@ impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 struct OpenOplogEntry {
     pub oplog: Weak<dyn Oplog>,
     pub initial: Arc<AtomicBool>,
-    generation: Arc<()>,
 }
 
 impl OpenOplogEntry {
-    pub fn new(oplog: Arc<dyn Oplog>, generation: Arc<()>) -> Self {
+    pub fn new(oplog: Arc<dyn Oplog>) -> Self {
         Self {
             oplog: Arc::downgrade(&oplog),
             initial: Arc::new(AtomicBool::new(true)),
-            generation,
         }
     }
 }
@@ -1112,14 +1117,7 @@ impl OpenOplogs {
     ) -> Arc<dyn Oplog> {
         loop {
             let constructor_clone = constructor.clone();
-            let generation = Arc::new(());
-            let expected_generation = generation.clone();
-            let close = Box::new(
-                self.oplogs
-                    .create_weak_remover_if(agent_id.clone(), move |entry| {
-                        Arc::ptr_eq(&entry.generation, &expected_generation)
-                    }),
-            );
+            let close = Box::new(self.oplogs.create_weak_remover(agent_id.clone()));
 
             let entry = self
                 .oplogs
@@ -1136,7 +1134,7 @@ impl OpenOplogs {
                             Arc::increment_strong_count(ptr);
                             Arc::from_raw(ptr)
                         };
-                        Ok(OpenOplogEntry::new(result, generation))
+                        Ok(OpenOplogEntry::new(result))
                     },
                 )
                 .await
@@ -1158,10 +1156,6 @@ impl OpenOplogs {
                 continue;
             }
         }
-    }
-
-    pub async fn remove(&self, agent_id: &AgentId) {
-        self.oplogs.remove(agent_id).await;
     }
 }
 

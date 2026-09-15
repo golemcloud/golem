@@ -51,7 +51,7 @@ use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -767,7 +767,6 @@ impl OplogService for ForwardingOplogService {
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.oplogs.remove(&owned_agent_id.agent_id).await;
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
@@ -855,7 +854,7 @@ pub struct ForwardingOplog {
     jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
     actor: JoinHandle<()>,
     timer: Option<JoinHandle<()>>,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 /// A request processed by the [`ForwardingOplog`] actor task, which exclusively owns the
@@ -1142,7 +1141,7 @@ impl ForwardingOplog {
             jobs,
             actor,
             timer: Some(timer),
-            close_fn: Some(close_fn),
+            close_fn: Mutex::new(Some(close_fn)),
         }
     }
 
@@ -1198,7 +1197,7 @@ impl Debug for ForwardingOplog {
 
 impl Drop for ForwardingOplog {
     fn drop(&mut self) {
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
         if let Some(timer) = self.timer.take() {
@@ -1215,6 +1214,17 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
+    fn retire(&self) {
+        self.actor.abort();
+        if let Some(timer) = &self.timer {
+            timer.abort();
+        }
+        if let Some(close_fn) = self.close_fn.lock().unwrap().take() {
+            close_fn();
+        }
+        self.inner.retire();
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let (done, done_rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(ForwardingJob::Add { entry, done }).is_err() {

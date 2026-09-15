@@ -71,6 +71,34 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info};
 
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust_as_resolve_target")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+
 struct DeletionStageHook {
     target: OwnedAgentId,
     calls: Mutex<HashMap<WorkerDeletionStage, usize>>,
@@ -212,34 +240,6 @@ impl WorkerDeletionHook for DeletionStageHook {
         Ok(())
     }
 }
-
-inherit_test_dep!(WorkerExecutorTestDependencies);
-inherit_test_dep!(LastUniqueId);
-inherit_test_dep!(Tracing);
-inherit_test_dep!(
-    #[tagged_as("host_api_tests")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("agent_rpc")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("agent_rpc_rust")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("agent_rpc_rust_as_resolve_target")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("agent_counters")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("http_tests")]
-    PrecompiledComponent
-);
 
 #[test]
 #[tracing::instrument]
@@ -3285,6 +3285,16 @@ async fn delete_nonexistent_worker(
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
     assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "create"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "create_fresh"),
+        0
+    );
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "open"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "get_last_index"),
+        0
+    );
     assert_eq!(executor.oplog_service_call_count(&worker_id, "commit"), 0);
     assert_eq!(
         executor.oplog_service_call_count(&worker_id, "read_exact"),
@@ -3300,15 +3310,15 @@ async fn concurrent_deletes_share_worker_owned_completion(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "concurrent-delete-completion");
+    let agent_id = agent_id!("Counter", "concurrent-delete-completion");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3372,25 +3382,40 @@ async fn delete_reacquires_the_same_generation_retired_before_claim(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "delete-reacquires-retired-generation");
+    let agent_id = agent_id!(
+        "InstantiationGrowthCounter",
+        "delete-reacquires-retired-generation"
+    );
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     executor
-        .invoke_agent(&component, &agent_id, "sleep", data_value!(30u64))
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "delayed_increment",
+            data_value!(30_000u64),
+        )
         .await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
+    executor.interrupt(&worker_id).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     let hook = Arc::new(BeforeDeletionClaimHook::new(owned_agent_id.clone()));
     executor.set_worker_deletion_hook(hook.clone());
 
@@ -3400,7 +3425,7 @@ async fn delete_reacquires_the_same_generation_retired_before_claim(
         tokio::spawn(async move { deleting_executor.delete_worker(&deleting_worker_id).await });
     hook.wait_until_gated().await;
 
-    executor.interrupt(&worker_id).await?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
     hook.release();
     deleting.await??;
@@ -3475,15 +3500,15 @@ async fn failed_delete_is_shared_and_one_retry_resumes_completed_stages(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "retry-delete-completion");
+    let agent_id = agent_id!("Counter", "retry-delete-completion");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3561,15 +3586,15 @@ async fn cold_existing_only_acquisition_preserves_persisted_identity_without_sta
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "cold-existing-only");
+    let agent_id = agent_id!("InstantiationGrowthCounter", "cold-existing-only");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -3581,7 +3606,12 @@ async fn cold_existing_only_acquisition_preserves_persisted_identity_without_sta
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
 
     executor
-        .invoke_agent(&component, &agent_id, "sleep", data_value!(30u64))
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "delayed_increment",
+            data_value!(30_000u64),
+        )
         .await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))

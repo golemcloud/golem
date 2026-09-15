@@ -650,7 +650,6 @@ impl OplogService for MultiLayerOplogService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        self.oplogs.remove(&owned_agent_id.agent_id).await;
         self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
@@ -821,7 +820,7 @@ pub struct MultiLayerOplog {
     transfer: UnboundedSender<BackgroundTransferMessage>,
     last_reported_commit_index: AtomicOplogIndex,
     last_transfer_point: AtomicOplogIndex,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 impl MultiLayerOplog {
@@ -883,7 +882,7 @@ impl MultiLayerOplog {
             transfer: tx,
             last_reported_commit_index,
             last_transfer_point,
-            close_fn: Some(close),
+            close_fn: Mutex::new(Some(close)),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
         multi_layer_oplog_service.register_transfer(
@@ -1095,7 +1094,7 @@ impl Drop for MultiLayerOplog {
     fn drop(&mut self) {
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
         self.multi_layer_oplog_service
@@ -1113,6 +1112,17 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
+    fn retire(&self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
+        if let Some(close_fn) = self.close_fn.lock().unwrap().take() {
+            close_fn();
+        }
+        self.primary.retire();
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         self.primary.enqueue_add(entry)
     }

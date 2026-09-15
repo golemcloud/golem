@@ -52,8 +52,7 @@
 use super::status::{calculate_last_known_status_with_checkpoint, update_status_with_new_entries};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
-    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerLifecycleState,
-    WorkerStatusMetric,
+    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
 };
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog};
@@ -115,7 +114,7 @@ enum StatusJob {
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
-        _instance_guard: OwnedMutexGuard<WorkerLifecycleState>,
+        _instance_guard: OwnedMutexGuard<WorkerInstance>,
         _card_event_boundary_guard: OwnedMutexGuard<()>,
         done: oneshot::Sender<()>,
     },
@@ -124,7 +123,7 @@ enum StatusJob {
         idempotency_key: IdempotencyKey,
         expected_result_generation: u64,
         expected_revert_generation: u64,
-        instance_guard: OwnedMutexGuard<WorkerLifecycleState>,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
         done: oneshot::Sender<bool>,
     },
     /// Returns the published status after reattaching it when a jump or revert detached it.
@@ -212,7 +211,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
         published_authority_generation: Arc<AtomicU64>,
-        lifecycle: Arc<Mutex<WorkerLifecycleState>>,
+        lifecycle: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let state = StatusState {
             deps,
@@ -290,7 +289,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 state
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await;
-                                if let WorkerInstance::Running(running) = &instance_guard.instance {
+                                if let WorkerInstance::Running(running) = &*instance_guard {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
                                 true
@@ -330,7 +329,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     LifecycleJob::NotifyStatusChanged => {
                         let lifecycle_guard = lifecycle.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
-                        if let WorkerInstance::Running(running) = &lifecycle_guard.instance {
+                        if let WorkerInstance::Running(running) = &*lifecycle_guard {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
@@ -408,7 +407,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         entry: OplogEntry,
         worker: Arc<Worker<Ctx>>,
-        instance_guard: OwnedMutexGuard<WorkerLifecycleState>,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
         card_event_boundary_guard: OwnedMutexGuard<()>,
     ) {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
@@ -429,7 +428,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         idempotency_key: IdempotencyKey,
         expected_result_generation: u64,
         expected_revert_generation: u64,
-        instance_guard: OwnedMutexGuard<WorkerLifecycleState>,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
     ) -> bool {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {

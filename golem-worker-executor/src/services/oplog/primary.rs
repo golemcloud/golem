@@ -51,7 +51,7 @@ use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, warn};
 
@@ -615,7 +615,6 @@ impl OplogService for PrimaryOplogService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         record_oplog_call("delete");
-        self.oplogs.remove(&owned_agent_id.agent_id).await;
 
         {
             let is = self.indexed_storage.clone();
@@ -903,7 +902,7 @@ struct PrimaryOplog {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
-    close: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 /// A request processed by the [`PrimaryOplog`] actor task, which exclusively owns the oplog
@@ -993,7 +992,7 @@ impl Drop for PrimaryOplog {
         // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
         // job reply anymore and aborting the actor cannot lose an observed operation.
         self.actor.abort();
-        if let Some(close) = self.close.take() {
+        if let Some(close) = self.close.get_mut().unwrap().take() {
             close();
         }
     }
@@ -1273,7 +1272,7 @@ impl PrimaryOplog {
             owned_agent_id,
             agent_mode,
             stream_session_index,
-            close: Some(close),
+            close: Mutex::new(Some(close)),
         }
     }
 
@@ -1743,6 +1742,13 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
+    fn retire(&self) {
+        self.actor.abort();
+        if let Some(close) = self.close.lock().unwrap().take() {
+            close();
+        }
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let (done, done_rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(OplogJob::Add { entry, done }).is_err() {

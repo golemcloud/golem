@@ -3909,6 +3909,10 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    fn retire(&self) {
+        self.oplog.retire();
+    }
+
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         self.pause_before_agent_initialization_enqueue(&entry).await;
         if Self::is_consume_body_scope_start(&entry)

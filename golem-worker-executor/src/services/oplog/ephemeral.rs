@@ -32,7 +32,7 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -59,7 +59,7 @@ pub struct EphemeralOplog {
     transfer: UnboundedSender<BackgroundTransferMessage>,
     transfer_fiber: TransferFiber,
     multi_layer_oplog_service: MultiLayerOplogService,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 /// A request processed by the [`EphemeralOplog`] actor task, which exclusively owns the
@@ -336,7 +336,7 @@ impl EphemeralOplog {
             transfer,
             transfer_fiber,
             multi_layer_oplog_service,
-            close_fn: Some(close),
+            close_fn: Mutex::new(Some(close)),
         }
     }
 
@@ -596,7 +596,7 @@ impl Drop for EphemeralOplog {
     fn drop(&mut self) {
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
         self.multi_layer_oplog_service
@@ -617,6 +617,17 @@ impl Debug for EphemeralOplog {
 
 #[async_trait]
 impl Oplog for EphemeralOplog {
+    fn retire(&self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
+        self.actor.abort();
+        if let Some(close_fn) = self.close_fn.lock().unwrap().take() {
+            close_fn();
+        }
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         record_oplog_call("add");
         let (done, done_rx) = tokio::sync::oneshot::channel();

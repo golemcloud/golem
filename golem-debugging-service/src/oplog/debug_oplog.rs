@@ -69,6 +69,10 @@ pub struct DebugOplogState {
 
 #[async_trait]
 impl Oplog for DebugOplog {
+    fn retire(&self) {
+        self.inner.retire();
+    }
+
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
     //
