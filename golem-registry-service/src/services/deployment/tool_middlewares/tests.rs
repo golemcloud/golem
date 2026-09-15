@@ -203,6 +203,7 @@ impl CompilerFixture {
                 account_id: Default::default(),
                 account_email: "tool@example.com".into(),
                 parameters: NormalizedJsonValue::new(serde_json::Value::Null),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: Default::default(),
                 secret_keys_revealable: Default::default(),
                 filesystem_access: ToolFilesystemAccess::Denied,

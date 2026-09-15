@@ -4160,6 +4160,7 @@
         "version",
         "parameters",
         "account",
+        "configKeysReadable",
         "secretKeysReadable",
         "secretKeysRevealable",
         "filesystemAccess",
@@ -4169,6 +4170,7 @@
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
         "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
@@ -4204,6 +4206,29 @@
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false
+    },
+    "ConfigKeyScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "keys"],
+          "properties": {
+            "kind": { "const": "keys" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecretKeyScope": {
       "oneOf": [
@@ -4720,6 +4745,7 @@
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
         { "$ref": "#/definitions/PublicOplogEntryRestart" },
+        { "$ref": "#/definitions/PublicOplogEntryResumed" },
         { "$ref": "#/definitions/PublicOplogEntryActivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
@@ -4882,6 +4908,7 @@
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
     "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
+    "PublicOplogEntryResumed": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Resumed" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
       "required": ["type", "timestamp", "error", "retryFrom", "insideAtomicRegion"],
@@ -5423,12 +5450,14 @@
       "type": "object",
       "required": [
         "parameters",
+        "configKeysReadable",
         "secretKeysReadable",
         "secretKeysRevealable",
         "filesystemAccess"
       ],
       "properties": {
         "parameters": {},
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
         "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
         "filesystemAccess": { "type": "string", "enum": ["unset", "allowed", "denied"] }

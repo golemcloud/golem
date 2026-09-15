@@ -22,8 +22,8 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
-    ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, RegisteredTool, SecretKeyScope, ToolBindingInput,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveToolBinding {
     pub parameters: NormalizedJsonValue,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     pub filesystem_access: ToolFilesystemAccess,
@@ -49,55 +50,60 @@ pub fn effective_tool_binding(
     environment: Option<&ToolBindingInput>,
     agent: Option<&ToolBindingInput>,
 ) -> Option<(EffectiveToolBinding, bool)> {
-    let (parameters, readable, requested_revealable, filesystem_access) = match (environment, agent)
-    {
-        (None, None) => return None,
-        (Some(binding), None) | (None, Some(binding)) => (
-            binding.parameters.clone(),
-            binding.secret_keys_readable.clone(),
-            binding.secret_keys_revealable.clone(),
-            binding.filesystem_access,
-        ),
-        (Some(environment), Some(agent)) => {
-            let mut parameters = environment
-                .parameters
-                .0
-                .as_object()
-                .expect("validated tool binding parameters are objects")
-                .clone();
-            parameters.extend(
-                agent
+    let (parameters, config_keys_readable, readable, requested_revealable, filesystem_access) =
+        match (environment, agent) {
+            (None, None) => return None,
+            (Some(binding), None) | (None, Some(binding)) => (
+                binding.parameters.clone(),
+                binding.config_keys_readable.clone(),
+                binding.secret_keys_readable.clone(),
+                binding.secret_keys_revealable.clone(),
+                binding.filesystem_access,
+            ),
+            (Some(environment), Some(agent)) => {
+                let mut parameters = environment
                     .parameters
                     .0
                     .as_object()
                     .expect("validated tool binding parameters are objects")
-                    .clone(),
-            );
-            (
-                NormalizedJsonValue::new(serde_json::Value::Object(parameters)),
-                environment
-                    .secret_keys_readable
-                    .intersection(&agent.secret_keys_readable),
-                environment
-                    .secret_keys_revealable
-                    .intersection(&agent.secret_keys_revealable),
-                match (environment.filesystem_access, agent.filesystem_access) {
-                    (ToolFilesystemAccess::Denied, _) | (_, ToolFilesystemAccess::Denied) => {
-                        ToolFilesystemAccess::Denied
-                    }
-                    (ToolFilesystemAccess::Allowed, _) | (_, ToolFilesystemAccess::Allowed) => {
-                        ToolFilesystemAccess::Allowed
-                    }
-                    _ => ToolFilesystemAccess::Unset,
-                },
-            )
-        }
-    };
+                    .clone();
+                parameters.extend(
+                    agent
+                        .parameters
+                        .0
+                        .as_object()
+                        .expect("validated tool binding parameters are objects")
+                        .clone(),
+                );
+                (
+                    NormalizedJsonValue::new(serde_json::Value::Object(parameters)),
+                    environment
+                        .config_keys_readable
+                        .intersection(&agent.config_keys_readable),
+                    environment
+                        .secret_keys_readable
+                        .intersection(&agent.secret_keys_readable),
+                    environment
+                        .secret_keys_revealable
+                        .intersection(&agent.secret_keys_revealable),
+                    match (environment.filesystem_access, agent.filesystem_access) {
+                        (ToolFilesystemAccess::Denied, _) | (_, ToolFilesystemAccess::Denied) => {
+                            ToolFilesystemAccess::Denied
+                        }
+                        (ToolFilesystemAccess::Allowed, _) | (_, ToolFilesystemAccess::Allowed) => {
+                            ToolFilesystemAccess::Allowed
+                        }
+                        _ => ToolFilesystemAccess::Unset,
+                    },
+                )
+            }
+        };
     let revealable = requested_revealable.intersection(&readable);
     let revealable_scope_narrowed = revealable != requested_revealable;
     Some((
         EffectiveToolBinding {
             parameters,
+            config_keys_readable,
             secret_keys_readable: readable,
             secret_keys_revealable: revealable,
             filesystem_access,
@@ -149,6 +155,7 @@ pub fn remote_tool_deployments(
                 binding.agent_type_name,
                 EffectiveToolBinding {
                     parameters: binding.parameters,
+                    config_keys_readable: binding.config_keys_readable,
                     secret_keys_readable: binding.secret_keys_readable,
                     secret_keys_revealable: binding.secret_keys_revealable,
                     filesystem_access: binding.filesystem_access,
@@ -480,8 +487,8 @@ impl Hashable for Deployment {
 #[cfg(test)]
 mod tests {
     use super::{
-        Deployment, EffectiveToolBinding, RemoteToolDeployment, remote_tool_deployments,
-        remote_tool_middleware_deployments,
+        Deployment, EffectiveToolBinding, RemoteToolDeployment, effective_tool_binding,
+        remote_tool_deployments, remote_tool_middleware_deployments,
     };
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
@@ -490,8 +497,8 @@ mod tests {
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
-        HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
-        ToolName, ToolProvisionConfig, ToolSource,
+        ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
     use crate::model::tool_middleware::{
         RegisteredToolMiddleware, ToolMiddlewareMergeMode, ToolMiddlewareSource,
@@ -807,6 +814,10 @@ mod tests {
         changed_release.release_id = ToolReleaseId::new();
         assert_ne!(base_hash, deployment_hash(changed_release, false));
 
+        let mut changed_version = base.clone();
+        changed_version.version = "2".to_string();
+        assert_ne!(base_hash, deployment_hash(changed_version, false));
+
         let mut changed_source = base.clone();
         changed_source.source_digest =
             crate::model::tool_release::tool_source_digest(&ToolSource::Host {
@@ -829,6 +840,7 @@ mod tests {
             AgentTypeName("Agent".to_string()),
             EffectiveToolBinding {
                 parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 5 })),
+                config_keys_readable: ConfigKeyScope::All,
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,
@@ -837,5 +849,23 @@ mod tests {
         assert_ne!(base_hash, deployment_hash(changed_binding, false));
 
         assert_eq!(base_hash, deployment_hash(base, true));
+    }
+
+    #[test]
+    fn ambient_override_equal_to_environment_default_has_same_effective_binding() {
+        let environment = ToolBindingInput {
+            version: None,
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 5 })),
+            account: None,
+            config_keys_readable: ConfigKeyScope::All,
+            secret_keys_readable: SecretKeyScope::All,
+            secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
+        };
+
+        assert_eq!(
+            effective_tool_binding(Some(&environment), None),
+            effective_tool_binding(Some(&environment), Some(&environment))
+        );
     }
 }

@@ -67,9 +67,10 @@ message ToolBindingInput {
   optional string account = 3;
   SecretKeyScope secret_keys_readable = 4;
   SecretKeyScope secret_keys_revealable = 5;
-  optional ToolMiddlewareInstallations middleware = 6;
-  optional ToolMiddlewareMergeMode middleware_merge_mode = 7;
-  ToolFilesystemAccess filesystem_access = 8;
+  ConfigKeyScope config_keys_readable = 6;
+  optional ToolMiddlewareInstallations middleware = 7;
+  optional ToolMiddlewareMergeMode middleware_merge_mode = 8;
+  ToolFilesystemAccess filesystem_access = 9;
 }
 
 message ToolMiddlewareInstallations {
@@ -94,6 +95,21 @@ enum ToolMiddlewareMergeMode {
   TOOL_MIDDLEWARE_MERGE_MODE_PREPEND = 0;
   TOOL_MIDDLEWARE_MERGE_MODE_APPEND = 1;
   TOOL_MIDDLEWARE_MERGE_MODE_REPLACE = 2;
+}
+
+message ConfigKeyScope {
+  oneof value {
+    golem.common.Empty all = 1;
+    ConfigKeyPaths keys = 2;
+  }
+}
+
+message ConfigKeyPaths {
+  repeated ConfigKeyPath paths = 1;
+}
+
+message ConfigKeyPath {
+  repeated string segments = 1;
 }
 
 message SecretKeyScope {

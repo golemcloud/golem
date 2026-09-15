@@ -74,6 +74,7 @@ use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use crate::services::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
@@ -130,6 +131,7 @@ pub struct Services {
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
+    pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
     pub plan_service: Arc<PlanService>,
@@ -295,10 +297,12 @@ impl Services {
             permission_share_service.clone(),
         ));
 
+        let native_tool_catalog = Arc::new(NativeToolCatalog::default());
         let deployment_service = Arc::new(DeploymentService::new(
             environment_service.clone(),
             application_service.clone(),
             repos.deployment_repo.clone(),
+            native_tool_catalog.clone(),
         ));
 
         let component_service = Arc::new(ComponentService::new(
@@ -333,6 +337,7 @@ impl Services {
         let tool_release_service = Arc::new(ToolReleaseService::new(
             repos.tool_release_repo.clone(),
             account_service.clone(),
+            component_service.clone(),
             builtin_tool_owner_account_id,
         ));
 
@@ -442,6 +447,7 @@ impl Services {
             tool_release_service.clone(),
             environment_tool_middleware_grant_service.clone(),
             tool_middleware_release_service.clone(),
+            native_tool_catalog.clone(),
         ));
 
         let deployed_routes_service =
@@ -471,7 +477,7 @@ impl Services {
             });
         }
 
-        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+        crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
             &repos.plugin_repo,
@@ -484,9 +490,34 @@ impl Services {
             &plugin_registration_service,
         )
         .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
-        }
+        .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
+
+        crate::services::builtin_tool_provisioner::provision_builtin_tools(
+            builtin_tool_owner_account_id,
+            &application_service,
+            &environment_service,
+            &component_service,
+            &component_write_service,
+            &deployment_service,
+            &deployment_write_service,
+            &tool_release_service,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+
+        let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
+        native_tool_catalog
+            .provision(
+                compiled_native_tools(),
+                golem_common::model::account::AccountSummary {
+                    id: builtin_tool_owner.id,
+                    name: builtin_tool_owner.name.clone(),
+                    email: builtin_tool_owner.email.clone(),
+                },
+                &tool_release_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision native tools: {error}"))?;
 
         Ok(Self {
             account_service,
@@ -516,6 +547,7 @@ impl Services {
             environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
+            native_tool_catalog,
             login_system,
             permission_share_service,
             plan_service,

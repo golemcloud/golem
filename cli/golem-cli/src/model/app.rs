@@ -405,6 +405,7 @@ impl BridgeSdkTargetKind {
                 Self::Agent,
                 BridgeMode::External,
                 GuestLanguage::TypeScript
+                | GuestLanguage::Effect
                 | GuestLanguage::Rust
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,
@@ -413,6 +414,7 @@ impl BridgeSdkTargetKind {
                 Self::Agent,
                 BridgeMode::Guest,
                 GuestLanguage::TypeScript
+                | GuestLanguage::Effect
                 | GuestLanguage::Rust
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,
@@ -421,6 +423,7 @@ impl BridgeSdkTargetKind {
                 Self::Tool,
                 BridgeMode::Guest,
                 GuestLanguage::TypeScript
+                | GuestLanguage::Effect
                 | GuestLanguage::Rust
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,
@@ -429,6 +432,7 @@ impl BridgeSdkTargetKind {
                 Self::Tool,
                 BridgeMode::External,
                 GuestLanguage::TypeScript
+                | GuestLanguage::Effect
                 | GuestLanguage::Rust
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,

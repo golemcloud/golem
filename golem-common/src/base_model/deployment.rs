@@ -38,6 +38,12 @@ declare_revision!(CurrentDeploymentRevision);
 declare_transparent_newtypes! {
     #[derive(Display, PartialOrd, Eq, Ord)]
     pub struct DeploymentVersion(pub String);
+
+    #[derive(Display, PartialOrd, Eq, Ord)]
+    pub struct ToolVersion(pub String);
+
+    #[derive(Display, PartialOrd, Eq, Ord)]
+    pub struct ToolMetadataVersion(pub String);
 }
 
 impl From<String> for DeploymentVersion {
@@ -141,6 +147,12 @@ declare_structs! {
         pub tool_compatibility_mode: ToolCompatibilityMode,
         pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
         pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
+        /// Registry-owned ambient tools available for the proposed deployment.
+        ///
+        /// Applications cannot declare ambient tools and do not need grants to use them. These
+        /// entries are not staged and therefore do not contribute to the deployment hash or diff;
+        /// selected releases and their effective bindings are represented in `remote_tools`.
+        pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -189,4 +201,19 @@ declare_structs! {
         pub name: ToolMiddlewareName,
         pub hash: Hash,
     }
+
+    pub struct DeploymentPlanAmbientToolEntry {
+        pub release_id: crate::model::tool_release::ToolReleaseId,
+        pub name: ToolName,
+        pub version: ToolVersion,
+        pub source_digest: Hash,
+        pub owner_account_id: crate::model::account::AccountId,
+        pub owner_account_email: crate::model::account::AccountEmail,
+        pub metadata_version: ToolMetadataVersion,
+        pub metadata_digest: Hash,
+        pub definition: crate::schema::tool::Tool,
+        pub provision: crate::model::tool::ToolProvisionConfig,
+        pub environment_binding: crate::model::tool::ToolBindingInput,
+    }
+
 }

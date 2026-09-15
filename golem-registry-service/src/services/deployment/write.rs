@@ -30,6 +30,7 @@ use crate::services::environment_tool_middleware_grant::{
 };
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -47,6 +48,8 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, Dep
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::RemoteToolDeployment;
+use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
@@ -54,7 +57,7 @@ use golem_common::model::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +93,10 @@ pub enum DeploymentWriteError {
         "A de-published tool middleware release must be restored explicitly before publication"
     )]
     ToolMiddlewareReleaseDePublishedConflict,
+    #[error("Ambient tool deployment for '{0}' does not match the server catalog")]
+    AmbientToolConflict(String),
+    #[error("Duplicate remote tool name '{0}'")]
+    DuplicateRemoteToolName(golem_common::model::tool::ToolName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -111,6 +118,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::ToolReleaseDePublishedConflict => self.to_string(),
             Self::ToolMiddlewareReleaseImmutableConflict => self.to_string(),
             Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
+            Self::AmbientToolConflict(_) => self.to_string(),
+            Self::DuplicateRemoteToolName(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -149,6 +158,7 @@ pub struct DeploymentWriteService {
     tool_release_service: Arc<ToolReleaseService>,
     environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
     tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentWriteService {
@@ -167,6 +177,7 @@ impl DeploymentWriteService {
         tool_release_service: Arc<ToolReleaseService>,
         environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
         tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -183,6 +194,7 @@ impl DeploymentWriteService {
             tool_release_service,
             environment_tool_middleware_grant_service,
             tool_middleware_release_service,
+            native_tool_catalog,
         }
     }
 
@@ -275,8 +287,27 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
-        let remote_tool_references = data
+        let mut remote_tool_names = BTreeSet::new();
+        for deployment in &data.remote_tools {
+            if !remote_tool_names.insert(deployment.name.clone()) {
+                return Err(DeploymentWriteError::DuplicateRemoteToolName(
+                    deployment.name.clone(),
+                ));
+            }
+        }
+        let ambient_catalog = self
+            .native_tool_catalog
+            .active()
+            .into_iter()
+            .map(|tool| (tool.release.name.clone(), tool))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let ordinary_remote_tools = data
             .remote_tools
+            .iter()
+            .filter(|deployment| !ambient_catalog.contains_key(&deployment.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let remote_tool_references = ordinary_remote_tools
             .iter()
             .map(|deployment| deployment.release.clone())
             .collect::<Vec<_>>();
@@ -284,10 +315,8 @@ impl DeploymentWriteService {
             .environment_tool_grant_service
             .resolve_active_references_partial(&environment, &remote_tool_references, auth)
             .await?;
-        let remote_tools = data
-            .remote_tools
-            .iter()
-            .cloned()
+        let mut remote_tools = ordinary_remote_tools
+            .into_iter()
             .zip(resolved_remote_tools)
             .collect::<Vec<_>>();
         let remote_middleware_references = data
@@ -305,6 +334,42 @@ impl DeploymentWriteService {
             .cloned()
             .zip(resolved_remote_middlewares)
             .collect::<Vec<_>>();
+        for ambient in ambient_catalog.into_values() {
+            let requested = data
+                .remote_tools
+                .iter()
+                .find(|deployment| deployment.name == ambient.release.name);
+            let release = ambient.release;
+            let canonical = RemoteToolDeployment {
+                name: release.name.clone(),
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+                provision: ambient.provision,
+                environment_binding: Some(ambient.environment_binding),
+                agent_bindings: requested
+                    .map(|deployment| deployment.agent_bindings.clone())
+                    .unwrap_or_default(),
+            };
+            if let Some(requested) = requested
+                && (requested.release != canonical.release
+                    || requested.provision != canonical.provision
+                    || requested.environment_binding != canonical.environment_binding)
+            {
+                return Err(DeploymentWriteError::AmbientToolConflict(
+                    canonical.name.to_string(),
+                ));
+            }
+            remote_tools.push((
+                canonical,
+                Some(
+                    crate::services::environment_tool_grant::ResolvedGrantedToolRelease {
+                        owner: ambient.owner,
+                        release,
+                    },
+                ),
+            ));
+        }
         let deployment_context = DeploymentContext::new(
             environment,
             components,

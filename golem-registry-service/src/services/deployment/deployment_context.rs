@@ -1247,6 +1247,7 @@ fn compile_tool_binding(
         account_id: owner_account_id,
         account_email: owner_account_email.clone(),
         parameters: binding.parameters,
+        config_keys_readable: binding.config_keys_readable,
         secret_keys_readable: binding.secret_keys_readable,
         secret_keys_revealable: binding.secret_keys_revealable,
         filesystem_access: binding.filesystem_access,
@@ -2125,6 +2126,7 @@ mod tests {
             version: Some("2.0.0".to_string()),
             parameters: NormalizedJsonValue::new(json!(["not", "an", "object"])),
             account: Some(AccountEmail::new("other@example.com")),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             ..ToolBindingInput::default()
@@ -2200,6 +2202,7 @@ mod tests {
             version: Some("2.0.0".to_string()),
             parameters: NormalizedJsonValue::new(json!(["not", "an", "object"])),
             account: Some(AccountEmail::new("other@example.com")),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             ..ToolBindingInput::default()
@@ -2306,6 +2309,7 @@ mod tests {
             version: Some("2.0.0".to_string()),
             parameters: NormalizedJsonValue::new(json!(["not", "an", "object"])),
             account: Some(AccountEmail::new("other@example.com")),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             ..ToolBindingInput::default()
@@ -2372,6 +2376,7 @@ mod tests {
             version: Some("2.0.0".to_string()),
             parameters: NormalizedJsonValue::new(json!(["not", "an", "object"])),
             account: Some(AccountEmail::new("other@example.com")),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             ..ToolBindingInput::default()
@@ -2439,6 +2444,7 @@ mod tests {
                 "environment": true
             })),
             account: None,
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([readable_path.clone()])),
             secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
                 readable_path.clone(),
@@ -2453,6 +2459,7 @@ mod tests {
                 "agent": true
             })),
             account: None,
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             ..ToolBindingInput::default()

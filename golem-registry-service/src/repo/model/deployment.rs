@@ -340,6 +340,7 @@ impl DeploymentIdentity {
             tool_compatibility_mode: self.middleware.compatibility_mode,
             environment_tool_middleware_bindings: self.middleware.environment_bindings,
             agent_tool_middleware_bindings: self.middleware.agent_bindings,
+            ambient_tools: Vec::new(),
         })
     }
 }

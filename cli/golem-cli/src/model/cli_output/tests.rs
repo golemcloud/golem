@@ -2186,6 +2186,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Restart(RestartParams {
             timestamp: timestamp(),
         }),
+        PublicOplogEntry::Resumed(ResumedParams {
+            timestamp: timestamp(),
+        }),
         PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
             timestamp: timestamp(),
             plugin: plugin(2),
@@ -5033,6 +5036,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     parameters: golem_common::model::json::NormalizedJsonValue::new(json!({
                         "limit": 5
                     })),
+                    config_keys_readable: Default::default(),
                     secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
                     secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(
                         BTreeSet::new(),

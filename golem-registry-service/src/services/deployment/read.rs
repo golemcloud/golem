@@ -17,6 +17,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -85,6 +86,7 @@ pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
     application_service: Arc<ApplicationService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentService {
@@ -92,11 +94,13 @@ impl DeploymentService {
         environment_service: Arc<EnvironmentService>,
         application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> Self {
         Self {
             environment_service,
             application_service,
             deployment_repo,
+            native_tool_catalog,
         }
     }
 
@@ -195,8 +199,10 @@ impl DeploymentService {
             .get_staged_identity(environment_id.0)
             .await?;
         staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
-        let summary: DeploymentPlan = staged_identity
+        let mut summary: DeploymentPlan = staged_identity
             .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
+
+        summary.ambient_tools = self.native_tool_catalog.plan_entries();
 
         Ok(summary)
     }

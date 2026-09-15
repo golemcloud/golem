@@ -965,12 +965,13 @@ fn external_generation_keeps_rest_runtime_and_name() {
     let source = std::fs::read_to_string(target.join("external-client.ts")).unwrap();
     assert!(source.contains("@golemcloud/golem-ts-bridge"));
     assert!(source.contains("export function configure("));
-    assert!(source.contains("signed: number"));
-    assert!(source.contains("unsigned: number"));
+    assert!(source.contains("signed: bigint"));
+    assert!(source.contains("unsigned: bigint"));
     assert!(source.contains("{ kind: 's64', value:"));
     assert!(source.contains("{ kind: 'u64', value:"));
-    assert!(source.contains("n.value as number"));
-    assert!(!source.contains(": bigint"));
+    assert!(source.contains("n.value as bigint"));
+    assert!(!source.contains("signed: number"));
+    assert!(!source.contains("unsigned: number"));
     assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
 }
 

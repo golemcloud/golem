@@ -958,10 +958,55 @@ pub mod sharding {
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
             register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+        static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
+            "stale_shard_delivery_total",
+            "Number of shard deliveries dropped for naming a revision older than the last applied",
+            &["delivery"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardDelivery {
+        Register,
+        Assign,
+        Revoke,
+        Renewal,
+    }
+
+    impl ShardDelivery {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Register => "register",
+                Self::Assign => "assign",
+                Self::Revoke => "revoke",
+                Self::Renewal => "renewal",
+            }
+        }
+    }
+
+    /// A delivery was dropped for arriving older than the last one applied.
+    ///
+    /// One of these is not a fault: a push and a renewal response that cross on the network
+    /// always produce one, and dropping the older is the point of the revision gate. A sustained
+    /// rate is the fault, and a warning per occurrence does not make a rate visible.
+    pub fn record_stale_shard_delivery(delivery: ShardDelivery) {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .inc();
+    }
+
+    /// How many deliveries of `delivery` have been dropped as stale.
+    #[cfg(test)]
+    pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .get()
     }
 }
 

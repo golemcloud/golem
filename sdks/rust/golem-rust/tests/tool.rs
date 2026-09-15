@@ -1569,11 +1569,11 @@ impl ToolErrorSchema for ManualError {
         Ok(Vec::new())
     }
 
-    fn to_error_payload_value(&self) -> Result<TypedSchemaValue, String> {
+    fn to_error_payload_value(&self) -> Result<(String, TypedSchemaValue), String> {
         todo!()
     }
 
-    fn from_error_payload_value(_value: TypedSchemaValue) -> Result<Self, String> {
+    fn from_error_payload_value(_name: String, _value: TypedSchemaValue) -> Result<Option<Self>, String> {
         todo!()
     }
 }

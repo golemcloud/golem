@@ -231,6 +231,13 @@ pub struct EtcdConfig {
     /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.
     #[serde(with = "humantime_serde", default = "default_leader_lease_ttl")]
     pub leader_lease_ttl: Duration,
+    /// How many etcd revisions of history the leader keeps behind the shard lease state; older
+    /// ones are compacted after each pass of its loop. The state is rewritten on every lease
+    /// renewal, so without compaction etcd grows until its space quota makes it read-only.
+    /// Compaction is cluster-wide: `0` disables it, for an etcd cluster shared with tenants that
+    /// keep their own history.
+    #[serde(default = "default_etcd_compaction_retention_revisions")]
+    pub compaction_retention_revisions: u64,
 }
 
 fn default_etcd_connect_timeout() -> Duration {
@@ -245,6 +252,13 @@ fn default_etcd_request_timeout() -> Duration {
     Duration::from_secs(5)
 }
 
+/// Generous against what anything needs: nothing reads an old revision of the state key, so the
+/// retention only has to outlast in-flight reads and the leader election's watches. At ten
+/// executors this is about half an hour of renewals, and about 50 MB of history.
+fn default_etcd_compaction_retention_revisions() -> u64 {
+    1000
+}
+
 impl Default for EtcdConfig {
     fn default() -> Self {
         Self {
@@ -252,6 +266,7 @@ impl Default for EtcdConfig {
             connect_timeout: default_etcd_connect_timeout(),
             request_timeout: default_etcd_request_timeout(),
             leader_lease_ttl: default_leader_lease_ttl(),
+            compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
         }
     }
 }
@@ -263,6 +278,7 @@ impl SafeDisplay for EtcdConfig {
             connect_timeout,
             request_timeout,
             leader_lease_ttl,
+            compaction_retention_revisions,
         } = self;
 
         let mut result = String::new();
@@ -270,6 +286,10 @@ impl SafeDisplay for EtcdConfig {
         let _ = writeln!(&mut result, "connect timeout: {connect_timeout:?}");
         let _ = writeln!(&mut result, "request timeout: {request_timeout:?}");
         let _ = writeln!(&mut result, "leader lease ttl: {leader_lease_ttl:?}");
+        let _ = writeln!(
+            &mut result,
+            "compaction retention revisions: {compaction_retention_revisions}"
+        );
         result
     }
 }
