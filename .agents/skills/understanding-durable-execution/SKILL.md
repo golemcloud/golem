@@ -152,6 +152,10 @@ open-oplog cache entries only for the generation being deleted. A stale `Arc<Wor
 cannot continue deletion against, or evict cache state belonging to, a replacement with the same
 `AgentId`.
 
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
 Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
 `Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
 after reading the worker's memory requirement succeeds and before changing the resident state to
