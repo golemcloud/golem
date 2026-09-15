@@ -409,6 +409,10 @@ mod tests {
                 cors: CorsOptions { allowed_patterns },
             }),
             captured_path_parameters: vec![],
+            request_target: golem_common::model::agent::http_files::HttpRequestTarget::parse(
+                "/notes",
+            )
+            .unwrap(),
             openapi_spec: None,
         }
     }

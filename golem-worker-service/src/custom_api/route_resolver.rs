@@ -23,6 +23,7 @@ use crate::custom_api::{
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::model::agent::http_files::HttpRequestTarget;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::SecuritySchemeId;
@@ -39,6 +40,7 @@ pub struct ResolvedRouteEntry {
     pub domain: Domain,
     pub route: Arc<RichCompiledRoute>,
     pub captured_path_parameters: Vec<String>,
+    pub request_target: HttpRequestTarget,
     pub openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }
 
@@ -88,16 +90,25 @@ impl RouteResolver {
         &self,
         request: &poem::Request,
     ) -> Result<ResolvedRouteEntry, RouteResolverError> {
+        let request_target = HttpRequestTarget::parse(
+            request
+                .uri()
+                .path_and_query()
+                .ok_or_else(|| RouteResolverError::MalformedPath("unsafe-path".into()))?
+                .as_str(),
+        )
+        .map_err(RouteResolverError::MalformedPath)?;
         let domain = authority_from_request(request)
             .map_err(RouteResolverError::CouldNotGetDomainFromRequest)?;
         debug!("Resolving router for domain: {domain}");
 
         let domain_api = self.get_or_build_domain_api(&domain).await?;
 
-        let decoded_path = urlencoding::decode(request.uri().path())
-            .map_err(|err| RouteResolverError::MalformedPath(err.to_string()))?;
-
-        let path_segments: Vec<&str> = split_path(&decoded_path).collect();
+        let path_segments: Vec<&str> = request_target
+            .segments()
+            .iter()
+            .map(String::as_str)
+            .collect();
 
         let (route_entry, captured_path_parameters) = domain_api
             .router
@@ -109,6 +120,7 @@ impl RouteResolver {
         Ok(ResolvedRouteEntry {
             domain,
             captured_path_parameters,
+            request_target,
             route: route_entry.clone(),
             openapi_spec: domain_api.openapi_spec.clone(),
         })
@@ -269,10 +281,6 @@ fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
         .ok_or("No host header provided".to_string())
 }
 
-fn split_path(s: &str) -> impl Iterator<Item = &str> {
-    s.trim_matches('/').split('/')
-}
-
 fn compile_route_security(
     security_schemes: &HashMap<SecuritySchemeId, Arc<SecuritySchemeDetails>>,
     security: RouteSecurity,
@@ -314,4 +322,124 @@ struct DomainHttpApi {
     environment_id: EnvironmentId,
     router: Router<Arc<RichCompiledRoute>>,
     openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::HttpMethod;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_service_base::custom_api::{CompiledRoute, RouteBehaviour, WebhookCallbackBehaviour};
+    use test_r::test;
+
+    struct LiteralLookup(Vec<String>);
+
+    #[async_trait::async_trait]
+    impl HttpApiDefinitionsLookup for LiteralLookup {
+        async fn get(&self, _: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+            Ok(CompiledRoutes {
+                account_id: AccountId(uuid::Uuid::nil()),
+                account_email: AccountEmail::new("test@example.com"),
+                environment_id: EnvironmentId(uuid::Uuid::nil()),
+                deployment_revision: DeploymentRevision::INITIAL,
+                security_schemes: HashMap::new(),
+                routes: vec![CompiledRoute {
+                    route_id: 7,
+                    method: HttpMethod::Get(Empty {}),
+                    path: self
+                        .0
+                        .iter()
+                        .cloned()
+                        .map(|value| PathSegment::Literal { value })
+                        .collect(),
+                    body: RequestBodySchema::Unused,
+                    behavior: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
+                        component_id: ComponentId(uuid::Uuid::nil()),
+                    }),
+                    security: RouteSecurity::None,
+                    cors: CorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                }],
+            })
+        }
+    }
+
+    struct UnexpectedLookup;
+
+    #[async_trait::async_trait]
+    impl HttpApiDefinitionsLookup for UnexpectedLookup {
+        async fn get(&self, _: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+            panic!("Unsafe paths must be rejected before deployment lookup");
+        }
+    }
+
+    #[test]
+    async fn unsafe_paths_are_terminal_before_deployment_lookup() {
+        let resolver =
+            RouteResolver::new(&RouteResolverConfig::default(), Arc::new(UnexpectedLookup));
+        for target in [
+            "//",
+            "/a//b",
+            "/a%2Fb",
+            "/a/%2e%2e",
+            "/%ff",
+            "/%zz",
+            "/%00",
+            "/a|b",
+            "/[1]",
+            "/{name}",
+            "/a\\b",
+            "/café",
+        ] {
+            let request = poem::Request::builder()
+                .uri(target.parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            assert!(
+                matches!(
+                    resolver.resolve_matching_route(&request).await,
+                    Err(RouteResolverError::MalformedPath(_))
+                ),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    async fn resolved_target_preserves_raw_path_and_decoded_boundaries() {
+        for (target, expected_segments, expected_query, trailing_slash) in [
+            ("/", vec![], None, false),
+            ("/a?", vec!["a"], Some(""), false),
+            (
+                "/a%20b/%252f?x=+&x=%2f",
+                vec!["a b", "%2f"],
+                Some("x=+&x=%2f"),
+                false,
+            ),
+        ] {
+            let resolver = RouteResolver::new(
+                &RouteResolverConfig::default(),
+                Arc::new(LiteralLookup(
+                    expected_segments.iter().map(|s| s.to_string()).collect(),
+                )),
+            );
+            let request = poem::Request::builder()
+                .uri(target.parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let resolved = resolver.resolve_matching_route(&request).await.unwrap();
+            assert_eq!(resolved.route.route_id, 7, "{target}");
+            assert_eq!(
+                resolved.request_target.path(),
+                target.split('?').next().unwrap()
+            );
+            assert_eq!(resolved.request_target.query(), expected_query);
+            assert_eq!(resolved.request_target.segments(), expected_segments);
+            assert_eq!(resolved.request_target.trailing_slash(), trailing_slash);
+        }
+    }
 }

@@ -15,6 +15,61 @@
 use super::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use std::collections::HashSet;
 
+/// A public request target with one shared segment boundary for routing and files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequestTarget {
+    path: String,
+    query: Option<String>,
+    segments: Vec<String>,
+    trailing_slash: bool,
+}
+
+impl HttpRequestTarget {
+    pub fn parse(target: &str) -> Result<Self, String> {
+        let (path, query) = match target.split_once('?') {
+            Some((path, query)) => (path, Some(query.to_string())),
+            None => (target, None),
+        };
+        let remaining = path.strip_prefix('/').ok_or("unsafe-path")?;
+        let trailing_slash = !remaining.is_empty() && remaining.ends_with('/');
+        let segments = if remaining.is_empty() {
+            Vec::new()
+        } else {
+            let remaining = if trailing_slash {
+                &remaining[..remaining.len() - 1]
+            } else {
+                remaining
+            };
+            remaining
+                .split('/')
+                .map(decode_segment)
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        Ok(Self {
+            path: path.to_string(),
+            query,
+            segments,
+            trailing_slash,
+        })
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn query(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+
+    pub fn segments(&self) -> &[String] {
+        &self.segments
+    }
+
+    pub fn trailing_slash(&self) -> bool {
+        self.trailing_slash
+    }
+}
+
 impl FileMapping {
     /// Compile URI source syntax once; targets are filesystem text, not URIs.
     pub fn compile(source: &str, target: &str) -> Result<Self, String> {
@@ -115,32 +170,35 @@ pub(crate) fn valid_decoded_segment(segment: &str) -> bool {
 }
 
 fn decode_source(source: &str) -> Result<Vec<String>, String> {
-    if source == "/" {
-        return Ok(vec![]);
+    if source.contains(['$', '*', '?', '#']) {
+        return Err("source-path".into());
     }
-    let path = source.strip_prefix('/').ok_or("source-path")?;
-    path.split('/')
-        .map(|raw| {
-            let mut decoded = Vec::with_capacity(raw.len());
-            let mut bytes = raw.bytes();
-            while let Some(byte) = bytes.next() {
-                if byte == b'%' {
-                    let high = bytes.next().and_then(hex).ok_or("source-path")?;
-                    let low = bytes.next().and_then(hex).ok_or("source-path")?;
-                    decoded.push(high * 16 + low);
-                } else if byte.is_ascii_alphanumeric() || b"-._~!&'()+,;=:@".contains(&byte) {
-                    decoded.push(byte);
-                } else {
-                    return Err("source-path".to_string());
-                }
-            }
-            let decoded = String::from_utf8(decoded).map_err(|_| "source-path")?;
-            if !valid_decoded_segment(&decoded) {
-                return Err("source-path".into());
-            }
-            Ok(decoded)
-        })
-        .collect()
+    let target = HttpRequestTarget::parse(source).map_err(|_| "source-path")?;
+    if target.trailing_slash {
+        return Err("source-path".into());
+    }
+    Ok(target.segments)
+}
+
+fn decode_segment(raw: &str) -> Result<String, String> {
+    let mut decoded = Vec::with_capacity(raw.len());
+    let mut bytes = raw.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let high = bytes.next().and_then(hex).ok_or("unsafe-path")?;
+            let low = bytes.next().and_then(hex).ok_or("unsafe-path")?;
+            decoded.push(high * 16 + low);
+        } else if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@".contains(&byte) {
+            decoded.push(byte);
+        } else {
+            return Err("unsafe-path".into());
+        }
+    }
+    let decoded = String::from_utf8(decoded).map_err(|_| "unsafe-path")?;
+    if !valid_decoded_segment(&decoded) {
+        return Err("unsafe-path".into());
+    }
+    Ok(decoded)
 }
 
 fn hex(byte: u8) -> Option<u8> {
@@ -157,6 +215,48 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
     use test_r::test;
+
+    #[test]
+    fn shared_request_path_corpus() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        for case in corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["suite"] == "path")
+        {
+            let result = HttpRequestTarget::parse(case["input"]["target"].as_str().unwrap());
+            if let Some(error) = case["expect"]["error"].as_str() {
+                assert_eq!(result.unwrap_err(), error, "{}", case["id"]);
+            } else {
+                let result = result.unwrap();
+                assert_eq!(
+                    json!({
+                        "segments": result.segments(),
+                        "trailing_slash": result.trailing_slash(),
+                        "path": result.path(),
+                        "query": result.query(),
+                    }),
+                    case["expect"],
+                    "{}",
+                    case["id"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn request_literals_do_not_acquire_mapping_syntax() {
+        let target = HttpRequestTarget::parse("/$1/*/%7Bid%7D/%252f?x=??%ff").unwrap();
+        assert_eq!(target.segments(), &["$1", "*", "{id}", "%2f"]);
+        assert_eq!(target.query(), Some("x=??%ff"));
+        assert!(FileMapping::compile("/$1", "/file").is_err());
+        assert!(FileMapping::compile("/a*b", "/file").is_err());
+        assert!(FileMapping::compile("/{id}", "/file").is_err());
+    }
 
     #[test]
     fn shared_mapping_corpus() {
