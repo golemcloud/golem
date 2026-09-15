@@ -14,8 +14,9 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
+    blob_file_name_to_string, blob_parent_to_string, blob_path_to_string,
+    validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -364,6 +365,37 @@ impl BlobStorage for InMemoryBlobStorage {
             .unwrap_or_default();
 
         Ok(files.into_iter().map(|f| path.join(f)).collect())
+    }
+
+    async fn list_blobs_below(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        validate_relative_blob_path(path)?;
+        let directory = blob_path_to_string(path)?;
+        let nested = format!("{directory}/");
+
+        let mut listed = Vec::new();
+        self.data
+            .iter_async(|key, entry| {
+                if let (Some(name), Entry::File { metadata, .. }) = (&key.file, entry)
+                    && key.namespace == namespace
+                    && (directory.is_empty()
+                        || key.dir == directory
+                        || key.dir.starts_with(&nested))
+                {
+                    listed.push(ListedBlob {
+                        path: blob_child_path(&key.dir, name),
+                        size: metadata.size,
+                    });
+                }
+                true
+            })
+            .await;
+        Ok(listed.into_boxed_slice())
     }
 
     async fn delete_dir(

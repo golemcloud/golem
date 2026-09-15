@@ -17,8 +17,9 @@ use crate::db::{DBValue, PoolApi};
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
+    blob_file_name_to_string, blob_parent_to_string, blob_path_to_string,
+    validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -300,6 +301,48 @@ impl BlobStorage for SqliteBlobStorage {
             .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())?;
 
         Ok(result)
+    }
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        validate_relative_blob_path(path)?;
+        let directory = blob_path_to_string(path)?;
+
+        // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
+        // below `directory` is at least `directory/` and less than `directory0`, because `0` is
+        // the character after `/`. This range can use the primary key.
+        let query = if directory.is_empty() {
+            sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE;",
+            )
+            .bind(Self::namespace(namespace))
+        } else {
+            sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE AND (parent = ? OR (parent >= ? AND parent < ?));",
+            )
+            .bind(Self::namespace(namespace))
+            .bind(directory.clone())
+            .bind(format!("{directory}/"))
+            .bind(format!("{directory}0"))
+        };
+
+        self.pool
+            .with_ro(target_label, op_label)
+            .fetch_all_as::<(String, String, i64), _>(query)
+            .await?
+            .into_iter()
+            .map(|(parent, name, size)| {
+                Ok(ListedBlob {
+                    path: blob_child_path(&parent, &name),
+                    size: u64::try_from(size)?,
+                })
+            })
+            .collect()
     }
 
     async fn delete_dir(

@@ -15,23 +15,25 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_to_string,
-    validate_relative_blob_path,
+    BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    blob_path_to_string, validate_relative_blob_path,
 };
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
+use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::{Buf, Bytes};
-use futures::TryFutureExt;
 use futures::stream::BoxStream;
+use futures::{TryFutureExt, TryStreamExt};
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
@@ -41,6 +43,12 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
+
+/// The largest number of keys that S3 accepts in one `DeleteObjects` request.
+const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
+
+/// The HTTP status that S3 gives for a range that has no byte in the object.
+const RANGE_NOT_SATISFIABLE: u16 = 416;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -84,10 +92,13 @@ impl S3BlobStorage {
             s3_config_builder = s3_config_builder.force_path_style(*path_style);
         }
 
-        let s3_config = s3_config_builder.build();
+        Self::with_sdk_config(config, s3_config_builder.build())
+    }
 
+    /// Makes a blob storage that sends its requests through a client with the given S3 settings.
+    fn with_sdk_config(config: S3BlobStorageConfig, sdk_config: aws_sdk_s3::Config) -> Self {
         Self {
-            client: aws_sdk_s3::Client::from_conf(s3_config),
+            client: aws_sdk_s3::Client::from_conf(sdk_config),
             config,
         }
     }
@@ -279,13 +290,124 @@ impl S3BlobStorage {
         Ok(!response.contents().is_empty())
     }
 
+    /// Checks that a ranged read got the bytes from `start` to `end`.
+    ///
+    /// S3 answers a range that ends after the object with the bytes that exist. That answer gives
+    /// a `BlobRangeError`. A missing `Content-Range`, or a range that starts at a different byte,
+    /// gives a different error.
+    fn check_content_range(content_range: Option<&str>, start: u64, end: u64) -> Result<(), Error> {
+        let returned = content_range
+            .and_then(|value| value.strip_prefix("bytes "))
+            .and_then(|value| value.split_once('/'))
+            .and_then(|(range, _)| range.split_once('-'))
+            .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
+        match returned {
+            Some((first, last)) if first == start && last == end => Ok(()),
+            Some((first, last)) if first == start && last < end => {
+                Err(BlobRangeError { start, end }.into())
+            }
+            _ => Err(anyhow!(
+                "S3 returned the content range {content_range:?} for the byte range {start}-{end}"
+            )),
+        }
+    }
+
+    /// Deletes objects in requests of at most [`MAX_KEYS_PER_DELETE_OBJECTS`] keys, one request
+    /// at a time.
+    ///
+    /// An empty list sends no request. The first request that fails after its last attempt stops
+    /// the deletion and gives its error.
+    async fn delete_keys(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        keys: &[ObjectIdentifier],
+    ) -> Result<(), Error> {
+        futures::stream::iter(keys.chunks(MAX_KEYS_PER_DELETE_OBJECTS).map(Ok))
+            .try_for_each(|chunk| {
+                self.delete_objects_request(target_label, op_label, bucket, chunk)
+            })
+            .await
+    }
+
+    /// Sends one `DeleteObjects` request in quiet mode, with retries.
+    ///
+    /// A response that reports an error for a key is a failed attempt, so the whole request goes
+    /// again within the retry budget. S3 reports a key that does not exist as deleted, so a new
+    /// attempt is safe.
+    async fn delete_objects_request(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        keys: &[ObjectIdentifier],
+    ) -> Result<(), Error> {
+        let delete = Delete::builder()
+            .set_objects(Some(keys.to_vec()))
+            .quiet(true)
+            .build()?;
+
+        with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {} keys", keys.len())),
+            &self.config.retries,
+            &(self.client.clone(), bucket, delete),
+            |(client, bucket, delete)| {
+                Box::pin(async move {
+                    let output = client
+                        .delete_objects()
+                        .bucket(*bucket)
+                        .delete(delete.clone())
+                        .send()
+                        .await
+                        .map_err(SdkErrorOrCustomError::sdk_error)?;
+                    Self::key_errors(&output, bucket, delete.objects().len())
+                        .map_or(Ok(()), |err| Err(SdkErrorOrCustomError::custom_error(err)))
+                })
+            },
+            |err| err.is_retriable(Self::is_delete_objects_error_retriable),
+            SdkErrorOrCustomError::as_loggable,
+            false,
+        )
+        .await
+        .map_err(|err| match err {
+            SdkErrorOrCustomError::SdkError(err) => Error::new(err),
+            SdkErrorOrCustomError::CustomError(err) => err,
+        })
+    }
+
+    /// Gives an error when a `DeleteObjects` response reports an error for a key.
+    ///
+    /// The message gives the number of keys that S3 did not delete, and the details of the first.
+    fn key_errors(output: &DeleteObjectsOutput, bucket: &str, requested: usize) -> Option<Error> {
+        output.errors().first().map(|first| {
+            anyhow!(
+                "S3 did not delete {} of {requested} keys in bucket {bucket}; first: {}: {}: {}",
+                output.errors().len(),
+                first.key().unwrap_or_default(),
+                first.code().unwrap_or_default(),
+                first.message().unwrap_or_default(),
+            )
+        })
+    }
+
     fn is_get_object_error_retriable(
         error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
     ) -> bool {
         match error {
-            SdkError::ServiceError(service_error) => !matches!(service_error.err(), NoSuchKey(_)),
+            SdkError::ServiceError(service_error) => {
+                !matches!(service_error.err(), NoSuchKey(_))
+                    && !Self::is_range_not_satisfiable(service_error.raw())
+            }
             _ => true,
         }
+    }
+
+    /// Tells whether S3 refused a range because no byte of the range is in the object.
+    fn is_range_not_satisfiable(response: &HttpResponse) -> bool {
+        response.status().as_u16() == RANGE_NOT_SATISFIABLE
     }
 
     fn is_head_object_error_retriable(error: &SdkError<HeadObjectError>) -> bool {
@@ -492,6 +614,10 @@ impl BlobStorage for S3BlobStorage {
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        // S3 ignores a range whose end is before its start, and sends the whole object.
+        if start > end {
+            return Err(BlobRangeError { start, end }.into());
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -521,11 +647,17 @@ impl BlobStorage for S3BlobStorage {
 
         match result {
             Ok(response) => {
+                Self::check_content_range(response.content_range(), start, end)?;
                 let body = response.body;
                 let aggregated_bytes = body.collect().await?;
                 let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
+            }
+            Err(SdkError::ServiceError(service_error))
+                if Self::is_range_not_satisfiable(service_error.raw()) =>
+            {
+                Err(BlobRangeError { start, end }.into())
             }
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 NoSuchKey(_) => Ok(None),
@@ -804,34 +936,8 @@ impl BlobStorage for S3BlobStorage {
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        with_retries_customized(
-            target_label,
-            op_label,
-            Some(format!("{bucket} - {prefix:?}")),
-            &self.config.retries,
-            &(self.client.clone(), bucket, to_delete),
-            |(client, bucket, to_delete)| {
-                Box::pin(async move {
-                    client
-                        .delete_objects()
-                        .bucket(*bucket)
-                        .delete(
-                            Delete::builder()
-                                .set_objects(Some(to_delete.clone()))
-                                .build()
-                                .expect("Could not build delete object"),
-                        )
-                        .send()
-                        .await
-                })
-            },
-            Self::is_delete_objects_error_retriable,
-            Self::sdk_error_as_loggable_string,
-            false,
-        )
-        .await?;
-
-        Ok(())
+        self.delete_keys(target_label, op_label, bucket, &to_delete)
+            .await
     }
 
     async fn create_dir(
@@ -914,6 +1020,37 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Vec<_>>())
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        validate_relative_blob_path(path)?;
+        let bucket = self.bucket_of(&namespace);
+        let namespace_root = self.prefix_of(&namespace);
+        let key = namespace_root.join(path);
+
+        self.list_objects(target_label, op_label, bucket, &key)
+            .await?
+            .iter()
+            .filter_map(|object| object.key().map(|key| (key, object.size())))
+            // Other S3 tools write a key that ends with `/` as a folder placeholder.
+            .filter(|(key, _)| {
+                !key.ends_with('/')
+                    && Path::new(key).file_name().and_then(|name| name.to_str())
+                        != Some("__dir_marker")
+            })
+            .map(|(key, size)| {
+                Ok::<_, Error>(ListedBlob {
+                    path: Path::new(key).strip_prefix(&namespace_root)?.into(),
+                    size: u64::try_from(size.unwrap_or_default())?,
+                })
+            })
+            .collect()
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -937,34 +1074,8 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Result<Vec<_>, _>>()?;
         let has_entries = !to_delete.is_empty();
 
-        if has_entries {
-            with_retries_customized(
-                target_label,
-                op_label,
-                Some(format!("{bucket} - {key:?}")),
-                &self.config.retries,
-                &(self.client.clone(), bucket, to_delete),
-                |(client, bucket, to_delete)| {
-                    Box::pin(async move {
-                        client
-                            .delete_objects()
-                            .bucket(*bucket)
-                            .delete(
-                                Delete::builder()
-                                    .set_objects(Some(to_delete.clone()))
-                                    .build()
-                                    .expect("Could not build delete object"),
-                            )
-                            .send()
-                            .await
-                    })
-                },
-                Self::is_delete_objects_error_retriable,
-                Self::sdk_error_as_loggable_string,
-                false,
-            )
+        self.delete_keys(target_label, op_label, bucket, &to_delete)
             .await?;
-        }
 
         Ok(has_entries)
     }
@@ -1195,3 +1306,6 @@ impl<D: Buf, E> http_body::Body for SizedBody<D, E> {
         self.hint
     }
 }
+
+#[cfg(test)]
+mod tests;

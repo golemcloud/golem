@@ -19,8 +19,8 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::TryStreamExt;
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -325,6 +325,18 @@ impl BlobStorage for S3BlobStorageWithContainer {
             .await
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.storage
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -449,6 +461,7 @@ fn custom_storage() -> BlobStorageNamespace {
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
+define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
 
 #[test]
 #[tracing::instrument]
@@ -1433,4 +1446,260 @@ async fn delete_dir_root_path_is_safe_noop(
         .unwrap();
 
     assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+}
+
+async fn put_blobs(
+    storage: &Arc<dyn BlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+    blobs: &[(&str, usize)],
+) {
+    futures::stream::iter(blobs)
+        .then(|(path, size)| async move {
+            storage
+                .put_raw(
+                    "put_blobs",
+                    "put-raw",
+                    namespace.clone(),
+                    Path::new(path),
+                    &vec![7u8; *size],
+                )
+                .await
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+}
+
+async fn sorted_listing(
+    storage: &Arc<dyn BlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+    path: &str,
+) -> Vec<ListedBlob> {
+    let mut listed = storage
+        .list_blobs_below("sorted_listing", "list", namespace.clone(), Path::new(path))
+        .await
+        .unwrap()
+        .into_vec();
+    listed.sort();
+    listed
+}
+
+fn listed_blobs(blobs: &[(&str, usize)]) -> Vec<ListedBlob> {
+    let mut listed = blobs
+        .iter()
+        .map(|(path, size)| ListedBlob {
+            path: Path::new(path).into(),
+            size: *size as u64,
+        })
+        .collect::<Vec<_>>();
+    listed.sort();
+    listed
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_blobs_below_finds_nested_blobs_with_sizes(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let below_tree = [("tree/a", 1), ("tree/x/b", 2), ("tree/x/y/c", 3)];
+    let sibling = [("tree2/d", 4)];
+    put_blobs(&storage, namespace, &below_tree).await;
+    put_blobs(&storage, namespace, &sibling).await;
+    storage
+        .create_dir(
+            "list_blobs_below_finds_nested_blobs_with_sizes",
+            "create-dir",
+            namespace.clone(),
+            Path::new("tree/empty"),
+        )
+        .await
+        .unwrap();
+    // A case-insensitive store maps `TREE` onto `tree`, so only a case-sensitive store gets the
+    // sibling that differs only in case.
+    let case_sensitive = storage
+        .exists(
+            "list_blobs_below_finds_nested_blobs_with_sizes",
+            "exists",
+            namespace.clone(),
+            Path::new("TREE/a"),
+        )
+        .await
+        .unwrap()
+        == ExistsResult::DoesNotExist;
+    let case_sibling: &[(&str, usize)] = if case_sensitive {
+        &[("TREE/x/e", 5)]
+    } else {
+        &[]
+    };
+    put_blobs(&storage, namespace, case_sibling).await;
+
+    let listed_below_tree = sorted_listing(&storage, namespace, "tree").await;
+    let listed_below_root = sorted_listing(&storage, namespace, "").await;
+    let listed_below_missing = sorted_listing(&storage, namespace, "missing").await;
+    let listed_below_blob = sorted_listing(&storage, namespace, "tree/a").await;
+
+    assert_eq!(listed_below_tree, listed_blobs(&below_tree));
+    assert_eq!(
+        listed_below_root,
+        listed_blobs(&[&below_tree[..], &sibling, case_sibling].concat())
+    );
+    assert_eq!(listed_below_missing, Vec::new());
+    assert_eq!(listed_below_blob, Vec::new());
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_raw_slice_uses_inclusive_ranges(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    put_blobs(&storage, namespace, &[("ranges/empty", 0)]).await;
+    storage
+        .put_raw(
+            "get_raw_slice_uses_inclusive_ranges",
+            "put-raw",
+            namespace.clone(),
+            Path::new("ranges/blob"),
+            b"abcdef",
+        )
+        .await
+        .unwrap();
+    let read = |path: &'static str, start: u64, end: u64| {
+        storage.get_raw_slice(
+            "get_raw_slice_uses_inclusive_ranges",
+            "get-raw-slice",
+            namespace.clone(),
+            Path::new(path),
+            start,
+            end,
+        )
+    };
+
+    assert_eq!(
+        read("ranges/blob", 1, 3).await.unwrap(),
+        Some(b"bcd".to_vec())
+    );
+    assert_eq!(
+        read("ranges/blob", 0, 5).await.unwrap(),
+        Some(b"abcdef".to_vec())
+    );
+    assert_eq!(
+        read("ranges/blob", 5, 5).await.unwrap(),
+        Some(b"f".to_vec())
+    );
+    assert_eq!(read("ranges/missing", 0, 0).await.unwrap(), None);
+
+    let outside = [
+        ("ranges/blob", 0, 6),
+        ("ranges/blob", 6, 6),
+        ("ranges/blob", 3, 2),
+        ("ranges/empty", 0, 0),
+        ("ranges/missing", 3, 2),
+    ];
+    let range_errors = futures::stream::iter(outside)
+        .then(|(path, start, end)| async move {
+            let error = read(path, start, end).await.err();
+            (
+                path,
+                error.and_then(|error| error.downcast_ref::<BlobRangeError>().copied()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        range_errors,
+        outside
+            .map(|(path, start, end)| (path, Some(BlobRangeError { start, end })))
+            .to_vec()
+    );
+}
+
+fn bulk_paths() -> Vec<PathBuf> {
+    (0..2001)
+        .map(|index| PathBuf::from(format!("bulk/{index:04}")))
+        .collect()
+}
+
+async fn put_bulk_blobs(
+    storage: &Arc<dyn BlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+    paths: &[PathBuf],
+) {
+    futures::stream::iter(paths.iter().cloned())
+        .map(|path| async move {
+            storage
+                .put_raw(
+                    "put_bulk_blobs",
+                    "put-raw",
+                    namespace.clone(),
+                    &path,
+                    b"bulk",
+                )
+                .await
+        })
+        .buffer_unordered(32)
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_many_deletes_more_than_1000_blobs(
+    #[dimension(s3_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let paths = bulk_paths();
+    put_bulk_blobs(&storage, namespace, &paths).await;
+    let written = sorted_listing(&storage, namespace, "bulk").await.len();
+
+    storage
+        .delete_many(
+            "delete_many_deletes_more_than_1000_blobs",
+            "delete-many",
+            namespace.clone(),
+            &paths,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (written, sorted_listing(&storage, namespace, "bulk").await),
+        (2001, Vec::new())
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_deletes_more_than_1000_blobs(
+    #[dimension(s3_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    put_bulk_blobs(&storage, namespace, &bulk_paths()).await;
+    let written = sorted_listing(&storage, namespace, "bulk").await.len();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_deletes_more_than_1000_blobs",
+            "delete-dir",
+            namespace.clone(),
+            Path::new("bulk"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            written,
+            deleted,
+            sorted_listing(&storage, namespace, "bulk").await
+        ),
+        (2001, true, Vec::new())
+    );
 }
