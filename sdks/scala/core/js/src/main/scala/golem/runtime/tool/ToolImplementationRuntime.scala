@@ -23,7 +23,7 @@ import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 
@@ -64,36 +64,75 @@ final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends
 
 /** The stdout handle of a JS-guest tool invocation. */
 final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) extends ToolOutputStream {
-  private var terminal: Option[Future[Either[StreamWriteError, Unit]]] = None
+  private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
+  private var pending                                        = Option.empty[Future[Either[StreamWriteError, Unit]]]
+  private var terminal                                       = Option.empty[ByteStreamCloseCause]
+  private var completion                                     = Option.empty[Future[Unit]]
 
   override def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
-    if (bytes.isEmpty) Future.successful(Right(()))
-    else call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
+    perform(None) {
+      if (bytes.isEmpty) js.Promise.resolve[Unit](())
+      else underlying.write(js.typedarray.Uint8Array.from(bytes.map(b => (b & 0xff).toShort).toJSArray))
+    }
+
   override def finish(): Future[Either[StreamWriteError, Unit]] =
-    selectTerminal(underlying.finish())
+    perform(Some(ByteStreamCloseCause.Finished))(underlying.finish())
+
   override def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
-    selectTerminal(underlying.fail(encodeFailure(reason)))
+    perform(Some(ByteStreamCloseCause.Failed(reason)))(underlying.fail(encodeFailure(reason)))
 
   private[tool] def finishInvocation(): Future[Unit] =
-    terminal
-      .getOrElse(finish())
-      .flatMap {
-        case Right(_)                         => Future.successful(())
-        case Left(StreamWriteError.Closed(_)) => Future.successful(())
-        case Left(error)                      =>
-          Future.failed(new IllegalStateException(s"tool stdout terminal failed: $error"))
-      }(ToolInvokerRuntime.executionContext)
+    completion.getOrElse {
+      val completed = Promise[Unit]()
+      completion = Some(completed.future)
+      val finished = pending
+        .getOrElse(Future.successful(Right(())))
+        .flatMap { _ =>
+          if (terminal.isDefined) Future.successful(Right(()))
+          else start(Some(ByteStreamCloseCause.Finished))(underlying.finish())
+        }
+        .flatMap {
+          case Right(_) | Left(StreamWriteError.Closed(_)) => Future.successful(())
+          case Left(error)                                 => Future.failed(new IllegalStateException(s"tool stdout terminal failed: $error"))
+        }
+      finished.transformWith { result =>
+        terminal = terminal.orElse(Some(ByteStreamCloseCause.Failed(ByteStreamFailure.Abandoned)))
+        JsToolOutputStream.dispose(underlying)
+        Future.fromTry(result)
+      }.onComplete(completed.complete)
+      completed.future
+    }
 
-  private def selectTerminal(
+  private def perform(selection: Option[ByteStreamCloseCause])(
     promise: => js.Promise[Unit]
   ): Future[Either[StreamWriteError, Unit]] =
-    terminal match {
-      case Some(selected) => selected
-      case None           =>
-        val selected = call(promise)
-        terminal = Some(selected)
-        selected
+    if (pending.isDefined || (completion.isDefined && terminal.isEmpty))
+      Future.successful(Left(StreamWriteError.ConcurrentOperation))
+    else if (completion.isDefined)
+      Future.successful(Left(StreamWriteError.Closed(terminal.get)))
+    else
+      terminal match {
+        case Some(cause) if selection.contains(cause) => Future.successful(Right(()))
+        case Some(cause)                              => Future.successful(Left(StreamWriteError.Closed(cause)))
+        case None                                     => start(selection)(promise)
+      }
+
+  private def start(selection: Option[ByteStreamCloseCause])(
+    promise: => js.Promise[Unit]
+  ): Future[Either[StreamWriteError, Unit]] = {
+    val completed = Promise[Either[StreamWriteError, Unit]]()
+    pending = Some(completed.future)
+    call(promise).onComplete { result =>
+      pending = None
+      result.foreach {
+        case Right(_)                                   => terminal = terminal.orElse(selection)
+        case Left(StreamWriteError.Closed(cause))       => terminal = Some(cause)
+        case Left(StreamWriteError.ConcurrentOperation) => ()
+      }
+      completed.complete(result)
     }
+    completed.future
+  }
 
   private def call(promise: => js.Promise[Unit]): Future[Either[StreamWriteError, Unit]] =
     try
@@ -123,6 +162,13 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
   override private[golem] def close(): Future[Unit] = finishInvocation()
 }
 object JsToolOutputStream {
+  private[golem] def dispose(writer: ToolHostApi.RawToolStdoutWriter): Unit = {
+    val symbol  = js.Dynamic.global.Symbol.selectDynamic("dispose")
+    val release = js.Dynamic.global.Reflect.applyDynamic("get")(writer, symbol)
+    release.applyDynamic("call")(writer)
+    ()
+  }
+
   def decodeFailure(value: js.Dynamic): ByteStreamFailure = value.tag.asInstanceOf[String] match {
     case "cancelled"          => ByteStreamFailure.Cancelled
     case "abandoned"          => ByteStreamFailure.Abandoned
