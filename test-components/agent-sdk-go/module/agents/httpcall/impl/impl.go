@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"agent-sdk-go/agents/httpcall"
 
@@ -36,6 +37,15 @@ func init() {
 		pol := retry.Immediate().MaxRetries(10).OnlyWhen(retry.StatusCode.OneOf(500))
 		defer retry.With(retry.Named("flaky-endpoint", pol).WithPriority(10))()
 		return fetch(in.Payload)
+	})
+	golem.Handle(agent, httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+		var body string
+		golem.Atomically(func() {
+			started := time.Now()
+			body = fetch(in.Payload)
+			_ = time.Since(started)
+		})
+		return body
 	})
 	golem.Handle(agent, httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string

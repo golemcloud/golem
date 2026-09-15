@@ -48,17 +48,14 @@ inherit_test_dep!(
 /// wasip3 client does. Without the await the guest reaches `MarkEndOperation`
 /// first and the executor refuses to close over the still-open scope.
 ///
-/// IGNORED for a residual, separate problem: with the await in place the
-/// region closes and the invocation succeeds, but ~1 run in 6 the guest hangs
-/// BEFORE `http::client::send` is observed by the host (last host call:
-/// `monotonic_clock::now` right after building the request). The identical
-/// request path outside an atomic region (`go_retry_policy_retries_matching_status`)
-/// and RPC inside one (`go_atomic_region_with_rpc`) are 10/10 stable, so the
-/// differentiator is host-side state while the region is open; the host's
-/// `send` awaits live permission authorization before it begins the durable
-/// call, which is the first candidate. See GOL-486 and `diagnostics.rs`.
+/// IGNORED until CI builds Go components with the sampler-patched toolchain
+/// (tmp/go-runtime-sampler-wasip1.diff): with the stock fork ~1 run in 6 hung
+/// before `send` on a clock read issued by the Go runtime's goroutine-tracking
+/// sampler from inside the scheduler. With the sampler disabled on wasip1 it is
+/// 58/58 here and 25/25 x3 in the full suite; a user-level clock read in the
+/// same place is covered by `go_atomic_region_with_clock_read_and_outgoing_http`.
 #[test]
-#[ignore = "GOL-486 (residual): ~15% pre-send hang inside atomic regions, host-side; the region-close failure itself is fixed"]
+#[ignore = "passes 100% with the sampler-patched go toolchain (tmp/go-runtime-sampler-wasip1.diff); flaky ~1/6 with the stock fork CI still uses"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_atomic_region_with_outgoing_http(
@@ -152,5 +149,70 @@ async fn go_atomic_region_with_rpc(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
     assert_eq!(total, 5);
+    Ok(())
+}
+
+/// A durable clock read (`time.Now()` = wall + monotonic host calls) inside an
+/// atomic region, immediately followed by an outbound HTTP call: both settle and
+/// the region closes. Pins down that positional clock calls inside a region do
+/// not interfere with the HTTP scope's completion (measured 24/24 while
+/// diagnosing GOL-486).
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_atomic_region_with_clock_read_and_outgoing_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    #[derive(Deserialize)]
+    struct QueryParams {
+        payload: String,
+    }
+
+    let server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/callback",
+                get(move |query: Query<QueryParams>| async move { query.payload.clone() }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-atomic-timed-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let body = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "atomic-timed-callback",
+            data_value!("timed"),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    server.abort();
+
+    assert_eq!(body, "timed");
     Ok(())
 }

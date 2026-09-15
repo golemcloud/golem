@@ -135,7 +135,7 @@ async fn diag_atomic_region_with_outgoing_http(
         executor.invoke_and_await_agent(
             &component,
             &agent_id,
-            "atomic-callback",
+            &std::env::var("DIAG_METHOD").unwrap_or_else(|_| "atomic-callback".to_string()),
             data_value!("inside"),
         ),
     )

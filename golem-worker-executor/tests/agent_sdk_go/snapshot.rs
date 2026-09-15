@@ -43,15 +43,16 @@ inherit_test_dep!(
 /// held in an unexported field, so only reachable through the SDK's Save/Load —
 /// is intact.
 ///
-/// IGNORED — intermittent (~12–20% on go1.25.5, ~80% on go1.27.1): the Go runtime's
-/// own `monotonic_clock::now` reads are timing-dependent even inside a `bump`
-/// that makes no host call (14 identical runs → 14 different live recordings,
-/// 10–22 clock reads), so replay after the restart sometimes issues a different
-/// number of reads than were recorded and diverges. Measured with
-/// `diagnostics.rs::diag_snapshot_recovery`; write-up in `tmp/durability-diagnosis.md`.
-/// Not an SDK-side fix; see GOL-485.
+/// IGNORED until CI builds Go components with the sampler-patched toolchain
+/// (tmp/go-runtime-sampler-wasip1.diff). Root cause: the Go runtime's
+/// goroutine-tracking sampler reads the monotonic clock for a random 1-in-8 of
+/// goroutines, and componentize-go spawns one per export call, so recordings of
+/// an identical workload differ (10–22 clock reads) and replay diverges ~15% on
+/// go1.25.5, ~80% on go1.27.1. With the sampler disabled on wasip1 the reads are
+/// constant and this test is 14/14 (1.25.5), 10/10 and 25/25 x3 (1.27.1).
+/// Measured with `diagnostics.rs`; write-up in `tmp/durability-diagnosis.md`.
 #[test]
-#[ignore = "GOL-485 residual: go runtime ambient clock reads are timing-dependent, replay diverges ~15% (see diagnostics.rs)"]
+#[ignore = "passes 100% with the sampler-patched go toolchain (tmp/go-runtime-sampler-wasip1.diff); replay diverges ~15% with the stock fork CI still uses"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_custom_snapshot_round_trips_unexported_state(

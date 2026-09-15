@@ -19,6 +19,12 @@ var Callback = golem.DefineMethod[Id, CallbackIn, string]("callback",
 var RetryCallback = golem.DefineMethod[Id, CallbackIn, string]("retry-callback",
 	golem.Desc("GET the flaky endpoint under a retry policy that retries on 500"))
 
+// AtomicTimedCallback reads the clock (wall + monotonic) inside the atomic
+// region right before the HTTP call — a user-level stand-in for the runtime's
+// sampled clock read that coincided with the pre-send hang.
+var AtomicTimedCallback = golem.DefineMethod[Id, CallbackIn, string]("atomic-timed-callback",
+	golem.Desc("time.Now() then GET, inside an atomic region"))
+
 // AtomicCallback makes the same call inside golem.Atomically — the minimal case
 // for "does an outbound HTTP call settle before an atomic region closes?".
 var AtomicCallback = golem.DefineMethod[Id, CallbackIn, string]("atomic-callback",
