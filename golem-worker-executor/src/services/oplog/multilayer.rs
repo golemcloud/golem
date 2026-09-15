@@ -27,6 +27,7 @@ use crate::services::oplog::{
     OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
     downcast_oplog, scan_modes,
 };
+use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
@@ -118,6 +119,12 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> OplogIndex;
+
+    /// The meta-namespace whose keys list every agent this archive holds entries for, or `None`
+    /// when the storage cannot list them, as for blob-backed archives.
+    fn scan_namespace(&self, _agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+        None
+    }
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive

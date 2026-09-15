@@ -70,6 +70,9 @@ pub trait SchedulerWorkerAccess {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
+    /// See [`WorkerActivator::worker_is_cached`].
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool;
+
     async fn activate_worker(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -99,6 +102,10 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint> {
         self.deref().active_worker_fingerprint(owned_agent_id).await
+    }
+
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.deref().worker_is_cached(owned_agent_id).await
     }
 
     async fn activate_worker(
@@ -839,6 +846,10 @@ mod tests {
             None
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -884,6 +895,10 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
         ) -> Option<AgentFingerprint> {
             Some(self.fingerprint)
+        }
+
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
         }
 
         async fn activate_worker(
@@ -946,6 +961,10 @@ mod tests {
             panic!("ephemeral schedules must not look up a target fingerprint")
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1002,6 +1021,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1042,6 +1065,10 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
         ) -> Option<AgentFingerprint> {
             None
+        }
+
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
         }
 
         async fn activate_worker(
@@ -1086,6 +1113,10 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
         ) -> Option<AgentFingerprint> {
             Some(self.fingerprint)
+        }
+
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
         }
 
         async fn activate_worker(

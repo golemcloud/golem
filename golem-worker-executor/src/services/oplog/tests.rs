@@ -655,6 +655,22 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .await
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<crate::storage::indexed::ScanResume>,
+        count: u64,
+    ) -> Result<(Option<crate::storage::indexed::ScanResume>, Vec<String>), IndexedStorageError>
+    {
+        self.count_read();
+        self.inner
+            .scan_stable(svc_name, api_name, namespace, prefix, resume, count)
+            .await
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -833,6 +849,20 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         self.count_read();
         self.inner
             .last(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .last_id(svc_name, api_name, entity_name, namespace, key)
             .await
     }
 
