@@ -3517,7 +3517,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_file_system_node(
-        &self,
+        self: &Arc<Self>,
         path: CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
@@ -3547,15 +3547,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 sender,
             });
 
-        // Two cases here:
-        // - Worker is running, we can send the invocation command, and the worker will look at the queue immediately
-        // - Worker is starting, it will process the request when it is started
-
         if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
+        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
         drop(instance_guard);
+        if needs_start {
+            Self::start_if_needed(self.clone()).await?;
+        }
 
         receiver
             .await
@@ -3606,7 +3606,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn read_file(
-        &self,
+        self: &Arc<Self>,
         path: CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
@@ -3640,7 +3640,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
+        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
         drop(instance_guard);
+        if needs_start {
+            Self::start_if_needed(self.clone()).await?;
+        }
 
         receiver
             .await
