@@ -40,26 +40,25 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// IGNORED — this currently fails: the executor refuses to end the region with
-/// "Cannot end atomic region N: non-re-executable durable calls initiated in it
-/// are still in flight". The region holds a lease per durable call it started
-/// (durable_host/mod.rs `ActiveAtomicRegion.members`, weak refs kept alive by the
-/// call's handle), and the outbound HTTP call's lease is still surviving at close.
+/// An outbound HTTP call inside `golem.Atomically` settles before the region
+/// closes. The region may only end once every durable call it started has its
+/// terminal recorded; for a p3 HTTP body that terminal is written when the host
+/// finalizes the consume-body scope, which it signals through the trailers
+/// future — so the transport must await that future after EOF, as the reference
+/// wasip3 client does. Without the await the guest reaches `MarkEndOperation`
+/// first and the executor refuses to close over the still-open scope.
 ///
-/// Attempts that did NOT fix it (don't repeat blindly):
-///   - waiting for the "handled ok" future's writer goroutine to finish before
-///     returning from Body.Close (no effect);
-///   - dropping the response trailers future in Body.Close (no effect);
-///   - dropping the done/trailers future WRITERS after their write — this DOES
-///     clear the atomic-region error, but the invocation then hangs to the test
-///     timeout, so it breaks the protocol somewhere else.
-/// Checked and not the cause: `Send` consumes the request handle and
-/// `consume-body` consumes the response handle, so neither leaks.
-///
-/// Rust's `transactions.rs` performs HTTP inside atomic regions successfully, so
-/// this is a Go-transport gap, not a platform limitation.
+/// IGNORED for a residual, separate problem: with the await in place the
+/// region closes and the invocation succeeds, but ~1 run in 6 the guest hangs
+/// BEFORE `http::client::send` is observed by the host (last host call:
+/// `monotonic_clock::now` right after building the request). The identical
+/// request path outside an atomic region (`go_retry_policy_retries_matching_status`)
+/// and RPC inside one (`go_atomic_region_with_rpc`) are 10/10 stable, so the
+/// differentiator is host-side state while the region is open; the host's
+/// `send` awaits live permission authorization before it begins the durable
+/// call, which is the first candidate. See GOL-486 and `diagnostics.rs`.
 #[test]
-#[ignore = "GOL-486: outbound HTTP inside an atomic region keeps a non-repairable durable call in flight, so the region cannot close"]
+#[ignore = "GOL-486 (residual): ~15% pre-send hang inside atomic regions, host-side; the region-close failure itself is fixed"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_atomic_region_with_outgoing_http(

@@ -19,6 +19,7 @@
 pub mod atomic_region;
 pub mod blobstore;
 pub mod config;
+pub mod diagnostics;
 pub mod durability;
 pub mod keyvalue;
 pub mod promise;
