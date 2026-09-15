@@ -23,6 +23,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
+use crate::worker::inspection_queue;
 use crate::worker::invocation::{
     GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
     invoke_observed_and_traced, lower_invocation, run_guest_call_settled,
@@ -66,7 +67,6 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
@@ -96,7 +96,7 @@ macro_rules! agent_phase_span {
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub receiver: UnboundedReceiver<WorkerCommand>,
-    pub active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    pub active: Arc<StdMutex<VecDeque<QueuedWorkerInvocation>>>,
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
@@ -258,7 +258,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(None).await;
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 break;
             }
             self.acquire_concurrent_agent_permit().await;
@@ -298,7 +299,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 continue;
                             } else {
                                 self.parent.complete_startup(self.start_attempt, Ok(()));
-                                self.stop_unloaded(None).await;
+                                self.stop_unloaded(
+                                    None,
+                                    inspection_disposition_for_suspend(
+                                        pending_interrupt
+                                            .map(|interrupt| interrupt.unload_request.reason)
+                                            .unwrap_or(UnloadReason::Suspend),
+                                    ),
+                                )
+                                .await;
                                 break;
                             }
                         }
@@ -310,7 +319,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 self.start_attempt,
                                 Err(WorkerExecutorError::Interrupted { kind }),
                             );
-                            self.stop_unloaded(None).await;
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                                .await;
                             break;
                         }
                     }
@@ -358,6 +368,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             if final_decision.is_none() {
                 'resident: loop {
+                    if !self.active.lock().unwrap().is_empty() {
+                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
+                    }
                     let mut inner_loop = InnerInvocationLoop {
                         receiver: &mut self.receiver,
                         active: self.active.clone(),
@@ -492,7 +505,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         });
                                         self.stop_cleanup_failed(cleanup).await;
                                     }
-                                    None => self.stop_unloaded(failure).await,
+                                    None => {
+                                        self.stop_unloaded(
+                                            failure,
+                                            PendingLiveInvocationDisposition::Fail,
+                                        )
+                                        .await
+                                    }
                                 }
                                 break 'outer;
                             }
@@ -593,6 +612,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         recovery_failure.or_else(|| {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
+                        PendingLiveInvocationDisposition::Fail,
                     )
                     .await;
                     if cleanup_ephemeral_worker {
@@ -613,7 +633,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             %agent_id,
                             "Invocation queue loop notifying parent about being stopped"
                         );
-                        self.stop_closed(None, None).await;
+                        self.stop_closed(
+                            None,
+                            None,
+                            inspection_disposition_for_suspend(unload_request.reason),
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -640,7 +665,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(command) => command,
                                     None => {
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_closed(None, None).await;
+                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                         break 'outer;
                                     }
                                 };
@@ -687,7 +712,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_closed(None, None).await;
+                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                             break 'outer;
                                         }
                                         RetryDecision::TryStop(timestamp) => {
@@ -695,7 +720,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 Self::defer_wakeup(&mut deferred_wakeups, command);
                                                 continue 'outer;
                                             }
-                                            self.stop_closed(None, None).await;
+                                            self.stop_closed(None, None, inspection_disposition_for_suspend(interrupt.unload_request.reason)).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
@@ -777,7 +802,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         self.permit_state.release();
     }
 
-    async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+    async fn stop_unloaded(
+        &self,
+        startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
         self.parent.complete_startup(
             self.start_attempt,
             Err(startup_failure.clone().unwrap_or_else(|| {
@@ -802,7 +831,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 startup_failure.clone(),
                 UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                 FinalWorkerState::Unloaded { startup_failure },
-                PendingLiveInvocationDisposition::Fail,
+                pending_live_invocations,
             )
             .await;
     }
@@ -836,12 +865,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         cleanup_error: Option<WorkerExecutorError>,
         startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
         publish_unload_outcome(
             cleanup_error,
             startup_failure,
             |error| async move { self.stop_cleanup_failed(error).await },
-            |startup_failure| async move { self.stop_unloaded(startup_failure).await },
+            |startup_failure| async move {
+                self.stop_unloaded(startup_failure, pending_live_invocations)
+                    .await
+            },
         )
         .await;
     }
@@ -1183,7 +1216,7 @@ pub(super) async fn run_invocation_loop_task<T>(
 
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
-    active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    active: Arc<StdMutex<VecDeque<QueuedWorkerInvocation>>>,
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
@@ -1378,7 +1411,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn internal_status_change_requires_permit(&self) -> bool {
-        if !self.active.read().await.is_empty()
+        if !self.active.lock().unwrap().is_empty()
             || self.interrupt_signal.lock().await.has_interrupt()
         {
             return true;
@@ -1404,7 +1437,26 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn pop_ready_internal_invocation(&self) -> Option<QueuedWorkerInvocation> {
-        self.active.write().await.pop_front()
+        if self.active.lock().unwrap().is_empty() {
+            return None;
+        }
+        // Hold the same mutex as acceptance through status sampling and queue selection.
+        // Otherwise a read enqueued after this snapshot could skip its older durable work.
+        let _instance = self.parent.instance.lock().await;
+        let status = self.parent.get_attached_last_known_status().await;
+        let has_inspections = self
+            .active
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|item| item.inspection_order().is_some());
+        if has_inspections {
+            // One error lookup serves the whole drain, not one oplog scan per waiter.
+            if let Err(error) = self.parent.ensure_inspection_not_failed(&status).await {
+                inspection_queue::fail_inspections(&mut self.active.lock().unwrap(), &error);
+            }
+        }
+        inspection_queue::pop_ready(&mut self.active.lock().unwrap(), &status)
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -1634,7 +1686,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             // idle), and re-enter through the scheduler queue.
                             break CommandOutcome::WaitForWakeup;
                         }
-                        continue;
+                        // The last older invocation may have released an inspection cutoff.
+                        // Revisit internal work before deciding the worker can become idle.
+                        break CommandOutcome::Continue;
                     }
                     other => break other,
                 }
@@ -1705,8 +1759,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     async fn inject_snapshot_as_next_action(&self) {
         self.active
-            .write()
-            .await
+            .lock()
+            .unwrap()
             .push_front(QueuedWorkerInvocation::SaveSnapshot);
     }
 
@@ -1953,6 +2007,14 @@ async fn take_pending_interrupt(
     signal.lock().await.take()
 }
 
+fn inspection_disposition_for_suspend(reason: UnloadReason) -> PendingLiveInvocationDisposition {
+    if reason == UnloadReason::Suspend {
+        PendingLiveInvocationDisposition::Preserve
+    } else {
+        PendingLiveInvocationDisposition::Fail
+    }
+}
+
 /// Context for performing one `QueuedWorkerInvocation`
 ///
 /// The most important part is that unlike the `InnerInvocationLoop`, it holds a locked
@@ -1970,7 +2032,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
+            QueuedWorkerInvocation::GetFileSystemNode { path, sender, .. } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
@@ -1984,7 +2046,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(wallet);
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::ReadFile { path, sender } => {
+            QueuedWorkerInvocation::ReadFile { path, sender, .. } => {
                 self.read_file(path, sender).await;
                 CommandOutcome::Continue
             }
@@ -3061,6 +3123,26 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    fn queued_inspections_survive_guest_suspend_but_not_quota_or_terminal_stops() {
+        assert_eq!(
+            super::inspection_disposition_for_suspend(UnloadReason::Suspend),
+            PendingLiveInvocationDisposition::Preserve
+        );
+        for reason in [
+            UnloadReason::MemoryLimit,
+            UnloadReason::FilesystemLimit,
+            UnloadReason::Failure,
+            UnloadReason::Interrupt,
+            UnloadReason::Deleting,
+        ] {
+            assert_eq!(
+                super::inspection_disposition_for_suspend(reason),
+                PendingLiveInvocationDisposition::Fail
+            );
+        }
+    }
 
     struct TestPermit {
         held: Arc<AtomicBool>,
