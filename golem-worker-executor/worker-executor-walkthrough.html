@@ -1792,6 +1792,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <h2 id="s-recovery"><span class="num">18</span>Interrupt, suspend, restart, evict, recover</h2>
 <p>Everything in this section is the same operation seen from different angles: <strong>discard the Store, go round the outer loop</strong>. The hints appended beforehand annotate the history for status folding and observers; none of them changes how reconstruction works.</p>
 
+<p>Environment and application deletion invalidate component metadata, environment state and agent type caches before awaiting owner retirement. New metadata lookups see deletion rather than admitting requests against a retiring cached owner.</p>
+
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Trigger</th><th scope="col">Mechanism</th><th scope="col">Oplog</th><th scope="col">Comes back when</th></tr></thead>
