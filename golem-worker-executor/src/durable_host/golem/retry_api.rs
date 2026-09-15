@@ -14,7 +14,6 @@
 
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::get_oplog_entry;
 use crate::preview2::golem_api_1_x::retry::{
     Host, NamedRetryPolicy as WitNamedRetryPolicy, PredicateValue as WitPredicateValue,
     RetryPolicy as WitRetryPolicy,
@@ -131,7 +130,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
-        } else if self.state.is_live() {
+        } else if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("SetRetryPolicy")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    "SetRetryPolicy",
+                    format!("{entry:?}"),
+                ).into());
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(
@@ -139,8 +148,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     named_policy.clone(),
                 ))
                 .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
         }
 
         self.state.apply_set_retry_policy(named_policy);
@@ -152,7 +159,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
-        } else if self.state.is_live() {
+        } else if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("RemoveRetryPolicy")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    "RemoveRetryPolicy",
+                    format!("{entry:?}"),
+                ).into());
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::remove_retry_policy(
@@ -160,8 +177,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     name.clone(),
                 ))
                 .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;
         }
 
         self.state.apply_remove_retry_policy(&name);

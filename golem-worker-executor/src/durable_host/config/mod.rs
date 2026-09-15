@@ -14,7 +14,9 @@
 
 use super::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::{agent_owner, config_segments_target};
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::render_config_path;
@@ -49,35 +51,32 @@ fn render_agent_config_value(value: &TypedSchemaValue) -> Option<String> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, key: String) -> anyhow::Result<Result<Option<String>, Error>> {
         let path: Vec<String> = key.split('.').map(ToOwned::to_owned).collect();
-        let denied = if self.state.is_live() {
-            match config_segments_target(agent_owner(self), &path) {
-                Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
-                Err(_) => true,
-            }
-        } else {
-            false
-        };
         let begun = DurableCallSession::<WasiConfigGet, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        let mut call = if begun.is_live() {
-            let call = begun.start_live(self, HostRequestConfigGet { key }).await?;
-            if denied {
-                let response = call
-                    .complete(
-                        self,
-                        HostResponseConfigGetResponse {
-                            result: Err(CONFIG_PERMISSION_DENIED.into()),
-                        },
-                    )
-                    .await?;
-                return Ok(response.result.map_err(config_error));
+        let mut call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let denied = match config_segments_target(agent_owner(self), &path) {
+                    Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
+                    Err(_) => true,
+                };
+                let call = begun.start_live(self, HostRequestConfigGet { key }).await?;
+                if denied {
+                    let response = call
+                        .complete(
+                            self,
+                            HostResponseConfigGetResponse {
+                                result: Err(CONFIG_PERMISSION_DENIED.into()),
+                            },
+                        )
+                        .await?;
+                    return Ok(response.result.map_err(config_error));
+                }
+                call
             }
-            call
-        } else {
-            begun.start_replay(self).await?
+            ResolvedCall::Replay(call) => call,
         };
         if !call.is_live() {
             match call.replay(self).await? {
@@ -100,35 +99,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_all(&mut self) -> anyhow::Result<Result<Vec<(String, String)>, Error>> {
-        let admitted_paths = if self.state.is_live() {
-            let paths: Vec<_> = self.state.agent_config.keys().cloned().collect();
-            let targets = paths
-                .iter()
-                .map(|path| config_segments_target(agent_owner(self), path))
-                .collect::<Result<Vec<_>, _>>();
-            let admitted = match targets {
-                Ok(targets) => self.filter_live_permissions(&targets).await?,
-                Err(_) => vec![false; paths.len()],
-            };
-            Some(
-                paths
-                    .into_iter()
-                    .zip(admitted)
-                    .filter_map(|(path, allowed)| allowed.then_some(path))
-                    .collect::<std::collections::HashSet<_>>(),
-            )
-        } else {
-            None
-        };
         let begun = DurableCallSession::<WasiConfigGetAll, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        let mut call = if begun.is_live() {
-            begun.start_live(self, HostRequestConfigGetAll {}).await?
-        } else {
-            begun.start_replay(self).await?
+        let (mut call, admitted_paths) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let paths: Vec<_> = self.state.agent_config.keys().cloned().collect();
+                let targets = paths
+                    .iter()
+                    .map(|path| config_segments_target(agent_owner(self), path))
+                    .collect::<Result<Vec<_>, _>>();
+                let admitted = match targets {
+                    Ok(targets) => self.filter_live_permissions(&targets).await?,
+                    Err(_) => vec![false; paths.len()],
+                };
+                let admitted_paths = paths
+                    .into_iter()
+                    .zip(admitted)
+                    .filter_map(|(path, allowed)| allowed.then_some(path))
+                    .collect::<std::collections::HashSet<_>>();
+                (
+                    begun.start_live(self, HostRequestConfigGetAll {}).await?,
+                    Some(admitted_paths),
+                )
+            }
+            ResolvedCall::Replay(call) => (call, None),
         };
         if !call.is_live() {
             match call.replay(self).await? {

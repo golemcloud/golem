@@ -1064,6 +1064,9 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 <h2 id="s-hostcalls"><span class="num">8</span>Durable host calls &amp; deterministic replay</h2>
 <p>Every nondeterministic host function — HTTP, key-value, blob store, RDBMS, sockets, clocks, random, RPC, promises, tools — goes through <code>begin_durable_function</code> / <code>end_durable_function</code> (<code>durable_host/durability.rs</code>) and, for the concurrent WASI p3 "accessor" path, a <code>DurableCallSession</code> (<code>durable_host/concurrent/call.rs</code>). The serialized p2 path (<code>&amp;mut self</code> host calls) uses <code>persist_durable_function_invocation</code> / <code>read_persisted_durable_function_invocation</code> with the same <code>Start</code>/<code>End</code> shape but no delivery markers.</p>
 
+<h3>Resolve before preparing live work</h3>
+<p>Two-step callers use <code>DurableCallSession::begin</code> (returning <code>BegunCall</code>) → <code>BegunCall::resolve</code> → <code>ResolvedCall::Live</code> or <code>ResolvedCall::Replay</code>. Only the <code>Live</code> branch performs live-only authorization and request preparation before <code>start_live</code>; <code>BegunCall::is_live()</code> is private so callers cannot choose prematurely. The <code>Replay</code> branch consumes the recorded result or repairs an admitted incomplete call without re-authorizing. Resolution can finish the guarded replay-tail transition and refresh authority capture. Snapshot calls remain unpersisted: resolving one as <code>Live</code> does not publish Store liveness or lift snapshot restrictions.</p>
+
 <h3>Four steps, four different facts</h3>
 <div class="grid2">
   <div class="card"><h4>Execute</h4><p>Perform the live effect. Allowed only when the durable context reports live (<code>store_is_live</code> / <code>is_live()</code>) — <em>never</em> because the cursor happens to be at the end of history.</p></div>
@@ -1219,6 +1222,9 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p>The rule is therefore: <code>claim_start_matching</code> claims the <em>first unclaimed matching</em> <code>Start</code> between the cursor and the replay target. Scanning ahead exists only to route concurrent completions to the right awaiter; it does not let the guest make <em>different</em> calls. The scan is also bounded by the next <code>CompletionDelivered</code> marker, so a call can never claim a <code>Start</code> that was recorded after a result the guest has not yet observed in this replay; guest-visible order is preserved exactly. When no matching <code>Start</code> exists in that window, replay stops with a divergence error, which is how nondeterminism in guest code or a host-function bug surfaces instead of being silently absorbed. The one exception is entries inside a region deleted by a <code>Jump</code>, which are never candidates.</p>
 
+<h3>Positional operations at the replay tail</h3>
+<p><code>NoOp</code>, <code>BeginAtomicRegion</code>, span entries and retry-policy entries use <code>get_oplog_entry_or_continue_live</code> / <code>prepare_live_continuation_at_replay_tail</code>. The positional read waits out reserved completion-delivery gates and distinguishes a recorded entry from <code>ReplayEnded</code>. Continuation is allowed only for the primary agent at <code>ReplayEnded</code> or an incomplete entity, including its deleted-region local continuation; a <code>ReplayingCompleted</code> entity is rejected. The helper returns <code>None</code> when already live or after the guarded transition finishes, and retries replay on <code>ReplayResumed</code>. A wrong recorded entry is still a mismatch. <strong><code>EndAtomicRegion</code> and transaction-protocol reads remain strict.</strong></p>
+
 <h3>Three facts that are not the same</h3>
 <ol>
   <li><strong>Cursor exhaustion</strong> — the recorded history has been consumed. An observation only.</li>
@@ -1344,6 +1350,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <!-- ===================== 12. RPC ===================== -->
 <h2 id="s-rpc"><span class="num">12</span>Exactly-once RPC &amp; atomic regions</h2>
 <p>Agent-to-agent RPC (<code>durable_host/wasm_rpc/mod.rs</code>) is a <code>WriteRemote</code> durable call on the caller whose result is a durable invocation on the target. Exactly-once is a property of the <em>target's logical invocation</em>, not of caller attempts, packets, or replay spans.</p>
+<p><code>RpcTargetAdmission::{Recorded, LiveOnly}</code> separates admission from call resolution. Deferred durable activation records or replays its own decision (<code>Recorded</code>). Non-deferred targets return <code>LiveOnly(PermissionTarget)</code>; their asynchronous permission check runs inside <code>ResolvedCall::Live</code>, after resolution, preserving operator authorization and decision telemetry. Denials use <code>persist_*_denial_from_begun</code> to record on the already-begun call instead of beginning another. Recorded calls, including incomplete repairs, retain admission without re-authorizing.</p>
 
 <h3>The key is the identity</h3>
 <ol class="steps">
@@ -1794,6 +1801,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <h2 id="s-recovery"><span class="num">18</span>Interrupt, suspend, restart, evict, recover</h2>
 <p>Everything in this section is the same operation seen from different angles: <strong>discard the Store, go round the outer loop</strong>. The hints appended beforehand annotate the history for status folding and observers; none of them changes how reconstruction works.</p>
 
+<p>A simulated crash (<code>recover_immediately = true</code>) requests <code>Restart</code> for Running, Suspended and Retrying workers; it never permanently interrupts a parked invocation. If no invocation loop remains, the existing promise, scheduler or permit wakeup starts reconstruction. The pending restart neither appends <code>Interrupted</code> nor fails the invocation waiter.</p>
+
 <p>Environment and application deletion invalidate component metadata, environment state and agent type caches before awaiting owner retirement. New metadata lookups see deletion rather than admitting requests against a retiring cached owner.</p>
 
 <div class="table-wrap">
@@ -1802,7 +1811,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <tbody>
     <tr><td><strong>Interrupt</strong> (API)</td><td><code>Worker::set_interrupting(InterruptKind::Interrupt(ts))</code>; the running invocation is aborted at the next host-call boundary</td><td><code>Interrupted</code> (h)</td><td>An explicit resume; status stays <code>Interrupted</code> until then</td></tr>
     <tr><td><strong>Resume interrupted invocation</strong></td><td><code>start_if_needed_internal</code>, after memory-requirement lookup succeeds and while the unloaded instance remains locked</td><td><code>Resumed</code> (h), timestamp only; committed before <code>WaitingForPermit</code></td><td>Status folds to <code>Running</code> immediately; reconstruction continues the existing invocation after admission</td></tr>
-    <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>Immediately: the outer loop reconstructs at once</td></tr>
+    <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>The resident loop reconstructs immediately; an already-unloaded worker reconstructs on its next wakeup</td></tr>
     <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps or waits for a promise long enough to unload</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a <code>ScheduledAction::Resume</code></td></tr>
     <tr><td><strong>Jump</strong></td><td><code>InterruptKind::Jump</code> ("jumping back in time"): atomic-region rollback or <code>set-oplog-index</code></td><td><code>Jump { region }</code> (positional)</td><td>Immediately, replaying with the region skipped</td></tr>
     <tr><td><strong>Eviction</strong> (memory / filesystem pressure)</td><td><code>EvictionClass</code> ordering: <code>LoadedIdle</code> first (cheapest), then <code>WarmRunnable</code> (has durable pending invocations). Executing workers and workers with non-durable in-memory work (internal queue, <code>ResumeReplay</code>, interrupt) are <em>never</em> evicted.</td><td>none</td><td>On the next invocation or scheduled action</td></tr>
