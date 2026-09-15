@@ -1975,10 +1975,83 @@ fn revised_files(
         })
 }
 
+/// Gives the steps that bring the old object of a read-only file of `initial` back to its path
+/// after an update replaced the file. The steps are: a hard link of the file to the file place
+/// `destination`; an update that gives the path the other content of the same size; a move of the
+/// link back onto the path; an update that changes the declaration of the path once more. `file`
+/// selects the file among the read-only files of `initial` whose content has the size of another
+/// content. `change` selects the last update: a content of another size, the other permission, or
+/// no declaration. Gives no step when `initial` has no such file.
+fn old_object_back_steps(
+    initial: &[DeclaredFile],
+    file: &proptest::sample::Index,
+    destination: usize,
+    change: u8,
+) -> Vec<HistoryStep> {
+    let candidates = initial
+        .iter()
+        .filter(|declared| declared.read_only && declared.content < 2)
+        .filter_map(|declared| {
+            FILE_PLACES
+                .iter()
+                .position(|place| *place == declared.path)
+                .map(|place| (place, declared))
+        })
+        .collect::<Box<[_]>>();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let &(source, declared) = file.get(&candidates);
+    let destination = if destination == source {
+        (destination + 1) % FILE_PLACES.len()
+    } else {
+        destination
+    };
+    let replaced = DeclaredFile {
+        content: 1 - declared.content,
+        ..declared.clone()
+    };
+    let revision = |change: Option<DeclaredFile>| {
+        initial
+            .iter()
+            .filter(|other| other.path != declared.path)
+            .cloned()
+            .chain(change)
+            .collect::<Box<[DeclaredFile]>>()
+    };
+    let last = match change {
+        0 => Some(DeclaredFile {
+            content: 2,
+            ..replaced.clone()
+        }),
+        1 => Some(DeclaredFile {
+            read_only: false,
+            ..replaced.clone()
+        }),
+        _ => None,
+    };
+    vec![
+        HistoryStep::HardLink {
+            source,
+            destination,
+        },
+        HistoryStep::Update {
+            files: revision(Some(replaced)),
+        },
+        HistoryStep::MoveFile {
+            source: destination,
+            destination: source,
+        },
+        HistoryStep::Update {
+            files: revision(last),
+        },
+    ]
+}
+
 /// Generates a few steps of a history whose first declarations are `initial`: a step of
 /// [`history_step`], an update to a revision of `initial`, a removal of a file followed by a new
-/// file, a new directory or a new symlink at the same place, or a write through a new symlink to
-/// the directory place `d`, which no file step names.
+/// file, a new directory or a new symlink at the same place, a write through a new symlink to the
+/// directory place `d`, which no file step names, or the steps of [`old_object_back_steps`].
 fn history_steps(
     initial: Box<[DeclaredFile]>,
 ) -> impl proptest::strategy::Strategy<Value = Vec<HistoryStep>> {
@@ -1993,9 +2066,18 @@ fn history_steps(
             .position(|candidate| *candidate == place)
             .expect("the place is in the list of places")
     };
+    let linked = initial.clone();
     proptest::prop_oneof![
         7 => history_step().prop_map(|step| vec![step]),
         2 => revised_files(initial).prop_map(|files| vec![HistoryStep::Update { files }]),
+        1 => (
+            proptest::arbitrary::any::<proptest::sample::Index>(),
+            0..FILE_PLACES.len(),
+            0..3_u8,
+        )
+            .prop_map(move |(file, destination, change)| {
+                old_object_back_steps(&linked, &file, destination, change)
+            }),
         2 => (0..FILE_PLACES.len(), 0..CONTENTS.len()).prop_map(|(file, content)| {
             vec![
                 HistoryStep::RemoveFile { file },
@@ -2457,6 +2539,10 @@ fn left_out_of(capture: &FilesystemCapture) -> BTreeSet<String> {
 /// The number of histories in which the restore property compared the tree with times.
 static TIMES_CHECKS: AtomicUsize = AtomicUsize::new(0);
 
+/// The number of histories in which an install of the reference model found the old object of a
+/// read-only file back at its path, with other content of the declared size.
+static OLD_OBJECT_BACK_CHECKS: AtomicUsize = AtomicUsize::new(0);
+
 /// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
     agents: &UnmanagedAgents,
@@ -2572,18 +2658,25 @@ enum ModelInstall {
 /// rule as the documentation of `plan` states it, from the tree and the declarations alone: a path
 /// with equal declarations keeps what is at it, a read-only file refuses changes to its content and
 /// its times, and a hard link or a rename moves the file with its permissions. It shares no code
-/// with the lifecycle, and it records no object that an install puts in place.
+/// with the lifecycle, and no rule of it reads an object that an install put in place.
 ///
 /// `paths` gives the object at each path, and two paths with one object are hard links. `objects`
 /// holds each object that the model made; the index of an object is its id. `component` holds the
 /// component declarations and `provisioned` the entity-provisioned declarations. The declarations
 /// of the filesystem are both together.
+///
+/// `seeded_read_only` holds the path and the object of each read-only file that an install put in
+/// place. `old_object_back` tells whether an install found the old object of such a file back at
+/// its path: a read-only file of the declared size with other content, at a path with a read-only
+/// declaration. Both serve only the count of the histories that reach that case.
 #[derive(Default)]
 struct ReferenceModel {
     paths: BTreeMap<String, usize>,
     objects: Vec<ModelObject>,
     component: BTreeMap<String, ModelDeclaration>,
     provisioned: BTreeMap<String, ModelDeclaration>,
+    seeded_read_only: BTreeSet<(String, usize)>,
+    old_object_back: bool,
 }
 
 impl ReferenceModel {
@@ -2640,6 +2733,34 @@ impl ReferenceModel {
         match (old, self.object_at(path)) {
             (Some(declared), Some(ModelObject::File { content, writable })) => {
                 content[..] == *CONTENTS[declared.content] && !(declared.read_only && *writable)
+            }
+            _ => false,
+        }
+    }
+
+    /// Tells whether `path` holds the old object of a read-only file back: a read-only file with
+    /// the size of the read-only declaration `old` and other content, whose object an earlier
+    /// install put at `path`. The lifecycle keeps the identity of each read-only file that it
+    /// installs. It must not take that identity for Golem's file after the object came back.
+    fn holds_old_object_back(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
+        match (
+            old,
+            self.paths.get(path).map(|id| (*id, &self.objects[*id])),
+        ) {
+            (
+                Some(declared),
+                Some((
+                    id,
+                    ModelObject::File {
+                        content,
+                        writable: false,
+                    },
+                )),
+            ) => {
+                declared.read_only
+                    && content.len() == CONTENTS[declared.content].len()
+                    && content[..] != *CONTENTS[declared.content]
+                    && self.seeded_read_only.contains(&(path.to_string(), id))
             }
             _ => false,
         }
@@ -2961,6 +3082,10 @@ impl ReferenceModel {
             })
             .cloned()
             .collect::<BTreeSet<String>>();
+        let old_object_back = changed
+            .iter()
+            .any(|path| self.holds_old_object_back(path, old.get(path)));
+        self.old_object_back |= old_object_back;
         let decisions = changed
             .iter()
             .map(|path| {
@@ -3060,6 +3185,10 @@ impl ReferenceModel {
                         writable: !declared.read_only,
                     },
                 );
+                if declared.read_only {
+                    self.seeded_read_only
+                        .insert((path.to_string(), self.objects.len() - 1));
+                }
             }
         }
     }
@@ -3199,6 +3328,9 @@ async fn check_restore_against_replay(
                 "step {index} of the replay gave {actual:?}, and the reference model gives {expected:?}"
             ));
         });
+    if model.old_object_back {
+        OLD_OBJECT_BACK_CHECKS.fetch_add(1, Ordering::Relaxed);
+    }
     let model_tree = model.tree();
     if replay_tree != model_tree {
         problems.push(format!(
@@ -3344,11 +3476,25 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
     let elapsed = started.elapsed();
     eprintln!(
         "restore property: {cases} histories in {elapsed:?}, {:?} for each history, the tree with \
-         times compared in {} histories",
+         times compared in {} histories, the old object of a read-only file back at its path in {} \
+         histories",
         elapsed / cases.max(1),
-        TIMES_CHECKS.load(Ordering::Relaxed)
+        TIMES_CHECKS.load(Ordering::Relaxed),
+        OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed)
     );
     if let Err(error) = result {
         panic!("{error}");
+    }
+    // A run with fewer histories does not have to reach every case.
+    if cases >= RESTORE_PROPERTY_CASES {
+        assert!(
+            TIMES_CHECKS.load(Ordering::Relaxed) > 0,
+            "TIMES_CHECKS: no history compared the tree with times"
+        );
+        assert!(
+            OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed) > 0,
+            "OLD_OBJECT_BACK_CHECKS: no history found the old object of a read-only file back at \
+             its path"
+        );
     }
 }

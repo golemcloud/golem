@@ -2351,6 +2351,15 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
     }
 }
 
+/// Opens the object at `target` under the coordination that `options` need, and registers the
+/// opened node in the generation.
+///
+/// An open that changes the object or its contents is authorized from a resolution made under the
+/// coordination on the entry. That check runs before the open. With a final symlink, an edit of
+/// other entries can put a read-only file at the referent between the check and the open, and the
+/// coordination on the entry does not stop it. The open pins one object, and the adapter reports
+/// whether that object is a regular file without write permission. That fact binds the check to
+/// the object that the caller gets: the function closes such an object and refuses the open.
 async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
@@ -2374,6 +2383,10 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
             continue;
         };
         let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
+        if change.is_some() && opened.is_read_only_file() {
+            execute_close(Arc::clone(&generation), opened.into_node()).await?;
+            return Err(Error::Access(AccessError::NotPermitted));
+        }
         if open_returns_directory(options) {
             let directory_key = opened
                 .directory_coordination_key()
@@ -2604,12 +2617,27 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
+/// Changes the attributes of the object that the entry at `target` names, under the coordination on
+/// the entry.
+///
+/// With `Follow::No` the change goes to the entry itself. The coordination stops an edit of the
+/// entry until the change is done. So the check of the permission and the change see one object.
+/// With `Follow::Yes` the change goes to the object that a final
+/// symlink at the entry names. An edit of other entries can put another object at that name while
+/// the change runs, and the coordination on the entry does not stop it. So the function opens the
+/// named object, and the check of its permission and the change go through the open descriptor to
+/// one object. That descriptor is not registered in the generation; it closes when the function
+/// returns.
 async fn execute_coordinated_path_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
     follow: Follow,
     changes: AttributeChanges,
 ) -> Result<(), Error> {
+    // The open of the followed object expects the kind that a read gave. A change of the object
+    // between the read and the open makes the open fail, and the operation starts again a bounded
+    // number of times.
+    let mut budget = RetryBudget::new(2);
     loop {
         let Some(CoordinatedTarget {
             coordination: _coordination,
@@ -2624,16 +2652,55 @@ async fn execute_coordinated_path_attribute_changes<Adapter: SandboxFilesystemAd
         else {
             continue;
         };
-        return execute_attribute_changes(
-            generation,
-            AttributeTarget::Path {
+        let target = match follow {
+            Follow::No => AttributeTarget::Path {
                 target: resolved.target(),
-                follow: sandbox_follow(follow),
+                follow: SandboxFollow::No,
             },
-            changes,
-        )
-        .await;
+            Follow::Yes => match open_followed_object(&generation, resolved.target()).await {
+                Ok(node) => AttributeTarget::Open(node),
+                Err(Error::Sandbox(error))
+                    if error.io_kind() == Some(std::io::ErrorKind::InvalidInput)
+                        && budget.consume() =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            },
+        };
+        return execute_attribute_changes(generation, target, changes).await;
     }
+}
+
+/// Opens the object that `target` names through a final symlink, for a change of its attributes,
+/// and refuses a regular file without write permission. The adapter reports that fact from the
+/// object that the open pinned.
+///
+/// The open expects the kind that a read of the object gives. When the open finds another kind,
+/// the object changed between the read and the open, and the open fails with an `InvalidInput`
+/// storage error.
+async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
+    generation: &Arc<FilesystemGeneration<Adapter>>,
+    target: SandboxPath,
+) -> Result<SandboxNode, Error> {
+    let read = mutation_attributes(
+        generation,
+        AttributeTarget::Path {
+            target: target.clone(),
+            follow: SandboxFollow::Yes,
+        },
+    )
+    .await?;
+    let options = OpenOptions::Existing {
+        expected: agent_object_kind(read.kind),
+        access: AccessMode::Read,
+        follow: Follow::Yes,
+    };
+    let opened = execute_open(Arc::clone(generation), target, options).await?;
+    if opened.is_read_only_file() {
+        return Err(Error::Access(AccessError::NotPermitted));
+    }
+    Ok(opened.into_node())
 }
 
 async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(

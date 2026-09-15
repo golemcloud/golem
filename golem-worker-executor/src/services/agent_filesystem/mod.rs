@@ -92,11 +92,11 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// content equals the declaration, so a file of an agent must always have this permission. The
 /// call is idempotent, and it changes only the owner write bit of the mask.
 ///
-/// On Linux the function reads the current mask from the `Umask:` line of `/proc/self/status`.
-/// That read does not change the mask. On other Unix platforms, and on Linux when the line is not
-/// available, the function sets the mask two times: to 0o022, which gives the current mask, and
-/// then to that mask without the owner write bit. Between the two calls, a file that another thread
-/// creates gets the usual permissions of the mask 0o022.
+/// On Linux the function reads the current mask from the `Umask:` line of
+/// `/proc/thread-self/status`. That read does not change the mask. On other Unix platforms, and on
+/// Linux when the line is not available, the function sets the mask two times: to 0o022, which
+/// gives the current mask, and then to that mask without the owner write bit. Between the two
+/// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
 ///
 /// Windows has no file mode creation mask. There, a file is read-only only when its read-only
 /// attribute is set, and an agent cannot set that attribute, so the service changes nothing.
@@ -109,11 +109,16 @@ fn keep_owner_write_permission() {
     }
 }
 
-/// Gives the current file mode creation mask of the process. Where `/proc/self/status` has no
-/// `Umask:` line, the mask is 0o022 after the call.
+/// Gives the current file mode creation mask of the calling thread. Where
+/// `/proc/thread-self/status` has no `Umask:` line, the mask is 0o022 after the call.
+///
+/// The function reads `/proc/thread-self/status`, not `/proc/self/status`. `/proc/self` is the
+/// thread group leader, and a thread that does not share the filesystem attributes of the process
+/// has its own mask. All threads of the executor share one mask, so there the read gives the mask
+/// of the process.
 #[cfg(target_os = "linux")]
 fn current_file_creation_mask() -> libc::mode_t {
-    std::fs::read_to_string("/proc/self/status")
+    std::fs::read_to_string("/proc/thread-self/status")
         .ok()
         .as_deref()
         .and_then(status_umask)
@@ -302,19 +307,43 @@ mod tests {
         );
     }
 
-    /// Reads the file mode creation mask of the process from the `Umask:` line of
-    /// `/proc/self/status`. The read does not change the mask.
+    /// Runs `f` on a new thread whose file mode creation mask is `mask`, and gives its result.
+    ///
+    /// The file mode creation mask is a value that all threads of a process share, and other
+    /// tests of this binary change it through `AgentFilesystems::new`. So the thread first takes
+    /// its own copy of the filesystem attributes of the process with `unshare(CLONE_FS)`. After
+    /// that call, a change of the mask on the thread changes only the mask of the thread.
     #[cfg(target_os = "linux")]
-    fn process_file_creation_mask() -> libc::mode_t {
-        status_umask(&std::fs::read_to_string("/proc/self/status").unwrap())
-            .expect("/proc/self/status must have a Umask: line")
+    fn with_private_file_creation_mask<T: Send + 'static>(
+        mask: libc::mode_t,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        std::thread::spawn(move || {
+            // SAFETY: `unshare` with `CLONE_FS` only gives the calling thread its own copy of the
+            // root directory, the current directory and the file mode creation mask. It needs no
+            // privilege.
+            let unshared = unsafe { libc::unshare(libc::CLONE_FS) };
+            assert_eq!(
+                unshared,
+                0,
+                "the thread must get its own filesystem attributes: {}",
+                std::io::Error::last_os_error()
+            );
+            // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
+            unsafe {
+                libc::umask(mask);
+            }
+            f()
+        })
+        .join()
+        .expect("the thread with a private file mode creation mask must not panic")
     }
 
-    /// Reads the file mode creation mask of the process. The function sets a mask and then sets
-    /// the mask from before again, so use it only in a process that runs one test.
-    #[cfg(all(unix, not(target_os = "linux")))]
-    fn process_file_creation_mask() -> libc::mode_t {
-        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+    /// Gives the file mode creation mask of the calling thread, which must have its own filesystem
+    /// attributes. The function sets a mask and then sets the mask from before again.
+    #[cfg(target_os = "linux")]
+    fn thread_file_creation_mask() -> libc::mode_t {
+        // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
         unsafe {
             let mask = libc::umask(0o022);
             libc::umask(mask);
@@ -322,75 +351,26 @@ mod tests {
         }
     }
 
-    /// The environment variable that the child process of the umask binding test gets.
-    #[cfg(unix)]
-    const UMASK_BINDING_CHILD_VARIABLE: &str = "GOLEM_AGENT_FILESYSTEMS_UMASK_BINDING_CHILD";
-
-    /// Gives the name of the child test as the test harness filters it: the module path in the
-    /// crate, then the name of the function.
-    #[cfg(unix)]
-    fn umask_binding_child_test() -> String {
-        let module = module_path!()
-            .split_once("::")
-            .map_or(module_path!(), |(_, module)| module);
-        format!("{module}::agent_filesystems_binding_in_a_child_process_clears_only_bit_0o200")
-    }
-
-    /// The file mode creation mask is a value of the process, and other tests of this binary change
-    /// it through `AgentFilesystems::new`. So the check runs in a child process that runs only the
-    /// child test.
-    #[cfg(unix)]
+    /// The test makes its temporary root under the mask that the process has. Then it binds the
+    /// filesystems on a thread with the mask 0o227, which must change the mask to 0o027.
+    #[cfg(target_os = "linux")]
     #[test]
     fn agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask() {
-        let child = umask_binding_child_test();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                child.as_str(),
-                "--exact",
-                "--include-ignored",
-                "--test-threads",
-                "1",
-                "--nocapture",
-            ])
-            .env(UMASK_BINDING_CHILD_VARIABLE, "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        assert!(
-            output.status.success() && stdout.contains(" 1 passed;"),
-            "the child test {child} must run and pass, and it ended with {}\nstdout:\n{stdout}\n\
-             stderr:\n{stderr}",
-            output.status
-        );
-    }
-
-    /// Runs only in the child process of
-    /// `agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask`.
-    ///
-    /// The test makes its temporary root under the mask that the process has. Then it sets the
-    /// mask 0o227 and binds the filesystems, which must change the mask to 0o027.
-    #[cfg(unix)]
-    #[test]
-    #[ignore = "runs only in the child process of the umask binding test"]
-    async fn agent_filesystems_binding_in_a_child_process_clears_only_bit_0o200() {
-        if std::env::var_os(UMASK_BINDING_CHILD_VARIABLE).is_none() {
-            return;
-        }
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             deterministic_root_dir: Some(root.path().to_path_buf()),
             ..FilesystemStorageConfig::default()
         };
-        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-        unsafe {
-            libc::umask(0o227);
-        }
 
-        let bound = AgentFilesystems::new(&settings).await;
+        let (bound, mask) = with_private_file_creation_mask(0o227, move || {
+            let bound = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(AgentFilesystems::new(&settings));
+            (bound, thread_file_creation_mask())
+        });
 
-        let mask = process_file_creation_mask();
         assert_eq!(
             mask, 0o027,
             "binding must change the mask 227 to 27, and the mask is {mask:o}"
@@ -401,28 +381,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn the_file_mode_creation_mask_probe_sets_0o022_and_gives_the_mask_before_the_call() {
-        let before = process_file_creation_mask();
-        // The call sets the mask 0o022 for all threads of the process. Other tests see no change
-        // only where the mask is 0o022 before the call, so the test makes the call only there.
-        if before != 0o022 {
-            eprintln!("skipped: the file mode creation mask is {before:o}, not 22");
-            return;
-        }
-
-        let replaced = replaced_file_creation_mask();
-        let during = process_file_creation_mask();
-        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-        unsafe {
-            libc::umask(replaced);
-        }
+        let (replaced, after) = with_private_file_creation_mask(0o227, || {
+            (replaced_file_creation_mask(), thread_file_creation_mask())
+        });
 
         assert_eq!(
-            replaced, before,
-            "the call must give the mask {before:o} from before the call, and it gave {replaced:o}"
+            replaced, 0o227,
+            "the call must give the mask 227 from before the call, and it gave {replaced:o}"
         );
         assert_eq!(
-            during, 0o022,
-            "the call must set the mask 0o022, and the mask is {during:o}"
+            after, 0o022,
+            "the call must set the mask 22, and the mask is {after:o}"
         );
     }
 

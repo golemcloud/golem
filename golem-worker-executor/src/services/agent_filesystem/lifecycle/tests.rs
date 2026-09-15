@@ -3266,6 +3266,60 @@ async fn a_time_change_authorizes_from_a_resolution_made_under_its_namespace_coo
 
 #[test]
 #[timeout("10s")]
+async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_check_read() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Both resolutions of alias find a symlink to a writable file, and the read of the kind of
+    // that file finds a regular file. The open, released after the rename below, follows alias
+    // to the read-only file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(710)));
+    let opening = control.block("open");
+    let changing = tokio::spawn(
+        set_attributes(
+            &generation_handle,
+            Target::Path(&alias, Follow::Yes),
+            AttributeChanges::Times(times),
+        )
+        .unwrap(),
+    );
+    opening.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the change opens it. The
+    // coordination on the entry alias does not stop the rename: it edits other entries.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    opening.release();
+
+    let changed = changing.await.unwrap();
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    assert!(!has_call(&control, "set_node_times("));
+    assert!(!has_call(&control, "set_path_times("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
 async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_coordination() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -3306,6 +3360,58 @@ async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_c
         Err(Error::Access(AccessError::NotPermitted))
     ));
     assert!(!has_call(&control, "open("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_through_a_symlink_refuses_the_read_only_file_that_it_opened() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // Both resolutions of alias find a symlink to a writable file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(720)));
+    control.push_close(Ok(()));
+    let opening_gate = control.block("open");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "alias").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap(),
+    );
+    opening_gate.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the open runs. The
+    // coordination on the entry alias does not stop the rename: it edits other entries. The open
+    // follows alias to that file, and the scripted open reports it as read-only.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    opening_gate.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(
+        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert_eq!(call_count(&control, "close("), 1);
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();

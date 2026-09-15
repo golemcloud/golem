@@ -337,7 +337,7 @@ fn sorted_declarations(declarations: &Declarations) -> Box<[InitialAgentFile]> {
         .iter()
         .collect::<BTreeMap<_, _>>()
         .into_values()
-        .cloned()
+        .map(|file| InitialAgentFile::clone(file))
         .collect()
 }
 

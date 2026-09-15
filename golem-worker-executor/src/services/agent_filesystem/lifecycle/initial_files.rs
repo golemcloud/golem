@@ -18,8 +18,9 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 
-/// The declarations of initial files, at their paths relative to the filesystem root.
-pub(super) type Declarations = HashMap<Box<Path>, InitialAgentFile>;
+/// The declarations of initial files, at their paths relative to the filesystem root. Two maps
+/// that hold one declaration share its path and its file.
+pub(super) type Declarations = HashMap<Arc<Path>, Arc<InitialAgentFile>>;
 
 /// The declarations that one operation reads, borrowed from the maps that hold them.
 pub(super) type DeclarationView<'a> = HashMap<&'a Path, &'a InitialAgentFile>;
@@ -473,18 +474,29 @@ async fn prepare_retry<Adapter: SandboxFilesystemAdapter>(
 
 /// Removes all that is under the directory at the root-relative `path`, and keeps the directory.
 ///
-/// The function unlinks the files and symlinks of a directory when it reads the directory, and
-/// removes the directories under `path` after all reads, the deepest directory first.
+/// The walk unlinks the files and symlinks of a directory when it reads the directory, and it
+/// removes a directory after the directories under it.
 async fn remove_contents<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
-    // The pending directories are a stack that the read pushes to and pops from.
-    let directories =
-        futures::stream::try_unfold(vec![Box::<Path>::from(path)], |mut pending| async move {
-            let Some(directory) = pending.pop() else {
+    // The pending directories are a stack that the walk pushes to and pops from. A directory goes
+    // on the stack to be read, and then again, marked as read, to be removed after the directories
+    // under it.
+    futures::stream::try_unfold(
+        vec![(Box::<Path>::from(path), false)],
+        |mut pending| async move {
+            let Some((directory, read)) = pending.pop() else {
                 return Ok(None);
             };
+            if read {
+                if directory.as_ref() != path {
+                    sandbox
+                        .remove_directory(SandboxPath::at_root(&*directory))
+                        .await?;
+                }
+                return Ok(Some(((), pending)));
+            }
             let entries = directory_entries(sandbox, &directory).await?;
             futures::stream::iter(
                 entries
@@ -496,25 +508,21 @@ async fn remove_contents<Adapter: SandboxFilesystemAdapter>(
                 sandbox.unlink_file(SandboxPath::at_root(directory.join(&entry.name)))
             })
             .await?;
+            // The directory goes under the directories in it, so the walk pops it after them. The
+            // paths of those directories are built from its path, so it moves onto the stack after
+            // them, at the position before them.
+            let position = pending.len();
             pending.extend(
                 entries
                     .into_iter()
                     .filter(|entry| entry.kind == SandboxObjectKind::Directory)
-                    .map(|entry| directory.join(entry.name).into_boxed_path()),
+                    .map(|entry| (directory.join(entry.name).into_boxed_path(), false)),
             );
-            Ok::<_, FilesystemStorageError>(Some((directory, pending)))
-        })
-        .try_collect::<Vec<Box<Path>>>()
-        .await?;
-    // The read gives a directory before the directories under it.
-    futures::stream::iter(
-        directories
-            .iter()
-            .rev()
-            .filter(|directory| directory.as_ref() != path),
+            pending.insert(position, (directory, true));
+            Ok::<_, FilesystemStorageError>(Some(((), pending)))
+        },
     )
-    .map(Ok)
-    .try_for_each(|directory| sandbox.remove_directory(SandboxPath::at_root(&**directory)))
+    .try_collect::<()>()
     .await
 }
 
@@ -603,7 +611,7 @@ impl PreparedInitialFiles {
                 loaded
                     .entry(file.initial_file.content_hash)
                     .or_insert(file.source);
-                declarations.insert(file.target.into_boxed_path(), file.initial_file);
+                declarations.insert(Arc::from(file.target), Arc::new(file.initial_file));
                 (declarations, loaded)
             },
         );
@@ -962,7 +970,7 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
         .provisioned
         .iter()
         .chain(&requested)
-        .map(|(path, file)| (path.clone(), file.clone()))
+        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
         .collect::<Declarations>();
     if provisioned == *state.provisioned {
         return Ok(());
@@ -1007,7 +1015,7 @@ async fn install_resident<Adapter: SandboxFilesystemAdapter>(
     .await
 }
 
-/// Makes declarations from `files`, and refuses two files at one path.
+/// Makes declarations from `files`, and refuses two files at one path. Each file is wrapped once.
 pub(super) fn declarations_of(
     files: Vec<InitialAgentFile>,
     duplicate_operation: &'static str,
@@ -1016,13 +1024,13 @@ pub(super) fn declarations_of(
     files.into_iter().try_fold(
         Declarations::with_capacity(count),
         |mut declarations, file| {
-            let path = PathBuf::from(file.path.to_rel_string()).into_boxed_path();
+            let path = Arc::<Path>::from(PathBuf::from(file.path.to_rel_string()));
             match declarations.entry(path) {
                 Entry::Occupied(entry) => Err(Error::Sandbox(
                     FilesystemStorageError::verification(duplicate_operation, entry.key()),
                 )),
                 Entry::Vacant(entry) => {
-                    entry.insert(file);
+                    entry.insert(Arc::new(file));
                     Ok(declarations)
                 }
             }
@@ -1057,7 +1065,7 @@ pub(super) fn declaration_view<'a>(
 ) -> DeclarationView<'a> {
     maps.into_iter()
         .flatten()
-        .map(|(path, file)| (path.as_ref(), file))
+        .map(|(path, file)| (path.as_ref(), file.as_ref()))
         .collect()
 }
 
@@ -1096,10 +1104,19 @@ mod tests {
             (Arc::<Path>::from(Path::new("made-writable")), file(4)),
         ]);
         let declared = Declarations::from([
-            (Box::<Path>::from(Path::new("kept")), read_only(1)),
-            (Box::<Path>::from(Path::new("reused")), read_only(1)),
-            (Box::<Path>::from(Path::new("made-writable")), read_write(1)),
-            (Box::<Path>::from(Path::new("seeded")), read_only(1)),
+            (Arc::<Path>::from(Path::new("kept")), Arc::new(read_only(1))),
+            (
+                Arc::<Path>::from(Path::new("reused")),
+                Arc::new(read_only(1)),
+            ),
+            (
+                Arc::<Path>::from(Path::new("made-writable")),
+                Arc::new(read_write(1)),
+            ),
+            (
+                Arc::<Path>::from(Path::new("seeded")),
+                Arc::new(read_only(1)),
+            ),
         ]);
         let new = declaration_view([&declared]);
         let seeded = new.get(Path::new("seeded")).unwrap();

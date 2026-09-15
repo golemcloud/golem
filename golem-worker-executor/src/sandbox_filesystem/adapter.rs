@@ -256,6 +256,7 @@ pub(crate) enum SandboxNode {
 #[derive(Clone, Debug)]
 pub(crate) struct SandboxOpened {
     node: SandboxNode,
+    read_only_file: bool,
 }
 
 impl SandboxOpened {
@@ -274,10 +275,24 @@ impl SandboxOpened {
         }
     }
 
+    /// Tells whether the opened object is a regular file without write permission.
+    pub(crate) fn is_read_only_file(&self) -> bool {
+        self.read_only_file
+    }
+
     #[cfg(test)]
     pub(crate) fn scripted_file(id: u64) -> Self {
         Self {
             node: SandboxNode::File(SandboxFile::scripted(id)),
+            read_only_file: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scripted_read_only_file(id: u64) -> Self {
+        Self {
+            node: SandboxNode::File(SandboxFile::scripted(id)),
+            read_only_file: true,
         }
     }
 
@@ -297,9 +312,11 @@ impl SandboxOpened {
         (
             Self {
                 node: SandboxNode::File(file(first_id, Arc::clone(&coordinators))),
+                read_only_file: false,
             },
             Self {
                 node: SandboxNode::File(file(second_id, coordinators)),
+                read_only_file: false,
             },
         )
     }
@@ -308,6 +325,7 @@ impl SandboxOpened {
     pub(crate) fn scripted_directory(id: u64) -> Self {
         Self {
             node: SandboxNode::Directory(SandboxDirectory::scripted(id)),
+            read_only_file: false,
         }
     }
 
@@ -318,6 +336,7 @@ impl SandboxOpened {
                 id,
                 format!("programmed-directory-{identity}"),
             )),
+            read_only_file: false,
         }
     }
 }
@@ -1117,6 +1136,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                         format!("expected {expected:?}, opened {kind:?}"),
                     ));
                 }
+                let read_only_file = is_read_only_file(&metadata);
                 let node = match kind {
                     SandboxObjectKind::Directory => {
                         let identity = native_file_identity(&metadata)?;
@@ -1146,7 +1166,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                         ));
                     }
                 };
-                Ok(SandboxOpened { node })
+                Ok(SandboxOpened {
+                    node,
+                    read_only_file,
+                })
             })
             .await
             .map_err(|error| task_error("open sandbox filesystem path", &operation_path, error))?
