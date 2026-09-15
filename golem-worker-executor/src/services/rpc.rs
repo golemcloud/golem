@@ -1627,7 +1627,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let completion = worker.await_enqueued_invocation(idempotency_key);
         tokio::pin!(result);
         tokio::pin!(completion);
-        let (value, output_mappings) = tokio::select! {
+        let result = tokio::select! {
             result = &mut result => result
                 .map_err(|details| RpcError::RemoteInternalError { details })?,
             output = &mut completion => {
@@ -1648,8 +1648,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             }
         };
         Ok(DurableRpcInvocationResult {
-            value,
-            output_mappings,
+            output_mappings: result.proto_mappings(),
+            value: result.value,
         })
     }
 

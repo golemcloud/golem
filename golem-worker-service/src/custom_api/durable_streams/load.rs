@@ -30,6 +30,7 @@ pub enum LoadRejection {
 }
 
 impl LoadRejection {
+    /// Distinguishes exhausted reader capacity (503) from per-stream rate limits (429).
     pub fn status_code(self) -> StatusCode {
         match self {
             Self::PerStreamReaders | Self::PerNodeReaders => StatusCode::SERVICE_UNAVAILABLE,
@@ -88,6 +89,7 @@ pub struct LiveReaderPermit {
 }
 
 impl DurableStreamLoadLimiter {
+    /// Creates node-local reader and request-rate accounting shared by this limiter's clones.
     pub fn new(config: DurableStreamsLoadConfig) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -97,6 +99,7 @@ impl DurableStreamLoadLimiter {
         }
     }
 
+    /// Reserves one live reader until the returned permit is dropped, without waiting for capacity.
     pub fn try_acquire_reader(&self, stream_key: &str) -> Result<LiveReaderPermit, LoadRejection> {
         let mut state = self
             .inner
@@ -126,6 +129,7 @@ impl DurableStreamLoadLimiter {
         })
     }
 
+    /// Charges one catch-up request against the stream's current one-second rate window.
     pub fn check_catch_up(&self, stream_key: &str) -> Result<(), LoadRejection> {
         self.check_catch_up_at(stream_key, Instant::now())
     }
@@ -141,6 +145,7 @@ impl DurableStreamLoadLimiter {
         )
     }
 
+    /// Charges one append request against the stream's current one-second rate window.
     pub fn check_append(&self, stream_key: &str) -> Result<(), LoadRejection> {
         self.check_append_at(stream_key, Instant::now())
     }

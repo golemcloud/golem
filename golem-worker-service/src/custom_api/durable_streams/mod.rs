@@ -46,6 +46,7 @@ pub struct DurableStreamsHandler {
 }
 
 impl DurableStreamsHandler {
+    /// Creates the HTTP handler with shared worker access and node-local load limits.
     pub fn new(
         worker_service: Arc<WorkerService>,
         call_agent: Arc<CallAgentHandler>,
@@ -60,6 +61,7 @@ impl DurableStreamsHandler {
         }
     }
 
+    /// Validates the durable-stream route suffix and dispatches session or slot operations.
     pub async fn handle(
         &self,
         request: &mut RichRequest,

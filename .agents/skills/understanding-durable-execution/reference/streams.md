@@ -52,8 +52,10 @@ bindings, while separate constructors remain independent even when given the sam
 there is no centralized session registry. Pure `SessionControlMetadata` and
 `SessionTopologyMetadata` projections live in `durable_host/durable_stream/session_state.rs` so
 the store, runtime and services can consume journal state without the store depending on the
-session runtime. RPC adapter separation, independent readers and explicit context remain future
-work; this ownership change alters no wire or oplog format.
+session runtime. `SessionValue` carries a schema value and domain mappings together, with
+canonical result indices converted to binding-local transport IDs before it leaves the session.
+RPC callers encode the mappings at transmission. Consumer endpoints own their read/replay state;
+admission and local write contexts are explicit. These boundaries alter no wire or oplog format.
 
 ### RPC result versus stream draining
 

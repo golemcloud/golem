@@ -29,6 +29,96 @@ use test_r::test;
 use uuid::Uuid;
 
 #[test]
+async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
+    let identity = identity();
+    let producer = DurableStreamStore::load(
+        Arc::new(TestOplog::default()),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut mappings = Vec::new();
+    for (index, transport_stream_id) in [91, 7].into_iter().enumerate() {
+        let handle = producer
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![StreamValuePathStep::RecordField(index as u32)],
+                    },
+                    StreamSourceKind::InvocationOutput,
+                ),
+            )
+            .await
+            .unwrap()
+            .value;
+        mappings.push(StreamSessionMappingRecord {
+            transport_stream_id,
+            handle,
+            role: SessionStreamRole::Output,
+        });
+    }
+    let reference = |stream_id| ProtoSchemaValue {
+        value: Some(schema_value::Value::StreamReference(
+            SchemaValueStreamReference { stream_id },
+        )),
+    };
+    let record = StreamSessionInvocationResultRecord {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        session_key: identity.invocation,
+        result: ProtoSchemaValue {
+            value: Some(schema_value::Value::ListValue(ListValue {
+                elements: vec![reference(0), reference(1)],
+            })),
+        }
+        .encode_to_vec(),
+        output_streams: mappings
+            .iter()
+            .map(|mapping| mapping.handle.clone())
+            .collect(),
+        stream_mappings: mappings.clone(),
+    };
+    let value = SessionValue::from_persisted(record.clone()).unwrap();
+    assert_eq!(
+        value.value,
+        ProtoSchemaValue {
+            value: Some(schema_value::Value::ListValue(ListValue {
+                elements: vec![reference(91), reference(7)],
+            })),
+        }
+    );
+    assert_eq!(value.mappings, mappings);
+    let encoded = value.proto_mappings();
+    assert_eq!(
+        encoded
+            .iter()
+            .map(|mapping| mapping.transport_stream_id)
+            .collect::<Vec<_>>(),
+        vec![91, 7]
+    );
+    assert_eq!(
+        encoded
+            .into_iter()
+            .map(durable_stream_mapping_from_proto)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap(),
+        mappings
+    );
+
+    let invalid = StreamSessionInvocationResultRecord {
+        result: reference(2).encode_to_vec(),
+        ..record
+    };
+    assert!(SessionValue::from_persisted(invalid).is_err());
+}
+
+#[test]
 fn system_durable_stream_cancellation_is_a_permanent_stream_error() {
     let error = durable_stream_cancel_error(
         StreamCancelRole::System,
@@ -6213,7 +6303,7 @@ async fn forwarded_root_input_and_direct_result_preserve_the_complete_handle() {
             handle: original.clone(),
         },
     ));
-    let (_, input_mappings) = streams
+    let input = streams
         .materialize_agent_input(
             &input,
             &graph,
@@ -6222,8 +6312,8 @@ async fn forwarded_root_input_and_direct_result_preserve_the_complete_handle() {
         )
         .await
         .unwrap();
-    assert_eq!(input_mappings.len(), 1);
-    assert_eq!(input_mappings[0].handle, original);
+    assert_eq!(input.mappings.len(), 1);
+    assert_eq!(input.mappings[0].handle, original);
     assert!(
         producer
             .handle_for_coordinate(&StreamRegistrationCoordinate::Root {

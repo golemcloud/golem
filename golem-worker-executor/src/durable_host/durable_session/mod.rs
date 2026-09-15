@@ -142,6 +142,41 @@ struct PendingOwnedStreamDrain {
     role: SessionStreamRole,
 }
 
+/// A stream-bearing value whose references name its binding-local transport mappings.
+#[derive(Debug, PartialEq)]
+pub(crate) struct SessionValue {
+    pub(crate) value: ProtoSchemaValue,
+    pub(crate) mappings: Vec<StreamSessionMappingRecord>,
+}
+
+impl SessionValue {
+    fn from_persisted(result: StreamSessionInvocationResultRecord) -> Result<Self, String> {
+        let value = ProtoSchemaValue::decode(result.result.as_slice())
+            .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
+        let value = remap_recursive_stream_references(value, |handle_index, _| {
+            let index = usize::try_from(handle_index)
+                .map_err(|_| format!("durable result handle index {handle_index} is too large"))?;
+            result
+                .stream_mappings
+                .get(index)
+                .map(|mapping| mapping.transport_stream_id)
+                .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
+        })?;
+        Ok(Self {
+            value,
+            mappings: result.stream_mappings,
+        })
+    }
+
+    /// Encodes this value's mappings when sending it over the invocation transport.
+    pub(crate) fn proto_mappings(&self) -> Vec<DurableStreamMapping> {
+        self.mappings
+            .iter()
+            .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+            .collect()
+    }
+}
+
 /// Encodes a fingerprint-bound session mapping for transport.
 pub(crate) fn durable_stream_mapping_to_proto(
     mapping: &StreamSessionMappingRecord,
@@ -2428,7 +2463,7 @@ impl StreamSession {
         graph: &SchemaGraph,
         root: &SchemaType,
         component_revision: golem_common::model::component::ComponentRevision,
-    ) -> Result<(ProtoSchemaValue, Vec<StreamSessionMappingRecord>), String> {
+    ) -> Result<SessionValue, String> {
         preflight_recursive_stream_value(value)?;
         let mut next_stream_index = 0u64;
         let retained_bytes =
@@ -2477,7 +2512,7 @@ impl StreamSession {
         graph: SchemaGraph,
         root: SchemaType,
         component_revision: golem_common::model::component::ComponentRevision,
-    ) -> Result<(ProtoSchemaValue, Vec<StreamSessionMappingRecord>), String> {
+    ) -> Result<SessionValue, String> {
         struct PendingInput {
             path: Vec<StreamValuePathStep>,
             endpoint: Option<LiveStreamEndpoint>,
@@ -2636,7 +2671,10 @@ impl StreamSession {
                 }
             });
         }
-        Ok((encoded, mappings))
+        Ok(SessionValue {
+            value: encoded,
+            mappings,
+        })
     }
 
     /// Registers result streams and replaces them with session transport mappings.
@@ -3689,39 +3727,19 @@ impl StreamSession {
     }
 
     /// Reads the committed invocation result, independently of stream drain progress.
-    pub(crate) async fn persisted_result(
-        &self,
-    ) -> Result<Option<(ProtoSchemaValue, Vec<DurableStreamMapping>)>, String> {
+    pub(crate) async fn persisted_result(&self) -> Result<Option<SessionValue>, String> {
         if let Some(result) = self.remote_result_record().await? {
-            let value = ProtoSchemaValue::decode(result.result.as_slice())
-                .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
-            let transport_value = remap_recursive_stream_references(value, |handle_index, _| {
-                let index = usize::try_from(handle_index).map_err(|_| {
-                    format!("durable result handle index {handle_index} is too large")
-                })?;
-                result
-                    .stream_mappings
-                    .get(index)
-                    .map(|mapping| mapping.transport_stream_id)
-                    .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
-            })?;
-            let proto_mappings = result
-                .stream_mappings
-                .iter()
-                .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                .collect();
-            for mapping in result.stream_mappings {
-                self.insert_mapping(mapping)?;
+            let value = SessionValue::from_persisted(result)?;
+            for mapping in &value.mappings {
+                self.insert_mapping(mapping.clone())?;
             }
-            return Ok(Some((transport_value, proto_mappings)));
+            return Ok(Some(value));
         }
         Ok(None)
     }
 
     /// Waits for a committed invocation result or session failure.
-    pub(crate) async fn wait_persisted_result(
-        &self,
-    ) -> Result<(ProtoSchemaValue, Vec<DurableStreamMapping>), String> {
+    pub(crate) async fn wait_persisted_result(&self) -> Result<SessionValue, String> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);

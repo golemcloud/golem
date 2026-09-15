@@ -1120,12 +1120,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await;
                 return;
             };
+            let new_stream_mappings = persisted_result.proto_mappings();
             if responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
                             result: Some(invocation_session_result::Result::MethodResult(
-                                persisted_result.0,
+                                persisted_result.value,
                             )),
                             component_revision: accepted
                                 .component_revision
@@ -1136,7 +1137,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: start.expected_callee_fingerprint,
-                            new_stream_mappings: persisted_result.1,
+                            new_stream_mappings,
                         },
                     )),
                 })
@@ -1721,12 +1722,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 },
             }
         };
-        if let Some((result, new_stream_mappings)) = persisted_result
+        if let Some(result) = persisted_result
             && responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
-                            result: Some(invocation_session_result::Result::MethodResult(result)),
+                            new_stream_mappings: result.proto_mappings(),
+                            result: Some(invocation_session_result::Result::MethodResult(result.value)),
                             component_revision: Some(
                                 acceptance
                                     .prepared
@@ -1741,7 +1743,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: resume.expected_callee_fingerprint,
-                            new_stream_mappings,
                         },
                     )),
                 })

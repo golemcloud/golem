@@ -20,8 +20,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
-    StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
-    strip_streams,
+    StreamSession, durable_stream_mapping_from_proto, strip_streams,
 };
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
@@ -682,7 +681,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let caller_revision = self.state.component_metadata.revision;
             let input_root = rpc_input_root(&prepared);
             let output_root = rpc_output_root(&prepared);
-            let (input, input_mappings) = streams
+            let input = streams
                 .materialize_agent_input(
                     &prepared.input_value,
                     &prepared.remote_agent_type.schema,
@@ -725,17 +724,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .caller_attempt_id()
                 .await
                 .map_err(anyhow::Error::msg)?;
+            let input_mappings = input.proto_mappings();
             let remote_result = self
                 .rpc()
                 .invoke_and_await_streaming(
                     &remote_agent_id,
                     idempotency_key,
                     prepared.method_name.clone(),
-                    input,
-                    input_mappings
-                        .iter()
-                        .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                        .collect(),
+                    input.value,
+                    input_mappings,
                     target_fingerprint,
                     attempt_id.0,
                     self.created_by(),
@@ -1223,7 +1220,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
             .await?;
             let caller_revision = self.state.component_metadata.revision;
-            let (input, input_mappings) = streams
+            let input = streams
                 .materialize_agent_input(
                     &input_value,
                     &remote_agent_type.schema,
@@ -1238,11 +1235,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .map_err(anyhow::Error::msg)?;
             let params = DurableStreamingTaskParams {
                 streams,
-                input,
-                input_mappings: input_mappings
-                    .iter()
-                    .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                    .collect(),
+                input_mappings: input.proto_mappings(),
+                input: input.value,
                 expected_callee_fingerprint: target_fingerprint,
                 attempt_id: attempt_id.0,
                 output_graph: Arc::new(remote_agent_type.schema.clone()),
