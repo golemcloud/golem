@@ -1340,7 +1340,10 @@ fn validate_final_http_api_router(
     }
 
     let mut mounts: Vec<&UnboundCompiledRoute> = Vec::new();
-    let mut router = golem_service_base::custom_api::router::Router::new();
+    let mut routers = [
+        golem_service_base::custom_api::router::Router::new(),
+        golem_service_base::custom_api::router::Router::new(),
+    ];
 
     for compiled_route in compiled_routes {
         if let Err(error) = validate_path_segments(&compiled_route.path, domain) {
@@ -1426,7 +1429,15 @@ fn validate_final_http_api_router(
             errors
         );
 
-        if !router.add_route(method, compiled_route.path.clone(), ()) {
+        let trailing_slash = matches!(
+            compiled_route.route_match,
+            RouteMatch::Method {
+                trailing_slash: true,
+                ..
+            }
+        );
+        if !routers[usize::from(trailing_slash)].add_route(method, compiled_route.path.clone(), ())
+        {
             errors.push(DeployValidationError::RouteIsAmbiguous {
                 domain: domain.clone(),
                 method: route_method.clone(),
@@ -1932,6 +1943,21 @@ mod tests {
                 .any(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
         );
         let encoded = desert_rust::serialize_to_byte_vec(&routes).unwrap();
+        let typed = routes
+            .iter()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
+            .unwrap();
+        let typed_bytes = desert_rust::serialize_to_byte_vec(typed).unwrap();
+        let mut with_slash: UnboundCompiledRoute = desert_rust::deserialize(&typed_bytes).unwrap();
+        if let golem_service_base::custom_api::RouteMatch::Method { trailing_slash, .. } =
+            &mut with_slash.route_match
+        {
+            *trailing_slash = true;
+        }
+        let mut distinct: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
+        distinct.push(with_slash);
+        validate_final_http_api_router(&typed.domain, &distinct, &HashMap::new(), &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
         for (path, method, accepted) in [
             (
                 vec![PathSegment::Literal {
