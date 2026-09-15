@@ -18,6 +18,7 @@ use super::*;
 impl DurableStreamStore {
     pub(super) async fn commit_resource_exhausted_terminal(
         &self,
+        context: &StreamWriteContext,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
@@ -25,7 +26,7 @@ impl DurableStreamStore {
         let result = StreamEndResult::ErrorContext(resource_exhausted_error_context()?);
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -44,7 +45,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
         let (oplog_index, entry) = entries
             .pop()
             .expect("resource exhaustion terminal batch returned no oplog entry");
@@ -67,17 +68,19 @@ impl DurableStreamStore {
             record,
             self.producer_fingerprint,
         )?;
-        let publication = self.enqueue_events(stream_id, vec![event], false)?;
+        let publication = self.enqueue_events(Some(context), stream_id, vec![event], false)?;
         self.record_terminal_streams(1);
         drop(index);
-        self.wait_for_publication(publication).await?;
-        self.finish_durable_effect();
+        self.wait_for_publication(Some(context), publication)
+            .await?;
+        context.finish_durable_effect();
         Ok(())
     }
 
     /// Commits the stream's single end terminal before publishing it to live readers.
     pub(crate) async fn end(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         sequence: u64,
         result: StreamEndResult,
@@ -86,9 +89,15 @@ impl DurableStreamStore {
             StreamEndResult::ErrorContext(bytes) => bytes.len(),
             _ => 0,
         };
-        self.run_owned(memory, move |owner| async move {
+        self.run_owned(context, memory, move |owner, context| async move {
             owner
-                .end_authored(stream_id, sequence, result, StreamTerminalAuthor::Guest)
+                .end_authored(
+                    &context,
+                    stream_id,
+                    sequence,
+                    result,
+                    StreamTerminalAuthor::Guest,
+                )
                 .await
         })
         .await
@@ -96,13 +105,14 @@ impl DurableStreamStore {
 
     async fn end_authored(
         &self,
+        context: &StreamWriteContext,
         stream_id: StreamId,
         sequence: u64,
         result: StreamEndResult,
         authored_by: StreamTerminalAuthor,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let index = self.index_for_terminal([], stream_id).await?;
-        self.end_authored_locked(index, stream_id, sequence, result, authored_by)
+        self.end_authored_locked(context, index, stream_id, sequence, result, authored_by)
             .await
     }
 
@@ -113,6 +123,7 @@ impl DurableStreamStore {
     )]
     async fn end_authored_locked(
         &self,
+        context: &StreamWriteContext,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
@@ -130,7 +141,8 @@ impl DurableStreamStore {
             TerminalReplayDecision::Replayed(event) => {
                 let offset = event.offset;
                 drop(index);
-                self.publish_repair(stream_id, vec![event]).await?;
+                self.publish_repair(Some(context), stream_id, vec![event])
+                    .await?;
                 crate::metrics::durable_stream::record_producer_operation("end", true);
                 tracing::debug!(
                     stream_id = %stream_id,
@@ -147,7 +159,8 @@ impl DurableStreamStore {
             TerminalReplayDecision::Fenced(event) => {
                 let error = StreamStoreError::FencedByTerminal(event.payload.clone());
                 drop(index);
-                self.publish_repair(stream_id, vec![event]).await?;
+                self.publish_repair(Some(context), stream_id, vec![event])
+                    .await?;
                 return Err(error);
             }
         }
@@ -164,13 +177,14 @@ impl DurableStreamStore {
                 .clone();
             let error = fenced_by_terminal(stream);
             drop(index);
-            self.publish_repair(stream_id, vec![terminal]).await?;
+            self.publish_repair(Some(context), stream_id, vec![terminal])
+                .await?;
             return Err(error);
         }
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -189,7 +203,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream end batch returned no oplog entry");
@@ -213,10 +227,11 @@ impl DurableStreamStore {
             self.producer_fingerprint,
         )?;
         let offset = event.offset;
-        let publication = self.enqueue_events(stream_id, vec![event], false)?;
+        let publication = self.enqueue_events(Some(context), stream_id, vec![event], false)?;
         self.record_terminal_streams(1);
         drop(index);
-        self.wait_for_publication(publication).await?;
+        self.wait_for_publication(Some(context), publication)
+            .await?;
         crate::metrics::durable_stream::record_producer_operation("end", false);
         tracing::debug!(
             stream_id = %stream_id,
@@ -238,6 +253,7 @@ impl DurableStreamStore {
     )]
     async fn commit_cancel_locked(
         &self,
+        context: &StreamWriteContext,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
@@ -260,7 +276,8 @@ impl DurableStreamStore {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
                 let offset = event.offset;
-                let publication = self.enqueue_events(stream_id, vec![event.clone()], true)?;
+                let publication =
+                    self.enqueue_events(Some(context), stream_id, vec![event.clone()], true)?;
                 drop(index);
                 self.cancel_source(stream_id);
                 return Ok(PendingCommittedCancellation {
@@ -278,7 +295,8 @@ impl DurableStreamStore {
             }
             TerminalReplayDecision::Fenced(event) => {
                 let error = StreamStoreError::FencedByTerminal(event.payload.clone());
-                let publication = self.enqueue_events(stream_id, vec![event.clone()], true)?;
+                let publication =
+                    self.enqueue_events(Some(context), stream_id, vec![event.clone()], true)?;
                 drop(index);
                 self.cancel_source(stream_id);
                 return Ok(PendingCommittedCancellation {
@@ -296,7 +314,7 @@ impl DurableStreamStore {
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -317,7 +335,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream cancellation batch returned no oplog entry");
@@ -341,7 +359,8 @@ impl DurableStreamStore {
             self.producer_fingerprint,
         )?;
         let offset = event.offset;
-        let publication = self.enqueue_events(stream_id, vec![event.clone()], false)?;
+        let publication =
+            self.enqueue_events(Some(context), stream_id, vec![event.clone()], false)?;
         self.record_terminal_streams(1);
         drop(index);
         self.cancel_source(stream_id);
@@ -362,10 +381,12 @@ impl DurableStreamStore {
     /// Publishes an already committed cancellation and waits for postcommit ordering.
     pub(crate) async fn publish_committed_cancellation(
         &self,
+        context: Option<&StreamWriteContext>,
         pending: PendingCommittedCancellation,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let offset = pending.event.offset;
-        self.wait_for_publication(pending.publication).await?;
+        self.wait_for_publication(context, pending.publication)
+            .await?;
         if let Ok(outcome) = &pending.outcome {
             crate::metrics::durable_stream::record_producer_operation("cancel", outcome.replayed);
             tracing::debug!(
@@ -384,16 +405,18 @@ impl DurableStreamStore {
     /// Commits cancellation for an open stream without yet completing live publication.
     pub(crate) async fn commit_cancel_open(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
     ) -> Result<Option<PendingCommittedCancellation>, StreamStoreError> {
         self.run_lifecycle(
+            context,
             details.as_ref().map_or(0, String::len),
-            move |owner| async move {
+            move |owner, context| async move {
                 owner
-                    .commit_cancel_open_owned(stream_id, role, reason, details)
+                    .commit_cancel_open_owned(&context, stream_id, role, reason, details)
                     .await
             },
         )
@@ -402,6 +425,7 @@ impl DurableStreamStore {
 
     async fn commit_cancel_open_owned(
         &self,
+        context: &StreamWriteContext,
         stream_id: StreamId,
         role: StreamCancelRole,
         reason: StreamCancelReason,
@@ -420,7 +444,7 @@ impl DurableStreamStore {
             return Ok(None);
         }
         let sequence = stream.next_sequence;
-        self.commit_cancel_locked(index, stream_id, sequence, role, reason, details)
+        self.commit_cancel_locked(context, index, stream_id, sequence, role, reason, details)
             .await
             .map(Some)
     }
@@ -428,16 +452,18 @@ impl DurableStreamStore {
     /// Commits and publishes cancellation for an open stream exactly once.
     pub(crate) async fn cancel_open(
         self: &Arc<Self>,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
     ) -> Result<(), StreamStoreError> {
         self.run_lifecycle(
+            context,
             details.as_ref().map_or(0, String::len),
-            move |owner| async move {
+            move |owner, context| async move {
                 owner
-                    .cancel_open_owned(stream_id, role, reason, details)
+                    .cancel_open_owned(&context, stream_id, role, reason, details)
                     .await
             },
         )
@@ -446,16 +472,18 @@ impl DurableStreamStore {
 
     async fn cancel_open_owned(
         &self,
+        context: &StreamWriteContext,
         stream_id: StreamId,
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
     ) -> Result<(), StreamStoreError> {
         if let Some(pending) = self
-            .commit_cancel_open(stream_id, role, reason, details)
+            .commit_cancel_open(Some(context), stream_id, role, reason, details)
             .await?
         {
-            self.publish_committed_cancellation(pending).await?;
+            self.publish_committed_cancellation(Some(context), pending)
+                .await?;
         }
         Ok(())
     }
@@ -511,6 +539,7 @@ impl DurableStreamStore {
     /// Appends a protocol-authored end to one stream unless it already has a terminal.
     pub(crate) async fn end_open(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         result: StreamEndResult,
     ) -> Result<(), StreamStoreError> {
@@ -518,14 +547,15 @@ impl DurableStreamStore {
             StreamEndResult::ErrorContext(bytes) => bytes.len(),
             _ => 0,
         };
-        self.run_lifecycle(memory, move |owner| async move {
-            owner.end_open_owned(stream_id, result).await
+        self.run_lifecycle(context, memory, move |owner, context| async move {
+            owner.end_open_owned(&context, stream_id, result).await
         })
         .await
     }
 
     async fn end_open_owned(
         &self,
+        context: &StreamWriteContext,
         stream_id: StreamId,
         result: StreamEndResult,
     ) -> Result<(), StreamStoreError> {
@@ -541,6 +571,7 @@ impl DurableStreamStore {
         }
         let sequence = stream.next_sequence;
         self.end_authored_locked(
+            context,
             index,
             stream_id,
             sequence,

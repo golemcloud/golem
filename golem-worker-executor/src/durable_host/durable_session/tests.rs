@@ -82,32 +82,35 @@ async fn append_prepared_pending(
         Vec::new()
     };
     producer
-        .append_session_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
-                attachment_id,
-                expected_callee_fingerprint: identity.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "consume".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: stream_mappings
-                        .iter()
-                        .map(|mapping| mapping.handle.clone())
-                        .collect(),
-                    execution_config: vec![2],
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "consume".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: stream_mappings
+                            .iter()
+                            .map(|mapping| mapping.handle.clone())
+                            .collect(),
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings,
-        }))
+                stream_mappings,
+            }),
+        )
         .await
         .unwrap();
     oplog
@@ -169,15 +172,18 @@ async fn mapping_records_preserve_construction_and_insertion_rules() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -233,15 +239,18 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -336,8 +345,8 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         let admitted = admitted.clone();
         operations.spawn(async move {
             producer
-                .run_owned(0, move |owner| async move {
-                    owner.defer_remote_cancellation(async move {
+                .run_owned(None, 0, move |_, context| async move {
+                    context.defer_remote_cancellation(async move {
                         admitted.wait().await;
                         Ok(())
                     });
@@ -415,15 +424,18 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -434,7 +446,7 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
         let handle = handle.clone();
         async move {
             streams
-                .ensure_nested_mapping(handle, SessionStreamRole::Output)
+                .ensure_nested_mapping(None, handle, SessionStreamRole::Output)
                 .await
         }
     });
@@ -444,7 +456,7 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
         let handle = handle.clone();
         async move {
             streams
-                .ensure_nested_mapping(handle, SessionStreamRole::Output)
+                .ensure_nested_mapping(None, handle, SessionStreamRole::Output)
                 .await
         }
     });
@@ -757,7 +769,7 @@ impl Rpc for AttachedProducerRpc {
                 key, role, reason, details,
             } = request.operation else { panic!("unexpected control RPC") };
             self.producer
-                .cancel_open(key.stream_id, role, reason, details)
+                .cancel_open(None, key.stream_id, role, reason, details)
                 .await
                 .map_err(|error| RpcError::ProtocolError {
                     details: error.to_string(),
@@ -892,15 +904,18 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -1092,15 +1107,18 @@ async fn backpressured_session_input() -> (
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -1122,14 +1140,17 @@ async fn backpressured_session_input() -> (
     )
     .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.clone(),
-            attachment_id,
-            attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let streams = StreamSession::new(
@@ -1145,7 +1166,12 @@ async fn backpressured_session_input() -> (
     .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
     let reader = producer.catch_up(handle.clone(), None).await.unwrap();
     producer
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![1]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![1]),
+        )
         .await
         .unwrap();
     (producer, streams, reader, handle)
@@ -1187,15 +1213,18 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
     .await
     .unwrap();
     let handle = remote_producer
-        .register(registration(
-            &remote,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: remote.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &remote,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: remote.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -1210,8 +1239,9 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
     .await
     .unwrap();
     producer
-        .append_session_record(StreamSessionRecord::Mapping(
-            StreamSessionMappingUpdateRecord {
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: local.invocation.clone(),
                 mapping: StreamSessionMappingRecord {
@@ -1219,13 +1249,14 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
                     handle: handle.clone(),
                     role: SessionStreamRole::Output,
                 },
-            },
-        ))
+            }),
+        )
         .await
         .unwrap();
     producer
-        .append_session_record(StreamSessionRecord::ConsumerCancelIntent(
-            StreamConsumerCancelIntentRecord {
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerCancelIntent(StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: local.invocation.clone(),
                 stream_id: handle.stream_id,
@@ -1233,8 +1264,8 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
                 role: StreamCancelRole::OutputConsumer,
                 reason: StreamCancelReason::GuestDrop,
                 details: Some("persisted remote cancellation".into()),
-            },
-        ))
+            }),
+        )
         .await
         .unwrap();
     drop(producer);
@@ -1273,7 +1304,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
     );
     streams
         .producer
-        .run_lifecycle(0, |_| async { Ok::<_, String>(()) })
+        .run_lifecycle(None, 0, |_, _context| async { Ok::<_, String>(()) })
         .await
         .expect("remote timeout must not poison the local producer");
     streams
@@ -1335,15 +1366,18 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
     .await
     .unwrap();
     let handle = remote_producer
-        .register(registration(
-            &remote,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: remote.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &remote,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: remote.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -1375,14 +1409,17 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
     )
     .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: local.invocation.clone(),
-            attachment_id,
-            attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: local.invocation.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let streams = StreamSession::new(
@@ -1485,15 +1522,18 @@ async fn completed_output_reconstruction_does_not_require_an_attachment() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -1508,7 +1548,7 @@ async fn completed_output_reconstruction_does_not_require_an_attachment() {
         "an open output still requires an attachment"
     );
     producer
-        .end(handle.stream_id, 0, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 0, StreamEndResult::Ok)
         .await
         .unwrap();
     drop(streams);
@@ -1547,21 +1587,25 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
         .await
         .unwrap();
         let handle = producer
-            .register(registration(
-                &identity,
-                StreamRegistrationCoordinate::Root {
-                    invocation_id: identity.invocation.clone(),
-                    root_kind: StreamRootKind::MethodResult,
-                    recursive_value_path: Vec::new(),
-                },
-                StreamSourceKind::InvocationOutput,
-            ))
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::InvocationOutput,
+                ),
+            )
             .await
             .unwrap()
             .value;
         producer
-            .append_session_record(StreamSessionRecord::Mapping(
-                StreamSessionMappingUpdateRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
                     mapping: StreamSessionMappingRecord {
@@ -1569,19 +1613,20 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                         handle: handle.clone(),
                         role: SessionStreamRole::Output,
                     },
-                },
-            ))
+                }),
+            )
             .await
             .unwrap();
         if already_ended {
             producer
-                .end(handle.stream_id, 0, StreamEndResult::Ok)
+                .end(None, handle.stream_id, 0, StreamEndResult::Ok)
                 .await
                 .unwrap();
         }
         producer
-            .append_session_record(StreamSessionRecord::ConsumerCancelIntent(
-                StreamConsumerCancelIntentRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::ConsumerCancelIntent(StreamConsumerCancelIntentRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
                     stream_id: handle.stream_id,
@@ -1589,8 +1634,8 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                     role: StreamCancelRole::OutputConsumer,
                     reason: StreamCancelReason::GuestDrop,
                     details: Some("consumer gone before restart".into()),
-                },
-            ))
+                }),
+            )
             .await
             .unwrap();
         let before = oplog.current_oplog_index().await;
@@ -1647,7 +1692,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .unwrap()
         );
         recovered
-            .reconcile_local_cancellation_intents()
+            .reconcile_local_cancellation_intents(None)
             .await
             .unwrap();
         let after = oplog.current_oplog_index().await;
@@ -1684,7 +1729,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             );
         }
         recovered
-            .reconcile_local_cancellation_intents()
+            .reconcile_local_cancellation_intents(None)
             .await
             .unwrap();
         assert_eq!(oplog.current_oplog_index().await, after);
@@ -1699,21 +1744,25 @@ async fn session_cancellation_retains_history_and_is_idempotent_under_backpressu
     let mut outputs = Vec::new();
     for index in 0..2 {
         let output = producer
-            .register(registration(
-                &identity,
-                StreamRegistrationCoordinate::Root {
-                    invocation_id: identity.invocation.clone(),
-                    root_kind: StreamRootKind::MethodResult,
-                    recursive_value_path: vec![StreamValuePathStep::RecordField(index)],
-                },
-                StreamSourceKind::InvocationOutput,
-            ))
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![StreamValuePathStep::RecordField(index)],
+                    },
+                    StreamSourceKind::InvocationOutput,
+                ),
+            )
             .await
             .unwrap()
             .value;
         streams
-            .append_record(StreamSessionRecord::Mapping(
-                StreamSessionMappingUpdateRecord {
+            .append_record(
+                None,
+                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: streams.session_key.clone(),
                     mapping: StreamSessionMappingRecord {
@@ -1721,12 +1770,12 @@ async fn session_cancellation_retains_history_and_is_idempotent_under_backpressu
                         handle: output.clone(),
                         role: SessionStreamRole::Output,
                     },
-                },
-            ))
+                }),
+            )
             .await;
         if index == 1 {
             producer
-                .end(output.stream_id, 0, StreamEndResult::Ok)
+                .end(None, output.stream_id, 0, StreamEndResult::Ok)
                 .await
                 .unwrap();
         }
@@ -1810,14 +1859,15 @@ async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {
             }
             Some(role) => {
                 streams
-                    .append_record(StreamSessionRecord::Tombstoned(
-                        StreamSlotTombstonedRecord {
+                    .append_record(
+                        None,
+                        StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: streams.session_key.clone(),
                             slot: "right".into(),
                             role,
-                        },
-                    ))
+                        }),
+                    )
                     .await
             }
         }
@@ -1843,9 +1893,10 @@ async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {
             let session = streams.clone();
             let root = root.clone();
             let (_, drains) = producer
-                .run_lifecycle(0, move |_| async move {
+                .run_lifecycle(None, 0, move |_, context| async move {
                     session
                         .materialize_result_owned(
+                            &context,
                             value,
                             SchemaGraph::anonymous(root.clone()),
                             root,
@@ -1914,7 +1965,7 @@ async fn cancelled_forwarded_result_persists_intent_without_remote_activation() 
     );
     request.element_schema_fingerprint =
         schema_fingerprint_v1(&graph, Some(&SchemaType::u8())).unwrap();
-    let handle = remote_producer.register(request).await.unwrap().value;
+    let handle = remote_producer.register(None, request).await.unwrap().value;
     let before = remote_oplog.current_oplog_index().await;
     for _ in 0..2 {
         let result = SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
@@ -1950,7 +2001,7 @@ async fn cancelled_forwarded_result_persists_intent_without_remote_activation() 
         vec![handle]
     );
     producer
-        .run_lifecycle(0, |_| async { Ok::<_, String>(()) })
+        .run_lifecycle(None, 0, |_, _context| async { Ok::<_, String>(()) })
         .await
         .unwrap();
 }
@@ -1966,11 +2017,11 @@ async fn slot_tombstone_persists_without_cancelling_other_slots() {
             let stream = (!pending_output).then(|| (handle.clone(), SessionStreamRole::Input));
             let before = streams.oplog.current_oplog_index().await;
             let changed = producer
-                .run_lifecycle(0, move |_| async move {
+                .run_lifecycle(None, 0, move |_, context| async move {
                     let lock = session.producer.session_lock(&session.session_key);
                     let guard = lock.lock().await;
                     session
-                        .tombstone_slot_owned(slot.into(), stream, guard)
+                        .tombstone_slot_owned(&context, slot.into(), stream, guard)
                         .await
                 })
                 .await
@@ -2026,8 +2077,9 @@ async fn slot_tombstone_persists_without_cancelling_other_slots() {
 async fn local_cancellation_recovery_does_not_wait_for_live_reader_capacity() {
     let (producer, streams, reader, handle) = backpressured_session_input().await;
     producer
-        .append_session_record(StreamSessionRecord::ConsumerCancelIntent(
-            StreamConsumerCancelIntentRecord {
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerCancelIntent(StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: streams.session_key.clone(),
                 stream_id: handle.stream_id,
@@ -2035,13 +2087,13 @@ async fn local_cancellation_recovery_does_not_wait_for_live_reader_capacity() {
                 role: StreamCancelRole::InputConsumer,
                 reason: StreamCancelReason::GuestDrop,
                 details: None,
-            },
-        ))
+            }),
+        )
         .await
         .unwrap();
     tokio::time::timeout(
         Duration::from_secs(1),
-        streams.reconcile_local_cancellation_intents(),
+        streams.reconcile_local_cancellation_intents(None),
     )
     .await
     .expect("recovery waited for a backpressured live reader")
@@ -2222,15 +2274,18 @@ async fn owned_tail_backlog_uses_source_history() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -2243,6 +2298,7 @@ async fn owned_tail_backlog_uses_source_history() {
 
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![1, 2, 3]),
@@ -2272,20 +2328,24 @@ async fn attached_preexisting_journal_lag_counts_committed_source_events() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![1, 2, 3]),
@@ -2424,20 +2484,24 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![
@@ -2503,21 +2567,25 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     for value in 0..8 {
         producer
             .write_items(
+                None,
                 handle.stream_id,
                 u64::from(value),
                 StreamItemsPayload::Values(vec![
@@ -2623,21 +2691,25 @@ async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_s
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let bytes = (0..4096).map(|value| value as u8).collect::<Vec<_>>();
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(bytes.clone()),
@@ -2645,7 +2717,12 @@ async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_s
         .await
         .unwrap();
     producer
-        .end(handle.stream_id, bytes.len() as u64, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            bytes.len() as u64,
+            StreamEndResult::Ok,
+        )
         .await
         .unwrap();
 
@@ -2731,15 +2808,18 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -2769,6 +2849,7 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
     consumer.begin_receive();
     let (write_result, receive_result) = tokio::join!(
         producer.write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(bytes.clone()),
@@ -2815,16 +2896,17 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
     .await
     .unwrap();
     reloaded
-        .append_session_record(StreamSessionRecord::ConsumerTerminal(
-            StreamConsumerTerminalRecord {
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                 format_version: 1,
                 session_key: identity.invocation,
                 stream_id: handle.stream_id,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(100), 0),
                 consumer_read_ordinal: 2048,
                 terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
-            },
-        ))
+            }),
+        )
         .await
         .expect("reloading must advance the consumer ordinal by every packed byte");
 }
@@ -2852,15 +2934,18 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -2882,14 +2967,17 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     )
     .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.clone(),
-            attachment_id,
-            attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let streams = StreamSession::new(
@@ -2978,15 +3066,18 @@ async fn dropped_input_cancellation_is_skipped_once_the_attachment_is_fenced() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3008,14 +3099,17 @@ async fn dropped_input_cancellation_is_skipped_once_the_attachment_is_fenced() {
     )
     .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.clone(),
-            attachment_id,
-            attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let streams = StreamSession::new(
@@ -3076,15 +3170,18 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3100,14 +3197,17 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     )
     .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.clone(),
-            attachment_id,
-            attempt_id: start_attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                attachment_id,
+                attempt_id: start_attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let transport = StreamSession::new(
@@ -3228,15 +3328,18 @@ async fn dropping_input_producer_during_runtime_teardown_does_not_schedule_cance
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3277,15 +3380,18 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &source,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: source.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &source,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: source.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3335,7 +3441,7 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
         ),
     ] {
         assert!(record.has_supported_format());
-        streams.append_record(record).await;
+        streams.append_record(None, record).await;
     }
     producer
         .prepare_attachment(attachment.clone(), 100)
@@ -3346,7 +3452,7 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
         .await
         .unwrap();
     producer
-        .end(handle.stream_id, 0, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 0, StreamEndResult::Ok)
         .await
         .unwrap();
     let source_offset = producer
@@ -3356,16 +3462,17 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
         .unwrap()
         .resulting_offset;
     streams
-        .append_record(StreamSessionRecord::ConsumerTerminal(
-            StreamConsumerTerminalRecord {
+        .append_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                 format_version: 1,
                 session_key: source.invocation.clone(),
                 stream_id: handle.stream_id,
                 source_offset,
                 consumer_read_ordinal: 0,
                 terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
-            },
-        ))
+            }),
+        )
         .await;
     streams.commit_consumer_journal().await.unwrap();
     producer.finalize_attachment(attachment.clone(), golem_common::model::durable_stream::StreamAttachmentFinalizationReason::ConsumerFinalized, 101).await.unwrap();
@@ -3442,15 +3549,18 @@ async fn source_unavailable_overlay_replays_without_reopening_the_source() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3465,17 +3575,20 @@ async fn source_unavailable_overlay_replays_without_reopening_the_source() {
         }],
     );
     streams
-        .append_record(StreamSessionRecord::SourceUnavailable(
-            golem_common::base_model::durable_stream::StreamSourceUnavailableRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                key: streams.attachment_key(&handle, 1).unwrap(),
-                source_offset: golem_common::model::durable_stream::StreamOffset::new(
-                    OplogIndex::INITIAL,
-                    0,
-                ),
-                consumer_read_ordinal: 0,
-            },
-        ))
+        .append_record(
+            None,
+            StreamSessionRecord::SourceUnavailable(
+                golem_common::base_model::durable_stream::StreamSourceUnavailableRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    key: streams.attachment_key(&handle, 1).unwrap(),
+                    source_offset: golem_common::model::durable_stream::StreamOffset::new(
+                        OplogIndex::INITIAL,
+                        0,
+                    ),
+                    consumer_read_ordinal: 0,
+                },
+            ),
+        )
         .await;
 
     let endpoint = streams
@@ -3511,15 +3624,18 @@ async fn resume_cursors_cannot_name_input_streams() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3558,15 +3674,18 @@ async fn output_resume_cursor_is_not_shadowed_by_same_handle_input_mapping() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3623,15 +3742,18 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     .await
     .unwrap();
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3641,43 +3763,49 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         role: SessionStreamRole::Input,
     };
     let output_handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let start_attempt_id = AttemptId::fresh();
     producer
-        .append_session_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
-                attachment_id,
-                expected_callee_fingerprint: identity.fingerprint,
-                attempt_id: start_attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "consume".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: vec![handle.clone()],
-                    execution_config: vec![2],
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id: start_attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "consume".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: vec![handle.clone()],
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings: vec![mapping.clone()],
-        }))
+                stream_mappings: vec![mapping.clone()],
+            }),
+        )
         .await
         .unwrap();
     let pending_invocation_oplog_index = oplog
@@ -3690,14 +3818,17 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         ))
         .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.clone(),
-            attachment_id,
-            attempt_id: start_attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                attachment_id,
+                attempt_id: start_attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     let streams_for = |epoch, attempt_id| {
@@ -3740,6 +3871,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     assert!(epoch1.ensure_current_attachment().await.is_err());
     producer
         .write_items(
+            None,
             output_handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![
@@ -3971,7 +4103,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
             attachment_id: AttachmentId(Uuid::from_u128(attachment_id)),
             role,
         });
-        let root = producer.register(root_request).await.unwrap().value;
+        let root = producer.register(None, root_request).await.unwrap().value;
         let nested_request = registration(
             &identity,
             StreamRegistrationCoordinate::Nested {
@@ -3983,6 +4115,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
         );
         producer
             .write_items_with_nested(
+                None,
                 root.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![
@@ -4108,15 +4241,18 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     .await
     .unwrap();
     let handle = remote_producer
-        .register(registration(
-            &producer_identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: producer_identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &producer_identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: producer_identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -4171,29 +4307,32 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     };
     let attempt_id = AttemptId::fresh();
     streams
-        .append_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: consumer.invocation.clone(),
-                attachment_id: attachment.attachment_id,
-                expected_callee_fingerprint: consumer.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: consumer.invocation.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "forward".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: vec![handle.clone()],
-                    execution_config: vec![2],
+                    attachment_id: attachment.attachment_id,
+                    expected_callee_fingerprint: consumer.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: consumer.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "forward".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: vec![handle.clone()],
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings: vec![mapping.clone()],
-        }))
+                stream_mappings: vec![mapping.clone()],
+            }),
+        )
         .await;
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
@@ -4205,16 +4344,19 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         ))
         .await;
     streams
-        .append_record(StreamSessionRecord::Attached(
-            golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: consumer.invocation.clone(),
-                attachment_id: attachment.attachment_id,
-                attempt_id,
-                epoch: 1,
-                pending_invocation_oplog_index,
-            },
-        ))
+        .append_record(
+            None,
+            StreamSessionRecord::Attached(
+                golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: consumer.invocation.clone(),
+                    attachment_id: attachment.attachment_id,
+                    attempt_id,
+                    epoch: 1,
+                    pending_invocation_oplog_index,
+                },
+            ),
+        )
         .await;
     let streams = streams.with_attachment(1, attempt_id);
     remote_producer
@@ -4407,6 +4549,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
 
     remote_producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![
@@ -4418,7 +4561,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .await
         .unwrap();
     remote_producer
-        .end(handle.stream_id, 1, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     let (responses, mut response_stream) = mpsc::channel(2);
@@ -4494,22 +4637,25 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     );
 
     let second_handle = remote_producer
-        .register(ProducerRegistrationRequest {
-            coordinate: StreamRegistrationCoordinate::Root {
-                invocation_id: producer_identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: vec![StreamValuePathStep::ListElement(1)],
-            },
-            ..registration(
-                &producer_identity,
-                StreamRegistrationCoordinate::Root {
+        .register(
+            None,
+            ProducerRegistrationRequest {
+                coordinate: StreamRegistrationCoordinate::Root {
                     invocation_id: producer_identity.invocation.clone(),
                     root_kind: StreamRootKind::MethodResult,
-                    recursive_value_path: Vec::new(),
+                    recursive_value_path: vec![StreamValuePathStep::ListElement(1)],
                 },
-                StreamSourceKind::InvocationOutput,
-            )
-        })
+                ..registration(
+                    &producer_identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: producer_identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::InvocationOutput,
+                )
+            },
+        )
         .await
         .unwrap()
         .value;
@@ -4524,14 +4670,15 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         role: SessionStreamRole::Input,
     };
     restarted
-        .append_record(StreamSessionRecord::TopologyPrepared(
-            StreamTopologyPreparedRecord {
+        .append_record(
+            None,
+            StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: restarted.session_key.clone(),
                 attachment: partial_attachment.clone(),
                 mapping: partial_mapping.clone(),
-            },
-        ))
+            }),
+        )
         .await;
     let consumer_length = restarted.oplog.current_oplog_index().await;
     let producer_length = producer_oplog.current_oplog_index().await;
@@ -4551,19 +4698,21 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     assert!(restarted.handle(19).is_none());
     assert!(restarted.complete().await.is_err());
     restarted
-        .append_record(StreamSessionRecord::TopologyActivated(
-            StreamTopologyActivatedRecord {
+        .append_record(
+            None,
+            StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: restarted.session_key.clone(),
                 attachment: partial_attachment,
                 mapping: partial_mapping,
-            },
-        ))
+            }),
+        )
         .await;
     assert!(restarted.complete().await.is_err());
 }
 
 #[test]
+#[test_r::timeout("30s")]
 async fn local_topology_cannot_activate_before_exact_session_attachment() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
@@ -4576,16 +4725,45 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
     )
     .await
     .unwrap();
-    let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
+    let remote_identity = TestIdentity {
+        environment_id: EnvironmentId(Uuid::from_u128(21)),
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::from_u128(22)),
+            agent_id: "remote-producer".to_string(),
+        },
+        fingerprint: AgentFingerprint(Uuid::from_u128(23)),
+        invocation: StreamInvocationId {
+            callee_environment_id: EnvironmentId(Uuid::from_u128(21)),
+            callee: AgentId {
+                component_id: ComponentId(Uuid::from_u128(22)),
+                agent_id: "remote-producer".to_string(),
             },
-            StreamSourceKind::AgentHostedInput,
-        ))
+            callee_fingerprint: AgentFingerprint(Uuid::from_u128(23)),
+            idempotency_key: IdempotencyKey::new("remote-invocation".to_string()),
+        },
+    };
+    let remote_producer = DurableStreamStore::load(
+        Arc::new(TestOplog::default()),
+        remote_identity.environment_id,
+        remote_identity.agent_id.clone(),
+        remote_identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = remote_producer
+        .register(
+            None,
+            registration(
+                &remote_identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: remote_identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -4602,29 +4780,32 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         role: SessionStreamRole::Input,
     };
     producer
-        .append_session_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
-                attachment_id,
-                expected_callee_fingerprint: identity.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "consume".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: vec![handle.clone()],
-                    execution_config: vec![2],
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "consume".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: vec![handle.clone()],
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings: vec![mapping.clone()],
-        }))
+                stream_mappings: vec![mapping.clone()],
+            }),
+        )
         .await
         .unwrap();
     let attachment = StreamAttachmentKey {
@@ -4632,9 +4813,9 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         stream_id: handle.stream_id,
         epoch: 1,
         session_key: identity.invocation.clone(),
-        producer_environment_id: identity.environment_id,
-        producer: identity.agent_id.clone(),
-        expected_producer_fingerprint: identity.fingerprint,
+        producer_environment_id: remote_identity.environment_id,
+        producer: remote_identity.agent_id.clone(),
+        expected_producer_fingerprint: remote_identity.fingerprint,
         consumer_environment_id: identity.environment_id,
         consumer: identity.agent_id.clone(),
         expected_consumer_fingerprint: identity.fingerprint,
@@ -4650,7 +4831,12 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
 
     assert!(
         streams
-            .activate_forwarded_mapping(attachment.clone(), mapping.clone(), producer.clone(), 100,)
+            .activate_forwarded_mapping(
+                attachment.clone(),
+                mapping.clone(),
+                remote_producer.clone(),
+                100
+            )
             .await
             .is_err()
     );
@@ -4673,18 +4859,26 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         ))
         .await;
     producer
-        .append_session_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation,
-            attachment_id,
-            attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation,
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await
         .unwrap();
     streams
-        .activate_forwarded_mapping(attachment.clone(), mapping.clone(), producer.clone(), 110)
+        .activate_forwarded_mapping(
+            attachment.clone(),
+            mapping.clone(),
+            remote_producer.clone(),
+            110,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -4711,15 +4905,18 @@ async fn oversized_remote_result_is_rejected_before_any_session_write() {
     .await
     .unwrap();
     let base_handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -4788,7 +4985,7 @@ async fn remote_result_schema_mismatch_is_rejected_before_caller_mutation() {
     );
     request.element_schema_fingerprint =
         schema_fingerprint_v1(&wrong_graph, Some(&wrong_element)).unwrap();
-    let handle = producer.register(request).await.unwrap().value;
+    let handle = producer.register(None, request).await.unwrap().value;
     let streams = StreamSession::new(producer, oplog.clone(), identity.invocation, []);
     let expected_root = SchemaType::stream(Some(SchemaType::u32()));
     let expected_graph = SchemaGraph::anonymous(expected_root.clone());
@@ -4852,7 +5049,7 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
         StreamSourceKind::InvocationOutput,
     );
     request.element_schema_fingerprint = schema_fingerprint_v1(&graph, Some(&element)).unwrap();
-    let handle = producer.register(request).await.unwrap().value;
+    let handle = producer.register(None, request).await.unwrap().value;
     let streams = StreamSession::new(producer, oplog.clone(), identity.invocation, [])
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
     let value = encode_recursive_stream_value_with_schema(
@@ -4933,7 +5130,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         attachment_id,
         role: SessionStreamRole::Output,
     });
-    let root = producer.register(root_request).await.unwrap().value;
+    let root = producer.register(None, root_request).await.unwrap().value;
     let nested_request = registration(
         &identity,
         StreamRegistrationCoordinate::Nested {
@@ -4950,6 +5147,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     };
     let root_written = producer
         .write_items_with_nested(
+            None,
             root.stream_id,
             0,
             StreamItemsPayload::Values(vec![canonical_value.encode_to_vec()]),
@@ -4958,12 +5156,13 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .await
         .unwrap();
     let root_ended = producer
-        .end(root.stream_id, 1, StreamEndResult::Ok)
+        .end(None, root.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     let nested = producer.nested_handles(root.stream_id, 0).await.unwrap()[0].clone();
     let nested_written = producer
         .write_items(
+            None,
             nested.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![10, 11]),
@@ -4971,34 +5170,37 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .await
         .unwrap();
     producer
-        .end(nested.stream_id, 2, StreamEndResult::Ok)
+        .end(None, nested.stream_id, 2, StreamEndResult::Ok)
         .await
         .unwrap();
     let attempt_id = AttemptId::fresh();
     producer
-        .append_session_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: session_key.clone(),
-                attachment_id,
-                expected_callee_fingerprint: identity.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: session_key.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "produce".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: Vec::new(),
-                    execution_config: vec![2],
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: session_key.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "produce".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: Vec::new(),
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings: Vec::new(),
-        }))
+                stream_mappings: Vec::new(),
+            }),
+        )
         .await
         .unwrap();
     let pending_invocation_oplog_index = oplog
@@ -5022,16 +5224,19 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     )
     .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
     streams
-        .append_record(StreamSessionRecord::Attached(
-            golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: session_key.clone(),
-                attachment_id,
-                attempt_id,
-                epoch: 1,
-                pending_invocation_oplog_index,
-            },
-        ))
+        .append_record(
+            None,
+            StreamSessionRecord::Attached(
+                golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: session_key.clone(),
+                    attachment_id,
+                    attempt_id,
+                    epoch: 1,
+                    pending_invocation_oplog_index,
+                },
+            ),
+        )
         .await;
     let streams = streams.with_attachment(1, attempt_id);
     assert!(
@@ -5103,7 +5308,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         attachment_id,
         role: SessionStreamRole::Output,
     });
-    let lone = producer.register(lone_request).await.unwrap().value;
+    let lone = producer.register(None, lone_request).await.unwrap().value;
     let lone_transport_stream_id = streams.allocate_transport_stream_id().unwrap();
     streams
         .insert_mapping(StreamSessionMappingRecord {
@@ -5126,7 +5331,12 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
             .await
     });
     let lone_written = producer
-        .write_items(lone.stream_id, 0, StreamItemsPayload::PackedU8(vec![99]))
+        .write_items(
+            None,
+            lone.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![99]),
+        )
         .await
         .unwrap();
     let lone_item = tokio::time::timeout(
@@ -5146,7 +5356,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         lone_written.value[0].as_bytes().to_vec()
     );
     producer
-        .end(lone.stream_id, 1, StreamEndResult::Ok)
+        .end(None, lone.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     assert!(matches!(
@@ -5278,20 +5488,24 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
     .await
     .unwrap();
     let root = remote_producer
-        .register(registration(
-            &producer_identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: producer_identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &producer_identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: producer_identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let root_written = remote_producer
         .write_items_with_nested(
+            None,
             root.stream_id,
             0,
             StreamItemsPayload::Values(vec![
@@ -5315,7 +5529,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .await
         .unwrap();
     remote_producer
-        .end(root.stream_id, 1, StreamEndResult::Ok)
+        .end(None, root.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     let nested = remote_producer
@@ -5325,6 +5539,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .clone();
     let nested_written = remote_producer
         .write_items(
+            None,
             nested.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![10, 11]),
@@ -5332,7 +5547,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .await
         .unwrap();
     remote_producer
-        .end(nested.stream_id, 2, StreamEndResult::Ok)
+        .end(None, nested.stream_id, 2, StreamEndResult::Ok)
         .await
         .unwrap();
 
@@ -5370,29 +5585,32 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
     }))
     .with_auth_ctx(AuthCtx::System);
     streams
-        .append_record(StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            attempt: StartAttemptDescriptor {
+        .append_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: consumer.invocation.clone(),
-                attachment_id,
-                expected_callee_fingerprint: consumer.fingerprint,
-                attempt_id: start_attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
+                attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: consumer.invocation.clone(),
-                    target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "resume-foreign".to_string(),
-                    invocation_value: vec![1],
-                    stream_handles: Vec::new(),
-                    execution_config: vec![2],
+                    attachment_id,
+                    expected_callee_fingerprint: consumer.fingerprint,
+                    attempt_id: start_attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: consumer.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        method_name: "resume-foreign".to_string(),
+                        invocation_value: vec![1],
+                        stream_handles: Vec::new(),
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
                     effective_identity: vec![3],
+                    live_join_buffer_events: 8,
                 },
-                effective_identity: vec![3],
-                live_join_buffer_events: 8,
-            },
-            stream_mappings: Vec::new(),
-        }))
+                stream_mappings: Vec::new(),
+            }),
+        )
         .await;
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
@@ -5404,14 +5622,17 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         ))
         .await;
     streams
-        .append_record(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: consumer.invocation.clone(),
-            attachment_id,
-            attempt_id: start_attempt_id,
-            epoch: 1,
-            pending_invocation_oplog_index,
-        }))
+        .append_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: consumer.invocation.clone(),
+                attachment_id,
+                attempt_id: start_attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
         .await;
     let epoch1 = streams.with_attachment(1, start_attempt_id);
     let root_mapping = StreamSessionMappingRecord {
@@ -5962,7 +6183,7 @@ async fn forwarded_root_input_and_direct_result_preserve_the_complete_handle() {
         .unwrap(),
         role: SessionStreamRole::Input,
     });
-    let original = producer.register(request).await.unwrap().value;
+    let original = producer.register(None, request).await.unwrap().value;
     let streams = StreamSession::new(
         producer.clone(),
         oplog.clone(),
@@ -6029,7 +6250,7 @@ async fn forwarded_root_input_and_direct_result_preserve_the_complete_handle() {
         .unwrap();
     assert_eq!(streams.persisted_finished().await.unwrap(), None);
     producer
-        .end(original.stream_id, 0, StreamEndResult::Ok)
+        .end(None, original.stream_id, 0, StreamEndResult::Ok)
         .await
         .unwrap();
     streams
@@ -6106,7 +6327,7 @@ async fn schema_mismatch_does_not_consume_forwarded_stream() {
     );
     request.element_schema_fingerprint =
         schema_fingerprint_v1(&source_graph, Some(&source_element_type)).unwrap();
-    let handle = producer.register(request).await.unwrap().value;
+    let handle = producer.register(None, request).await.unwrap().value;
     let mut second_request = registration(
         &identity,
         StreamRegistrationCoordinate::Root {
@@ -6118,7 +6339,7 @@ async fn schema_mismatch_does_not_consume_forwarded_stream() {
     );
     second_request.element_schema_fingerprint =
         schema_fingerprint_v1(&source_graph, Some(&source_element_type)).unwrap();
-    let second_handle = producer.register(second_request).await.unwrap().value;
+    let second_handle = producer.register(None, second_request).await.unwrap().value;
     let streams = StreamSession::new(
         producer,
         oplog.clone(),
@@ -6285,38 +6506,53 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     .await
     .unwrap();
     let forwarded = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::AgentHostedInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let parent = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let streams = StreamSession::new(producer.clone(), oplog.clone(), identity.invocation, [])
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
-    streams
-        .append_mapping_once(StreamSessionMappingRecord {
-            transport_stream_id: 3,
-            handle: forwarded.clone(),
-            role: SessionStreamRole::Output,
+    let mapping_streams = streams.clone();
+    let mapping_handle = forwarded.clone();
+    producer
+        .run_owned(None, 0, move |_, context| async move {
+            mapping_streams
+                .append_mapping_once(
+                    &context,
+                    StreamSessionMappingRecord {
+                        transport_stream_id: 3,
+                        handle: mapping_handle,
+                        role: SessionStreamRole::Output,
+                    },
+                )
+                .await
         })
         .await
         .unwrap();
@@ -6327,6 +6563,7 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     };
     producer
         .write_items_with_nested_sources(
+            None,
             parent.stream_id,
             0,
             StreamItemsPayload::Values(vec![value.encode_to_vec()]),

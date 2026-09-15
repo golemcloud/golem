@@ -20,16 +20,18 @@ impl DurableStreamStore {
     /// Durably registers a stream before its handle can be exposed to a consumer.
     pub(crate) async fn register(
         &self,
+        context: Option<&StreamWriteContext>,
         request: ProducerRegistrationRequest,
     ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, StreamStoreError> {
-        self.run_owned(0, move |owner| async move {
-            owner.register_owned(request).await
+        self.run_owned(context, 0, move |owner, context| async move {
+            owner.register_owned(&context, request).await
         })
         .await
     }
 
     async fn register_owned(
         &self,
+        context: &StreamWriteContext,
         request: ProducerRegistrationRequest,
     ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, StreamStoreError> {
         if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
@@ -104,7 +106,7 @@ impl DurableStreamStore {
         let producer_fingerprint = self.producer_fingerprint;
         let entity_parent_start_index = request.entity_parent_start_index;
         let request_for_entry = request.clone();
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -121,7 +123,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
         let (oplog_index, entry) = entries
             .pop()
             .expect("registration batch returned no oplog entry");
@@ -165,26 +167,33 @@ impl DurableStreamStore {
     /// Registers or validates every stream discovered in an invocation result.
     pub(crate) async fn register_result_streams(
         &self,
+        context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
     ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), StreamStoreError> {
-        self.run_owned(result.len() * 2, move |owner| async move {
-            owner
-                .register_result_streams_owned(
-                    session_key,
-                    result,
-                    outputs,
-                    entity_parent_start_index,
-                )
-                .await
-        })
+        self.run_owned(
+            context,
+            result.len() * 2,
+            move |owner, context| async move {
+                owner
+                    .register_result_streams_owned(
+                        &context,
+                        session_key,
+                        result,
+                        outputs,
+                        entity_parent_start_index,
+                    )
+                    .await
+            },
+        )
         .await
     }
 
     async fn register_result_streams_owned(
         &self,
+        context: &StreamWriteContext,
         session_key: StreamSessionKey,
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
@@ -383,7 +392,7 @@ impl DurableStreamStore {
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -475,7 +484,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
 
         let mut handles = Vec::new();
         let mut session_record = None;
@@ -543,7 +552,12 @@ impl DurableStreamStore {
                     )?;
                     self.cancel_source(event.stream_id);
                     // The terminal dispatcher publishes without delaying result registration on a reader.
-                    drop(self.enqueue_events(event.stream_id, vec![event], false)?);
+                    drop(self.enqueue_events(
+                        Some(context),
+                        event.stream_id,
+                        vec![event],
+                        false,
+                    )?);
                     cancelled_count += 1;
                 }
                 _ => {

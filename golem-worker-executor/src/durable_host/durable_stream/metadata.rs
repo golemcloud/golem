@@ -1795,7 +1795,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -1877,7 +1877,7 @@ mod tests {
         let entity_parent_start_index = Some(OplogIndex::from_u64(42));
         let mut request = fixture.registration(0);
         request.entity_parent_start_index = entity_parent_start_index;
-        let handle = producer.register(request).await.unwrap().value;
+        let handle = producer.register(None, request).await.unwrap().value;
         fixture.persist().await;
         drop(producer);
 
@@ -1899,6 +1899,7 @@ mod tests {
         );
         drop(index);
         cold.register_result_streams(
+            None,
             fixture.identity.invocation.clone(),
             vec![17],
             vec![ProducerOutputRegistration {
@@ -1917,6 +1918,7 @@ mod tests {
             .producer()
             .await
             .finish_session(
+                None,
                 fixture.identity.invocation.clone(),
                 entity_parent_start_index,
                 Ok(()),
@@ -1944,6 +1946,7 @@ mod tests {
             .producer()
             .await
             .register_result_streams(
+                None,
                 fixture.identity.invocation.clone(),
                 vec![29],
                 Vec::new(),
@@ -1965,6 +1968,7 @@ mod tests {
             .producer()
             .await
             .finish_session(
+                None,
                 fixture.identity.invocation.clone(),
                 attribution,
                 Ok(()),
@@ -1991,7 +1995,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.input_registration(0))
+            .register(None, fixture.input_registration(0))
             .await
             .unwrap()
             .value;
@@ -2002,6 +2006,7 @@ mod tests {
         };
         let accepted = producer
             .append_external_input(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -2019,6 +2024,7 @@ mod tests {
         let cold = fixture.producer().await;
         assert_eq!(
             cold.append_external_input(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -2040,12 +2046,13 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.input_registration(97))
+            .register(None, fixture.input_registration(97))
             .await
             .unwrap()
             .value;
         let first = producer
             .write_attached_items_with_nested(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 0,
@@ -2058,6 +2065,7 @@ mod tests {
         assert!(matches!(
             producer
                 .append_external_input(
+                    None,
                     &fixture.identity.invocation,
                     handle.stream_id,
                     Some(StreamItemsPayload::Values(vec![
@@ -2099,6 +2107,7 @@ mod tests {
         );
         let fresh = producer
             .write_attached_items_with_nested(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 2,
@@ -2121,6 +2130,7 @@ mod tests {
         let cold = fixture.producer().await;
         let retry = cold
             .write_attached_items_with_nested(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 2,
@@ -2149,6 +2159,7 @@ mod tests {
         fixture.indexed.reset();
         let rehydrated = cold
             .write_attached_items_with_nested(
+                None,
                 &fixture.identity.invocation,
                 handle.stream_id,
                 2,
@@ -2160,6 +2171,7 @@ mod tests {
         assert!(rehydrated.replayed);
         assert_eq!(rehydrated.value, fresh.value);
         cold.append_external_input(
+            None,
             &fixture.identity.invocation,
             handle.stream_id,
             None,
@@ -2192,7 +2204,13 @@ mod tests {
             .await
             .unwrap();
         producer
-            .finish_session(session.clone(), None, Ok(()), StreamCancelReason::Protocol)
+            .finish_session(
+                None,
+                session.clone(),
+                None,
+                Ok(()),
+                StreamCancelReason::Protocol,
+            )
             .await
             .unwrap();
         fixture.persist().await;
@@ -2241,7 +2259,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -2249,6 +2267,7 @@ mod tests {
         for sequence in 0..140 {
             let outcome = producer
                 .write_items(
+                    None,
                     handle.stream_id,
                     sequence,
                     StreamItemsPayload::Values(vec![vec![sequence as u8; 128]]),
@@ -2325,6 +2344,7 @@ mod tests {
         );
         let replay = cold
             .write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![0; 128]]),
@@ -2340,12 +2360,13 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
         let offsets = producer
             .write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::PackedU8((0..5000).map(|index| index as u8).collect()),
@@ -2390,12 +2411,13 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
         let first = producer
             .write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::PackedU8(vec![1; 64]),
@@ -2405,6 +2427,7 @@ mod tests {
             .value;
         let second = producer
             .write_items(
+                None,
                 handle.stream_id,
                 64,
                 StreamItemsPayload::PackedU8(vec![2; 64]),
@@ -2451,13 +2474,14 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
         for sequence in 0..256 {
             producer
                 .write_items(
+                    None,
                     handle.stream_id,
                     sequence,
                     StreamItemsPayload::Values(vec![vec![sequence as u8; 64]]),
@@ -2493,7 +2517,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -2502,6 +2526,7 @@ mod tests {
             offsets.push(
                 producer
                     .write_items(
+                        None,
                         handle.stream_id,
                         sequence,
                         StreamItemsPayload::Values(vec![vec![sequence as u8]]),
@@ -2512,7 +2537,7 @@ mod tests {
             );
         }
         let terminal_offset = producer
-            .end(handle.stream_id, 140, StreamEndResult::Ok)
+            .end(None, handle.stream_id, 140, StreamEndResult::Ok)
             .await
             .unwrap()
             .value;
@@ -2582,7 +2607,7 @@ mod tests {
         .await
         .unwrap();
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -2603,6 +2628,7 @@ mod tests {
         );
         producer
             .write_items_with_nested(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1; 128]]),
@@ -2632,7 +2658,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -2655,6 +2681,7 @@ mod tests {
             .collect();
         producer
             .write_items_with_nested(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1; 128]]),
@@ -2699,16 +2726,21 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
         producer
-            .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![7]),
+            )
             .await
             .unwrap();
         let terminal_offset = producer
-            .end(handle.stream_id, 1, StreamEndResult::Ok)
+            .end(None, handle.stream_id, 1, StreamEndResult::Ok)
             .await
             .unwrap()
             .value;
@@ -2779,36 +2811,42 @@ mod tests {
         let session_key = fixture.identity.invocation.clone();
         for ordinal in 0..512 {
             consumer
-                .append_session_record(StreamSessionRecord::ConsumerItemValue(
-                    golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: session_key.clone(),
-                        stream_id,
-                        source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
-                        consumer_read_ordinal: ordinal,
-                        value: vec![ordinal as u8],
-                        packed_u8: false,
-                        recursive_handles: Vec::new(),
-                        recursive_mappings: Vec::new(),
-                    },
-                ))
+                .append_session_record(
+                    None,
+                    StreamSessionRecord::ConsumerItemValue(
+                        golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: session_key.clone(),
+                            stream_id,
+                            source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
+                            consumer_read_ordinal: ordinal,
+                            value: vec![ordinal as u8],
+                            packed_u8: false,
+                            recursive_handles: Vec::new(),
+                            recursive_mappings: Vec::new(),
+                        },
+                    ),
+                )
                 .await
                 .unwrap();
         }
         let terminal_offset = StreamOffset::new(OplogIndex::from_u64(513), 0);
         consumer
-            .append_session_record(StreamSessionRecord::ConsumerTerminal(
-                golem_common::model::durable_stream::StreamConsumerTerminalRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: session_key.clone(),
-                    stream_id,
-                    source_offset: terminal_offset,
-                    consumer_read_ordinal: 512,
-                    terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
-                        StreamEndResult::Ok,
-                    ),
-                },
-            ))
+            .append_session_record(
+                None,
+                StreamSessionRecord::ConsumerTerminal(
+                    golem_common::model::durable_stream::StreamConsumerTerminalRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: session_key.clone(),
+                        stream_id,
+                        source_offset: terminal_offset,
+                        consumer_read_ordinal: 512,
+                        terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
+                            StreamEndResult::Ok,
+                        ),
+                    },
+                ),
+            )
             .await
             .unwrap();
         fixture.persist().await;
@@ -2902,12 +2940,13 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
         producer
             .end(
+                None,
                 handle.stream_id,
                 0,
                 StreamEndResult::ErrorContext(vec![7; 256]),
@@ -2919,6 +2958,7 @@ mod tests {
         let cold = fixture.producer().await;
         let (started, release) = fixture.blobs.pause_next_read();
         let mut suspended = Box::pin(cold.end(
+            None,
             handle.stream_id,
             0,
             StreamEndResult::ErrorContext(vec![7; 256]),
@@ -2945,7 +2985,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;
@@ -2968,7 +3008,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let handle = producer
-            .register(fixture.registration(0))
+            .register(None, fixture.registration(0))
             .await
             .unwrap()
             .value;

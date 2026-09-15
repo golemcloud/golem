@@ -30,6 +30,7 @@ mod terminals;
 pub(crate) mod tests;
 
 pub(crate) use catch_up::DurableCatchUpReader;
+pub(crate) use mutation::StreamWriteContext;
 pub(crate) use probe::{
     ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe, StreamAttachmentConsumerProbe,
 };

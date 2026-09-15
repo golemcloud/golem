@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::index::validate_items_payload;
-use super::mutation::MUTATION_SCOPE;
 use super::*;
 
 // This is a producer-wide budget rather than a per-stream budget. In particular, creating many
@@ -367,6 +366,7 @@ impl DurableStreamStore {
 
     pub(super) fn enqueue_events(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEvent>,
         replayed: bool,
@@ -393,10 +393,10 @@ impl DurableStreamStore {
                 })
                 .collect(),
             replayed,
-            MUTATION_SCOPE
-                .try_with(Arc::clone)
-                .ok()
-                .filter(|scope| std::ptr::eq(scope.producer.as_ref(), self)),
+            context.map(|context| {
+                context.assert_owner(self);
+                context.publication_keepalive()
+            }),
         ))
     }
 
@@ -494,18 +494,12 @@ impl DurableStreamStore {
 
     pub(super) async fn wait_for_publication(
         &self,
+        context: Option<&StreamWriteContext>,
         publication: PublicationReceipt,
     ) -> Result<(), StreamStoreError> {
-        let scope = MUTATION_SCOPE
-            .try_with(Arc::clone)
-            .ok()
-            .filter(|scope| std::ptr::eq(scope.producer.as_ref(), self));
-        if let Some(scope) = scope {
-            scope
-                .publications
-                .lock()
-                .expect("publication receipt list lock poisoned")
-                .push(publication);
+        if let Some(context) = context {
+            context.assert_owner(self);
+            context.defer_publication(publication);
         } else {
             publication
                 .await
@@ -538,15 +532,16 @@ impl DurableStreamStore {
 
     pub(super) async fn publish_repair(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEvent>,
     ) -> Result<(), StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
-        let publication = self.enqueue_events(stream_id, events, true)?;
+        let publication = self.enqueue_events(context, stream_id, events, true)?;
         drop(index);
-        self.wait_for_publication(publication).await?;
+        self.wait_for_publication(context, publication).await?;
         Ok(())
     }
 }

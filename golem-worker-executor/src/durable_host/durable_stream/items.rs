@@ -26,11 +26,12 @@ impl DurableStreamStore {
     /// Appends values in producer order and returns only after their durable receipt.
     pub(crate) async fn write_items(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
     ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
-        self.write_items_with_nested(stream_id, first_sequence, payload, Vec::new())
+        self.write_items_with_nested(context, stream_id, first_sequence, payload, Vec::new())
             .await
     }
 
@@ -370,12 +371,14 @@ impl DurableStreamStore {
     /// Commits values and their nested stream registrations as one ordered producer mutation.
     pub(crate) async fn write_items_with_nested(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
         nested: Vec<ProducerRegistrationRequest>,
     ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested_sources_at_depth(
+            context,
             stream_id,
             first_sequence,
             payload,
@@ -392,6 +395,7 @@ impl DurableStreamStore {
     /// Writes nested values while enforcing the protocol traversal-depth limit.
     pub(crate) async fn write_items_with_nested_at_depth(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
@@ -399,6 +403,7 @@ impl DurableStreamStore {
         traversal_depth: usize,
     ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested_sources_at_depth(
+            context,
             stream_id,
             first_sequence,
             payload,
@@ -414,13 +419,21 @@ impl DurableStreamStore {
     /// Persists values together with newly registered or forwarded nested stream sources.
     pub(crate) async fn write_items_with_nested_sources(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
         nested: Vec<NestedStreamWrite>,
     ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
-        self.write_items_with_nested_sources_at_depth(stream_id, first_sequence, payload, nested, 0)
-            .await
+        self.write_items_with_nested_sources_at_depth(
+            context,
+            stream_id,
+            first_sequence,
+            payload,
+            nested,
+            0,
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -430,6 +443,7 @@ impl DurableStreamStore {
     )]
     async fn write_items_with_nested_sources_at_depth(
         &self,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
@@ -437,9 +451,10 @@ impl DurableStreamStore {
         traversal_depth: usize,
     ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         let memory = Self::retained_payload_bytes(&payload)?;
-        self.run_owned(memory, move |owner| async move {
+        self.run_owned(context, memory, move |owner, context| async move {
             owner
                 .write_items_owned(
+                    &context,
                     stream_id,
                     first_sequence,
                     payload,
@@ -456,6 +471,7 @@ impl DurableStreamStore {
     /// Writes forwarded values after checking that the source attachment is still active.
     pub(crate) async fn write_attached_items_with_nested(
         self: &Arc<Self>,
+        context: Option<&StreamWriteContext>,
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         transport_first_sequence: u64,
@@ -467,7 +483,7 @@ impl DurableStreamStore {
             .checked_add(payload.logical_item_count() as u64)
             .ok_or(StreamStoreError::CounterOverflow)?;
         let session_key = session_key.clone();
-        self.run_owned(memory, move |owner| async move {
+        self.run_owned(context, memory, move |owner, context| async move {
             let id = ExternalProducerId::Attached;
             let index = owner
                 .index_for_terminal(
@@ -573,6 +589,7 @@ impl DurableStreamStore {
                 .collect::<Result<Vec<_>, StreamStoreError>>()?;
             owner
                 .write_items_owned(
+                    &context,
                     stream_id,
                     global_first_sequence,
                     payload,
@@ -641,6 +658,7 @@ impl DurableStreamStore {
 
     async fn write_items_owned(
         &self,
+        context: &StreamWriteContext,
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
@@ -726,7 +744,8 @@ impl DurableStreamStore {
                     return Err(StreamStoreError::EventConflict);
                 }
                 let events = self.materialize_item_batch(&record).await?;
-                self.publish_repair(stream_id, events).await?;
+                self.publish_repair(Some(context), stream_id, events)
+                    .await?;
                 crate::metrics::durable_stream::record_producer_operation("write", true);
                 tracing::debug!(
                     stream_id = %stream_id,
@@ -746,7 +765,8 @@ impl DurableStreamStore {
                 let terminal = terminal.clone();
                 let error = fenced_by_terminal(stream);
                 drop(index);
-                self.publish_repair(stream_id, vec![terminal]).await?;
+                self.publish_repair(Some(context), stream_id, vec![terminal])
+                    .await?;
                 return Err(error);
             }
             return Err(StreamStoreError::EventConflict);
@@ -763,7 +783,8 @@ impl DurableStreamStore {
                 .clone();
             let error = fenced_by_terminal(stream);
             drop(index);
-            self.publish_repair(stream_id, vec![terminal]).await?;
+            self.publish_repair(Some(context), stream_id, vec![terminal])
+                .await?;
             return Err(error);
         }
         if first_sequence != stream.next_sequence {
@@ -778,13 +799,13 @@ impl DurableStreamStore {
                     > MAX_STREAM_VALUE_TRAVERSAL_DEPTH
             })
         {
-            self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
+            self.commit_resource_exhausted_terminal(context, index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("traversal_depth");
             return Err(StreamStoreError::TraversalDepthLimit);
         }
         if nested_sources.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
-            self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
+            self.commit_resource_exhausted_terminal(context, index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
             return Err(StreamStoreError::ValueStreamLimit);
@@ -835,7 +856,7 @@ impl DurableStreamStore {
             }
         }
         if new_nested.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
-            self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
+            self.commit_resource_exhausted_terminal(context, index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
             return Err(StreamStoreError::ValueStreamLimit);
@@ -867,13 +888,13 @@ impl DurableStreamStore {
                         .is_none_or(|count| count > MAX_DURABLE_STREAMS_PER_SESSION)
                 });
         if session_limit_exceeded {
-            self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
+            self.commit_resource_exhausted_terminal(context, index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
             return Err(StreamStoreError::StreamLimit);
         }
         if first_sequence.checked_add(item_count).is_none() {
-            self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
+            self.commit_resource_exhausted_terminal(context, index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("sequence");
             return Err(StreamStoreError::CounterOverflow);
@@ -894,7 +915,7 @@ impl DurableStreamStore {
         let registrations_for_entry = new_nested;
         let nested_for_entry = nested_sources;
         let external_session_key = session_key.clone();
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -1008,16 +1029,17 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
 
         let (item_events, newly_registered_stream_count) = self
             .apply_committed_write_batch(&mut index, entries)
             .await?;
         let item_offsets = item_events.iter().map(|event| event.offset).collect();
-        let publication = self.enqueue_events(stream_id, item_events, false)?;
+        let publication = self.enqueue_events(Some(context), stream_id, item_events, false)?;
         self.record_registered_streams(newly_registered_stream_count);
         drop(index);
-        self.wait_for_publication(publication).await?;
+        self.wait_for_publication(Some(context), publication)
+            .await?;
         crate::metrics::durable_stream::record_producer_operation("write", false);
         tracing::debug!(
             stream_id = %stream_id,

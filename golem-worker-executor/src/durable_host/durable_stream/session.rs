@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::index::registration_coordinate_depth;
-use super::mutation::MUTATION_SCOPE;
 use super::registration::registration_record;
 use super::*;
 
@@ -95,23 +94,26 @@ impl DurableStreamStore {
     /// Appends a session fact under the producer's default attribution.
     pub(crate) async fn append_session_record(
         &self,
+        context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
     ) -> Result<(), StreamStoreError> {
-        self.append_session_record_attributed(None, record).await
+        self.append_session_record_attributed(context, None, record)
+            .await
     }
 
     /// Appends a session fact with explicit entity ownership attribution.
     pub(crate) async fn append_session_record_attributed(
         &self,
+        context: Option<&StreamWriteContext>,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecord,
     ) -> Result<(), StreamStoreError> {
         let memory = golem_common::serialization::serialize(&record)
             .map_err(StreamStoreError::Oplog)?
             .len();
-        self.run_owned(memory, move |owner| async move {
+        self.run_owned(context, memory, move |owner, context| async move {
             owner
-                .append_session_record_owned(entity_parent_start_index, record)
+                .append_session_record_owned(&context, entity_parent_start_index, record)
                 .await
         })
         .await
@@ -120,16 +122,18 @@ impl DurableStreamStore {
     /// Serializes, commits, and indexes one session mutation.
     pub(crate) async fn append_session_record_owned(
         &self,
+        context: &StreamWriteContext,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecord,
     ) -> Result<(), StreamStoreError> {
-        self.append_session_records_owned(entity_parent_start_index, vec![record])
+        self.append_session_records_owned(context, entity_parent_start_index, vec![record])
             .await
     }
 
     /// Serializes and commits an ordered batch of session mutations.
     pub(crate) async fn append_session_records_owned(
         &self,
+        context: &StreamWriteContext,
         entity_parent_start_index: Option<OplogIndex>,
         records: Vec<StreamSessionRecord>,
     ) -> Result<(), StreamStoreError> {
@@ -181,7 +185,7 @@ impl DurableStreamStore {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |_| {
@@ -203,10 +207,10 @@ impl DurableStreamStore {
                 .entry(key)
                 .or_insert(entries[position].0);
         }
-        self.commit().await;
+        self.commit(context).await;
         *index = staged;
         drop(index);
-        self.notify_session_records_changed();
+        self.notify_session_records_changed(Some(context));
         Ok(())
     }
 
@@ -253,18 +257,11 @@ impl DurableStreamStore {
     }
 
     /// Wakes waiters after the corresponding session records have been committed.
-    pub(crate) fn notify_session_records_changed(&self) {
-        let deferred = MUTATION_SCOPE
-            .try_with(|scope| {
-                if std::ptr::eq(scope.producer.as_ref(), self) {
-                    scope.session_records_changed.store(true, Ordering::Release);
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
-        if !deferred {
+    pub(crate) fn notify_session_records_changed(&self, context: Option<&StreamWriteContext>) {
+        if let Some(context) = context {
+            context.assert_owner(self);
+            context.notify_session_records_changed();
+        } else {
             self.session_records_changed.notify_waiters();
         }
     }
@@ -272,6 +269,7 @@ impl DurableStreamStore {
     /// Atomically persists root inputs, the session descriptor, and invocation attachment before acceptance.
     pub(crate) async fn prepare_session(
         &self,
+        context: Option<&StreamWriteContext>,
         requests: Vec<(u64, ProducerRegistrationRequest)>,
         pending_invocation: OplogEntry,
         committed: oneshot::Sender<()>,
@@ -282,9 +280,15 @@ impl DurableStreamStore {
         let memory = golem_common::serialization::serialize(&pending_invocation)
             .map_err(StreamStoreError::Oplog)?
             .len();
-        self.run_owned(memory, move |owner| async move {
+        self.run_owned(context, memory, move |owner, context| async move {
             owner
-                .prepare_session_owned(requests, pending_invocation, committed, make_prepared)
+                .prepare_session_owned(
+                    &context,
+                    requests,
+                    pending_invocation,
+                    committed,
+                    make_prepared,
+                )
                 .await
         })
         .await
@@ -292,6 +296,7 @@ impl DurableStreamStore {
 
     async fn prepare_session_owned(
         &self,
+        context: &StreamWriteContext,
         requests: Vec<(u64, ProducerRegistrationRequest)>,
         pending_invocation: OplogEntry,
         committed: oneshot::Sender<()>,
@@ -343,7 +348,7 @@ impl DurableStreamStore {
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
         let records = requests.clone();
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -470,7 +475,7 @@ impl DurableStreamStore {
             &StreamSessionRecord::Prepared(prepared.clone()),
         )?;
 
-        self.commit_notifying(committed).await;
+        self.commit_notifying(context, committed).await;
         *index = updated_index;
         self.buses
             .write()
@@ -521,6 +526,7 @@ impl DurableStreamStore {
     /// Records the session terminal after all required stream finalization is durable.
     pub(crate) async fn finish_session(
         &self,
+        context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
@@ -544,9 +550,10 @@ impl DurableStreamStore {
         let memory = terminal_bytes
             .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
             .saturating_mul(4);
-        self.run_lifecycle(memory, move |owner| async move {
+        self.run_lifecycle(context, memory, move |owner, context| async move {
             owner
                 .finish_session_owned(
+                    &context,
                     session_key,
                     entity_parent_start_index,
                     result,
@@ -559,6 +566,7 @@ impl DurableStreamStore {
 
     async fn finish_session_owned(
         &self,
+        context: &StreamWriteContext,
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
@@ -608,7 +616,7 @@ impl DurableStreamStore {
 
         let producer_fingerprint = self.producer_fingerprint;
         let session_key_for_batch = session_key.clone();
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -668,7 +676,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
 
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
@@ -690,6 +698,7 @@ impl DurableStreamStore {
                         self.producer_fingerprint,
                     )?;
                     terminal_events.push(self.enqueue_events(
+                        Some(context),
                         event.stream_id,
                         vec![event],
                         false,
@@ -712,6 +721,7 @@ impl DurableStreamStore {
                         self.producer_fingerprint,
                     )?;
                     terminal_events.push(self.enqueue_events(
+                        Some(context),
                         event.stream_id,
                         vec![event],
                         false,
@@ -747,14 +757,15 @@ impl DurableStreamStore {
         self.record_terminal_streams(terminal_count);
         drop(index);
         for publication in terminal_events {
-            self.wait_for_publication(publication).await?;
+            self.wait_for_publication(Some(context), publication)
+                .await?;
         }
         crate::metrics::durable_stream::record_producer_operation("finish_session", false);
         tracing::debug!(
             terminal_streams = terminal_count,
             "Durable Stream Session finish committed"
         );
-        self.notify_session_records_changed();
+        self.notify_session_records_changed(Some(context));
         Ok(())
     }
 }

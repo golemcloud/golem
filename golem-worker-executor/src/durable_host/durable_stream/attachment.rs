@@ -19,13 +19,19 @@ impl DurableStreamStore {
     /// Commits deterministic source-unavailable state for unread consumer history.
     pub(crate) async fn commit_source_unavailable_overlay(
         &self,
+        context: Option<&StreamWriteContext>,
         key: StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     ) -> Result<bool, StreamStoreError> {
-        self.run_lifecycle(0, move |owner| async move {
+        self.run_lifecycle(context, 0, move |owner, context| async move {
             owner
-                .commit_source_unavailable_overlay_owned(key, source_offset, consumer_read_ordinal)
+                .commit_source_unavailable_overlay_owned(
+                    &context,
+                    key,
+                    source_offset,
+                    consumer_read_ordinal,
+                )
                 .await
         })
         .await
@@ -33,6 +39,7 @@ impl DurableStreamStore {
 
     async fn commit_source_unavailable_overlay_owned(
         &self,
+        context: &StreamWriteContext,
         key: StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
@@ -147,15 +154,15 @@ impl DurableStreamStore {
         );
         index.apply_session_references(entity_parent_start_index, &record)?;
         index.apply_consumer_journal_record(&record)?;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record)),
             ))
             .await;
-        self.commit().await;
-        self.notify_session_records_changed();
+        self.commit(context).await;
+        self.notify_session_records_changed(Some(context));
         Ok(false)
     }
 
@@ -190,14 +197,17 @@ impl DurableStreamStore {
         &self,
         record: StreamSessionRecord,
     ) -> Result<AttachmentApplyOutcome, StreamStoreError> {
-        self.run_lifecycle(0, move |owner| async move {
-            owner.persist_attachment_record_owned(record).await
+        self.run_lifecycle(None, 0, move |owner, context| async move {
+            owner
+                .persist_attachment_record_owned(&context, record)
+                .await
         })
         .await
     }
 
     async fn persist_attachment_record_owned(
         &self,
+        context: &StreamWriteContext,
         record: StreamSessionRecord,
     ) -> Result<AttachmentApplyOutcome, StreamStoreError> {
         if !record.has_supported_format() {
@@ -225,19 +235,19 @@ impl DurableStreamStore {
             self.producer_fingerprint,
         )?;
         if outcome == AttachmentApplyOutcome::Changed {
-            self.begin_durable_effect();
+            context.begin_durable_effect();
             self.oplog
                 .add(OplogEntry::stream_session(
                     entity_parent_start_index,
                     OplogPayload::Inline(Box::new(record)),
                 ))
                 .await;
-            self.commit().await;
+            self.commit(context).await;
             *index = updated;
         }
         drop(index);
         if outcome == AttachmentApplyOutcome::Changed {
-            self.notify_session_records_changed();
+            self.notify_session_records_changed(Some(context));
         }
         Ok(outcome)
     }
@@ -540,9 +550,9 @@ impl DurableStreamStore {
         now_millis: u64,
         require_no_dependents: bool,
     ) -> Result<(), StreamStoreError> {
-        self.run_lifecycle(0, move |owner| async move {
+        self.run_lifecycle(None, 0, move |owner, context| async move {
             owner
-                .commit_deletion_barrier_owned(now_millis, require_no_dependents)
+                .commit_deletion_barrier_owned(&context, now_millis, require_no_dependents)
                 .await
         })
         .await
@@ -550,6 +560,7 @@ impl DurableStreamStore {
 
     async fn commit_deletion_barrier_owned(
         &self,
+        context: &StreamWriteContext,
         now_millis: u64,
         require_no_dependents: bool,
     ) -> Result<(), StreamStoreError> {
@@ -582,7 +593,7 @@ impl DurableStreamStore {
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -622,7 +633,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
@@ -669,7 +680,7 @@ impl DurableStreamStore {
             self.cancel_source(event.stream_id);
             // The terminal dispatcher owns delivery. Deletion waits for the committed
             // barrier and cascade records, never for a live reader to make progress.
-            drop(self.enqueue_events(event.stream_id, vec![event], false)?);
+            drop(self.enqueue_events(Some(context), event.stream_id, vec![event], false)?);
         }
         self.record_terminal_streams(terminal_count);
         drop(index);
@@ -678,7 +689,7 @@ impl DurableStreamStore {
             terminal_streams = terminal_count,
             "Durable stream producer deletion barrier committed"
         );
-        self.notify_session_records_changed();
+        self.notify_session_records_changed(Some(context));
         Ok(())
     }
 
@@ -688,9 +699,9 @@ impl DurableStreamStore {
         now_millis: u64,
         result: StreamCascadeDependentResult,
     ) -> Result<(), StreamStoreError> {
-        self.run_lifecycle(0, move |owner| async move {
+        self.run_lifecycle(None, 0, move |owner, context| async move {
             owner
-                .commit_cascade_outbox_owned(key, now_millis, result)
+                .commit_cascade_outbox_owned(&context, key, now_millis, result)
                 .await
         })
         .await
@@ -698,6 +709,7 @@ impl DurableStreamStore {
 
     async fn commit_cascade_outbox_owned(
         &self,
+        context: &StreamWriteContext,
         key: StreamAttachmentKey,
         now_millis: u64,
         result: StreamCascadeDependentResult,
@@ -732,14 +744,14 @@ impl DurableStreamStore {
             completed_at_millis: now_millis,
             result,
         });
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record.clone())),
             ))
             .await;
-        self.commit().await;
+        self.commit(context).await;
         index.apply_session_references(entity_parent_start_index, &record)?;
         index.apply_deletion_record(
             &record,

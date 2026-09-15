@@ -2078,15 +2078,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if !deleting_recorded {
             producer
-                .append_session_record(StreamSessionRecord::ConsumerDeleting(
-                    StreamConsumerDeletingRecord {
+                .append_session_record(
+                    None,
+                    StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         consumer_environment_id: self.owned_agent_id.environment_id,
                         consumer: self.owned_agent_id.agent_id.clone(),
                         consumer_fingerprint: self.initial_worker_metadata.fingerprint,
                         deleting_at_millis: Timestamp::now_utc().to_millis(),
-                    },
-                ))
+                    }),
+                )
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         }
@@ -4304,7 +4305,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 stream_mappings: foreign_mappings.clone(),
             };
             producer
-                .append_session_record(StreamSessionRecord::Prepared(prepared.clone()))
+                .append_session_record(None, StreamSessionRecord::Prepared(prepared.clone()))
                 .await
                 .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
             prepared
@@ -4319,6 +4320,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let attempt = request.attempt.clone();
             let prepared = producer
                 .prepare_session(
+                    None,
                     request.registrations.clone(),
                     pending,
                     acceptance_committed
@@ -5281,7 +5283,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 std::iter::empty(),
             );
             streams
-                .reconcile_local_cancellation_intents()
+                .reconcile_local_cancellation_intents(None)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let mut cancellations_done = !streams
@@ -5446,6 +5448,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .durable_stream_producer()
                 .await?
                 .commit_source_unavailable_overlay(
+                    None,
                     key.clone(),
                     *source_offset,
                     *consumer_read_ordinal,
@@ -5570,7 +5573,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
                 producer
-                    .cancel_open(key.stream_id, role, reason, details)
+                    .cancel_open(None, key.stream_id, role, reason, details)
                     .await
                     .map(|_| false)
             }

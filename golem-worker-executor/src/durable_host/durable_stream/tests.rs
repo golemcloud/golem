@@ -365,13 +365,13 @@ async fn mutation_queue_serializes_abandoned_requests_on_one_task() {
         let live = live.clone();
         let first_finished = first_finished.clone();
         async move {
-            live.run_owned(0, move |owner| async move {
+            live.run_owned(None, 0, move |_, context| async move {
                 let task = tokio::task::id();
                 entered.send(task).unwrap();
                 released.await.unwrap();
                 // Nested mutations execute inline rather than enqueueing behind themselves.
-                owner
-                    .run_lifecycle(0, |_| async { Ok::<(), StreamStoreError>(()) })
+                context
+                    .run_nested(|_, _| async { Ok::<(), StreamStoreError>(()) })
                     .await?;
                 first_finished.store(true, Ordering::Release);
                 Ok::<_, StreamStoreError>(task)
@@ -381,7 +381,7 @@ async fn mutation_queue_serializes_abandoned_requests_on_one_task() {
     });
     let task = ready.await.unwrap();
     let (completed, completion) = oneshot::channel();
-    let mut second = Box::pin(live.run_owned(0, move |_| async move {
+    let mut second = Box::pin(live.run_owned(None, 0, move |_, _| async move {
         assert!(first_finished.load(Ordering::Acquire));
         assert_eq!(tokio::task::id(), task);
         completed.send(()).unwrap();
@@ -405,11 +405,11 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
     let first = tokio::spawn({
         let live = live.clone();
         async move {
-            live.run_owned(0, move |owner| async move {
-                owner.begin_durable_effect();
+            live.run_owned(None, 0, move |_, context| async move {
+                context.begin_durable_effect();
                 entered.send(()).unwrap();
                 released.await.unwrap();
-                owner.finish_durable_effect();
+                context.finish_durable_effect();
                 Ok::<(), StreamStoreError>(())
             })
             .await
@@ -418,7 +418,7 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
     ready.await.unwrap();
     let executed = Arc::new(AtomicBool::new(false));
     let queued_executed = executed.clone();
-    let mut queued = Box::pin(live.run_owned(0, move |_| async move {
+    let mut queued = Box::pin(live.run_owned(None, 0, move |_, _| async move {
         queued_executed.store(true, Ordering::Release);
         Ok::<(), StreamStoreError>(())
     }));
@@ -432,7 +432,7 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
     drained.await;
     assert!(!executed.load(Ordering::Acquire));
     assert_eq!(
-        live.run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
+        live.run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
             .await,
         Err(StreamStoreError::RecoveryRequired)
     );
@@ -445,31 +445,60 @@ async fn mutation_queue_completion_can_route_back_to_the_same_producer() {
     let (entered, ready) = oneshot::channel();
     let (release, released) = oneshot::channel();
     let (completed, completion) = oneshot::channel();
-    let mut caller = Box::pin(live.run_lifecycle(0, move |owner| async move {
-        let routed_owner = owner.clone();
-        owner.defer_remote_cancellation(async move {
-            assert!(super::mutation::MUTATION_SCOPE.try_with(|_| ()).is_err());
-            entered.send(()).unwrap();
-            released.await.unwrap();
-            routed_owner
-                .run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
-                .await?;
-            completed.send(()).unwrap();
-            Ok(())
-        });
-        Ok::<(), StreamStoreError>(())
-    }));
+    let mut caller = Box::pin(
+        live.run_lifecycle(None, 0, move |owner, context| async move {
+            let routed_owner = owner.clone();
+            context.defer_remote_cancellation(async move {
+                entered.send(()).unwrap();
+                released.await.unwrap();
+                routed_owner
+                    .run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
+                    .await?;
+                completed.send(()).unwrap();
+                Ok(())
+            });
+            Ok::<(), StreamStoreError>(())
+        }),
+    );
     assert!(futures::poll!(caller.as_mut()).is_pending());
     ready.await.unwrap();
     drop(caller);
     // A stalled completion does not hold the serial mutation lane.
-    live.run_lifecycle(0, |_| async { Ok::<(), StreamStoreError>(()) })
+    live.run_lifecycle(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
         .await
         .unwrap();
     release.send(()).unwrap();
     completion.await.unwrap();
     live.wait_durable_drained().await;
     live.ensure_healthy().unwrap();
+}
+
+#[test]
+#[timeout("30s")]
+async fn write_context_rejects_a_different_store_and_use_after_completion() {
+    let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let other = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let escaped = live
+        .run_owned(None, 0, move |owner, context| async move {
+            context.assert_owner(&owner);
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    context.assert_owner(&other);
+                }))
+                .is_err()
+            );
+            assert_eq!(other.ensure_healthy(), Ok(()));
+            Ok::<_, StreamStoreError>(context)
+        })
+        .await
+        .unwrap();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            escaped.begin_durable_effect();
+        }))
+        .is_err()
+    );
+    assert_eq!(live.ensure_healthy(), Ok(()));
 }
 
 #[test]
@@ -488,12 +517,12 @@ async fn nested_mutation_preserves_unfinished_parent_effects() {
                 .await
                 .unwrap();
                 let outcome: Result<(), StreamStoreError> = producer
-                    .run_owned(0, move |parent| async move {
+                    .run_owned(None, 0, move |_, parent| async move {
                         if parent_pending {
                             parent.begin_durable_effect();
                         }
                         let child_result: Result<(), StreamStoreError> = parent
-                            .run_lifecycle(0, move |child| async move {
+                            .run_nested(move |_, child| async move {
                                 child.begin_durable_effect();
                                 if child_finishes {
                                     child.finish_durable_effect();
@@ -536,22 +565,22 @@ async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
         .await
         .unwrap();
         producer
-            .run_owned(0, move |parent| async move {
+            .run_owned(None, 0, move |owner, parent| async move {
                 let (release, released) = oneshot::channel();
-                let mut child = Box::pin(parent.run_owned(0, move |child| async move {
+                let mut child = Box::pin(parent.run_nested(move |_, child| async move {
                     child.begin_durable_effect();
                     released.await.unwrap();
                     Err::<(), _>(StreamStoreError::ItemTooLarge)
                 }));
                 assert!(futures::poll!(child.as_mut()).is_pending());
                 parent
-                    .run_owned(0, |sibling| async move {
+                    .run_nested(|_, sibling| async move {
                         sibling.begin_durable_effect();
                         sibling.finish_durable_effect();
                         Ok::<(), StreamStoreError>(())
                     })
                     .await?;
-                assert_eq!(parent.ensure_healthy(), Ok(()));
+                assert_eq!(owner.ensure_healthy(), Ok(()));
                 if cancel_child {
                     drop(child);
                 } else {
@@ -863,14 +892,17 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
     .unwrap();
     let offset = StreamOffset::new(OplogIndex::from_u64(7), 3);
     consumer
-        .append_session_record(StreamSessionRecord::SourceUnavailable(
-            golem_common::model::durable_stream::StreamSourceUnavailableRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                key: key.clone(),
-                source_offset: offset,
-                consumer_read_ordinal: 0,
-            },
-        ))
+        .append_session_record(
+            None,
+            StreamSessionRecord::SourceUnavailable(
+                golem_common::model::durable_stream::StreamSourceUnavailableRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    key: key.clone(),
+                    source_offset: offset,
+                    consumer_read_ordinal: 0,
+                },
+            ),
+        )
         .await
         .unwrap();
     oplog.take_read_ranges();
@@ -1104,16 +1136,21 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
     let entity_parent_start_index = Some(OplogIndex::from_u64(42));
     let mut request = root_registration(&identity);
     request.entity_parent_start_index = entity_parent_start_index;
-    let handle = live.register(request).await.unwrap().value;
+    let handle = live.register(None, request).await.unwrap().value;
 
     oplog.add(OplogEntry::no_op(None)).await;
-    live.write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![1]))
-        .await
-        .unwrap();
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![1]),
+    )
+    .await
+    .unwrap();
     live.prepare_attachment(attachment_key(&identity, handle.stream_id), 100)
         .await
         .unwrap();
-    live.end(handle.stream_id, 1, StreamEndResult::Ok)
+    live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
 
@@ -1146,19 +1183,19 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let payload = StreamItemsPayload::PackedU8(vec![7; 64]);
     let first = producer
-        .write_items(handle.stream_id, 0, payload.clone())
+        .write_items(None, handle.stream_id, 0, payload.clone())
         .await
         .unwrap()
         .value;
     for sequence in (64..4096).step_by(64) {
         producer
-            .write_items(handle.stream_id, sequence, payload.clone())
+            .write_items(None, handle.stream_id, sequence, payload.clone())
             .await
             .unwrap();
     }
@@ -1184,7 +1221,7 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
     assert!(oplog.take_read_ranges().is_empty());
     assert!(
         producer
-            .write_items(handle.stream_id, 0, payload)
+            .write_items(None, handle.stream_id, 0, payload)
             .await
             .unwrap()
             .replayed
@@ -1192,6 +1229,7 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
     assert!(matches!(
         producer
             .write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::PackedU8(vec![8; 64])
@@ -1207,12 +1245,13 @@ async fn packed_retention_is_compact_and_materializes_only_a_bounded_partial_win
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let offsets = producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8((0..5000).map(|index| index as u8).collect()),
@@ -1258,7 +1297,7 @@ async fn retention_entry_budget_evicts_batches_instead_of_packed_items() {
     let identity = identity();
     let producer = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1298,7 +1337,7 @@ async fn retained_segment_returns_prefix_at_encoded_byte_bound() {
     let identity = identity();
     let producer = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1332,7 +1371,7 @@ async fn retention_gap_falls_back_to_authoritative_history() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1341,6 +1380,7 @@ async fn retention_gap_falls_back_to_authoritative_history() {
         offsets.extend(
             producer
                 .write_items(
+                    None,
                     handle.stream_id,
                     sequence,
                     StreamItemsPayload::Values(vec![vec![sequence as u8]]),
@@ -1374,12 +1414,13 @@ async fn cursor_validation_point_reads_without_historical_event_cache() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let offsets = producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![1, 2, 3]),
@@ -1391,7 +1432,7 @@ async fn cursor_validation_point_reads_without_historical_event_cache() {
         oplog.add(OplogEntry::interrupted()).await;
     }
     producer
-        .end(handle.stream_id, 3, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 3, StreamEndResult::Ok)
         .await
         .unwrap();
     let high_water = producer.input_high_water(handle.stream_id).await.unwrap();
@@ -1439,7 +1480,7 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1574,7 +1615,7 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1677,7 +1718,7 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1748,7 +1789,7 @@ async fn replacing_a_source_cancellation_fences_the_old_drain_without_losing_the
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1762,6 +1803,7 @@ async fn replacing_a_source_cancellation_fences_the_old_drain_without_losing_the
     producer.unregister_source_cancellation(handle.stream_id, old_id);
     producer
         .cancel_open(
+            None,
             handle.stream_id,
             StreamCancelRole::OutputConsumer,
             StreamCancelReason::GuestDrop,
@@ -1779,7 +1821,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1809,7 +1851,7 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
     let first = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1851,19 +1893,22 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
         ..identity.invocation.clone()
     };
     assert_eq!(
-        live.register(ProducerRegistrationRequest {
-            coordinate: StreamRegistrationCoordinate::Root {
-                invocation_id: second_session.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
-            },
-            source_invocation: second_session,
-            component_revision: ComponentRevision::INITIAL,
-            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-            source_kind: StreamSourceKind::InvocationOutput,
-            session_mapping: None,
-            entity_parent_start_index: None,
-        })
+        live.register(
+            None,
+            ProducerRegistrationRequest {
+                coordinate: StreamRegistrationCoordinate::Root {
+                    invocation_id: second_session.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                source_invocation: second_session,
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                source_kind: StreamSourceKind::InvocationOutput,
+                session_mapping: None,
+                entity_parent_start_index: None,
+            }
+        )
         .await,
         Err(StreamStoreError::ProducerDeleting)
     );
@@ -1875,7 +1920,7 @@ async fn deletion_gate_and_attachment_prepare_have_one_linearization_order() {
         let identity = identity();
         let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
         let handle = live
-            .register(root_registration(&identity))
+            .register(None, root_registration(&identity))
             .await
             .unwrap()
             .value;
@@ -1917,12 +1962,17 @@ async fn deleting_producer_restarts_without_renewing_before_cascade_retry() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let first_offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -1975,7 +2025,7 @@ async fn deletion_cascade_does_not_wait_for_a_stalled_live_reader() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, Some(1)).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -1986,7 +2036,12 @@ async fn deletion_cascade_does_not_wait_for_a_stalled_live_reader() {
         .await
         .unwrap();
     let first_offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -2037,12 +2092,17 @@ async fn cascade_is_durable_idempotent_and_overlays_the_first_unjournaled_positi
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let item_offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -2069,8 +2129,13 @@ async fn cascade_is_durable_idempotent_and_overlays_the_first_unjournaled_positi
     assert_eq!(probe.overlay_commits.load(Ordering::Relaxed), 1);
     assert_eq!(oplog.committed_length(), committed_length);
     assert_eq!(
-        live.write_items(handle.stream_id, 1, StreamItemsPayload::PackedU8(vec![8]))
-            .await,
+        live.write_items(
+            None,
+            handle.stream_id,
+            1,
+            StreamItemsPayload::PackedU8(vec![8])
+        )
+        .await,
         Err(StreamStoreError::ProducerDeleting)
     );
 
@@ -2096,12 +2161,13 @@ async fn cascade_retries_when_the_consumer_journal_advances_before_overlay_commi
     let identity = identity();
     let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let offsets = live
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![7, 8]),
@@ -2154,12 +2220,17 @@ async fn cascade_retries_after_overlay_commit_before_outbox_commit() {
     let identity = identity();
     let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -2207,12 +2278,13 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
     let source_identity = identity();
     let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
     let handle = source
-        .register(root_registration(&source_identity))
+        .register(None, root_registration(&source_identity))
         .await
         .unwrap()
         .value;
     let offsets = source
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![7, 8]),
@@ -2248,7 +2320,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         tokio::spawn(async move {
             barrier.wait().await;
             consumer
-                .commit_source_unavailable_overlay(key, first_offset, 0)
+                .commit_source_unavailable_overlay(None, key, first_offset, 0)
                 .await
         })
     };
@@ -2257,7 +2329,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         let barrier = barrier.clone();
         tokio::spawn(async move {
             barrier.wait().await;
-            consumer.append_session_record(first_item).await
+            consumer.append_session_record(None, first_item).await
         })
     };
     barrier.wait().await;
@@ -2268,7 +2340,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         (Ok(false), Err(StreamStoreError::ConsumerJournalAdvanced)) => {
             assert!(
                 consumer
-                    .commit_source_unavailable_overlay(key.clone(), offsets[0], 0)
+                    .commit_source_unavailable_overlay(None, key.clone(), offsets[0], 0)
                     .await
                     .unwrap()
             );
@@ -2276,7 +2348,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         (Err(StreamStoreError::ConsumerJournalAdvanced), Ok(())) => {
             assert!(
                 !consumer
-                    .commit_source_unavailable_overlay(key.clone(), offsets[1], 1)
+                    .commit_source_unavailable_overlay(None, key.clone(), offsets[1], 1)
                     .await
                     .unwrap()
             );
@@ -2286,8 +2358,9 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
 
     assert_eq!(
         consumer
-            .append_session_record(StreamSessionRecord::ConsumerItemValue(
-                StreamConsumerItemValueRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: key.session_key,
                     stream_id: key.stream_id,
@@ -2297,8 +2370,8 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
                     packed_u8: true,
                     recursive_handles: Vec::new(),
                     recursive_mappings: Vec::new(),
-                },
-            ))
+                },)
+            )
             .await,
         Err(StreamStoreError::ConsumerJournalAdvanced)
     );
@@ -2309,7 +2382,7 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
     let source_identity = identity();
     let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
     let handle = source
-        .register(root_registration(&source_identity))
+        .register(None, root_registration(&source_identity))
         .await
         .unwrap()
         .value;
@@ -2322,15 +2395,16 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
     };
     let consumer = producer(Arc::new(TestOplog::default()), &consumer_identity, None).await;
     consumer
-        .append_session_record(StreamSessionRecord::ConsumerDeleting(
-            StreamConsumerDeletingRecord {
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 consumer_environment_id: consumer_identity.environment_id,
                 consumer: consumer_identity.agent_id,
                 consumer_fingerprint: consumer_identity.fingerprint,
                 deleting_at_millis: 100,
-            },
-        ))
+            }),
+        )
         .await
         .unwrap();
     let mapping = StreamSessionMappingRecord {
@@ -2341,27 +2415,29 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
 
     assert_eq!(
         consumer
-            .append_session_record(StreamSessionRecord::TopologyPrepared(
-                StreamTopologyPreparedRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: key.session_key.clone(),
                     attachment: key.clone(),
                     mapping: mapping.clone(),
-                },
-            ))
+                },)
+            )
             .await,
         Err(StreamStoreError::ConsumerDeleting)
     );
     assert_eq!(
         consumer
-            .append_session_record(StreamSessionRecord::TopologyActivated(
-                StreamTopologyActivatedRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: key.session_key.clone(),
                     attachment: key,
                     mapping,
-                },
-            ))
+                },)
+            )
             .await,
         Err(StreamStoreError::ConsumerDeleting)
     );
@@ -2373,17 +2449,22 @@ async fn complete_value_journal_releases_dependency_only_after_the_source_termin
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let item_offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
         .await
         .unwrap()
         .value[0];
     let terminal_offset = live
-        .end(handle.stream_id, 1, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap()
         .value;
@@ -2426,7 +2507,7 @@ async fn reconciliation_adopts_rolls_back_and_fences_recreated_consumers() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -2469,19 +2550,22 @@ async fn reconciliation_adopts_rolls_back_and_fences_recreated_consumers() {
         ..identity.invocation.clone()
     };
     let second = live
-        .register(ProducerRegistrationRequest {
-            coordinate: StreamRegistrationCoordinate::Root {
-                invocation_id: second_session.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
+        .register(
+            None,
+            ProducerRegistrationRequest {
+                coordinate: StreamRegistrationCoordinate::Root {
+                    invocation_id: second_session.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                source_invocation: second_session,
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                source_kind: StreamSourceKind::InvocationOutput,
+                session_mapping: None,
+                entity_parent_start_index: None,
             },
-            source_invocation: second_session,
-            component_revision: ComponentRevision::INITIAL,
-            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-            source_kind: StreamSourceKind::InvocationOutput,
-            session_mapping: None,
-            entity_parent_start_index: None,
-        })
+        )
         .await
         .unwrap()
         .value;
@@ -2524,14 +2608,17 @@ async fn reconciliation_processes_every_attachment_beyond_one_batch() {
         golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE + 1;
     for index in 0..attachment_count {
         let handle = live
-            .register(ProducerRegistrationRequest {
-                coordinate: StreamRegistrationCoordinate::Root {
-                    invocation_id: identity.invocation.clone(),
-                    root_kind: StreamRootKind::MethodResult,
-                    recursive_value_path: vec![StreamValuePathStep::ListElement(index as u32)],
+            .register(
+                None,
+                ProducerRegistrationRequest {
+                    coordinate: StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![StreamValuePathStep::ListElement(index as u32)],
+                    },
+                    ..root_registration(&identity)
                 },
-                ..root_registration(&identity)
-            })
+            )
             .await
             .unwrap()
             .value;
@@ -2559,14 +2646,17 @@ async fn reconciliation_continues_after_an_earlier_probe_failure() {
     let mut keys = Vec::new();
     for index in 0..2 {
         let handle = live
-            .register(ProducerRegistrationRequest {
-                coordinate: StreamRegistrationCoordinate::Root {
-                    invocation_id: identity.invocation.clone(),
-                    root_kind: StreamRootKind::MethodResult,
-                    recursive_value_path: vec![StreamValuePathStep::ListElement(index)],
+            .register(
+                None,
+                ProducerRegistrationRequest {
+                    coordinate: StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![StreamValuePathStep::ListElement(index)],
+                    },
+                    ..root_registration(&identity)
                 },
-                ..root_registration(&identity)
-            })
+            )
             .await
             .unwrap()
             .value;
@@ -2629,7 +2719,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
     .await
     .unwrap();
     let stream_id = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value
@@ -2646,18 +2736,21 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
         ))
         .await;
     producer
-        .append_session_record(StreamSessionRecord::ConsumerTerminal(
-            golem_common::model::durable_stream::StreamConsumerTerminalRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation,
-                stream_id,
-                source_offset: StreamOffset::new(OplogIndex::INITIAL, 0),
-                consumer_read_ordinal: 0,
-                terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
-                    StreamEndResult::Ok,
-                ),
-            },
-        ))
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(
+                golem_common::model::durable_stream::StreamConsumerTerminalRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation,
+                    stream_id,
+                    source_offset: StreamOffset::new(OplogIndex::INITIAL, 0),
+                    consumer_read_ordinal: 0,
+                    terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
+                        StreamEndResult::Ok,
+                    ),
+                },
+            ),
+        )
         .await
         .unwrap();
 
@@ -2677,7 +2770,7 @@ async fn producer_journal_restarts_and_replays_without_appending() {
     let oplog = Arc::new(TestOplog::default());
     let live_producer = producer(oplog.clone(), &identity, None).await;
     let registered = live_producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     assert!(!registered.replayed);
@@ -2688,7 +2781,12 @@ async fn producer_journal_restarts_and_replays_without_appending() {
     );
 
     let written = live_producer
-        .write_items(stream_id, 0, StreamItemsPayload::PackedU8(vec![10, 11]))
+        .write_items(
+            None,
+            stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![10, 11]),
+        )
         .await
         .unwrap();
     assert_eq!(written.value.len(), 2);
@@ -2707,7 +2805,7 @@ async fn producer_journal_restarts_and_replays_without_appending() {
         })
     );
     let terminal = live_producer
-        .end(stream_id, 2, StreamEndResult::Ok)
+        .end(None, stream_id, 2, StreamEndResult::Ok)
         .await
         .unwrap();
     assert_eq!(
@@ -2727,21 +2825,26 @@ async fn producer_journal_restarts_and_replays_without_appending() {
     drop(live_producer);
     let restarted = producer(oplog.clone(), &identity, None).await;
     let replayed_registration = restarted
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     assert!(replayed_registration.replayed);
     assert_eq!(replayed_registration.value, registered.value);
     assert!(
         restarted
-            .write_items(stream_id, 0, StreamItemsPayload::PackedU8(vec![10, 11]))
+            .write_items(
+                None,
+                stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![10, 11])
+            )
             .await
             .unwrap()
             .replayed
     );
     assert!(
         restarted
-            .end(stream_id, 2, StreamEndResult::Ok)
+            .end(None, stream_id, 2, StreamEndResult::Ok)
             .await
             .unwrap()
             .replayed
@@ -2778,12 +2881,13 @@ async fn closed_export_reports_terminal_state_before_final_page() {
     let identity = identity();
     let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let offsets = live
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![3, 9, 17, 41]),
@@ -2791,7 +2895,7 @@ async fn closed_export_reports_terminal_state_before_final_page() {
         .await
         .unwrap()
         .value;
-    live.end(handle.stream_id, 4, StreamEndResult::Ok)
+    live.end(None, handle.stream_id, 4, StreamEndResult::Ok)
         .await
         .unwrap();
     let read = live
@@ -2818,14 +2922,19 @@ async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit()
     let identity = identity();
     let live = producer(Arc::new(TestOplog::default()), &identity, Some(1)).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     let bus = live.stream_bus(handle.stream_id).await.unwrap();
     let mut reader = bus.subscribe().await.unwrap();
     let offset = live
-        .write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![3]))
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![3]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -2842,7 +2951,10 @@ async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit()
 
     let terminal = tokio::spawn({
         let live = live.clone();
-        async move { live.end(handle.stream_id, 1, StreamEndResult::Ok).await }
+        async move {
+            live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
+                .await
+        }
     });
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
@@ -2878,7 +2990,7 @@ async fn unattached_slot_reads_paginate_and_wake_both_readers() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -2887,6 +2999,7 @@ async fn unattached_slot_reads_paginate_and_wake_both_readers() {
     live.activate_attachment(key.clone(), 101).await.unwrap();
     let offsets = live
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![3, 9, 17]),
@@ -2974,7 +3087,12 @@ async fn unattached_slot_reads_paginate_and_wake_both_readers() {
         Err(super::DurableLiveStreamBusError::ReaderLimit)
     ));
     let next = live
-        .write_items(handle.stream_id, 3, StreamItemsPayload::PackedU8(vec![41]))
+        .write_items(
+            None,
+            handle.stream_id,
+            3,
+            StreamItemsPayload::PackedU8(vec![41]),
+        )
         .await
         .unwrap()
         .value[0];
@@ -3015,7 +3133,7 @@ async fn future_cursor_live_reads_wait_for_deadline_or_closure() {
     let identity = identity();
     let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -3038,11 +3156,16 @@ async fn future_cursor_live_reads_wait_for_deadline_or_closure() {
         ..request.clone()
     }));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
-    live.write_items(handle.stream_id, 0, StreamItemsPayload::PackedU8(vec![7]))
-        .await
-        .unwrap();
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![7]),
+    )
+    .await
+    .unwrap();
     assert!(futures::poll!(waiting.as_mut()).is_pending());
-    live.end(handle.stream_id, 1, StreamEndResult::Ok)
+    live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     let closed = waiting.await.unwrap();
@@ -3058,15 +3181,18 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, Some(1)).await;
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3076,7 +3202,7 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
         let live = live.clone();
         let id = handle.stream_id;
         async move {
-            live.write_items(id, 0, StreamItemsPayload::PackedU8(vec![3, 7, 19]))
+            live.write_items(None, id, 0, StreamItemsPayload::PackedU8(vec![3, 7, 19]))
                 .await
         }
     });
@@ -3086,6 +3212,7 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
     let second = live.append_external_input(
+        None,
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![31, 44])),
@@ -3167,14 +3294,14 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
         .await
         .unwrap();
         let handle = live
-            .register(root_registration(&identity))
+            .register(None, root_registration(&identity))
             .await
             .unwrap()
             .value;
         let payload = StreamItemsPayload::PackedU8(vec![13, 79]);
         fail.store(true, Ordering::Release);
         assert!(
-            live.write_items(handle.stream_id, 0, payload.clone())
+            live.write_items(None, handle.stream_id, 0, payload.clone())
                 .await
                 .is_err()
         );
@@ -3190,7 +3317,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
             "cached reads must not conceal an uncertain commit outcome"
         );
         assert!(
-            live.write_items(handle.stream_id, 0, payload.clone())
+            live.write_items(None, handle.stream_id, 0, payload.clone())
                 .await
                 .is_err()
         );
@@ -3216,7 +3343,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
             ]
         );
         let retry = recovered
-            .write_items(handle.stream_id, 0, payload)
+            .write_items(None, handle.stream_id, 0, payload)
             .await
             .unwrap();
         assert!(retry.replayed);
@@ -3270,7 +3397,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
     .await
     .unwrap();
     let handle = live
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -3281,6 +3408,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
         let live = live.clone();
         async move {
             live.cancel_open(
+                None,
                 handle.stream_id,
                 StreamCancelRole::OutputConsumer,
                 StreamCancelReason::Cancelled,
@@ -3351,15 +3479,18 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
     .await
     .unwrap();
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3377,6 +3508,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
         let external = external.clone();
         async move {
             live.append_external_input(
+                None,
                 &session,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -3393,6 +3525,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
 
     let retry = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -3448,15 +3581,18 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
     .await
     .unwrap();
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3472,6 +3608,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
         let external = external.clone();
         async move {
             live.append_external_input(
+                None,
                 &session,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -3487,6 +3624,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
     release.notify_one();
     let retry = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -3516,10 +3654,11 @@ async fn provisional_external_append_retains_entity_attribution() {
         StreamSourceKind::ExternalInlineInput,
     );
     request.entity_parent_start_index = attribution;
-    let handle = live.register(request).await.unwrap().value;
+    let handle = live.register(None, request).await.unwrap().value;
     let before = oplog.current_oplog_index().await;
 
     live.append_external_input(
+        None,
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![7])),
@@ -3554,20 +3693,24 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
             let oplog = Arc::new(TestOplog::default());
             let live = producer(oplog.clone(), &identity, None).await;
             let handle = live
-                .register(registration(
-                    &identity,
-                    StreamRegistrationCoordinate::Root {
-                        invocation_id: identity.invocation.clone(),
-                        root_kind: StreamRootKind::MethodInput,
-                        recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
-                    },
-                    StreamSourceKind::ExternalInlineInput,
-                ))
+                .register(
+                    None,
+                    registration(
+                        &identity,
+                        StreamRegistrationCoordinate::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKind::MethodInput,
+                            recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
+                        },
+                        StreamSourceKind::ExternalInlineInput,
+                    ),
+                )
                 .await
                 .unwrap()
                 .value;
             if sent_item {
                 live.write_attached_items_with_nested(
+                    None,
                     &identity.invocation,
                     handle.stream_id,
                     0,
@@ -3579,6 +3722,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
             }
             let end_sequence = u64::from(sent_item);
             live.append_external_input(
+                None,
                 &identity.invocation,
                 handle.stream_id,
                 None,
@@ -3597,6 +3741,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
             let tip = oplog.current_oplog_index().await;
             let error = recovered
                 .write_attached_items_with_nested(
+                    None,
                     &identity.invocation,
                     handle.stream_id,
                     end_sequence + u64::from(own_end),
@@ -3619,6 +3764,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
                 assert_eq!(
                     recovered
                         .write_attached_items_with_nested(
+                            None,
                             &identity.invocation,
                             handle.stream_id,
                             end_sequence + 2,
@@ -3635,6 +3781,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
                 assert_eq!(
                     recovered
                         .write_attached_items_with_nested(
+                            None,
                             &identity.invocation,
                             handle.stream_id,
                             end_sequence,
@@ -3658,20 +3805,24 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(98)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(98)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
 
     live.write_attached_items_with_nested(
+        None,
         &identity.invocation,
         handle.stream_id,
         0,
@@ -3687,6 +3838,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     };
     let accepted = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::Values(vec![vec![20], vec![30]])),
@@ -3696,6 +3848,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
         .await
         .unwrap();
     live.write_attached_items_with_nested(
+        None,
         &identity.invocation,
         handle.stream_id,
         1,
@@ -3713,6 +3866,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     assert_eq!(
         recovered
             .append_external_input(
+                None,
                 &identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::Values(vec![vec![20], vec![30]])),
@@ -3737,6 +3891,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     );
     let retry = recovered
         .write_attached_items_with_nested(
+            None,
             &identity.invocation,
             handle.stream_id,
             1,
@@ -3749,6 +3904,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     assert!(matches!(
         recovered
             .write_attached_items_with_nested(
+                None,
                 &identity.invocation,
                 handle.stream_id,
                 1,
@@ -3760,6 +3916,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
     ));
     recovered
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             None,
@@ -3820,20 +3977,24 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(97)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(97)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     let (attached, http) = tokio::join!(
         live.write_attached_items_with_nested(
+            None,
             &identity.invocation,
             handle.stream_id,
             0,
@@ -3841,6 +4002,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
             Vec::new(),
         ),
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::Values(vec![
@@ -3866,6 +4028,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
     let payload = StreamItemsPayload::Values(vec![vec![40]]);
     let fresh = live
         .write_attached_items_with_nested(
+            None,
             &identity.invocation,
             handle.stream_id,
             2,
@@ -3888,6 +4051,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
         .pop()
         .unwrap();
     live.append_external_input(
+        None,
         &identity.invocation,
         child.stream_id,
         None,
@@ -3904,6 +4068,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
     let recovered = producer(oplog, &identity, None).await;
     let retry = recovered
         .write_attached_items_with_nested(
+            None,
             &identity.invocation,
             handle.stream_id,
             2,
@@ -3928,6 +4093,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
     assert!(matches!(
         recovered
             .append_external_input(
+                None,
                 &identity.invocation,
                 handle.stream_id,
                 None,
@@ -3942,7 +4108,14 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
         Err(StreamStoreError::EventConflict)
     ));
     recovered
-        .append_external_input(&identity.invocation, handle.stream_id, None, true, None)
+        .append_external_input(
+            None,
+            &identity.invocation,
+            handle.stream_id,
+            None,
+            true,
+            None,
+        )
         .await
         .unwrap();
     let high_water = recovered
@@ -3973,15 +4146,18 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(99)],
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(99)],
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -3992,6 +4168,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     };
     let accepted = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
@@ -4005,6 +4182,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     };
     let (a, b) = tokio::join!(
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
@@ -4012,6 +4190,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             Some(p0.clone())
         ),
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
@@ -4027,6 +4206,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     assert_eq!(b.unwrap(), duplicate);
     let newer = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
@@ -4042,6 +4222,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     assert!(matches!(newer, ExternalAppendOutcome::Accepted(_)));
     assert_eq!(
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
@@ -4061,6 +4242,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     );
     assert_eq!(
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
@@ -4080,6 +4262,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     );
     assert!(matches!(
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
@@ -4096,6 +4279,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     ));
     assert_eq!(
         live.append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![4])),
@@ -4111,12 +4295,18 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
         ExternalAppendOutcome::EpochFenced(2)
     );
     let normal = live
-        .write_items(handle.stream_id, 4, StreamItemsPayload::PackedU8(vec![8]))
+        .write_items(
+            None,
+            handle.stream_id,
+            4,
+            StreamItemsPayload::PackedU8(vec![8]),
+        )
         .await
         .unwrap()
         .value[0];
     let closed = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![4])),
@@ -4134,9 +4324,16 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     };
     assert!(original < normal && normal < closed);
     assert_eq!(
-        live.append_external_input(&identity.invocation, handle.stream_id, None, true, None)
-            .await
-            .unwrap(),
+        live.append_external_input(
+            None,
+            &identity.invocation,
+            handle.stream_id,
+            None,
+            true,
+            None
+        )
+        .await
+        .unwrap(),
         ExternalAppendOutcome::Duplicate {
             offset: closed,
             highest_sequence: None,
@@ -4147,6 +4344,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
     assert_eq!(
         recovered
             .append_external_input(
+                None,
                 &identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![9])),
@@ -4165,15 +4363,18 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
@@ -4183,6 +4384,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
         sequence,
     };
     live.append_external_input(
+        None,
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![1])),
@@ -4193,6 +4395,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
     .unwrap();
     let accepted = live
         .append_external_input(
+            None,
             &identity.invocation,
             handle.stream_id,
             None,
@@ -4211,6 +4414,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
         assert_eq!(
             current
                 .append_external_input(
+                    None,
                     &identity.invocation,
                     handle.stream_id,
                     None,
@@ -4235,6 +4439,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
             assert_eq!(
                 current
                     .append_external_input(
+                        None,
                         &identity.invocation,
                         handle.stream_id,
                         None,
@@ -4249,6 +4454,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
         assert_eq!(
             current
                 .append_external_input(
+                    None,
                     &identity.invocation,
                     handle.stream_id,
                     Some(StreamItemsPayload::PackedU8(vec![1])),
@@ -4269,20 +4475,24 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodInput,
-                recursive_value_path: Vec::new(),
-            },
-            StreamSourceKind::ExternalInlineInput,
-        ))
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::ExternalInlineInput,
+            ),
+        )
         .await
         .unwrap()
         .value;
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![1]]),
@@ -4291,6 +4501,7 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
         .unwrap();
     producer
         .cancel_open(
+            None,
             handle.stream_id,
             StreamCancelRole::InputConsumer,
             StreamCancelReason::GuestDrop,
@@ -4303,6 +4514,7 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
     assert!(matches!(
         producer
             .write_items(
+                None,
                 handle.stream_id,
                 1,
                 StreamItemsPayload::Values(vec![vec![2]]),
@@ -4320,7 +4532,7 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
 
     assert!(matches!(
         producer
-            .end(handle.stream_id, 64, StreamEndResult::Ok)
+            .end(None, handle.stream_id, 64, StreamEndResult::Ok)
             .await,
         Err(StreamStoreError::FencedByTerminal(
             CommittedProducerStreamEventPayload::Cancel {
@@ -4396,6 +4608,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
         async move {
             live_producer
                 .prepare_session(
+                    None,
                     vec![(17, registration)],
                     pending,
                     committed,
@@ -4491,12 +4704,13 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![42]]),
@@ -4506,6 +4720,7 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
 
     producer
         .end_open(
+            None,
             handle.stream_id,
             StreamEndResult::ErrorContext(b"invocation failed".to_vec()),
         )
@@ -4514,6 +4729,7 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
     let committed_length = oplog.committed_length();
     producer
         .end_open(
+            None,
             handle.stream_id,
             StreamEndResult::ErrorContext(b"ignored duplicate".to_vec()),
         )
@@ -4541,20 +4757,20 @@ async fn empty_invocation_result_replays_exactly_and_rejects_conflicts() {
     let producer = producer(oplog.clone(), &identity, None).await;
 
     producer
-        .register_result_streams(identity.invocation.clone(), vec![1], Vec::new(), None)
+        .register_result_streams(None, identity.invocation.clone(), vec![1], Vec::new(), None)
         .await
         .unwrap();
     let committed = oplog.committed_length();
 
     producer
-        .register_result_streams(identity.invocation.clone(), vec![1], Vec::new(), None)
+        .register_result_streams(None, identity.invocation.clone(), vec![1], Vec::new(), None)
         .await
         .unwrap();
     assert_eq!(oplog.committed_length(), committed);
 
     assert_eq!(
         producer
-            .register_result_streams(identity.invocation.clone(), vec![2], Vec::new(), None)
+            .register_result_streams(None, identity.invocation.clone(), vec![2], Vec::new(), None)
             .await
             .unwrap_err(),
         StreamStoreError::RegistrationDivergence
@@ -4568,7 +4784,7 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let existing = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -4596,7 +4812,13 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
         ]
     };
     let (owned, record) = producer
-        .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs(), None)
+        .register_result_streams(
+            None,
+            identity.invocation.clone(),
+            vec![4, 5],
+            outputs(),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(owned.len(), 1);
@@ -4619,7 +4841,13 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
     );
     let committed = oplog.committed_length();
     let replay = producer
-        .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs(), None)
+        .register_result_streams(
+            None,
+            identity.invocation.clone(),
+            vec![4, 5],
+            outputs(),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(replay, (owned, record));
@@ -4638,9 +4866,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             root_kind: StreamRootKind::MethodResult,
             recursive_value_path: vec![StreamValuePathStep::RecordField(0)],
         };
-        let existing = producer.register(request.clone()).await.unwrap().value;
+        let existing = producer
+            .register(None, request.clone())
+            .await
+            .unwrap()
+            .value;
         producer
-            .end(existing.stream_id, 0, StreamEndResult::Ok)
+            .end(None, existing.stream_id, 0, StreamEndResult::Ok)
             .await
             .unwrap();
         request.coordinate = StreamRegistrationCoordinate::Root {
@@ -4651,7 +4883,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
         let open = if new_output {
             None
         } else {
-            Some(producer.register(request.clone()).await.unwrap().value)
+            Some(
+                producer
+                    .register(None, request.clone())
+                    .await
+                    .unwrap()
+                    .value,
+            )
         };
         let outputs = || {
             vec![
@@ -4671,7 +4909,7 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             ]
         };
         let registered = producer
-            .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+            .register_result_streams(None, identity.invocation.clone(), vec![3], outputs(), None)
             .await
             .unwrap();
         let StreamSessionRecord::InvocationResult(result) = &registered.1 else {
@@ -4707,7 +4945,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
         }
         assert_eq!(
             recovered
-                .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![3],
+                    outputs(),
+                    None
+                )
                 .await
                 .unwrap(),
             registered
@@ -4737,7 +4981,7 @@ async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
 
     assert_eq!(
         producer
-            .register_result_streams(identity.invocation.clone(), vec![1], outputs, None)
+            .register_result_streams(None, identity.invocation.clone(), vec![1], outputs, None)
             .await,
         Err(StreamStoreError::RegistrationDivergence)
     );
@@ -4750,7 +4994,7 @@ async fn nested_registration_and_enclosing_item_share_one_ordered_batch() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let parent = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let nested = registration(
@@ -4764,6 +5008,7 @@ async fn nested_registration_and_enclosing_item_share_one_ordered_batch() {
     );
     let written = producer
         .write_items_with_nested(
+            None,
             parent.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![1, 2, 3]]),
@@ -4775,12 +5020,13 @@ async fn nested_registration_and_enclosing_item_share_one_ordered_batch() {
         written.value[0].producer_oplog_index(),
         OplogIndex::from_u64(3)
     );
-    let nested_replay = producer.register(nested).await.unwrap();
+    let nested_replay = producer.register(None, nested).await.unwrap();
     assert!(nested_replay.replayed);
     assert_eq!(oplog.committed_length(), 3);
     assert!(
         producer
             .write_items_with_nested(
+                None,
                 parent.value.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1, 2, 3]]),
@@ -4816,7 +5062,7 @@ async fn new_nested_registration_cannot_commit_without_its_enclosing_item() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let parent = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let nested = registration(
@@ -4830,7 +5076,7 @@ async fn new_nested_registration_cannot_commit_without_its_enclosing_item() {
     );
 
     assert_eq!(
-        producer.register(nested).await,
+        producer.register(None, nested).await,
         Err(StreamStoreError::RegistrationDivergence)
     );
     assert_eq!(
@@ -4846,7 +5092,7 @@ async fn catch_up_joins_live_without_a_gap_or_duplicate() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let mut reader = producer
@@ -4855,6 +5101,7 @@ async fn catch_up_joins_live_without_a_gap_or_duplicate() {
         .unwrap();
     producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![9]]),
@@ -4862,7 +5109,7 @@ async fn catch_up_joins_live_without_a_gap_or_duplicate() {
         .await
         .unwrap();
     producer
-        .end(registered.value.stream_id, 1, StreamEndResult::Ok)
+        .end(None, registered.value.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     assert_eq!(
@@ -4882,7 +5129,7 @@ async fn replay_publication_is_deduplicated_at_the_live_reader() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let mut reader = producer
@@ -4891,6 +5138,7 @@ async fn replay_publication_is_deduplicated_at_the_live_reader() {
         .unwrap();
     producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![1]]),
@@ -4902,6 +5150,7 @@ async fn replay_publication_is_deduplicated_at_the_live_reader() {
     assert!(
         producer
             .write_items(
+                None,
                 registered.value.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -4911,7 +5160,7 @@ async fn replay_publication_is_deduplicated_at_the_live_reader() {
             .replayed
     );
     producer
-        .end(registered.value.stream_id, 1, StreamEndResult::Ok)
+        .end(None, registered.value.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     let terminal = reader.next().await.unwrap().unwrap();
@@ -4928,7 +5177,7 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let stream_id = registered.value.stream_id;
@@ -5051,7 +5300,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let parent = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let parent_stream_id = parent.value.stream_id;
@@ -5120,7 +5369,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let parent = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let environment_id = identity.environment_id;
@@ -5172,7 +5421,7 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let stream_id = registered.value.stream_id;
@@ -5180,6 +5429,7 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
     assert_eq!(
         producer
             .write_items(
+                None,
                 stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![0; MAX_DURABLE_STREAM_ITEM_SIZE + 1]]),
@@ -5191,6 +5441,7 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
     assert_eq!(
         producer
             .write_items(
+                None,
                 stream_id,
                 0,
                 StreamItemsPayload::PackedU8(vec![0; MAX_PACKED_U8_STREAM_ITEM_SIZE + 1]),
@@ -5201,7 +5452,12 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
     assert_eq!(oplog.committed_length(), 1);
 
     let written = producer
-        .write_items(stream_id, 0, StreamItemsPayload::Values(vec![vec![1]]))
+        .write_items(
+            None,
+            stream_id,
+            0,
+            StreamItemsPayload::Values(vec![vec![1]]),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -5228,7 +5484,7 @@ async fn root_registration_rejects_coordinate_beyond_traversal_depth_limit() {
     );
 
     assert_eq!(
-        producer.register(request).await,
+        producer.register(None, request).await,
         Err(StreamStoreError::TraversalDepthLimit)
     );
     assert_eq!(
@@ -5283,7 +5539,7 @@ async fn stream_limit_is_scoped_to_one_session_not_the_producer_agent_lifetime()
             entity_parent_start_index: None,
         };
 
-        producer.register(request).await.expect(
+        producer.register(None, request).await.expect(
             "one stream in each independent session must remain below the per-session limit",
         );
     }
@@ -5368,9 +5624,9 @@ async fn session_control_batch_validates_before_appending_any_record() {
     let invalid_records = vec![cancel.clone(), malformed];
     assert!(matches!(
         producer
-            .run_owned(0, move |owner| async move {
+            .run_owned(None, 0, move |owner, context| async move {
                 owner
-                    .append_session_records_owned(None, invalid_records)
+                    .append_session_records_owned(&context, None, invalid_records)
                     .await
             })
             .await,
@@ -5380,8 +5636,10 @@ async fn session_control_batch_validates_before_appending_any_record() {
 
     let records = vec![cancel.clone(), tombstone.clone()];
     producer
-        .run_owned(0, move |owner| async move {
-            owner.append_session_records_owned(None, records).await
+        .run_owned(None, 0, move |owner, context| async move {
+            owner
+                .append_session_records_owned(&context, None, records)
+                .await
         })
         .await
         .unwrap();
@@ -5406,7 +5664,7 @@ async fn malformed_session_record_is_rejected_at_the_write_boundary() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let mut malformed_handle = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -5415,8 +5673,9 @@ async fn malformed_session_record_is_rejected_at_the_write_boundary() {
 
     assert!(matches!(
         producer
-            .append_session_record(StreamSessionRecord::Mapping(
-                StreamSessionMappingUpdateRecord {
+            .append_session_record(
+                None,
+                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation,
                     mapping: StreamSessionMappingRecord {
@@ -5424,8 +5683,8 @@ async fn malformed_session_record_is_rejected_at_the_write_boundary() {
                         handle: malformed_handle,
                         role: SessionStreamRole::Output,
                     },
-                },
-            ))
+                },)
+            )
             .await,
         Err(StreamStoreError::CorruptHistory(_))
     ));
@@ -5438,7 +5697,7 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let stream_id = registered.value.stream_id;
@@ -5459,6 +5718,7 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
     assert_eq!(
         producer
             .write_items_with_nested(
+                None,
                 stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -5487,7 +5747,12 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
 
     assert!(matches!(
         producer
-            .write_items(stream_id, 0, StreamItemsPayload::Values(vec![vec![2]]),)
+            .write_items(
+                None,
+                stream_id,
+                0,
+                StreamItemsPayload::Values(vec![vec![2]]),
+            )
             .await,
         Err(StreamStoreError::FencedByTerminal(_))
     ));
@@ -5506,7 +5771,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
         let oplog = Arc::new(TestOplog::default());
         let producer = producer(oplog.clone(), &identity, None).await;
         let handle = producer
-            .register(root_registration(&identity))
+            .register(None, root_registration(&identity))
             .await
             .unwrap()
             .value;
@@ -5517,6 +5782,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
     assert_eq!(
         depth_producer
             .write_items_with_nested_at_depth(
+                None,
                 depth_handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -5552,6 +5818,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
     assert_eq!(
         stream_producer
             .write_items_with_nested(
+                None,
                 stream_handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -5574,6 +5841,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
     assert_eq!(
         counter_producer
             .write_items(
+                None,
                 counter_handle.stream_id,
                 u64::MAX,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -5628,7 +5896,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
     let registration = tokio::spawn({
         let producer = live.clone();
         let request = request.clone();
-        async move { producer.register(request).await }
+        async move { producer.register(None, request).await }
     });
 
     commit_reached.wait().await;
@@ -5651,7 +5919,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
         .unwrap()
     );
     assert_eq!(oplog.committed_length(), 1);
-    assert!(restarted.register(request).await.unwrap().replayed);
+    assert!(restarted.register(None, request).await.unwrap().replayed);
     assert_eq!(oplog.committed_length(), 1);
 }
 
@@ -5665,15 +5933,14 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
         let caller = tokio::spawn({
             let live = live.clone();
             async move {
-                live.run_lifecycle(7, move |owner| async move {
+                live.run_lifecycle(None, 7, move |owner, context| async move {
                     let routed_owner = owner.clone();
-                    owner.defer_remote_cancellation(async move {
-                        assert!(super::mutation::MUTATION_SCOPE.try_with(|_| ()).is_err());
+                    context.defer_remote_cancellation(async move {
                         started.send(()).unwrap();
                         released.await.unwrap();
                         assert_eq!(
                             routed_owner
-                                .run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
+                                .run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
                                 .await,
                             Err(StreamStoreError::RecoveryRequired)
                         );
@@ -5757,10 +6024,10 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
     let caller = tokio::spawn({
         let live = live.clone();
         async move {
-            live.run_owned(0, move |owner| async move {
-                owner.commit().await;
-                owner.finish_durable_effect();
-                owner.notify_session_records_changed();
+            live.run_owned(None, 0, move |owner, context| async move {
+                owner.commit(&context).await;
+                context.finish_durable_effect();
+                owner.notify_session_records_changed(Some(&context));
                 requested.send(()).unwrap();
                 Ok::<(), StreamStoreError>(())
             })
@@ -5820,7 +6087,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
         .await
         .unwrap();
         let handle = live
-            .register(root_registration(&identity))
+            .register(None, root_registration(&identity))
             .await
             .unwrap()
             .value;
@@ -5831,6 +6098,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
             .await
             .unwrap();
         live.write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![3]]),
@@ -5842,9 +6110,11 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
             let live = live.clone();
             async move {
                 if lifecycle {
-                    live.end_open(handle.stream_id, StreamEndResult::Ok).await
+                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
+                        .await
                 } else {
                     live.write_items(
+                        None,
                         handle.stream_id,
                         1,
                         StreamItemsPayload::Values(vec![vec![7]]),
@@ -5866,7 +6136,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
             .await
             .expect("durable activity retained a blocked publication");
         assert_eq!(
-            live.run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
+            live.run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
                 .await,
             Err(StreamStoreError::RecoveryRequired)
         );
@@ -5903,15 +6173,18 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
         // buses than one dispatcher page, exercise both admission and scan progress.
         for i in 0..33 {
             let handle = live
-                .register(registration(
-                    &identity,
-                    StreamRegistrationCoordinate::Root {
-                        invocation_id: identity.invocation.clone(),
-                        root_kind: StreamRootKind::MethodResult,
-                        recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
-                    },
-                    StreamSourceKind::InvocationOutput,
-                ))
+                .register(
+                    None,
+                    registration(
+                        &identity,
+                        StreamRegistrationCoordinate::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKind::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
+                        },
+                        StreamSourceKind::InvocationOutput,
+                    ),
+                )
                 .await
                 .unwrap()
                 .value;
@@ -5922,6 +6195,7 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
                 .await
                 .unwrap();
             live.write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![3]]),
@@ -5939,10 +6213,16 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
                 // Charge the whole byte lane without allocating a 256 MiB test payload.
                 // The nested write retains that reservation through blocked delivery.
                 live.run_owned(
+                    None,
                     if saturate_bytes { 256 * 1024 * 1024 } else { 1 },
-                    move |owner| async move {
+                    move |owner, context| async move {
                         owner
-                            .write_items(stream_id, 1, StreamItemsPayload::Values(vec![vec![7]]))
+                            .write_items(
+                                Some(&context),
+                                stream_id,
+                                1,
+                                StreamItemsPayload::Values(vec![vec![7]]),
+                            )
                             .await
                     },
                 )
@@ -5963,6 +6243,7 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
             let live = live.clone();
             cancellations.push(tokio::spawn(async move {
                 live.cancel_open(
+                    None,
                     stream_id,
                     StreamCancelRole::OutputConsumer,
                     StreamCancelReason::Cancelled,
@@ -6047,15 +6328,18 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
         let mut handles = Vec::new();
         for i in 0..3 {
             handles.push(
-                live.register(registration(
-                    &identity,
-                    StreamRegistrationCoordinate::Root {
-                        invocation_id: identity.invocation.clone(),
-                        root_kind: StreamRootKind::MethodResult,
-                        recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
-                    },
-                    StreamSourceKind::InvocationOutput,
-                ))
+                live.register(
+                    None,
+                    registration(
+                        &identity,
+                        StreamRegistrationCoordinate::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKind::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
+                        },
+                        StreamSourceKind::InvocationOutput,
+                    ),
+                )
                 .await
                 .unwrap()
                 .value,
@@ -6070,6 +6354,7 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             .unwrap();
         let error = vec![71; error_len];
         let mut finishing = Box::pin(live.finish_session(
+            None,
             identity.invocation.clone(),
             None,
             Err(error.clone()),
@@ -6124,6 +6409,7 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             tokio::time::timeout(
                 Duration::from_secs(1),
                 current.finish_session(
+                    None,
                     identity.invocation.clone(),
                     None,
                     Err(vec![99; error_len]),
@@ -6150,15 +6436,18 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
     for i in 0..MAX_DURABLE_STREAMS_PER_SESSION {
-        live.register(registration(
-            &identity,
-            StreamRegistrationCoordinate::Root {
-                invocation_id: identity.invocation.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: vec![StreamValuePathStep::TupleElement(i as u32)],
-            },
-            StreamSourceKind::InvocationOutput,
-        ))
+        live.register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: vec![StreamValuePathStep::TupleElement(i as u32)],
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
         .await
         .unwrap();
     }
@@ -6170,6 +6459,7 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
         .await
         .unwrap();
     let mut finishing = Box::pin(live.finish_session(
+        None,
         identity.invocation.clone(),
         None,
         Err(vec![83; 128]),
@@ -6196,10 +6486,10 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
             .all(|stream| stream.terminal && stream.terminal_event.is_none())
     );
 
-    live.run_lifecycle(256 * 1024 * 1024 + 1, |owner| async move {
+    live.run_lifecycle(None, 256 * 1024 * 1024 + 1, |owner, context| async move {
         assert_eq!(owner.lifecycle_operation_bytes.available_permits(), 0);
-        owner
-            .run_lifecycle(1, |_| async { Ok::<(), StreamStoreError>(()) })
+        context
+            .run_nested(|_, _| async { Ok::<(), StreamStoreError>(()) })
             .await
     })
     .await
@@ -6227,15 +6517,18 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
         let mut readers = Vec::new();
         for i in 0..3 {
             let handle = live
-                .register(registration(
-                    &identity,
-                    StreamRegistrationCoordinate::Root {
-                        invocation_id: identity.invocation.clone(),
-                        root_kind: StreamRootKind::MethodResult,
-                        recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
-                    },
-                    StreamSourceKind::InvocationOutput,
-                ))
+                .register(
+                    None,
+                    registration(
+                        &identity,
+                        StreamRegistrationCoordinate::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKind::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStep::TupleElement(i)],
+                        },
+                        StreamSourceKind::InvocationOutput,
+                    ),
+                )
                 .await
                 .unwrap()
                 .value;
@@ -6246,6 +6539,7 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
                 .await
                 .unwrap();
             live.write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![i as u8 + 3]]),
@@ -6262,6 +6556,7 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
                     live.commit_deletion_barrier(123, true).await
                 } else {
                     live.finish_session(
+                        None,
                         session,
                         None,
                         Err(vec![19, 31]),
@@ -6345,7 +6640,7 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
     let oplog = Arc::new(TestOplog::default());
     let live_producer = producer(oplog.clone(), &identity, Some(1)).await;
     let registered = live_producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let mut reader = live_producer
@@ -6354,6 +6649,7 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
         .unwrap();
     live_producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![1]]),
@@ -6366,7 +6662,12 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
         let stream_id = registered.value.stream_id;
         async move {
             producer
-                .write_items(stream_id, 1, StreamItemsPayload::Values(vec![vec![2]]))
+                .write_items(
+                    None,
+                    stream_id,
+                    1,
+                    StreamItemsPayload::Values(vec![vec![2]]),
+                )
                 .await
         }
     });
@@ -6381,7 +6682,7 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
     let blocked_terminal = tokio::spawn({
         let producer = live_producer.clone();
         let stream_id = registered.value.stream_id;
-        async move { producer.end(stream_id, 2, StreamEndResult::Ok).await }
+        async move { producer.end(None, stream_id, 2, StreamEndResult::Ok).await }
     });
     while oplog.committed_length() < 4 {
         tokio::task::yield_now().await;
@@ -6407,12 +6708,13 @@ async fn historical_catch_up_does_not_deadlock_with_backpressured_publication() 
     let oplog = Arc::new(TestOplog::default());
     let live_producer = producer(oplog.clone(), &identity, Some(1)).await;
     let handle = live_producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
     live_producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![0]]),
@@ -6425,6 +6727,7 @@ async fn historical_catch_up_does_not_deadlock_with_backpressured_publication() 
     let join_high_water = subscription.high_water;
     live_producer
         .write_items(
+            None,
             handle.stream_id,
             1,
             StreamItemsPayload::Values(vec![vec![1]]),
@@ -6436,7 +6739,12 @@ async fn historical_catch_up_does_not_deadlock_with_backpressured_publication() 
         let stream_id = handle.stream_id;
         async move {
             producer
-                .write_items(stream_id, 2, StreamItemsPayload::Values(vec![vec![2]]))
+                .write_items(
+                    None,
+                    stream_id,
+                    2,
+                    StreamItemsPayload::Values(vec![vec![2]]),
+                )
                 .await
         }
     });
@@ -6473,7 +6781,7 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
     let oplog = Arc::new(TestOplog::default());
     let live_producer = producer(oplog.clone(), &identity, Some(1)).await;
     let registered = live_producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let blocked_reader = live_producer
@@ -6482,6 +6790,7 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
         .unwrap();
     live_producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![0]]),
@@ -6494,7 +6803,12 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
         let stream_id = registered.value.stream_id;
         async move {
             producer
-                .write_items(stream_id, 1, StreamItemsPayload::Values(vec![vec![1]]))
+                .write_items(
+                    None,
+                    stream_id,
+                    1,
+                    StreamItemsPayload::Values(vec![vec![1]]),
+                )
                 .await
         }
     });
@@ -6508,7 +6822,7 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
     let blocked_terminal = tokio::spawn({
         let producer = live_producer.clone();
         let stream_id = registered.value.stream_id;
-        async move { producer.end(stream_id, 2, StreamEndResult::Ok).await }
+        async move { producer.end(None, stream_id, 2, StreamEndResult::Ok).await }
     });
     while oplog.committed_length() < 4 {
         tokio::task::yield_now().await;
@@ -6535,11 +6849,12 @@ async fn rejected_catch_up_cursor_does_not_consume_live_reader_capacity() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![1]]),
@@ -6569,7 +6884,7 @@ async fn unavailable_cursor_is_rejected_for_an_empty_stream() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     let unavailable_cursor = StreamOffset::new(OplogIndex::from_u64(999), 0);
@@ -6649,11 +6964,12 @@ async fn poisoned_producer_rejects_prefetched_history_without_advancing_cursor()
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     producer
         .write_items(
+            None,
             registered.value.stream_id,
             0,
             StreamItemsPayload::PackedU8(vec![3, 7]),
@@ -6675,11 +6991,11 @@ async fn completed_terminal_catch_up_reader_releases_live_reader_capacity() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let registered = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
     producer
-        .end(registered.value.stream_id, 0, StreamEndResult::Ok)
+        .end(None, registered.value.stream_id, 0, StreamEndResult::Ok)
         .await
         .unwrap();
 
@@ -6710,26 +7026,29 @@ async fn nested_registration_must_match_its_enclosing_stream_coordinate() {
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog, &identity, None).await;
     let enclosing = producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap();
 
     let mut other_session = identity.invocation.clone();
     other_session.idempotency_key = IdempotencyKey::new("other-session".to_string());
     let other = producer
-        .register(ProducerRegistrationRequest {
-            coordinate: StreamRegistrationCoordinate::Root {
-                invocation_id: other_session.clone(),
-                root_kind: StreamRootKind::MethodResult,
-                recursive_value_path: Vec::new(),
+        .register(
+            None,
+            ProducerRegistrationRequest {
+                coordinate: StreamRegistrationCoordinate::Root {
+                    invocation_id: other_session.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                source_invocation: other_session,
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                source_kind: StreamSourceKind::InvocationOutput,
+                session_mapping: None,
+                entity_parent_start_index: None,
             },
-            source_invocation: other_session,
-            component_revision: ComponentRevision::INITIAL,
-            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-            source_kind: StreamSourceKind::InvocationOutput,
-            session_mapping: None,
-            entity_parent_start_index: None,
-        })
+        )
         .await
         .unwrap();
     let nested_with_wrong_parent = registration(
@@ -6745,6 +7064,7 @@ async fn nested_registration_must_match_its_enclosing_stream_coordinate() {
     assert_eq!(
         producer
             .write_items_with_nested(
+                None,
                 enclosing.value.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![1]]),
@@ -6761,7 +7081,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
     let oplog = Arc::new(TestOplog::default());
     let live_producer = producer(oplog.clone(), &identity, None).await;
     let root = live_producer
-        .register(root_registration(&identity))
+        .register(None, root_registration(&identity))
         .await
         .unwrap()
         .value;
@@ -6780,6 +7100,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
         tokio::spawn(async move {
             producer
                 .write_items_with_nested(
+                    None,
                     root.stream_id,
                     0,
                     StreamItemsPayload::Values(vec![vec![1]]),
@@ -6794,6 +7115,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
         tokio::spawn(async move {
             producer
                 .finish_session(
+                    None,
                     session_key,
                     None,
                     Err(b"failed".to_vec()),
@@ -6810,6 +7132,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
     assert!(matches!(
         live_producer
             .write_items(
+                None,
                 root.stream_id,
                 usize::from(write_result.is_ok()) as u64,
                 StreamItemsPayload::Values(vec![vec![2]]),
@@ -6833,6 +7156,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
     assert!(matches!(
         restarted
             .write_items(
+                None,
                 root.stream_id,
                 usize::from(write_result.is_ok()) as u64,
                 StreamItemsPayload::Values(vec![vec![2]]),

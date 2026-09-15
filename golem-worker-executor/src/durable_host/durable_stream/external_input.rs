@@ -19,6 +19,7 @@ impl DurableStreamStore {
     /// Admits one externally sequenced input and commits it before reporting acceptance.
     pub(crate) async fn append_external_input(
         self: &Arc<Self>,
+        context: Option<&StreamWriteContext>,
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         payload: Option<StreamItemsPayload>,
@@ -54,9 +55,16 @@ impl DurableStreamStore {
             ExternalProducerId::Attached => 0,
         });
         let session_key = session_key.clone();
-        self.run_owned(retained_bytes, move |owner| async move {
+        self.run_owned(context, retained_bytes, move |owner, context| async move {
             owner
-                .append_external_input_owned(&session_key, stream_id, payload, close, producer)
+                .append_external_input_owned(
+                    &context,
+                    &session_key,
+                    stream_id,
+                    payload,
+                    close,
+                    producer,
+                )
                 .await
         })
         .await
@@ -64,6 +72,7 @@ impl DurableStreamStore {
 
     async fn append_external_input_owned(
         &self,
+        context: &StreamWriteContext,
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         payload: Option<StreamItemsPayload>,
@@ -209,7 +218,7 @@ impl DurableStreamStore {
         }
         let producer_record = producer.clone();
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        self.begin_durable_effect();
+        context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -326,7 +335,7 @@ impl DurableStreamStore {
             }))
             .await
             .map_err(StreamStoreError::Oplog)?;
-        self.commit().await;
+        self.commit(context).await;
 
         let (events, _) = self
             .apply_committed_write_batch(&mut index, entries)
@@ -335,12 +344,13 @@ impl DurableStreamStore {
             .last()
             .expect("external append committed no result offset")
             .offset;
-        let publication = self.enqueue_events(stream_id, events, false)?;
+        let publication = self.enqueue_events(Some(context), stream_id, events, false)?;
         if close {
             self.record_terminal_streams(1);
         }
         drop(index);
-        self.wait_for_publication(publication).await?;
+        self.wait_for_publication(Some(context), publication)
+            .await?;
         Ok(ExternalAppendOutcome::Accepted(offset))
     }
 }

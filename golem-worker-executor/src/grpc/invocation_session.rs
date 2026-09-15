@@ -2740,7 +2740,7 @@ async fn route_durable_request(
                 None => return Err("durable input item has no payload".to_string()),
             };
             streams
-                .write_input(item.transport_stream_id, item.sequence, payload)
+                .write_input(None, item.transport_stream_id, item.sequence, payload)
                 .await
                 .map(|outcome| {
                     outcome.map(

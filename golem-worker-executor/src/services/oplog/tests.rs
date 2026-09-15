@@ -2610,9 +2610,14 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     )
     .await
     .unwrap();
-    let handle = producer.register(registration.clone()).await.unwrap().value;
+    let handle = producer
+        .register(None, registration.clone())
+        .await
+        .unwrap()
+        .value;
     producer
         .write_items(
+            None,
             handle.stream_id,
             0,
             StreamItemsPayload::Values(vec![vec![42]]),
@@ -2620,7 +2625,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         .await
         .unwrap();
     producer
-        .end(handle.stream_id, 1, StreamEndResult::Ok)
+        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     drop(producer);
@@ -2656,10 +2661,17 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     )
     .await
     .unwrap();
-    assert!(restarted.register(registration).await.unwrap().replayed);
+    assert!(
+        restarted
+            .register(None, registration)
+            .await
+            .unwrap()
+            .replayed
+    );
     assert!(
         restarted
             .write_items(
+                None,
                 handle.stream_id,
                 0,
                 StreamItemsPayload::Values(vec![vec![42]]),
@@ -2670,7 +2682,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     );
     assert!(
         restarted
-            .end(handle.stream_id, 1, StreamEndResult::Ok)
+            .end(None, handle.stream_id, 1, StreamEndResult::Ok)
             .await
             .unwrap()
             .replayed

@@ -137,13 +137,17 @@ producer-less empty close remains idempotent. No resident dedupe state or new re
 
 Each resident `DurableStreamStore` retains one local mutation task and request channel; this is the
 existing store, not a new actor or wrapper. It runs durable mutation bodies serially; nested
-same-store calls run inline. Dropping a caller's reply receiver does not cancel an accepted
+same-store calls run inline only when passed the active `StreamWriteContext`. A root write (`None`)
+inside a queued body would wait behind itself. Each nested context tracks unfinished effects
+independently, so a successful sibling cannot hide another write's failure. Contexts must belong
+to the receiving store and cannot be reused after their operation completes.
+Dropping a caller's reply receiver does not cancel an accepted
 mutation. Retirement closes the channel, lets an already-running body drain, and rejects queued
 bodies before they start.
 
 The same task polls completion work separately from mutation bodies: commit callback tails,
 remote cancellations, and live publication waits cannot prevent the next mutation from running.
-These completions carry no mutation task-local scope, so a routed cancellation back to the same
+These completions receive no write context, so a routed cancellation back to the same
 producer enters the queue normally. Durable activity lasts through callback/status-fold completion,
 but excludes remote RPC and live fanout. Count/byte admission still bounds outstanding work;
 the separate lifecycle lane prevents blocked data delivery from starving cancellation. Metadata

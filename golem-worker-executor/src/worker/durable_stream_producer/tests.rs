@@ -200,7 +200,7 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
         })
         .await
         .unwrap();
-    let mut append = Box::pin(producer.register(request));
+    let mut append = Box::pin(producer.register(None, request));
     assert!(futures::poll!(append.as_mut()).is_pending());
     reached.notified().await;
     drop(append);
