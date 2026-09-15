@@ -1160,8 +1160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     invocation_context: invocation_context_stack.clone(),
                     principal,
                 })
-                .await
-                .expect("Failed enqueuing initial agent invocations to worker");
+                .await?;
         };
         if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
             && worker.has_durable_stream_history()
