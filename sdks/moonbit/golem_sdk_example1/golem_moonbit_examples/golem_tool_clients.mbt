@@ -117,11 +117,7 @@ pub fn CanonicalGrepClient::canonical_grep(
       __golem_name,
       __golem_value,
     ) {
-      Some(
-        CanonicalGrepError::from_error_payload_value(
-          __golem_name, __golem_value,
-        ),
-      )
+      @tool.decode_named_tool_error(__golem_name, __golem_value)
     }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_invocation) =>

@@ -40,11 +40,11 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn to_error_payload_v
 ) {
   match self {
     InvalidPattern(reason~) =>
-      Ok(("InvalidPattern", @schema.try_into_typed_schema_value(reason))) catch {
+      Ok(("invalid-pattern", @schema.try_into_typed_schema_value(reason))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     NoMatch =>
-      Ok(("NoMatch", @schema.try_into_typed_schema_value(()))) catch {
+      Ok(("no-match", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -57,7 +57,7 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload
   __golem_value,
 ) {
   match __golem_name {
-    "InvalidPattern" => {
+    "invalid-pattern" => {
       let __golem_decoded : String? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -66,9 +66,9 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload
       if __golem_decoded is Some(__golem_payload) {
         return Ok(InvalidPattern(reason=__golem_payload))
       }
-      Err("remote tool error payload is malformed for case `InvalidPattern`")
+      Err("remote tool error payload is malformed for case `invalid-pattern`")
     }
-    "NoMatch" => {
+    "no-match" => {
       let __golem_decoded : Unit? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -77,7 +77,7 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload
       if __golem_decoded is Some(__golem_payload) {
         return Ok(NoMatch)
       }
-      Err("remote tool error payload is malformed for case `NoMatch`")
+      Err("remote tool error payload is malformed for case `no-match`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -133,15 +133,15 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn to_error_payload
 ) {
   match self {
     NothingStaged =>
-      Ok(("NothingStaged", @schema.try_into_typed_schema_value(()))) catch {
+      Ok(("nothing-staged", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     DirtyMerge =>
-      Ok(("DirtyMerge", @schema.try_into_typed_schema_value(()))) catch {
+      Ok(("dirty-merge", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     BadAuthorFormat(author~) =>
-      Ok(("BadAuthorFormat", @schema.try_into_typed_schema_value(author))) catch {
+      Ok(("bad-author-format", @schema.try_into_typed_schema_value(author))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -154,7 +154,7 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
   __golem_value,
 ) {
   match __golem_name {
-    "NothingStaged" => {
+    "nothing-staged" => {
       let __golem_decoded : Unit? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -163,9 +163,9 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
       if __golem_decoded is Some(__golem_payload) {
         return Ok(NothingStaged)
       }
-      Err("remote tool error payload is malformed for case `NothingStaged`")
+      Err("remote tool error payload is malformed for case `nothing-staged`")
     }
-    "DirtyMerge" => {
+    "dirty-merge" => {
       let __golem_decoded : Unit? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -174,9 +174,9 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
       if __golem_decoded is Some(__golem_payload) {
         return Ok(DirtyMerge)
       }
-      Err("remote tool error payload is malformed for case `DirtyMerge`")
+      Err("remote tool error payload is malformed for case `dirty-merge`")
     }
-    "BadAuthorFormat" => {
+    "bad-author-format" => {
       let __golem_decoded : String? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -185,7 +185,7 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
       if __golem_decoded is Some(__golem_payload) {
         return Ok(BadAuthorFormat(author=__golem_payload))
       }
-      Err("remote tool error payload is malformed for case `BadAuthorFormat`")
+      Err("remote tool error payload is malformed for case `bad-author-format`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -230,11 +230,11 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn to_error_payload_va
 ) {
   match self {
     BadRevision =>
-      Ok(("BadRevision", @schema.try_into_typed_schema_value(()))) catch {
+      Ok(("bad-revision", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     NotARepository =>
-      Ok(("NotARepository", @schema.try_into_typed_schema_value(()))) catch {
+      Ok(("not-a-repository", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -247,7 +247,7 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_
   __golem_value,
 ) {
   match __golem_name {
-    "BadRevision" => {
+    "bad-revision" => {
       let __golem_decoded : Unit? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -256,9 +256,9 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_
       if __golem_decoded is Some(__golem_payload) {
         return Ok(BadRevision)
       }
-      Err("remote tool error payload is malformed for case `BadRevision`")
+      Err("remote tool error payload is malformed for case `bad-revision`")
     }
-    "NotARepository" => {
+    "not-a-repository" => {
       let __golem_decoded : Unit? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -267,7 +267,7 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_
       if __golem_decoded is Some(__golem_payload) {
         return Ok(NotARepository)
       }
-      Err("remote tool error payload is malformed for case `NotARepository`")
+      Err("remote tool error payload is malformed for case `not-a-repository`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -309,7 +309,7 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn to_error_payload
 ) {
   match self {
     NoSuchRemote(name~) =>
-      Ok(("NoSuchRemote", @schema.try_into_typed_schema_value(name))) catch {
+      Ok(("no-such-remote", @schema.try_into_typed_schema_value(name))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -322,7 +322,7 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn from_error_paylo
   __golem_value,
 ) {
   match __golem_name {
-    "NoSuchRemote" => {
+    "no-such-remote" => {
       let __golem_decoded : String? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -331,7 +331,7 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn from_error_paylo
       if __golem_decoded is Some(__golem_payload) {
         return Ok(NoSuchRemote(name=__golem_payload))
       }
-      Err("remote tool error payload is malformed for case `NoSuchRemote`")
+      Err("remote tool error payload is malformed for case `no-such-remote`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -373,7 +373,7 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn to_error_payload
 ) {
   match self {
     Failed(__golem_payload) =>
-      Ok(("Failed", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+      Ok(("failed", @schema.try_into_typed_schema_value(__golem_payload))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -386,7 +386,7 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn from_error_paylo
   __golem_value,
 ) {
   match __golem_name {
-    "Failed" => {
+    "failed" => {
       let __golem_decoded : String? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -395,7 +395,7 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn from_error_paylo
       if __golem_decoded is Some(__golem_payload) {
         return Ok(Failed(__golem_payload))
       }
-      Err("remote tool error payload is malformed for case `Failed`")
+      Err("remote tool error payload is malformed for case `failed`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -437,7 +437,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn to_error_payload_
 ) {
   match self {
     NoSuchStash(name~) =>
-      Ok(("NoSuchStash", @schema.try_into_typed_schema_value(name))) catch {
+      Ok(("no-such-stash", @schema.try_into_typed_schema_value(name))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -450,7 +450,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn from_error_payloa
   __golem_value,
 ) {
   match __golem_name {
-    "NoSuchStash" => {
+    "no-such-stash" => {
       let __golem_decoded : String? = Some(
         @schema.from_value_as(__golem_value.value),
       ) catch {
@@ -459,7 +459,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn from_error_payloa
       if __golem_decoded is Some(__golem_payload) {
         return Ok(NoSuchStash(name=__golem_payload))
       }
-      Err("remote tool error payload is malformed for case `NoSuchStash`")
+      Err("remote tool error payload is malformed for case `no-such-stash`")
     }
     _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
@@ -1290,6 +1290,15 @@ async fn __golem_tool_invoke_CanonicalGrep(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let case_sensitive : Bool = @tool.decode_canonical_field(
         __golem_decoded, "case-sensitive", "tool canonical-grep command replace",
       ) catch {
@@ -2112,6 +2121,15 @@ async fn __golem_tool_invoke_CanonicalGit(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let verbose : UInt = @tool.decode_canonical_field(
         __golem_decoded, "verbose", "tool canonical-git command commit",
       ) catch {
@@ -2239,6 +2257,15 @@ async fn __golem_tool_invoke_CanonicalGit(
           __golem_stdin,
           @toolCommon.ToolError::InvalidInput(
             "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
           ),
         )
       }
@@ -2775,6 +2802,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let verbose : UInt = @tool.decode_canonical_field(
         __golem_decoded, "verbose", "tool remote command add",
       ) catch {
@@ -2870,6 +2906,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let name : String = @tool.decode_canonical_field(
         __golem_decoded, "name", "tool remote command remove",
       ) catch {
@@ -2913,6 +2958,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           __golem_stdin,
           @toolCommon.ToolError::InvalidInput(
             "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
           ),
         )
       }
@@ -3300,6 +3354,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let verbose : UInt = @tool.decode_canonical_field(
         __golem_decoded, "verbose", "tool stash command stash",
       ) catch {
@@ -3362,6 +3425,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
       let name : String? = @tool.decode_canonical_field(
         __golem_decoded, "name", "tool stash command pop",
       ) catch {
@@ -3413,6 +3485,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           __golem_stdin,
           @toolCommon.ToolError::InvalidInput(
             "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
           ),
         )
       }
@@ -3624,6 +3705,15 @@ async fn __golem_tool_invoke_CanonicalBigBound(
           __golem_stdin,
           @toolCommon.ToolError::InvalidInput(
             "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
           ),
         )
       }

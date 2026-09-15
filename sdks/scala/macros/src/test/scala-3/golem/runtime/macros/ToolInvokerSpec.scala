@@ -75,6 +75,37 @@ object ToolInvokerSpec extends ZIOSpecDefault {
     override def cancel(): Future[Unit] = Future.successful(())
   }
 
+  @toolDefinition(version = "1.0.0")
+  trait Streaming {
+    def writeUnit(payload: String, stdout: ToolOutputStream): Future[Unit]
+    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, principal: Principal): Future[String]
+    def failWithOutput(message: String, stdout: ToolOutputStream): Future[Either[EchoError, String]]
+  }
+
+  final class StreamingImpl extends Streaming {
+    private implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic
+
+    def writeUnit(payload: String, stdout: ToolOutputStream): Future[Unit] =
+      stdout.write(payload.getBytes("UTF-8")).flatMap {
+        case Right(_)    => Future.successful(())
+        case Left(error) => Future.failed(new IllegalStateException(s"write failed: $error"))
+      }
+
+    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, principal: Principal): Future[String] =
+      writeUnit(stdin.asInstanceOf[FakeStdin].content, stdout).map(_ => s"copied/$principal")
+
+    def failWithOutput(message: String, stdout: ToolOutputStream): Future[Either[EchoError, String]] =
+      writeUnit(s"diagnostic:$message", stdout).map(_ => Left(EchoError.BadInput(message)))
+  }
+
+  private final class CapturingStdout extends ToolOutputStream {
+    var bytes                                                                      = Vector.empty[Byte]
+    override def write(chunk: Array[Byte]): Future[Either[StreamWriteError, Unit]] = {
+      bytes ++= chunk
+      Future.successful(Right(()))
+    }
+  }
+
   @toolDefinition(version = "0.1.0")
   trait Remote {
     def add(name: String, url: String): String
@@ -94,9 +125,9 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   }
 
   private final class FakeEnv(
-    tools: Map[String, (ExtendedToolType, ToolInvokeHandler)] = Map.empty
+    tools: Map[String, (ExtendedToolType, ToolInvokeHandler)] = Map.empty,
+    val stdout: Option[ToolOutputStream] = None
   ) extends ToolInvokeEnv {
-    val stdout: Option[ToolOutputStream]                            = None
     def invokerFor(toolName: String): Option[ToolInvokeHandler]     = tools.get(toolName).map(_._2)
     def extendedToolFor(toolName: String): Option[ExtendedToolType] = tools.get(toolName).map(_._1)
   }
@@ -133,6 +164,40 @@ object ToolInvokerSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolInvokerSpec")(
+      test("generated stdout injection preserves unit, structured, custom errors, stdin and principal") {
+        val handle  = ToolImplementationMacro.handle[Streaming, StreamingImpl]
+        val tool    = handle.descriptor(new ToolBuildCtx).toOption.get
+        val out     = new CapturingStdout
+        val handler = ToolInvokerRuntime.handler(tool, handle, new FakeEnv(stdout = Some(out)))
+        val unit    = outcome(
+          handler.invoke(
+            List("write-unit"),
+            input(tool, List("write-unit"), SchemaValue.StringValue("α")),
+            None,
+            anonymous
+          )
+        )
+        val copied =
+          outcome(handler.invoke(List("copy"), input(tool, List("copy")), Some(FakeStdin("stdin")), anonymous))
+        val failed = outcome(
+          handler.invoke(
+            List("fail-with-output"),
+            input(tool, List("fail-with-output"), SchemaValue.StringValue("bad")),
+            None,
+            anonymous
+          )
+        )
+        val body = tool.commands(tool.commandIndexByPath(List("copy")).get).body.get
+        assertTrue(
+          unit == Right(ToolInvokeResult(None, Some(out))),
+          copied == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("copied/Anonymous")), Some(out))),
+          failed == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("bad"))),
+          new String(out.bytes.toArray, "UTF-8") == "αstdindiagnostic:bad",
+          body.stdout.exists(_.required),
+          body.stdin.exists(_.required),
+          tool.canonicalInputFields(tool.commandIndexByPath(List("copy")).get).isEmpty
+        )
+      },
       test("root command invocation encodes the successful result") {
         val result = outcome(
           echoHandler.invoke(Nil, input(echoTool, Nil, SchemaValue.StringValue("hi")), None, anonymous)

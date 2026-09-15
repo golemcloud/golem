@@ -159,7 +159,7 @@ object ToolParamDecoder {
   /** Auto-injected from the invocation stdin stream. */
   case object StdinParam extends ToolParamDecoder
 
-  /** Auto-injected process stdout handle (also returned in the result). */
+  /** Auto-injected invocation-scoped stdout writer. */
   case object StdoutParam extends ToolParamDecoder
 }
 
