@@ -79,8 +79,14 @@ pub(super) enum PathState {
     /// declaration and, where that declaration is read-only, without write permission. Only a path
     /// that the old declarations have can hold Golem's file.
     Golem,
-    /// Another object is at the path, or an object above the path is not a directory.
+    /// Another object is at the path.
     Other,
+    /// An object above the path is not a directory.
+    Blocked,
+    /// A directory is at a path that the old declarations do not have and the new declarations
+    /// have. Each object under the directory is Golem's file at a path that the new declarations do
+    /// not have, or a directory that holds at least one object.
+    DirectoryOfDroppedFiles,
 }
 
 /// One change of an install.
@@ -95,12 +101,17 @@ pub(super) enum Step<'a> {
     },
     /// Removes Golem's file from the path.
     Unlink { path: &'a Path },
+    /// Removes the directory at the path after the unlinks of the install make it empty. A seed
+    /// then puts a file at the path or above it.
+    RemoveDirectory { path: &'a Path },
 }
 
 impl<'a> Step<'a> {
     fn path(&self) -> &'a Path {
         match self {
-            Self::Seed { path, .. } | Self::Unlink { path } => path,
+            Self::Seed { path, .. } | Self::Unlink { path } | Self::RemoveDirectory { path } => {
+                path
+            }
         }
     }
 }
@@ -122,31 +133,83 @@ impl<'a> Step<'a> {
 /// 2. A path that holds nothing, and that `new` does not declare, stays as it is.
 /// 3. Anything else at the path is a conflict.
 ///
+/// The rules read the tree as the removals of the install leave it. Golem's file that the install
+/// removes does not block a path under it, so that path holds nothing. A directory of Golem's
+/// files that the install removes also holds nothing: the install removes that directory, and the
+/// directories in it, after the files and before the seeds.
+///
 /// The result gives the steps in path order, or the first path in path order that has a conflict.
 pub(super) fn plan<'a>(
     old: &'a Declarations,
     new: &'a Declarations,
     state: impl Fn(&Path) -> PathState,
 ) -> Result<Box<[Step<'a>]>, &'a Path> {
-    old.keys()
+    let paths = old
+        .keys()
         .chain(new.keys())
         .map(AsRef::as_ref)
-        .collect::<BTreeSet<&Path>>()
+        .collect::<BTreeSet<&Path>>();
+    let unlinked = paths
+        .iter()
+        .copied()
+        .filter(|path| rule(old.get(*path), new.get(*path), state(path)) == Decision::Unlink)
+        .collect::<BTreeSet<&Path>>();
+    paths
         .into_iter()
         .try_fold(Vec::new(), |mut steps, path| {
-            match rule(old.get(path), new.get(path), state(path)) {
+            let observed = state(path);
+            // Only Golem's file can be unlinked, so an unlinked ancestor is the object that blocks.
+            let resolved = match observed {
+                PathState::Blocked
+                    if path
+                        .ancestors()
+                        .skip(1)
+                        .any(|ancestor| unlinked.contains(ancestor)) =>
+                {
+                    PathState::Absent
+                }
+                PathState::Blocked => PathState::Other,
+                PathState::DirectoryOfDroppedFiles => PathState::Absent,
+                observed => observed,
+            };
+            match rule(old.get(path), new.get(path), resolved) {
                 Decision::Keep => {}
-                Decision::Seed(file, placement) => steps.push(Step::Seed {
-                    path,
-                    file,
-                    placement,
-                }),
+                Decision::Seed(file, placement) => {
+                    if observed == PathState::DirectoryOfDroppedFiles {
+                        steps.extend(
+                            emptied_directories(path, &unlinked)
+                                .into_iter()
+                                .map(|path| Step::RemoveDirectory { path }),
+                        );
+                    }
+                    steps.push(Step::Seed {
+                        path,
+                        file,
+                        placement,
+                    });
+                }
                 Decision::Unlink => steps.push(Step::Unlink { path }),
                 Decision::Conflict => return Err(path),
             }
             Ok(steps)
         })
         .map(Vec::into_boxed_slice)
+}
+
+/// Gives the directories that an install removes before it seeds a file at `path`: the directory at
+/// `path`, and each directory between it and a path in `unlinked` under it.
+fn emptied_directories<'a>(path: &'a Path, unlinked: &BTreeSet<&'a Path>) -> BTreeSet<&'a Path> {
+    unlinked
+        .iter()
+        .copied()
+        .filter(|unlinked| unlinked.starts_with(path) && *unlinked != path)
+        .flat_map(|unlinked| {
+            unlinked
+                .ancestors()
+                .skip(1)
+                .take_while(move |ancestor| ancestor.starts_with(path))
+        })
+        .collect()
 }
 
 /// What the rule of [`plan`] decides for one path.
@@ -210,32 +273,44 @@ pub(super) async fn install<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// Makes the changes of `steps`, the removals first, and gives the read-only files that it seeded.
+/// Makes the changes of `steps`: the unlinks, then the removals of directories with the deepest
+/// directory first, then the seeds. Gives the read-only files that it seeded.
 async fn apply<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
     sources: &InitialFileSources,
     steps: &[Step<'_>],
 ) -> Result<Vec<(Box<Path>, InstalledFile)>, Error> {
-    let (unlinks, seeds) = steps.iter().fold(
-        (Vec::new(), Vec::new()),
-        |(mut unlinks, mut seeds), step| {
+    let (unlinks, mut directories, seeds) = steps.iter().fold(
+        (Vec::new(), Vec::new(), Vec::new()),
+        |(mut unlinks, mut directories, mut seeds), step| {
             match *step {
                 Step::Unlink { path } => unlinks.push(path),
+                Step::RemoveDirectory { path } => directories.push(path),
                 Step::Seed {
                     path,
                     file,
                     placement,
                 } => seeds.push((path, file, placement)),
             }
-            (unlinks, seeds)
+            (unlinks, directories, seeds)
         },
     );
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     futures::stream::iter(unlinks)
         .map(Ok)
         .try_for_each(|path| async move {
             sandbox
                 .unlink_file(SandboxPath::at_root(path))
+                .await
+                .map_err(Error::Sandbox)
+        })
+        .await?;
+    futures::stream::iter(directories)
+        .map(Ok)
+        .try_for_each(|path| async move {
+            sandbox
+                .remove_directory(SandboxPath::at_root(path))
                 .await
                 .map_err(Error::Sandbox)
         })
@@ -370,7 +445,7 @@ impl InitialFileSources {
             .iter()
             .filter_map(|step| match *step {
                 Step::Seed { path, file, .. } => Some((path, file)),
-                Step::Unlink { .. } => None,
+                Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
             })
             .collect::<Vec<(&Path, &InitialAgentFile)>>();
         futures::stream::iter(seeded)
@@ -447,6 +522,11 @@ impl PreparedInitialFiles {
 /// declares, the function checks whether the path holds Golem's file of that declaration. A path
 /// that `old` does not declare never holds Golem's file. The function reads no path whose
 /// declarations in `old` and `new` are equal.
+///
+/// After all the paths, the function reads each directory that is at a path that `old` does not
+/// declare. Such a path is a path that `new` declares. The read of one directory stops at the first
+/// object that is not Golem's file at a path that `new` does not declare, and at the first
+/// directory that holds nothing.
 pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     old: &Declarations,
@@ -459,14 +539,15 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
         .filter(|path| old.get(*path) != new.get(*path))
         .map(AsRef::as_ref)
         .collect::<BTreeSet<&Path>>();
-    futures::stream::iter(changed)
+    let (_, states, directories) = futures::stream::iter(changed)
         .map(Ok)
         .try_fold(
-            (PathReader::default(), HashMap::new()),
-            |(reader, mut states), path| async move {
+            (PathReader::default(), HashMap::new(), Vec::new()),
+            |(reader, mut states, mut directories), path| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
                 let state = match (lookup, old.get(path)) {
                     (PathLookup::Absent, _) => PathState::Absent,
+                    (PathLookup::Blocked, _) => PathState::Blocked,
                     (PathLookup::Found(attributes), Some(declared)) => {
                         if holds_golem_file(
                             sandbox,
@@ -482,14 +563,114 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
                             PathState::Other
                         }
                     }
-                    (PathLookup::Found(_) | PathLookup::Blocked, _) => PathState::Other,
+                    (PathLookup::Found(attributes), None) => {
+                        if attributes.kind == SandboxObjectKind::Directory {
+                            directories.push(path);
+                        }
+                        PathState::Other
+                    }
                 };
                 states.insert(Box::from(path), state);
-                Ok((reader, states))
+                Ok((reader, states, directories))
             },
         )
+        .await?;
+    futures::stream::iter(directories)
+        .map(Ok)
+        .try_fold(states, |mut states, path| async move {
+            if holds_only_dropped_files(sandbox, path, old, new, &states).await? {
+                states.insert(Box::from(path), PathState::DirectoryOfDroppedFiles);
+            }
+            Ok(states)
+        })
         .await
-        .map(|(_, states)| states)
+}
+
+/// Tells whether the directory at `path` holds at least one object, and each object under it is
+/// Golem's file at a path that `old` declares and `new` does not declare, or a directory that holds
+/// at least one object. `states` gives what is at the paths whose declarations differ.
+///
+/// The function reads each directory under `path` one time. It stops after the first directory
+/// that holds nothing or an object that does not agree with these conditions.
+async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    old: &Declarations,
+    new: &Declarations,
+    states: &HashMap<Box<Path>, PathState>,
+) -> Result<bool, FilesystemStorageError> {
+    futures::stream::try_unfold(vec![Box::<Path>::from(path)], |mut pending| async move {
+        let Some(directory) = pending.pop() else {
+            return Ok(None);
+        };
+        let entries = directory_entries(sandbox, &directory).await?;
+        let agrees = !entries.is_empty()
+            && entries.iter().all(|entry| {
+                entry.kind == SandboxObjectKind::Directory
+                    || dropped_golem_file(&directory.join(&entry.name), old, new, states)
+            });
+        // A directory that does not agree ends the read, so no other directory is read.
+        let pending = if agrees {
+            pending
+                .into_iter()
+                .chain(
+                    entries
+                        .into_iter()
+                        .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                        .map(|entry| directory.join(entry.name).into_boxed_path()),
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok::<_, FilesystemStorageError>(Some((agrees, pending)))
+    })
+    .try_fold(true, |holds, agrees| {
+        std::future::ready(Ok(holds && agrees))
+    })
+    .await
+}
+
+/// Tells whether `object` is Golem's file at a path that `old` declares and `new` does not declare.
+/// `states` gives what is at the paths whose declarations differ.
+fn dropped_golem_file(
+    object: &Path,
+    old: &Declarations,
+    new: &Declarations,
+    states: &HashMap<Box<Path>, PathState>,
+) -> bool {
+    old.contains_key(object)
+        && !new.contains_key(object)
+        && states.get(object) == Some(&PathState::Golem)
+}
+
+/// Lists the entries of the directory at the root-relative `path`, without following a final
+/// symlink.
+async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<Vec<crate::sandbox_filesystem::SandboxDirectoryEntry>, FilesystemStorageError> {
+    let node = sandbox
+        .open(
+            SandboxPath::at_root(path),
+            SandboxOpenOptions::Existing {
+                expected: SandboxObjectKind::Directory,
+                access: SandboxAccessMode::Read,
+                follow: SandboxFollow::No,
+            },
+        )
+        .await?
+        .into_node();
+    let entries = match &node {
+        SandboxNode::Directory(directory) => sandbox.read_directory(directory).await,
+        SandboxNode::File(_) => Err(FilesystemStorageError::verification(
+            "list the entries of an initial-file directory at",
+            path,
+        )),
+    };
+    let closed = sandbox.close(node).await;
+    let entries = entries?;
+    closed.map(|()| entries)
 }
 
 /// Tells whether the object at `path`, which `attributes` describe, is Golem's file of the

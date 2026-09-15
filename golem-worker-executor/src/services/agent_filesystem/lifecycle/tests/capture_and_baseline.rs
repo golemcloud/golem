@@ -1435,66 +1435,58 @@ async fn a_left_out_file_above_a_new_declaration_gives_automatic_and_manual_upda
         !captured.directory().join("tree").join("config").exists(),
         "the capture must leave out the bytes of config"
     );
-    let conflict = format!("{CONFLICT_ERROR_START}config/app.toml");
-
     futures::stream::iter(apps)
         .for_each(|(name, app)| {
             let agents = &agents;
             let config = &config;
             let captured = &captured;
-            let conflict = &conflict;
             async move {
                 let automatic_agent = agents.agent(&format!("automatic-{name}"));
                 let automatic = agents
                     .start(&automatic_agent, config, NO_RESTORE)
                     .await
                     .unwrap();
-                let automatic_error = update_initial_files(
+                let updated = update_initial_files(
                     &resident_generation_handle(&automatic),
                     Arc::clone(&agents.store.loader),
                     agents.store.environment_id,
                     vec![app.clone()],
                 )
                 .unwrap()
-                .await
-                .unwrap_err();
-                let manual_error = match agents
+                .await;
+                assert!(updated.is_ok(), "{name}: {updated:?}");
+                let manual_agent = agents.agent(&format!("manual-{name}"));
+                let manual = match agents
                     .start(
-                        &agents.agent(&format!("manual-{name}")),
+                        &manual_agent,
                         std::slice::from_ref(&app),
                         Some(copying_restore(captured)),
                     )
                     .await
                 {
-                    Ok(manual) => {
-                        delete(seal(manual)).await.unwrap();
-                        panic!(
-                            "{name}: the manual update must fail as the automatic update fails: \
-                             {automatic_error}"
-                        );
-                    }
-                    Err(error) => error,
+                    Ok(manual) => manual,
+                    Err(error) => panic!(
+                        "{name}: the manual update must start as the automatic update succeeds: \
+                         {error}"
+                    ),
                 };
 
-                assert!(
-                    automatic_error.to_string().contains(conflict),
-                    "{name}: {automatic_error}"
-                );
-                assert!(
-                    manual_error.to_string().contains(conflict),
-                    "{name}: {manual_error}"
-                );
                 let tree = read_tree(&agents.root(&automatic_agent));
+                assert_eq!(read_tree(&agents.root(&manual_agent)), tree, "{name}");
+                let writable = app.permissions == AgentFilePermissions::ReadWrite;
                 assert!(
-                    tree.nodes.len() == 1
+                    tree.nodes.len() == 2
+                        && matches!(tree.nodes.get("config"), Some(Node::Directory { .. }))
                         && matches!(
-                            tree.nodes.get("config"),
+                            tree.nodes.get("config/app.toml"),
                             Some(Node::File { mode, content })
-                                if mode & 0o222 == 0 && content == b"config"
+                                if (mode & 0o200 != 0) == writable && content == b"app"
                         ),
-                    "{name}: the failed update must change nothing: {tree:?}"
+                    "{name}: the update must remove config and put config/app.toml in place: \
+                     {tree:?}"
                 );
                 delete(seal(automatic)).await.unwrap();
+                delete(seal(manual)).await.unwrap();
             }
         })
         .await;
@@ -1915,15 +1907,18 @@ fn revised_files(
         })
 }
 
-/// Generates one or two steps of a history whose first declarations are `initial`: a step of
-/// [`history_step`], an update to a revision of `initial`, or a removal of a file followed by a new
-/// file, a new directory or a new symlink at the same place.
+/// Generates a few steps of a history whose first declarations are `initial`: a step of
+/// [`history_step`], an update to a revision of `initial`, a removal of a file followed by a new
+/// file, a new directory or a new symlink at the same place, or a write through a new symlink to
+/// the directory place `d`, which no file step names.
 fn history_steps(
     initial: Box<[DeclaredFile]>,
 ) -> impl proptest::strategy::Strategy<Value = Vec<HistoryStep>> {
     use proptest::strategy::Strategy as _;
     // The places that are file places and also places where a step makes a directory.
     let file_and_directory_places: &'static [&'static str] = &["h", "d/h", "e/h"];
+    // The file places at the root, where a symlink with the target `d` names the place `d`.
+    let root_file_places: &'static [&'static str] = &["f", "g", "h"];
     let position = |places: &[&str], place: &str| {
         places
             .iter()
@@ -1955,6 +1950,19 @@ fn history_steps(
                 HistoryStep::Symlink { file, target },
             ]
         }),
+        1 => (proptest::sample::select(root_file_places), 0..CONTENTS.len()).prop_map(
+            move |(place, content)| {
+                let file = position(&FILE_PLACES, place);
+                vec![
+                    HistoryStep::RemoveFile { file },
+                    HistoryStep::Symlink {
+                        file,
+                        target: position(&SYMLINK_TARGETS, "d"),
+                    },
+                    HistoryStep::Write { file, content },
+                ]
+            }
+        ),
     ]
 }
 
@@ -2514,15 +2522,6 @@ impl ReferenceModel {
         self.paths.insert(path.to_string(), self.objects.len() - 1);
     }
 
-    /// Tells whether an object above `path` is not a directory. An install then does not count the
-    /// path as empty, because an install never removes data that invocations made.
-    fn blocked(&self, path: &str) -> bool {
-        Self::ancestors(path).iter().any(|ancestor| {
-            self.object_at(ancestor)
-                .is_some_and(|object| *object != ModelObject::Directory)
-        })
-    }
-
     fn holds_children(&self, directory: &str) -> bool {
         let prefix = format!("{directory}/");
         self.paths.keys().any(|path| path.starts_with(&prefix))
@@ -2816,9 +2815,15 @@ impl ReferenceModel {
     /// declarations left there: Golem's file where they declare the path, and nothing where they do
     /// not. A path that holds what the install expects gets what the new declarations give there:
     /// the new file, or nothing. A path that holds nothing, and that the new declarations do not
-    /// have, stays as it is. Anything else is a conflict. Each decision reads the tree as it is
-    /// before the install. A conflict fails the whole install, changes nothing, and names the first
-    /// conflicting path.
+    /// have, stays as it is. Anything else is a conflict. A conflict fails the whole install,
+    /// changes nothing, and names the first conflicting path.
+    ///
+    /// Each decision reads the tree as the removals of the install leave it. The install removes
+    /// Golem's file where the new declarations do not have its path. So such a file above a path
+    /// does not block the path. A directory at a path that the new declarations have holds nothing
+    /// when every file under it is such a file and every directory in it holds at least one object.
+    /// The install removes the files first, then such directories, then puts the new files in
+    /// place.
     fn install_declarations(
         &mut self,
         component: BTreeMap<String, ModelDeclaration>,
@@ -2834,14 +2839,26 @@ impl ReferenceModel {
         };
         let old = together(&self.component, &self.provisioned);
         let new = together(&component, &provisioned);
-        let decisions = old
+        let changed = old
             .keys()
             .chain(new.keys())
             .filter(|path| old.get(*path) != new.get(*path))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .cloned()
+            .collect::<BTreeSet<String>>();
+        let removed = changed
+            .iter()
+            .filter(|path| {
+                !new.contains_key(*path)
+                    && old
+                        .get(*path)
+                        .is_some_and(|previous| self.holds_golem_file(path, Some(previous)))
+            })
+            .cloned()
+            .collect::<BTreeSet<String>>();
+        let decisions = changed
+            .iter()
             .map(|path| {
-                let empty = !self.blocked(path) && !self.paths.contains_key(path);
+                let empty = self.empty_after_removals(path, new.contains_key(path), &removed);
                 let expected = match old.get(path) {
                     Some(previous) => self.holds_golem_file(path, Some(previous)),
                     None => empty,
@@ -2857,13 +2874,58 @@ impl ReferenceModel {
         match decisions {
             Err(path) => ResultClass::Conflict(path),
             Ok(decisions) => {
-                decisions
+                let (removals, seeds) =
+                    decisions
+                        .into_iter()
+                        .partition::<Vec<_>, _>(|(_, decision)| {
+                            !matches!(decision, ModelInstall::Seed(_))
+                        });
+                removals
                     .into_iter()
+                    .chain(seeds)
                     .for_each(|(path, decision)| self.install_path(&path, decision));
                 self.component = component;
                 self.provisioned = provisioned;
                 ResultClass::Ok
             }
+        }
+    }
+
+    /// Tells whether `path` holds nothing after the install removes the files at the paths
+    /// `removed`. `declared` tells whether the new declarations have the path.
+    ///
+    /// An object above the path that is not a directory blocks the path, unless it is one of the
+    /// removed files. A directory at the path blocks the path, unless the new declarations have the
+    /// path, every object under the directory that is not a directory is a removed file, and every
+    /// directory there holds at least one object.
+    fn empty_after_removals(&self, path: &str, declared: bool, removed: &BTreeSet<String>) -> bool {
+        let blocker = Self::ancestors(path).into_iter().find(|ancestor| {
+            self.object_at(ancestor)
+                .is_some_and(|object| *object != ModelObject::Directory)
+        });
+        match (blocker, self.object_at(path)) {
+            (Some(blocker), _) => removed.contains(&blocker),
+            (None, None) => true,
+            (None, Some(ModelObject::Directory)) if declared => {
+                let prefix = format!("{path}/");
+                let under = self
+                    .paths
+                    .iter()
+                    .filter(|(other, _)| other.starts_with(&prefix))
+                    .map(|(other, id)| (other.as_str(), &self.objects[*id]))
+                    .collect::<Vec<_>>();
+                under.iter().all(|(other, object)| {
+                    **object == ModelObject::Directory || removed.contains(*other)
+                }) && std::iter::once(path)
+                    .chain(
+                        under
+                            .iter()
+                            .filter(|(_, object)| **object == ModelObject::Directory)
+                            .map(|(other, _)| *other),
+                    )
+                    .all(|directory| self.holds_children(directory))
+            }
+            (None, Some(_)) => false,
         }
     }
 
@@ -2874,6 +2936,10 @@ impl ReferenceModel {
                 self.paths.remove(path);
             }
             ModelInstall::Seed(declared) => {
+                // After the removals, a directory at the path holds only directories.
+                let prefix = format!("{path}/");
+                self.paths
+                    .retain(|other, _| other.as_str() != path && !other.starts_with(&prefix));
                 let missing = Self::ancestors(path)
                     .into_iter()
                     .filter(|ancestor| !self.paths.contains_key(ancestor))
