@@ -32,6 +32,7 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod filesystem_inspection;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
@@ -107,6 +108,7 @@ tag_suite!(retry_policies, group2);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
+tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
 
 tag_suite!(websocket, group4);

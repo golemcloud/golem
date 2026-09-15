@@ -189,19 +189,42 @@ mod tests {
     #[test]
     #[timeout("30s")]
     async fn arrival_deadline_and_queue_capacity_include_unstarted_work() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        )))
+        .unwrap();
+        let id = "lifecycle-read-queue-bounded";
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .expect("lifecycle-read-queue-bounded");
+        let queued_count: usize = case["input"]["events"][1]
+            .as_str()
+            .unwrap()
+            .strip_prefix("queued-reads:")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(queued_count, 16, "{id}");
         let admission = Arc::new(FileReadAdmission::default());
         let agent = agent();
         let arrival = Instant::now() - Duration::from_secs(10);
         let reservation = admission.reserve(agent.clone(), arrival).unwrap();
         assert_eq!(reservation.deadline(), arrival + Duration::from_secs(60));
         let mut queued = Vec::new();
-        for _ in 0..16 {
+        for _ in 0..queued_count {
             queued.push(admission.reserve(agent.clone(), arrival).unwrap());
         }
-        assert!(matches!(
-            admission.reserve(agent.clone(), arrival),
-            Err(FileReadError::ResourceExhausted)
-        ));
+        assert!(
+            matches!(
+                admission.reserve(agent.clone(), arrival),
+                Err(FileReadError::ResourceExhausted)
+            ),
+            "{id}"
+        );
         let active = reservation.acquire().await.unwrap();
         assert_eq!(active.deadline(), arrival + Duration::from_secs(60));
         let mut waiting = Box::pin(queued.pop().unwrap().acquire());

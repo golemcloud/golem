@@ -1239,7 +1239,11 @@ impl TestDsl for TestWorkerExecutor {
                     return Err(anyhow!("Error from get_file_contents: {err:?}"));
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::ReadFailure(err)) => {
-                    return Err(anyhow!("File read error from get_file_contents: {err:?}"));
+                    let err = golem_api_grpc::proto::golem::worker::FileReadError::try_from(err)?;
+                    return Err(anyhow!(
+                        "File read error from get_file_contents: {}",
+                        err.as_str_name()
+                    ));
                 }
                 None => {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
