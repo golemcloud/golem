@@ -231,16 +231,10 @@ impl IndexedStorage for SqliteIndexedStorage {
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         // Stored keys are never empty, so `key > ''` starts the first page at the first key.
-        let after = match resume {
-            Some(ScanResume::Marker(key)) => key,
-            Some(ScanResume::Cursor(_)) => {
-                return Err(IndexedStorageError::Other(
-                    "SQLite indexed storage was handed a resume token it did not produce"
-                        .to_string(),
-                ));
-            }
-            None => String::new(),
-        };
+        let after = resume
+            .map(|resume| resume.into_marker("SQLite"))
+            .transpose()?
+            .unwrap_or_default();
         let query = match prefix {
             Some(prefix) => {
                 let like = Self::to_like_prefix(prefix);

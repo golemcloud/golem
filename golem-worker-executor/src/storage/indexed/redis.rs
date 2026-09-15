@@ -247,16 +247,10 @@ impl IndexedStorage for RedisIndexedStorage {
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
         // nothing, and a key present for the whole iteration comes back at least once.
-        let cursor = match resume {
-            Some(ScanResume::Cursor(cursor)) => cursor,
-            Some(ScanResume::Marker(_)) => {
-                return Err(IndexedStorageError::Other(
-                    "Redis indexed storage was handed a resume token it did not produce"
-                        .to_string(),
-                ));
-            }
-            None => 0,
-        };
+        let cursor = resume
+            .map(|resume| resume.into_cursor("Redis"))
+            .transpose()?
+            .unwrap_or(0);
         let (next, keys) = self
             .scan(svc_name, api_name, namespace, prefix, cursor, count)
             .await?;

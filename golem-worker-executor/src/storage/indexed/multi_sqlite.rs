@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -188,20 +189,17 @@ impl MultiSqliteIndexedStorage {
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
         // Set when this call creates the file, which makes cached listings stale. Checked only on a
         // cache miss, since a hit means the file is already open.
-        let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let created = Arc::new(AtomicBool::new(false));
         let flag = created.clone();
         let existing = db_path.clone();
         let storage = self
             .cache
             .get_or_insert_simple(&db, async move || {
-                flag.store(
-                    !Path::new(&existing).exists(),
-                    std::sync::atomic::Ordering::SeqCst,
-                );
+                flag.store(!Path::new(&existing).exists(), Ordering::SeqCst);
                 Self::init_storage(max_connections, foreign_keys, db_path).await
             })
             .await?;
-        if created.load(std::sync::atomic::Ordering::SeqCst) {
+        if created.load(Ordering::SeqCst) {
             self.listing_cache.lock().await.clear();
         }
         Ok(storage)
@@ -350,16 +348,9 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         // read whole. Files are emptied, never deleted, so the token stays a valid seek position.
         // Drained files stay listed, so a call stops after opening `count` files even if they were
         // all empty.
-        let after = match resume {
-            Some(ScanResume::Marker(file)) => Some(file),
-            Some(ScanResume::Cursor(_)) => {
-                return Err(IndexedStorageError::Other(
-                    "Multi-SQLite indexed storage was handed a resume token it did not produce"
-                        .to_string(),
-                ));
-            }
-            None => None,
-        };
+        let after = resume
+            .map(|resume| resume.into_marker("Multi-SQLite"))
+            .transpose()?;
 
         let files = self.namespace_db_files(&namespace).await?;
         // The listing is sorted, so the marker is found by bisection.
@@ -368,11 +359,13 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             None => 0,
         };
 
+        // A zero count still opens one file, so every call makes progress.
+        let page = count.max(1);
         let mut keys = Vec::new();
         let mut last_file = None;
         let mut opened = 0;
         for file_name in files[start..].iter().cloned() {
-            if opened >= count.max(1) {
+            if opened >= page {
                 break;
             }
             opened += 1;
@@ -382,14 +375,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             let mut within = None;
             loop {
                 let (next, page) = storage
-                    .scan_stable(
-                        svc_name,
-                        api_name,
-                        namespace.clone(),
-                        prefix,
-                        within,
-                        count.max(1),
-                    )
+                    .scan_stable(svc_name, api_name, namespace.clone(), prefix, within, page)
                     .await?;
                 keys.extend(page);
                 match next {
@@ -406,7 +392,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         // The walk ends at the end of the file list, not on a short page, since the files a page
         // opened may simply have been empty.
-        let exhausted = opened < count.max(1) && (keys.len() as u64) < count;
+        let exhausted = opened < page && (keys.len() as u64) < count;
         let next = match last_file {
             Some(file) if !exhausted => Some(ScanResume::Marker(file)),
             _ => None,

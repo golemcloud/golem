@@ -202,16 +202,9 @@ impl IndexedStorage for InMemoryIndexedStorage {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        let after = match resume {
-            Some(ScanResume::Marker(key)) => Some(key),
-            Some(ScanResume::Cursor(_)) => {
-                return Err(IndexedStorageError::Other(
-                    "In-memory indexed storage was handed a resume token it did not produce"
-                        .to_string(),
-                ));
-            }
-            None => None,
-        };
+        let after = resume
+            .map(|resume| resume.into_marker("In-memory"))
+            .transpose()?;
         let matcher = Self::match_key(namespace, prefix);
 
         // The map is unordered, so keep the `count` smallest matching keys in a capped max-heap

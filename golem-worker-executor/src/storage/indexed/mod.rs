@@ -85,6 +85,32 @@ pub enum ScanResume {
     Cursor(ScanCursor),
 }
 
+impl ScanResume {
+    /// The marker this token carries, or an error if `backend` was handed a token it did not
+    /// produce.
+    pub fn into_marker(self, backend: &str) -> Result<String, IndexedStorageError> {
+        match self {
+            ScanResume::Marker(marker) => Ok(marker),
+            ScanResume::Cursor(_) => Err(Self::foreign(backend)),
+        }
+    }
+
+    /// The cursor this token carries, or an error if `backend` was handed a token it did not
+    /// produce.
+    pub fn into_cursor(self, backend: &str) -> Result<ScanCursor, IndexedStorageError> {
+        match self {
+            ScanResume::Cursor(cursor) => Ok(cursor),
+            ScanResume::Marker(_) => Err(Self::foreign(backend)),
+        }
+    }
+
+    fn foreign(backend: &str) -> IndexedStorageError {
+        IndexedStorageError::Other(format!(
+            "{backend} indexed storage was handed a resume token it did not produce"
+        ))
+    }
+}
+
 /// Generic indexed storage interface
 ///
 /// The storage holds indexes identified by keys. Each index is a sequence of entries,

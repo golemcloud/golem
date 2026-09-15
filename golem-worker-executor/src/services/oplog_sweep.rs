@@ -114,18 +114,36 @@ enum Outcome {
 }
 
 impl Outcome {
+    /// Every outcome, in declaration order, which is also the order [`RouteReport`] counts them in.
+    const ALL: [Outcome; 8] = [
+        Outcome::Unparseable,
+        Outcome::NotOwned,
+        Outcome::Empty,
+        Outcome::Waiting,
+        Outcome::Resident,
+        Outcome::Unaddressable,
+        Outcome::ArchiveFailed,
+        Outcome::Archived,
+    ];
+
+    /// The `outcome` label on the sweep metrics.
+    fn label(self) -> &'static str {
+        match self {
+            Outcome::Unparseable => "unparseable",
+            Outcome::NotOwned => "not_owned",
+            Outcome::Empty => "empty",
+            Outcome::Waiting => "waiting",
+            Outcome::Resident => "resident",
+            Outcome::Unaddressable => "unaddressable",
+            Outcome::ArchiveFailed => "archive_failed",
+            Outcome::Archived => "archived",
+        }
+    }
+
     /// Whether deciding this agent cost an archive attempt, which is what both archive budgets are
     /// charged. A failed archive counts, since it will be attempted again.
-    fn reached_the_store(&self) -> bool {
-        match self {
-            Outcome::Archived | Outcome::ArchiveFailed => true,
-            Outcome::Unparseable
-            | Outcome::NotOwned
-            | Outcome::Empty
-            | Outcome::Waiting
-            | Outcome::Resident
-            | Outcome::Unaddressable => false,
-        }
+    fn reached_the_store(self) -> bool {
+        matches!(self, Outcome::Archived | Outcome::ArchiveFailed)
     }
 }
 
@@ -172,14 +190,8 @@ fn next_backoff(current: u32, over_deadline: bool, cap: u32) -> u32 {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteReport {
     scanned: u64,
-    unparseable: u64,
-    not_owned: u64,
-    empty: u64,
-    waiting: u64,
-    resident: u64,
-    unaddressable: u64,
-    archive_failed: u64,
-    archived: u64,
+    /// One counter per [`Outcome`], indexed by its discriminant.
+    outcomes: [u64; Outcome::ALL.len()],
     /// Outcomes that spent an archive attempt, by [`Outcome::reached_the_store`], which is what the
     /// archive budgets are charged. Not recorded as an outcome.
     store_visits: u64,
@@ -188,18 +200,13 @@ struct RouteReport {
 }
 
 impl RouteReport {
+    fn count(&self, outcome: Outcome) -> u64 {
+        self.outcomes[outcome as usize]
+    }
+
     fn record(&self, route: &str, elapsed: std::time::Duration) {
-        for (outcome, count) in [
-            ("unparseable", self.unparseable),
-            ("not_owned", self.not_owned),
-            ("empty", self.empty),
-            ("waiting", self.waiting),
-            ("resident", self.resident),
-            ("unaddressable", self.unaddressable),
-            ("archive_failed", self.archive_failed),
-            ("archived", self.archived),
-        ] {
-            record_oplog_sweep_outcome(route, outcome, count);
+        for outcome in Outcome::ALL {
+            record_oplog_sweep_outcome(route, outcome.label(), self.count(outcome));
         }
         record_oplog_sweep_tick(route, elapsed, self.truncated);
     }
@@ -224,7 +231,10 @@ impl SweepReport {
     }
 
     fn archived(&self) -> u64 {
-        self.routes.iter().map(|(_, r)| r.archived).sum()
+        self.routes
+            .iter()
+            .map(|(_, r)| r.count(Outcome::Archived))
+            .sum()
     }
 
     fn scanned(&self) -> u64 {
@@ -266,16 +276,13 @@ fn assess(remembered: Option<Seen>, current: OplogIndex, pass: u64) -> Verdict {
 
 /// Adds two reports. `truncated` is sticky: a tick that stopped early on any page stopped early.
 fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
+    let mut outcomes = left.outcomes;
+    for (sum, count) in outcomes.iter_mut().zip(right.outcomes) {
+        *sum += count;
+    }
     RouteReport {
         scanned: left.scanned + right.scanned,
-        unparseable: left.unparseable + right.unparseable,
-        not_owned: left.not_owned + right.not_owned,
-        empty: left.empty + right.empty,
-        waiting: left.waiting + right.waiting,
-        resident: left.resident + right.resident,
-        unaddressable: left.unaddressable + right.unaddressable,
-        archive_failed: left.archive_failed + right.archive_failed,
-        archived: left.archived + right.archived,
+        outcomes,
         store_visits: left.store_visits + right.store_visits,
         truncated: left.truncated || right.truncated,
     }
@@ -287,16 +294,7 @@ fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
         .into_iter()
         .fold(RouteReport::default(), |mut report, outcome| {
             report.store_visits += u64::from(outcome.reached_the_store());
-            match outcome {
-                Outcome::Unparseable => report.unparseable += 1,
-                Outcome::NotOwned => report.not_owned += 1,
-                Outcome::Empty => report.empty += 1,
-                Outcome::Waiting => report.waiting += 1,
-                Outcome::Resident => report.resident += 1,
-                Outcome::Unaddressable => report.unaddressable += 1,
-                Outcome::ArchiveFailed => report.archive_failed += 1,
-                Outcome::Archived => report.archived += 1,
-            }
+            report.outcomes[outcome as usize] += 1;
             report
         })
 }
@@ -356,12 +354,15 @@ impl TickBudget {
 
     /// The next route's share: what is left, split over the routes still to run, rounded up. `None`
     /// once either budget is spent, which stops the tick.
-    fn share(&self) -> Option<(u64, u64)> {
+    fn share(&self) -> Option<RouteShare> {
         if self.scans == 0 || self.archives == 0 {
             return None;
         }
         let left = self.routes_left.max(1);
-        Some((self.scans.div_ceil(left), self.archives.div_ceil(left)))
+        Some(RouteShare {
+            scans: self.scans.div_ceil(left),
+            archives: self.archives.div_ceil(left),
+        })
     }
 
     /// Books what a route used and drops it from the split.
@@ -370,6 +371,13 @@ impl TickBudget {
         self.archives = self.archives.saturating_sub(archived);
         self.routes_left = self.routes_left.saturating_sub(1);
     }
+}
+
+/// What one route may spend in a tick: keys to walk and archive attempts to make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RouteShare {
+    scans: u64,
+    archives: u64,
 }
 
 struct Route {
@@ -562,12 +570,12 @@ impl OplogSweeper {
             } else {
                 budget.share()
             };
-            let Some((scans, archives)) = affordable else {
+            let Some(share) = affordable else {
                 stopped_at = Some(start + offset);
                 break;
             };
             let report = self
-                .sweep_route(route, &assignment, cancel, scans, archives)
+                .sweep_route(route, &assignment, cancel, share)
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
             budget.spend(report.scanned, report.store_visits);
@@ -589,8 +597,7 @@ impl OplogSweeper {
         route: &Route,
         assignment: &ShardAssignment,
         cancel: &CancellationToken,
-        scan_budget: u64,
-        archive_budget: u64,
+        share: RouteShare,
     ) -> RouteReport {
         let started = Instant::now();
         let mut resume = self.cursors.lock().await.get(&route.id).cloned();
@@ -605,12 +612,12 @@ impl OplogSweeper {
         let mut report = RouteReport::default();
         let mut truncated = false;
         let mut exhausted = false;
-        let mut archive_allowance = archive_budget;
+        let mut archive_allowance = share.archives;
         let mut walked: u64 = 0;
         let mut pages: u64 = 0;
         // A zero page size would end the pass on an empty page and wipe the tracking table.
         let page_size = self.config.page_size.max(1);
-        let scan_budget = scan_budget.max(1);
+        let scan_budget = share.scans.max(1);
         // Redis can return empty pages while it walks the keyspace, so a key budget alone does not
         // bound round trips.
         let page_budget = scan_budget.div_ceil(page_size).max(1);
@@ -1056,19 +1063,31 @@ mod tests {
         let mut budget = TickBudget::new(&config, 2);
         assert_eq!(
             budget.share(),
-            Some((50, 5)),
+            Some(RouteShare {
+                scans: 50,
+                archives: 5
+            }),
             "an even split, not the whole of it"
         );
 
         // A route that finds nothing leaves its share to the one behind it rather than wasting it.
         budget.spend(0, 0);
-        assert_eq!(budget.share(), Some((100, 10)));
+        assert_eq!(
+            budget.share(),
+            Some(RouteShare {
+                scans: 100,
+                archives: 10
+            })
+        );
 
         let mut budget = TickBudget::new(&config, 2);
         budget.spend(50, 5);
         assert_eq!(
             budget.share(),
-            Some((50, 5)),
+            Some(RouteShare {
+                scans: 50,
+                archives: 5
+            }),
             "and a route that spends its share does not"
         );
     }
@@ -1084,7 +1103,10 @@ mod tests {
         let mut budget = TickBudget::new(&config, 4);
         assert_eq!(
             budget.share(),
-            Some((1, 1)),
+            Some(RouteShare {
+                scans: 1,
+                archives: 1
+            }),
             "the first route gets the one key there is to spend"
         );
         budget.spend(1, 1);
@@ -1200,16 +1222,9 @@ mod tests {
             Outcome::Archived,
         ]);
 
-        assert_eq!(report.archived, 2);
+        assert_eq!(report.count(Outcome::Archived), 2);
         assert_eq!(
-            report.unparseable
-                + report.not_owned
-                + report.empty
-                + report.waiting
-                + report.resident
-                + report.unaddressable
-                + report.archive_failed
-                + report.archived,
+            report.outcomes.iter().sum::<u64>(),
             9,
             "every outcome lands in exactly one counter"
         );
@@ -1225,45 +1240,31 @@ mod tests {
     }
 
     #[test]
+    fn outcomes_are_counted_under_their_own_index() {
+        for (index, outcome) in Outcome::ALL.into_iter().enumerate() {
+            assert_eq!(outcome as usize, index, "{outcome:?}");
+        }
+    }
+
+    #[test]
     fn merge_adds_every_field() {
         // Distinct non-zero values, so a wrongly added field cannot match by coincidence.
         let left = RouteReport {
             scanned: 2,
-            unparseable: 3,
-            not_owned: 4,
-            empty: 5,
-            waiting: 6,
-            resident: 7,
-            unaddressable: 8,
-            archive_failed: 9,
-            archived: 10,
+            outcomes: [3, 4, 5, 6, 7, 8, 9, 10],
             store_visits: 11,
             truncated: false,
         };
         let right = RouteReport {
             scanned: 12,
-            unparseable: 13,
-            not_owned: 14,
-            empty: 15,
-            waiting: 16,
-            resident: 17,
-            unaddressable: 18,
-            archive_failed: 19,
-            archived: 20,
+            outcomes: [13, 14, 15, 16, 17, 18, 19, 20],
             store_visits: 21,
             truncated: true,
         };
 
         let merged = merge(left, right);
         assert_eq!(merged.scanned, 14);
-        assert_eq!(merged.unparseable, 16);
-        assert_eq!(merged.not_owned, 18);
-        assert_eq!(merged.empty, 20);
-        assert_eq!(merged.waiting, 22);
-        assert_eq!(merged.resident, 24);
-        assert_eq!(merged.unaddressable, 26);
-        assert_eq!(merged.archive_failed, 28);
-        assert_eq!(merged.archived, 30);
+        assert_eq!(merged.outcomes, [16, 18, 20, 22, 24, 26, 28, 30]);
         assert_eq!(merged.store_visits, 32);
         assert!(merged.truncated, "truncation is sticky");
     }
@@ -1990,7 +1991,7 @@ mod tests {
         // The first tick has nothing to compare against, so it only records the index.
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(first.scanned(), 1);
-        assert_eq!(first.route(EPHEMERAL_L1).waiting, 1);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Waiting), 1);
         assert_eq!(first.archived(), 0);
 
         // The index has not moved, so the second tick archives.
@@ -2055,7 +2056,7 @@ mod tests {
 
         // Unarmed: the first tick only records the index.
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(first.route(EPHEMERAL_L1).waiting, 1);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Waiting), 1);
 
         // Armed. The gate is open, and the deadline lands while the agent's index is being read.
         let cut = CancellationToken::new();
@@ -2143,7 +2144,7 @@ mod tests {
 
     #[test]
     #[timeout("1m")]
-    async fn a_tick_cut_before_a_page_s_agents_leaves_them_for_the_next_pass() {
+    async fn a_tick_cut_before_a_pages_agents_leaves_them_for_the_next_pass() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
@@ -2159,7 +2160,7 @@ mod tests {
         );
 
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(first.route(EPHEMERAL_L1).waiting, 1);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Waiting), 1);
 
         // The deadline lands as soon as the page is served, before any agent on it is started.
         let cut = CancellationToken::new();
@@ -2275,7 +2276,7 @@ mod tests {
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(
-            second.route(EPHEMERAL_L1).unaddressable,
+            second.route(EPHEMERAL_L1).count(Outcome::Unaddressable),
             1,
             "the agent is still reported rather than skipped silently"
         );
@@ -2422,7 +2423,7 @@ mod tests {
         let after = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(after.archived(), 0);
         assert_eq!(
-            after.route(EPHEMERAL_L1).waiting,
+            after.route(EPHEMERAL_L1).count(Outcome::Waiting),
             1,
             "the index moved before it was read, so the agent is not quiet"
         );
@@ -2470,7 +2471,7 @@ mod tests {
         let after = sweeper.sweep_once(&CancellationToken::new()).await;
 
         assert_eq!(after.archived(), 0);
-        assert_eq!(after.route(EPHEMERAL_L1).resident, 1);
+        assert_eq!(after.route(EPHEMERAL_L1).count(Outcome::Resident), 1);
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
@@ -2520,7 +2521,7 @@ mod tests {
     /// route.
     #[test]
     #[timeout("1m")]
-    async fn what_one_route_spends_is_taken_off_the_next_route_s_share() {
+    async fn what_one_route_spends_comes_off_the_next_routes_share() {
         let layers = deep_layers(2);
         let environment_id = EnvironmentId::new();
         let component_id = ComponentId::new();
@@ -2627,7 +2628,7 @@ mod tests {
 
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(
-            second.route(deepest).archive_failed,
+            second.route(deepest).count(Outcome::ArchiveFailed),
             1,
             "the deeper route spent an archive attempt and moved nothing"
         );
@@ -2797,7 +2798,7 @@ mod tests {
 
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 0);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 0);
         assert_eq!(second.archived(), 1, "second lifetime");
         assert_eq!(
             layers.archives[0]
@@ -2832,7 +2833,7 @@ mod tests {
 
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 1);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 1);
         assert_eq!(second.archived(), 0);
         assert_eq!(
             storage.last_ids.load(std::sync::atomic::Ordering::SeqCst),
@@ -2872,7 +2873,7 @@ mod tests {
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
 
-        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 0);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 0);
         assert_eq!(second.archived(), 1);
         assert_eq!(
             layers.archives[0]
@@ -2908,7 +2909,7 @@ mod tests {
 
         // One tick, two pages, the same key on both: two sightings from one pass open nothing.
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(first.route(EPHEMERAL_L1).waiting, 2);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Waiting), 2);
         assert_eq!(
             first.archived(),
             0,
@@ -2954,12 +2955,12 @@ mod tests {
         for tick in 2..=5 {
             let report = sweeper.sweep_once(&CancellationToken::new()).await;
             assert_eq!(
-                report.route(EPHEMERAL_L1).archive_failed,
+                report.route(EPHEMERAL_L1).count(Outcome::ArchiveFailed),
                 1,
                 "tick {tick} should still be trying to archive"
             );
             assert_eq!(
-                report.route(EPHEMERAL_L1).waiting,
+                report.route(EPHEMERAL_L1).count(Outcome::Waiting),
                 0,
                 "tick {tick} lost the sighting and restarted the quiet gate"
             );
@@ -2982,14 +2983,14 @@ mod tests {
 
         // Residency is decided in memory, so it lands on the first tick.
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(first.route(EPHEMERAL_L1).resident, 1);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Resident), 1);
         assert_eq!(first.archived(), 0);
 
         // And nothing about a running agent is remembered, because it was never a candidate.
         assert!(sweeper.memo.lock().await.is_empty());
 
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(second.route(EPHEMERAL_L1).resident, 1);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Resident), 1);
         assert_eq!(second.archived(), 0);
     }
 
@@ -3080,7 +3081,7 @@ mod tests {
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
 
-        assert_eq!(second.route(EPHEMERAL_L1).not_owned, 1);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::NotOwned), 1);
         assert_eq!(second.archived(), 0);
     }
 
@@ -3223,7 +3224,7 @@ mod tests {
 
         let first = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(first.archived(), 0, "nothing is quiet on a first sighting");
-        assert_eq!(first.route(EPHEMERAL_L1).waiting, 4);
+        assert_eq!(first.route(EPHEMERAL_L1).count(Outcome::Waiting), 4);
 
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(
@@ -3505,7 +3506,7 @@ mod tests {
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
 
-        assert_eq!(second.route(EPHEMERAL_L1).archive_failed, 1);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::ArchiveFailed), 1);
         assert_eq!(second.archived(), 0, "moved nothing to completion");
         assert_eq!(
             appends.load(std::sync::atomic::Ordering::SeqCst),
@@ -3539,9 +3540,9 @@ mod tests {
         sweeper.sweep_once(&CancellationToken::new()).await;
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
 
-        assert_eq!(second.route(EPHEMERAL_L1).archived, 1);
+        assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Archived), 1);
         assert_eq!(
-            second.route(EPHEMERAL_L1).archive_failed,
+            second.route(EPHEMERAL_L1).count(Outcome::ArchiveFailed),
             0,
             "a stack this deep is a supported configuration, not a miscounting layer"
         );
