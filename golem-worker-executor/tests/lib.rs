@@ -43,6 +43,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod rdbms;
