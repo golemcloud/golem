@@ -214,10 +214,8 @@ impl IndexedStorage for InMemoryIndexedStorage {
         };
         let matcher = Self::match_key(namespace, prefix);
 
-        // The map has no order of its own, so the page cannot be taken by seeking. Sorting the
-        // whole matching set would hold every key in the namespace at once; a max-heap capped at
-        // `count` keeps the same page for the same walk while holding only the page. The SQL
-        // backends let their index do the same job.
+        // The map is unordered, so keep the `count` smallest matching keys in a capped max-heap
+        // rather than sorting every key in the namespace.
         let limit = count as usize;
         let mut page: BinaryHeap<String> = BinaryHeap::new();
         self.data

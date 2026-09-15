@@ -837,8 +837,7 @@ pub async fn create_worker_executor_impl<
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
-    // The sweeper needs the same layer stack, but it is built here while its other dependency
-    // (the worker activator) only exists further down, so keep a handle.
+    // The sweeper is built further down, once the worker activator exists.
     let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
@@ -1001,9 +1000,8 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
-    // Same work as `ScheduledAction::ArchiveOplog`, driven by a paginated scan of the oplog layers
-    // instead of a row written on the oplog commit path. Spawned into the executor's join set so a
-    // shutdown waits for the tick in flight rather than cutting an archive step in half.
+    // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
+    // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
     let oplog_sweeper = OplogSweeper::over_layers(
         golem_config.oplog.sweep.clone(),
         indexed_storage.clone(),
@@ -1012,11 +1010,10 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
     );
-    join_set.spawn({
+    shutdown.spawn({
         let shutdown_token = shutdown_token.clone();
         async move {
             oplog_sweeper.run(shutdown_token).await;
-            Ok(())
         }
     });
 

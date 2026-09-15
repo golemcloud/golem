@@ -245,10 +245,8 @@ impl IndexedStorage for RedisIndexedStorage {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        // Redis has no key order to seek in, so this is `scan` unchanged. It qualifies anyway:
-        // a `SCAN` cursor is an opaque token over the hash space rather than a position, so
-        // deleting keys behind it moves nothing, and the protocol already guarantees that a key
-        // present for the whole iteration comes back at least once.
+        // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
+        // nothing, and a key present for the whole iteration comes back at least once.
         let cursor = match resume {
             Some(ScanResume::Cursor(cursor)) => cursor,
             Some(ScanResume::Marker(_)) => {
@@ -433,8 +431,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
-        // Streams have no id-only read, so this is `last` and does move the payload. Every other
-        // backend answers without it.
+        // Streams have no id-only read, so this reads the payload too.
         Ok(self
             .last(svc_name, api_name, entity_name, namespace, key)
             .await?

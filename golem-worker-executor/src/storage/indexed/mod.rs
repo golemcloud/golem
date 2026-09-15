@@ -74,17 +74,14 @@ impl From<String> for IndexedStorageError {
     }
 }
 
-/// Where a [`IndexedStorage::scan_stable`] walk left off.
-///
-/// Produced and read by one backend only. A caller carries it from one page to the next and must
-/// not interpret it.
+/// Where a [`IndexedStorage::scan_stable`] walk left off. Only the backend that produced it can
+/// read it; a caller passes it back unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanResume {
-    /// The last position a backend reached in whatever ordering it walks. Usually the last key it
-    /// handed back, but a backend that shards its keys may instead name the shard it finished, so
-    /// this is not interchangeable between backends and must not be read as a key.
+    /// The last position reached in the backend's walk order: usually the last key handed back,
+    /// but the multi-SQLite backend names the last file it finished.
     Marker(String),
-    /// The backend's own iteration cursor, for one that has no order to seek in at all.
+    /// The iteration cursor of a backend with no key order to seek in.
     Cursor(ScanCursor),
 }
 
@@ -134,27 +131,14 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
 
-    /// Pages the keys of a namespace in a way that survives the caller deleting what it was
-    /// handed.
+    /// Pages the keys of a namespace so that the caller can delete the keys it was handed without
+    /// the walk skipping any. [`Self::scan`] cannot: its cursor is a position, so a delete behind
+    /// it makes the next page step over keys nothing has seen.
     ///
-    /// [`Self::scan`] cannot do that. Its cursor is a position on every backend that has one, so
-    /// deleting a key behind it shifts everything after it down and the next page steps over
-    /// exactly that many keys nothing has looked at. A caller that consumes what it scans wants
-    /// this instead.
-    ///
-    /// `resume` is `None` for the first page, and afterwards whatever the previous call returned.
-    /// A backend that keeps its keys in order returns the last key it handed back, so resuming is a
-    /// seek rather than an offset and nothing behind it can move. One with no key order returns
-    /// whatever its own iteration protocol needs, and is only fit for this if that protocol already
-    /// tolerates deletion.
-    ///
-    /// The next token is `None` once the walk is done, but backends learn that differently: one
-    /// that pages in key order only knows it from a short page, so a namespace whose size is an
-    /// exact multiple of `count` costs one more, empty, call, while Redis reports it alongside its
-    /// last keys. A caller that acts on exhaustion should expect the extra call.
-    ///
-    /// A key that is present for the whole walk is handed back at least once; a key the caller
-    /// deletes may or may not be.
+    /// `resume` is `None` for the first page, then whatever the previous call returned; the
+    /// returned token is `None` once the walk is done. A backend that pages in key order only
+    /// learns that from a short page, so it may take one extra, empty call. A key present for the
+    /// whole walk is returned at least once; a key the caller deletes may or may not be.
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -252,10 +236,8 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
 
-    /// Gets the id of the last entry in the index of the given key, without its payload.
-    ///
-    /// Separate from [`Self::last`] because an entry's payload has no size limit, and a caller
-    /// that only wants to know how far an index has got should not pay to move one.
+    /// Gets the id of the last entry in the index of the given key, without reading its payload,
+    /// which can be arbitrarily large.
     async fn last_id(
         &self,
         svc_name: &'static str,

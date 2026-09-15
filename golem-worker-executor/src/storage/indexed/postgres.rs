@@ -284,8 +284,7 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let count_i64 = Self::to_i64(count, "count")?;
-        // Every stored key is non-empty, so the empty string is a lower bound below all of them and
-        // the first page needs no separate query.
+        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
         let after = match resume {
             Some(ScanResume::Marker(key)) => key,
             Some(ScanResume::Cursor(_)) => {

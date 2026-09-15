@@ -12,17 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Counts the rows an ephemeral workload leaves in the executor's scheduler storage.
-//!
-//! Every transition into `Idle` registers an `ArchiveOplog` action. For an ephemeral agent that
-//! costs one synchronous scheduler-storage write, and leaves one row, per invocation, for an action
-//! that cannot do useful work: `InvocationLoop::archive_ephemeral_oplog` has already drained the
-//! oplog by the time it fires, and the agent it names was removed milliseconds after it was
-//! registered.
-//!
-//! A durable agent in the same component acts as the control. Without it, an empty table would
-//! equally well mean the guard had stopped scheduling for every agent mode, which is the one thing
-//! this change must not do.
+//! Counts the `ArchiveOplog` rows an ephemeral workload leaves in scheduler storage. With the oplog
+//! sweep enabled there are none, while a durable agent in the same component, the control, still
+//! registers one.
 
 use crate::Tracing;
 
@@ -47,8 +39,7 @@ inherit_test_dep!(Tracing);
 /// Large enough that "one row per invocation" cannot be mistaken for incidental scheduler traffic.
 const INVOCATIONS: usize = 30;
 
-/// Reads the executor's scheduler storage directly. This workload schedules nothing else, so every
-/// row is an `ArchiveOplog` registration.
+/// Reads scheduler storage directly. This workload schedules nothing but `ArchiveOplog`.
 async fn scheduled_action_count(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -101,9 +92,7 @@ async fn ephemeral_invocations_schedule_no_oplog_archive(
         "{INVOCATIONS} ephemeral invocations left {count} scheduled actions behind"
     );
 
-    // The control. `Counter` is durable and lives in the same component, so it reaches the same
-    // `schedule_oplog_archive_if_needed` call by the same route; only the agent mode differs. One
-    // invocation is enough, because the registration happens on the transition into `Idle`.
+    // The control: `Counter` is durable and in the same component, so only the agent mode differs.
     let durable_agent_id = agent_id!("Counter", "archive-schedule-durable");
     executor
         .start_agent(&component.id, durable_agent_id.clone())
@@ -121,11 +110,8 @@ async fn ephemeral_invocations_schedule_no_oplog_archive(
     Ok(())
 }
 
-/// The guard that suppresses the ephemeral registration reads the same flag that runs the sweep,
-/// so turning the sweep off has to hand the work back rather than drop it. Without this the two
-/// mechanisms are independent switches, and the off position of one of them leaves an ephemeral
-/// oplog behind a crashed pod with nothing to move it: the teardown drain never runs, the sweep is
-/// not running, and no row was ever written.
+/// With the sweep disabled nothing else would archive an ephemeral oplog stranded by a crashed
+/// pod, so the registration has to happen again.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -160,8 +146,7 @@ async fn disabling_the_sweep_restores_the_ephemeral_archive_registration(
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
-    // Settling time, matching the positive case, so a registration that merely arrived late is
-    // still counted rather than read as absent.
+    // Settling time, as in the positive case.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let count = scheduled_action_count(deps, &context).await?;

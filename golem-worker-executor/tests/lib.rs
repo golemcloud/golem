@@ -46,6 +46,7 @@ pub mod observability;
 pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
+pub mod oplog_sweep;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;

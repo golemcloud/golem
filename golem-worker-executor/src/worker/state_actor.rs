@@ -777,17 +777,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         old_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
-        // An ephemeral oplog is drained by `InvocationLoop::archive_ephemeral_oplog` on teardown,
-        // and never lives in the primary oplog store to begin with (see the `AgentMode::Ephemeral`
-        // branch of `CreateOplogConstructor::create_oplog`, which opens only the lower layers).
-        // Scheduling an archive here costs one synchronous scheduler-storage write, and leaves one
-        // row, per ephemeral invocation, for an action that fires `archive_interval` later against
-        // an agent removed milliseconds after it was registered.
-        //
-        // What the teardown drain misses is the pod that dies mid-invocation, and the sweep is
-        // what covers it. So the two are one switch rather than two: with the sweep off this
-        // registration has to come back, or an interrupted ephemeral agent strands its oplog with
-        // nothing left to move it. See `OplogSweepConfig::enabled`.
+        // Teardown drains an ephemeral oplog, and the oplog sweep archives one stranded by a
+        // crashed pod, so registering an archive per ephemeral invocation would only cost a
+        // scheduler-storage write. With the sweep disabled nothing else covers the crash case, so
+        // the registration still happens. See `OplogSweepConfig::enabled`.
         if self.agent_mode == AgentMode::Ephemeral && self.deps.config().oplog.sweep.enabled {
             return;
         }

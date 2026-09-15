@@ -1965,107 +1965,47 @@ impl Default for OplogConfig {
     }
 }
 
-/// Controls the background sweep that archives the oplogs of agents which have gone quiet.
+/// Controls the background sweep that archives the oplogs of ephemeral agents which have gone
+/// quiet. It finds them by paginating the oplog layers, so an ephemeral invocation registers no
+/// `ScheduledAction::ArchiveOplog`. Durable agents are not swept; see
+/// [`oplog_sweep`](crate::services::oplog_sweep).
 ///
-/// The sweep replaces the work list that `ScheduledAction::ArchiveOplog` builds from a row written
-/// on the oplog commit path. It finds the same agents by paginating the oplog layer itself, and
-/// runs the same archive step against them, so no scheduler-storage write happens per invocation.
-///
-/// Every field except `enabled` and `interval` bounds what one tick may consume. A tick that hits
-/// a bound keeps its scan cursor and resumes there on the next tick, so work is deferred, never
-/// dropped.
-///
-/// Which agent modes the sweep covers is deliberately not a setting. See
-/// [`SWEPT_MODES`](crate::services::oplog_sweep::SWEPT_MODES).
+/// A tick that hits a per-tick bound keeps its scan cursor and resumes there on the next tick, so
+/// work is deferred, never dropped.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OplogSweepConfig {
-    /// Whether the sweep runs at all, and the rollback lever: false restores exactly the
-    /// behaviour that preceded the sweep. It is read in two places, because the sweep and the
-    /// registration it replaces are one switch. Here it stops the background loop, and in
-    /// `StatusState::schedule_oplog_archive_if_needed` it decides whether an ephemeral agent still
-    /// registers `ScheduledAction::ArchiveOplog` on its way to `Idle`. Gating only the loop would
-    /// leave an ephemeral oplog with no mechanism at all behind a pod that died mid-invocation.
+    /// Whether the sweep runs. Also read by `StatusState::schedule_oplog_archive_if_needed`: while
+    /// it is false, ephemeral agents register `ScheduledAction::ArchiveOplog` instead, so an oplog
+    /// stranded by a crashed pod always has something to move it.
     pub enabled: bool,
-    /// How long a tick waits after the previous one finished. Sets the pace of the quiet gate,
-    /// which an agent clears when its last oplog index is unchanged between the two scans that saw
-    /// it. A scan resumes where it stopped, so a key is visited once per pass rather than once per
-    /// tick: the gate is one interval only while the namespace fits inside one tick's budget, and
-    /// one full pass over it otherwise.
+    /// Wait between ticks. An agent is archived once its last oplog index is unchanged across two
+    /// scan passes, and a pass takes one interval only while the namespace fits in one tick's
+    /// budget.
     #[serde(with = "humantime_serde")]
     pub interval: Duration,
     /// Keys read per scan call.
     pub page_size: u64,
-    /// Agents archived concurrently within one tick. Shares the executor's indexed-storage
-    /// connection budget with the invocation path, so it is deliberately small. It is also the
-    /// memory bound: an archive step moves an agent's whole layer through one `Vec`, so peak memory
-    /// is this many layers, not this many chunks.
+    /// Agents archived concurrently. Shares the indexed-storage connection budget with
+    /// invocations, and bounds memory: an archive step reads an agent's whole layer into one `Vec`.
     pub max_concurrency: usize,
-    /// Agents one tick may archive before it stops. A page is probed as a unit, so a tick stops at
-    /// the first page that carries it past this and can exceed it by up to `page_size`.
-    ///
-    /// A tick budget, not a per-route one: a stack with more than one source layer splits this
-    /// between its routes rather than giving each the whole of it.
+    /// Agents one tick may archive, split across routes. A page is decided as a unit, so a tick can
+    /// exceed this by up to `page_size`.
     pub max_archives_per_tick: usize,
-    /// Keys one tick may scan before it stops, because a tick asks each scan for no more than
-    /// what is left of the budget. A backend is free to hand back more than it was asked for, and
-    /// two do: Redis treats its page count as a hint, and the multi-file SQLite backend takes each
-    /// of its files whole. So this is a close bound rather than an exact one. It bounds the scan
-    /// round trips a tick issues against a namespace far larger than the work it holds. A tick
-    /// that stops here resumes where it left off.
-    ///
-    /// The sweep pages with `IndexedStorage::scan_stable`, which resumes by seeking to where it
-    /// left off rather than by counting past what it has already read, so the cost of a page does
-    /// not grow with how far into the namespace it sits. Raising this raises the work a tick does
-    /// in proportion, and nothing worse.
-    ///
-    /// A tick budget, not a per-route one, like `max_archives_per_tick` above. Routes share it,
-    /// each taking an even split of what the routes before it left, so the number of source layers
-    /// changes how a tick divides its work and not how much of it there is.
+    /// Keys one tick may scan, split across routes. A close bound rather than an exact one, since
+    /// Redis and the multi-file SQLite backend can return more keys than asked for.
     pub max_scanned_per_tick: usize,
-    /// Wall-clock bound on one tick, after which the tick stops at its next boundary and reports
-    /// itself truncated.
-    ///
-    /// The count budgets above bound how much work a tick does; this bounds how long it holds the
-    /// executor's indexed-storage concurrency while doing it, and under a degraded store those are
-    /// not the same quantity. `PostgresIndexedStorage` puts one semaphore
-    /// (`max_concurrent_ops`) in front of the pool and every caller shares it, the invocation path
-    /// included. A tick sized in operations is brief when each operation is milliseconds and runs
-    /// for minutes when each is seconds, so without a time bound the sweep stops being a periodic
-    /// user of that semaphore and becomes a continuous one, at exactly the moment the invocation
-    /// path can least afford it.
-    ///
-    /// Measured, not assumed: chaos scenario S23 delays the indexed cluster by 500ms and was run
-    /// twice against the same image, once with the sweep off and once on. Off, two executors
-    /// aborted; on, seven did, and the promise stream fell to 0% of its baseline throughput
-    /// instead of merely slowing. Nothing else differed.
-    ///
-    /// **Untuned.** 30s is half the default interval. Note that this aims the duty cycle rather
-    /// than bounding it: a tick stops at its next boundary, never inside an archive step, so a
-    /// store slow enough can overrun the deadline by a whole step. The backoff below is what
-    /// takes a persistently slow sweep further down. A perf pass should pick both properly.
+    /// Wall-clock bound on one tick. The count budgets bound work; this bounds how long a tick
+    /// holds the indexed-storage concurrency it shares with invocations, which matters when the
+    /// store is slow. A tick stops at its next boundary, never inside an archive step, so it can
+    /// overrun by one step.
     #[serde(with = "humantime_serde")]
     pub max_tick_duration: Duration,
-    /// How many intervals the loop may wait after a tick that hit `max_tick_duration`, at most.
-    ///
-    /// A tick cut short by its deadline is evidence the store is slow, and running the next one on
-    /// schedule would add load to a store already failing to keep up. So the wait doubles after
-    /// each such tick and resets on the first that finishes inside its deadline. This is
-    /// backpressure the sweep can apply to itself: nothing else tells it what the storage layer is
-    /// doing, and the alternative is competing with invocations for the semaphore during precisely
-    /// the incident the executor is trying to survive.
-    ///
-    /// Deferring archiving costs nothing durable. The work list is the layer itself, so a skipped
-    /// tick leaves the same agents to be found later; only the latency of moving a stranded oplog
-    /// grows, against a default `archive_interval` of a day.
-    ///
-    /// **Untuned**, like the deadline above. 8 caps the wait at eight intervals, eight minutes at
-    /// the defaults.
+    /// Most intervals to wait after a tick that hit `max_tick_duration`. The wait doubles after
+    /// each such tick and resets once a tick finishes in time, so the sweep backs off a slow store.
     pub max_backoff_intervals: u32,
-    /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
-    /// extra tick of latency for that agent and nothing else, because the work list lives in
-    /// storage. A pass that would exceed it leaves the agents past the bound untracked for that
-    /// pass rather than dropping what the table already holds, so set it above the largest backlog
-    /// of stranded oplogs a single pod is expected to work through.
+    /// Most agents whose previous index is remembered. An agent past the bound goes untracked for
+    /// that pass and is archived a pass later, so set this above the largest backlog of stranded
+    /// oplogs one pod should work through.
     pub max_tracked_agents: usize,
 }
 

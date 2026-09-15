@@ -257,8 +257,7 @@ async fn postgres_storage(
     Arc::new(PostgresIndexedStorageWrapper { postgres })
 }
 
-/// A compressed level nothing else writes to, so a walk over it has a fixed set of keys to be
-/// right about.
+/// A compressed level no other test writes to, so a walk over it sees a fixed set of keys.
 const SCAN_STABLE_LEVEL: usize = 97;
 
 #[derive(Debug, Clone)]
@@ -858,25 +857,9 @@ async fn scan_with_no_pattern_paginated(
     assert!(all.contains(&key3.to_string()));
 }
 
-/// Pins the contract `IndexedStorage::scan_stable` exists for.
-///
-/// `scan` cannot be paged by a caller that deletes what it is handed: its cursor is a position on
-/// every backend that has one, so a delete behind the cursor shifts the rest down and the next page
-/// steps over that many keys nothing has looked at. `scan_stable` resumes by seeking instead, and
-/// every backend has to honour that, whether it seeks on a key, walks its files, or falls back to
-/// an iteration protocol that already tolerates deletion.
-///
-/// The keys are spread over six agents rather than one, because the multi-SQLite backend puts each
-/// agent in its own file and walks files rather than keys. With one agent its whole walk is a
-/// single file and none of that is exercised.
-///
-/// A second namespace is deleted from alongside the first. It stands for the lower oplog layers an
-/// archive step drains on its way down: the caller removes keys there too, and none of that may
-/// disturb the walk in progress.
-///
-/// The walk needs a meta-namespace nothing else writes to, so it takes a compressed level of its
-/// own. The shared one carries whatever the tests running beside this are appending and deleting,
-/// which leaves the walk with no fixed set of keys to be right about.
+/// `scan_stable` must not skip keys when the caller deletes each page it is handed. The keys belong
+/// to six agents because the multi-SQLite backend keeps a file per agent, and a second namespace is
+/// drained alongside, as an archive step drains the layer below.
 #[test]
 #[tracing::instrument]
 async fn scan_stable_resumes_past_deleted_keys(
@@ -922,13 +905,11 @@ async fn scan_stable_resumes_past_deleted_keys(
             .unwrap();
     }
 
-    // Take a page, delete what it handed back along with that key's entry in the layer below, carry
-    // on from the token. The sweep's tick in miniature.
+    // Take a page, delete its keys here and in the layer below, and resume from the token.
     let mut seen: Vec<String> = Vec::new();
     let mut resume = None;
     let mut terminated = false;
     for _ in 0..256 {
-        // Through the labelled wrapper, which is how every caller reaches this.
         let (next, chunk) = is
             .with("svc", "api")
             .scan_stable(swept_meta.clone(), None, resume, 2)
@@ -962,8 +943,7 @@ async fn scan_stable_resumes_past_deleted_keys(
         );
     }
 
-    // Redis may hand a key back more than once, so this is the strongest thing every backend
-    // owes: nothing but the planted keys, and all of them.
+    // Redis may return a key more than once, so check membership rather than an exact sequence.
     for key in &seen {
         assert!(
             planted.iter().any(|(_, _, planted)| planted == key),
@@ -972,10 +952,8 @@ async fn scan_stable_resumes_past_deleted_keys(
     }
 }
 
-/// The multi-SQLite walk pages over files rather than keys: its token names the last file it
-/// finished, and it is done when the file list runs out. A drained namespace keeps every one of
-/// its files, since nothing removes them, so that list stays as long as it ever was and the walk
-/// still has to cross it a budget at a time.
+/// A drained multi-SQLite namespace keeps its files, so the walk still crosses them a page budget
+/// at a time.
 #[test]
 #[tracing::instrument]
 async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
@@ -1054,12 +1032,8 @@ async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
     );
 }
 
-/// A file created after a listing was cached still shows up in the next walk.
-///
-/// The listing is cached because re-reading and re-sorting the whole directory per page made a walk
-/// quadratic in the file count, and a directory holds one file per agent that has ever had entries.
-/// Nothing may go missing for that: this process is the only writer to its own directory, so
-/// creating a file has to drop what the cache holds.
+/// A file created after a listing was cached still shows up in the next walk, because creating a
+/// file clears the listing cache.
 #[test]
 #[tracing::instrument]
 async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
@@ -1159,7 +1133,6 @@ async fn last_id_matches_last_without_the_value(
         .last("svc", "api", "entity", ns.ns.clone(), &key)
         .await
         .unwrap();
-    // Through the labelled wrapper, which is how every caller reaches this.
     let last_id = is
         .with_entity("svc", "api", "entity")
         .last_id(ns.ns.clone(), &key)

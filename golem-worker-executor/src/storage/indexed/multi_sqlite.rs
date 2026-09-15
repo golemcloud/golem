@@ -29,13 +29,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-/// How long a directory listing is served before it is taken again.
-///
-/// A backstop rather than the mechanism. This process is the only writer to its own directory, and
-/// [`MultiSqliteIndexedStorage::storage_by_db_name`] drops the cached listings whenever it creates a
-/// file, so a listing served from cache is normally exact. The window only matters if something
-/// outside the process puts a file there, and it can only make a listing short, never wrong: a file
-/// is emptied rather than deleted, so a name once listed keeps its place.
+/// How long a cached directory listing is served. A backstop only:
+/// [`MultiSqliteIndexedStorage::storage_by_db_name`] clears the cache whenever it creates a file,
+/// so this matters only for files created outside the process.
 const LISTING_TTL: Duration = Duration::from_secs(10);
 
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
@@ -125,14 +121,10 @@ impl MultiSqliteIndexedStorage {
         }
     }
 
-    /// The `.db` files a namespace is spread over, in a stable order.
+    /// The `.db` files a namespace is spread over, sorted.
     ///
-    /// Cached for [`LISTING_TTL`], and read off the Tokio worker. A walk over a meta-namespace asks
-    /// for this once per page, the directory holds one file per agent that has ever had entries at
-    /// this level -- ephemeral ids are unbounded, so that is one per invocation -- and reading and
-    /// sorting all of it per page made a walk quadratic in the file count, with a synchronous
-    /// `read_dir` of the whole directory blocking a runtime worker each time. That defeats the
-    /// bounded-work guarantee of anything paging through it.
+    /// A walk asks for this once per page, and the directory holds a file per agent that ever had
+    /// entries, so the listing is cached for [`LISTING_TTL`] and read on a blocking thread.
     async fn namespace_db_files(
         &self,
         namespace: &IndexedStorageMetaNamespace,
@@ -194,10 +186,8 @@ impl MultiSqliteIndexedStorage {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
-        // Set when this call is what puts a new file in the directory, which makes every cached
-        // listing that would have contained it short. Tested inside the miss path rather than on
-        // every call: a hit means the file was opened already, and a miss on its own only means the
-        // connection was evicted.
+        // Set when this call creates the file, which makes cached listings stale. Checked only on a
+        // cache miss, since a hit means the file is already open.
         let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = created.clone();
         let existing = db_path.clone();
@@ -356,17 +346,10 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        // A meta-namespace spans one file per namespace under it, and key order does not follow
-        // file order, so this walks the files rather than the keys: the token names the last file
-        // finished, and a file is always taken whole. Merging a page from every file instead would
-        // read everything the meta-namespace holds to answer one page, which is both quadratic over
-        // a pass and unbounded in memory.
-        //
-        // A file is never deleted, only emptied, which is what makes the token a seek: the name a
-        // caller comes back with still sits where it did. It also means a drained meta-namespace is
-        // a long row of empty files, so a call stops once it has opened `count` of them whether or
-        // not it found anything. Otherwise one call would open every file the backend has ever
-        // made, and the caller's page budget would bound round trips while bounding nothing here.
+        // Walks files rather than keys: the token names the last file finished, and each file is
+        // read whole. Files are emptied, never deleted, so the token stays a valid seek position.
+        // Drained files stay listed, so a call stops after opening `count` files even if they were
+        // all empty.
         let after = match resume {
             Some(ScanResume::Marker(file)) => Some(file),
             Some(ScanResume::Cursor(_)) => {
@@ -379,8 +362,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         };
 
         let files = self.namespace_db_files(&namespace).await?;
-        // Sorted, so the marker is found by bisection rather than by walking the files before it.
-        // Skipping linearly cost every page a pass over everything the pass had already done.
+        // The listing is sorted, so the marker is found by bisection.
         let start = match after.as_deref() {
             Some(after) => files.partition_point(|file| file.as_str() <= after),
             None => 0,
@@ -396,8 +378,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             opened += 1;
             let storage = self.storage_by_db_name(file_name.clone()).await?;
 
-            // Whole file, however many pages that takes. A file holds one namespace, so this is
-            // bounded by what that namespace holds rather than by the meta-namespace.
+            // The whole file, which holds a single namespace.
             let mut within = None;
             loop {
                 let (next, page) = storage
@@ -423,9 +404,8 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             }
         }
 
-        // The token is the last file finished, not the last key, so it cannot go through
-        // `last_key_resume`. Exhaustion is reaching the end of the file list, which is why a short
-        // page does not end the walk here: an empty page only means the files it opened were empty.
+        // The walk ends at the end of the file list, not on a short page, since the files a page
+        // opened may simply have been empty.
         let exhausted = opened < count.max(1) && (keys.len() as u64) < count;
         let next = match last_file {
             Some(file) if !exhausted => Some(ScanResume::Marker(file)),

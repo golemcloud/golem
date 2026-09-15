@@ -120,12 +120,8 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
-    /// The meta-namespace whose keys enumerate every agent this archive currently holds entries
-    /// for, when the backing storage can enumerate them.
-    ///
-    /// `None` means the archive cannot be enumerated, so it can receive an archive step but never
-    /// be the source of one. Blob-backed archives answer `None`, which is why the bottom of a
-    /// layer stack is always a target.
+    /// The meta-namespace whose keys list every agent this archive holds entries for, or `None`
+    /// when the storage cannot list them, as for blob-backed archives.
     fn scan_namespace(&self, _agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
         None
     }
