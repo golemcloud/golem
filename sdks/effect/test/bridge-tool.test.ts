@@ -1,12 +1,33 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Exit, Scope } from "effect"
-import { createToolClientRuntime, typedSchemaValueConforms } from "../src/BridgeTool.js"
+import {
+  createToolClientRuntime,
+  splitToolRpcError,
+  typedSchemaValueConforms,
+} from "../src/BridgeTool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { ToolTransport, type ToolTransport as ToolTransportShape } from "../src/Tool.js"
 import type { TypedSchemaValue } from "../src/Bridge.js"
-import { emptyMetadata, schemaType, t } from "../src/Bridge.js"
+import { emptyMetadata, schemaType, t, v } from "../src/Bridge.js"
+import { typedSchemaValueToWit } from "../src/internal/schema-model/wit.js"
 
 describe("BridgeTool", () => {
+  it("passes the declared custom-error name and payload to generated decoders", () => {
+    const payload = typedSchemaValueToWit({
+      graph: { defs: new Map(), root: t.string() },
+      value: v.string("bad"),
+    })
+    expect(
+      splitToolRpcError(
+        {
+          tag: "remote-tool-error",
+          val: { tag: "custom-error", val: { name: "second", payload } },
+        },
+        (name, decoded) => ({ name, value: decoded.value }),
+      ),
+    ).toMatchObject({ tag: "tool", error: { name: "second" } })
+  })
+
   it("requires exact result graphs and values that conform to the expected graph", () => {
     const expected = { defs: new Map(), root: t.u32({ min: { tag: "unsigned", val: 1n } }) }
     expect(

@@ -168,8 +168,13 @@ export const isRpcError = (value: unknown): value is Host.RpcError =>
 /** Split declared custom failures from transport failures. @since 1.6.0 @category errors */
 export const splitToolRpcError = <E>(
   error: Host.RpcError,
-  decode: (value: TypedSchemaValue) => E,
-): ToolRuntimeError<E> =>
-  error.tag === "remote-tool-error" && error.val.tag === "custom-error"
-    ? { tag: "tool", error: decodeTypedSchemaValue(error.val.val, decode) }
-    : { tag: "rpc", error }
+  decode: (name: string, payload: TypedSchemaValue) => E,
+): ToolRuntimeError<E> => {
+  if (error.tag !== "remote-tool-error" || error.val.tag !== "custom-error")
+    return { tag: "rpc", error }
+  const custom = error.val.val
+  return {
+    tag: "tool",
+    error: decodeTypedSchemaValue(custom.payload, (payload) => decode(custom.name, payload)),
+  }
+}

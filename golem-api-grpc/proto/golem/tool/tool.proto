@@ -11,6 +11,26 @@ message Tool {
   golem.schema.SchemaGraph schema = 3;
 }
 
+message ToolMiddleware {
+  string name = 1;
+  string version = 2;
+  repeated string aliases = 3;
+  Doc doc = 4;
+  ToolMiddlewareScope scope = 5;
+}
+
+message ToolMiddlewareScope {
+  oneof value {
+    MonomorphicToolMiddlewareScope monomorphic = 1;
+    golem.common.Empty universal = 2;
+  }
+}
+
+message MonomorphicToolMiddlewareScope {
+  Tool presented = 1;
+  optional Tool expected = 2;
+}
+
 message CommandTree {
   repeated CommandNode nodes = 1;
 }

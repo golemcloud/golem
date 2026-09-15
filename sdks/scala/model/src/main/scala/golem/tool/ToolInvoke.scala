@@ -32,6 +32,7 @@ sealed trait ToolInvokeError[+E] extends Product with Serializable {
   def mapTool[E2](f: E => E2): ToolInvokeError[E2] =
     this match {
       case ToolInvokeError.Tool(error)                => ToolInvokeError.Tool(f(error))
+      case error: ToolInvokeError.UnknownToolError    => error
       case error: ToolInvokeError.InvalidToolName     => error
       case error: ToolInvokeError.InvalidCommandPath  => error
       case error: ToolInvokeError.InvalidInput        => error
@@ -41,12 +42,13 @@ sealed trait ToolInvokeError[+E] extends Product with Serializable {
 }
 
 object ToolInvokeError {
-  final case class InvalidToolName(name: String)          extends ToolInvokeError[Nothing]
-  final case class InvalidCommandPath(path: List[String]) extends ToolInvokeError[Nothing]
-  final case class InvalidInput(message: String)          extends ToolInvokeError[Nothing]
-  final case class ConstraintViolation(message: String)   extends ToolInvokeError[Nothing]
-  final case class InvalidResult(message: String)         extends ToolInvokeError[Nothing]
-  final case class Tool[E](error: E)                      extends ToolInvokeError[E]
+  final case class InvalidToolName(name: String)                             extends ToolInvokeError[Nothing]
+  final case class InvalidCommandPath(path: List[String])                    extends ToolInvokeError[Nothing]
+  final case class InvalidInput(message: String)                             extends ToolInvokeError[Nothing]
+  final case class ConstraintViolation(message: String)                      extends ToolInvokeError[Nothing]
+  final case class InvalidResult(message: String)                            extends ToolInvokeError[Nothing]
+  final case class Tool[E](error: E)                                         extends ToolInvokeError[E]
+  final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolInvokeError[Nothing]
 
   def toWire(error: ToolInvokeError[TypedSchemaValue]): WitToolError =
     error match {
@@ -55,8 +57,12 @@ object ToolInvokeError {
       case InvalidInput(message)        => WitToolError.InvalidInput(message)
       case ConstraintViolation(message) => WitToolError.ConstraintViolation(message)
       case InvalidResult(message)       => WitToolError.InvalidResult(message)
-      case Tool(payload)                =>
-        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(payload))
+      case Tool(_)                      =>
+        throw new IllegalArgumentException("named tool errors must be encoded through ToolErrorSchema")
+      case UnknownToolError(name, payload) =>
+        WitToolError.CustomError(
+          golem.tool.wire.WitCustomToolError(name, SchemaWire.typedSchemaValueToWit(payload))
+        )
     }
 
   def fromWire(error: WitToolError): ToolInvokeError[TypedSchemaValue] =
@@ -66,8 +72,8 @@ object ToolInvokeError {
       case WitToolError.InvalidInput(message)    => InvalidInput(message)
       case WitToolError.ConstraintViolation(m)   => ConstraintViolation(m)
       case WitToolError.InvalidResult(message)   => InvalidResult(message)
-      case WitToolError.CustomError(payload)     =>
-        Tool(SchemaWire.typedSchemaValueFromWit(payload))
+      case WitToolError.CustomError(error)       =>
+        UnknownToolError(error.name, SchemaWire.typedSchemaValueFromWit(error.payload))
     }
 }
 
@@ -370,9 +376,9 @@ object ToolInvokerRuntime {
    * result) into the custom-error payload carrier.
    */
   def customError[E](error: E, schema: ToolErrorSchema[E]): ToolInvokeError[TypedSchemaValue] =
-    schema.toErrorPayloadValue(error) match {
-      case Right(payload) => ToolInvokeError.Tool(payload)
-      case Left(message)  => ToolInvokeError.InvalidResult(message)
+    schema.toErrorValue(error) match {
+      case Right(value)  => ToolInvokeError.UnknownToolError(value.name, value.payload)
+      case Left(message) => ToolInvokeError.InvalidResult(message)
     }
 
   private def failed[T](

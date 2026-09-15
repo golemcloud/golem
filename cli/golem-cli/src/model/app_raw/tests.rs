@@ -173,6 +173,9 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_readable,
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
+                filesystem_access: None,
+                middleware: None,
+                middleware_merge_mode: None,
             },
         )
         .boxed()
@@ -677,6 +680,7 @@ fn arb_deployment_options_model() -> BoxedStrategy<DeploymentOptions> {
         .prop_map(
             |(compatibility_check, version_check, security_overrides)| DeploymentOptions {
                 compatibility_check: Some(compatibility_check),
+                compatibility_mode: None,
                 version_check: Some(version_check),
                 security_overrides: Some(security_overrides),
             },
@@ -770,6 +774,7 @@ fn arb_environment_model() -> BoxedStrategy<Environment> {
                     cli,
                     deployment,
                     version,
+                    tools: None,
                 }
             },
         )
@@ -1284,6 +1289,7 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                 retry_policy_defaults,
                 resource_defaults,
                 tool_releases: Default::default(),
+                tool_middleware_releases: Default::default(),
             },
         )
         .boxed()
@@ -1448,7 +1454,7 @@ fn manifest_loading_validates_tool_names_in_every_agent_layer() {
 
 #[test]
 fn environment_rejects_tool_bindings_and_publications() {
-    for field in ["tools", "toolsMergeMode", "publishTools"] {
+    for field in ["toolsMergeMode", "publishTools"] {
         let source = format!(
             "app: test-app\nenvironments:\n  local:\n    server: local\n    {field}: {{}}\n"
         );
@@ -1458,6 +1464,202 @@ fn environment_rejects_tool_bindings_and_publications() {
             "environment unexpectedly accepted {field}"
         );
     }
+}
+
+#[test]
+fn middleware_manifest_slots_and_distinct_release_ids_parse() {
+    let app = Application::from_yaml_str(indoc::indoc! { r#"
+        app: test-app
+        tools:
+          middleware:
+            audit:
+              component: app:audit
+        toolMiddlewareReleases:
+          local:
+            audit: {}
+        environments:
+          local:
+            server: local
+            deployment:
+              compatibilityMode: nominal
+            tools:
+              middleware:
+                - audit@1.0.0
+                - name: audit
+                  version: 1.0.0
+                  filesystemAccess: denied
+        agents:
+          SearchAgent:
+            tools:
+              search:
+                middleware: []
+                middlewareMergeMode: replace
+    "# })
+    .unwrap();
+    let (_, middleware) = app.tools.into_tools_and_middleware();
+    assert!(middleware.is_some());
+    let tools = app.environments["local"].tools.as_ref().unwrap();
+    assert_eq!(tools.middleware.len(), 2);
+    assert_eq!(
+        tools.middleware[1]
+            .clone()
+            .into_common()
+            .unwrap()
+            .filesystem_access,
+        ToolFilesystemAccess::Denied
+    );
+    assert_eq!(
+        app.agents[&AgentTypeName("SearchAgent".to_string())]
+            .tools
+            .as_ref()
+            .unwrap()["search"]
+            .middleware,
+        Some(vec![])
+    );
+    assert_eq!(
+        app.tool_middleware_releases
+            .get(&EnvironmentName("local".to_string()))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        app.environments["local"]
+            .deployment
+            .as_ref()
+            .unwrap()
+            .compatibility_mode(),
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal
+    );
+}
+
+#[test]
+fn tool_middleware_declaration_rejects_misspelled_property() {
+    let error =
+        serde_yaml::from_str::<ToolMiddlewareDeclaration>("envMergeModee: replace").unwrap_err();
+    assert!(error.to_string().contains("unknown field `envMergeModee`"));
+}
+
+#[test]
+fn tool_middleware_declaration_properties_parse() {
+    let source = indoc::indoc! { r#"
+        component: app:audit
+        config: { level: info }
+        envMergeMode: replace
+        env: { LOG: debug }
+        pluginsMergeMode: replace
+        plugins: []
+        filesMergeMode: replace
+        files: []
+    "# };
+    let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(source).unwrap();
+    let properties = declaration.tool_layer_properties();
+    assert_eq!(properties.env.unwrap()["LOG"], "debug");
+    assert!(properties.plugins.unwrap().is_empty());
+    assert!(properties.files.unwrap().is_empty());
+}
+
+#[test]
+fn tool_middleware_declaration_properties_roundtrip() {
+    let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(indoc::indoc! { r#"
+        component: app:audit
+        config: { level: info }
+        envMergeMode: replace
+        env: { LOG: debug }
+        pluginsMergeMode: replace
+        plugins: []
+        filesMergeMode: replace
+        files: []
+    "# })
+    .unwrap();
+    assert_eq!(
+        serde_yaml::from_value::<ToolMiddlewareDeclaration>(
+            serde_yaml::to_value(&declaration).unwrap()
+        )
+        .unwrap()
+        .tool_layer_properties()
+        .config,
+        declaration.tool_layer_properties().config
+    );
+}
+
+#[test]
+fn compatibility_mode_schema_accepts_every_rust_value() {
+    use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+    for mode in [
+        ToolCompatibilityMode::StrictEquality,
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        let options: DeploymentOptions = serde_json::from_value(serde_json::json!({
+            "compatibilityMode": mode,
+        }))
+        .unwrap();
+        assert_eq!(options.to_diffable().tool_compatibility_mode, mode);
+        assert_eq!(
+            serde_json::to_value(&options).unwrap()["compatibilityMode"],
+            serde_json::to_value(mode).unwrap()
+        );
+        let manifest = serde_json::json!({
+            "environments": {
+                "local": { "deployment": { "compatibilityMode": mode } }
+            }
+        });
+        assert!(
+            JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
+            "schema rejected Rust compatibility mode {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn reserved_middleware_tool_name_has_clear_error() {
+    let error = Application::from_yaml_str(indoc::indoc! { r#"
+        tools:
+          middleware:
+            component: app:tool
+    "# })
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("tool name `middleware` is reserved")
+    );
+}
+
+#[test]
+fn environment_middleware_merge_mode_is_rejected_even_when_prepend() {
+    let source = indoc::indoc! { r#"
+        environments:
+          local:
+            tools:
+              search:
+                middlewareMergeMode: prepend
+    "# };
+    let error = Application::from_yaml_str(source).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only valid on agent tool bindings")
+    );
+
+    let json = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+}
+
+#[test]
+fn agent_universal_middleware_slot_is_rejected() {
+    assert!(
+        Application::from_yaml_str(indoc::indoc! { r#"
+        app: test-app
+        agents:
+          Worker:
+            tools:
+              middleware: [audit]
+    "# })
+        .is_err()
+    );
 }
 
 #[test]
