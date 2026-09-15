@@ -48,6 +48,9 @@ use std::task::{Context, Poll};
 
 const WRITE_PRESSURE_RECOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
+mod inspection;
+pub(crate) use inspection::{FileInspection, open_file_for_inspection};
+
 mod lifecycle_stage {
     pub trait Sealed {}
 }

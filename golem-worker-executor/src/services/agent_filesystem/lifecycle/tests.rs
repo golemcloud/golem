@@ -27,6 +27,9 @@ use test_r::{test, timeout};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+#[path = "inspection_tests.rs"]
+mod inspection;
+
 struct ScriptedWriteRecovery {
     outcomes: Mutex<VecDeque<FilesystemWriteRecoveryOutcome>>,
     calls: AtomicUsize,
