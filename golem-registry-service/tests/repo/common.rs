@@ -5482,6 +5482,53 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
 
+    let exact_first_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let exact_second_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let alpha = ToolName::try_from("alpha").unwrap();
+    let agent_type = AgentTypeName(agent_type_name.clone());
+    assert_eq!(exact_first_state.deployment_revision.get(), 1);
+    assert_eq!(
+        exact_first_state.agent_tool_bindings[&agent_type][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 1 })
+    );
+    assert_eq!(exact_second_state.deployment_revision.get(), 2);
+    assert_eq!(
+        exact_second_state.agent_tool_bindings[&agent_type][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 2 })
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(environment_id, 999)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(new_repo_uuid(), 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
     let first_revision = deps
         .full_deployment_repo
         .list_deployment_registered_tools(environment_id, 1)
@@ -5743,6 +5790,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .full_deployment_repo
         .get_tool_deployment_state(environment_id, 4)
         .await
+        .unwrap()
         .unwrap()
         .try_into()
         .unwrap();
@@ -6168,6 +6216,33 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             .await,
         Err(ToolReleaseError::ToolReleaseNotPublished)
     ));
+
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                6,
+                updated_component_revision_id,
+                "6.0.0",
+                Vec::new(),
+                None,
+                true,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let empty_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(empty_state.deployment_revision.get(), 6);
+    assert!(empty_state.registered_tools.is_empty());
+    assert!(empty_state.agent_tool_bindings.is_empty());
 
     deps.full_deployment_repo
         .set_current_deployment(owner_account_id, environment_id, 1)

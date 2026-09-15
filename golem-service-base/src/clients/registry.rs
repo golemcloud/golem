@@ -30,7 +30,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
     GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
-    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, GetToolDeploymentStateRequest,
+    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ResolveAgentTypeByNamesRequest, ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
     UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
@@ -227,6 +228,16 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "get_tool_deployment_state is not supported by this registry service",
+        ))
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_tool_deployment_state_at_revision is not supported by this registry service",
         ))
     }
 
@@ -1053,6 +1064,34 @@ impl RegistryService for GrpcRegistryService {
                     component_revision: component_revision.into(),
                 };
                 Box::pin(client.get_tool_deployment_state(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_tool_deployment_state_response::Result::Success(payload)) => payload
+                .tool_deployment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
+            Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_tool_deployment_state_at_revision", move |client| {
+                let request = GetToolDeploymentStateAtRevisionRequest {
+                    environment_id: Some(environment_id.into()),
+                    deployment_revision: deployment_revision.into(),
+                };
+                Box::pin(client.get_tool_deployment_state_at_revision(request))
             })
             .await?
             .into_inner();

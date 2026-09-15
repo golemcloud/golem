@@ -153,7 +153,7 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord>;
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
 
     async fn get_current_tool_deployment_state(
         &self,
@@ -461,7 +461,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord> {
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         self.repo
             .get_tool_deployment_state(environment_id, deployment_revision_id)
             .instrument(Self::span_env_and_revision(
@@ -1403,7 +1403,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord> {
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        if self
+            .get_deployment_revision(environment_id, deployment_revision_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
         let registered_tools = self
             .list_deployment_registered_tools(environment_id, deployment_revision_id)
             .await?;
@@ -1421,11 +1428,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
-        Ok(ToolDeploymentStateRecord {
+        Ok(Some(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
-        })
+        }))
     }
 
     async fn get_current_tool_deployment_state(
@@ -1454,7 +1461,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .map_err(RepoError::from)?;
         self.get_tool_deployment_state(environment_id, deployment_revision_id)
             .await
-            .map(Some)
     }
 
     async fn get_latest_tool_deployment_state_by_component_revision(
@@ -1488,7 +1494,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .map_err(RepoError::from)?;
         self.get_tool_deployment_state(*environment_id, deployment_revision_id)
             .await
-            .map(Some)
     }
 
     async fn get_deployed_agent_type(

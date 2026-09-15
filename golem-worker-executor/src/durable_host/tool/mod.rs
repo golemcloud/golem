@@ -4111,6 +4111,7 @@ fn classify_tool_discovery_error(error: &ToolDiscoveryError) -> HostFailureKind 
     match error {
         ToolDiscoveryError::Retrieval(_) => HostFailureKind::Transient,
         ToolDiscoveryError::AgentContextRequired
+        | ToolDiscoveryError::MissingDeploymentRevision { .. }
         | ToolDiscoveryError::InconsistentSnapshot { .. } => HostFailureKind::Permanent,
     }
 }

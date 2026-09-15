@@ -1,25 +1,45 @@
 use super::{
-    CachedToolDeployment, ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache,
-    ToolDiscoveryError, ToolDiscoverySnapshot, ToolDispatchTarget,
-    get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
-    get_tool_activation_from_deployment,
+    CachedToolDeployment, EnvironmentStateService, GrpcEnvironmentStateService,
+    ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache, ToolDiscoveryError,
+    ToolDiscoverySnapshot, ToolDispatchTarget, get_accessible_tool_from_snapshot,
+    get_accessible_tools_from_snapshot, get_tool_activation_from_deployment,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+use golem_common::model::agent::{
+    AgentFileContentHash, AgentTypeName, RegisteredAgentType, ResolvedAgentType,
+};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
+use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
     InitialAgentFile,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::entity::{EntityActivationPolicy, ExecutableTarget, FilesystemCapability};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
-use std::collections::BTreeMap;
+use golem_service_base::clients::registry::{
+    RegistryInvalidationHandler, RegistryService, RegistryServiceError, ResourceUsageUpdate,
+};
+use golem_service_base::custom_api::CompiledRoutes;
+use golem_service_base::mcp::CompiledMcp;
+use golem_service_base::model::agent_secret::AgentSecret;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
+use golem_service_base::model::environment::EnvironmentState;
+use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{test, timeout};
@@ -125,6 +145,14 @@ fn ready_activation(
     match get_tool_activation_from_deployment(Some(deployment), agent_type, tool_name).unwrap() {
         ToolActivationOutcome::Ready(activation) => *activation,
         outcome => panic!("expected ready activation, got {outcome:?}"),
+    }
+}
+
+fn empty_deployment(revision: DeploymentRevision) -> ToolDeploymentState {
+    ToolDeploymentState {
+        deployment_revision: revision,
+        registered_tools: BTreeMap::new(),
+        agent_tool_bindings: BTreeMap::new(),
     }
 }
 
@@ -692,4 +720,485 @@ async fn tool_discovery_cache_retains_background_ttl_eviction() {
         .unwrap()
         .unwrap();
     assert!(Arc::ptr_eq(&loaded_fresh_snapshot, &fresh_snapshot));
+}
+
+type ExactKey = (EnvironmentId, DeploymentRevision);
+type LiveKey = (EnvironmentId, ComponentId, ComponentRevision);
+
+#[derive(Default)]
+struct MockRegistryService {
+    exact: std::sync::Mutex<
+        HashMap<ExactKey, VecDeque<Result<Option<ToolDeploymentState>, RegistryServiceError>>>,
+    >,
+    live: std::sync::Mutex<HashMap<LiveKey, Option<ToolDeploymentState>>>,
+    exact_calls: std::sync::Mutex<Vec<ExactKey>>,
+    live_calls: std::sync::Mutex<Vec<LiveKey>>,
+    exact_gate: std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+}
+
+impl MockRegistryService {
+    fn service(self: &Arc<Self>) -> Arc<GrpcEnvironmentStateService> {
+        Arc::new(GrpcEnvironmentStateService::new(
+            self.clone(),
+            32,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ))
+    }
+
+    fn script_exact(
+        &self,
+        key: ExactKey,
+        responses: impl IntoIterator<Item = Result<Option<ToolDeploymentState>, RegistryServiceError>>,
+    ) {
+        self.exact
+            .lock()
+            .unwrap()
+            .insert(key, responses.into_iter().collect());
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistryService for MockRegistryService {
+    async fn authenticate_token(&self, _: &TokenSecret) -> Result<AuthCtx, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_limits(
+        &self,
+        _: AccountId,
+    ) -> Result<ResourceLimits, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn update_worker_connection_limit(
+        &self,
+        _: AccountId,
+        _: &golem_common::model::AgentId,
+        _: bool,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn batch_update_resource_usage(
+        &self,
+        _: HashMap<AccountId, ResourceUsageUpdate>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn download_component(
+        &self,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_component_metadata(
+        &self,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_deployed_component_metadata(
+        &self,
+        _: ComponentId,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_all_deployed_component_revisions(
+        &self,
+        _: ComponentId,
+    ) -> Result<Vec<Component>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn resolve_component(
+        &self,
+        _: AccountId,
+        _: ApplicationId,
+        _: EnvironmentId,
+        _: &str,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_all_agent_types(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_agent_type(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+        _: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let key = (environment_id, component_id, component_revision);
+        self.live_calls.lock().unwrap().push(key);
+        Ok(self.live.lock().unwrap().get(&key).cloned().flatten())
+    }
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let key = (environment_id, deployment_revision);
+        self.exact_calls.lock().unwrap().push(key);
+        let gate = self.exact_gate.lock().unwrap().clone();
+        if let Some((started, release)) = gate {
+            started.notify_one();
+            release.notified().await;
+        }
+        self.exact
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or_else(|| panic!("unexpected exact lookup: {key:?}"))
+    }
+    async fn resolve_agent_type_by_names(
+        &self,
+        _: &ApplicationName,
+        _: &golem_common::model::environment::EnvironmentName,
+        _: &AgentTypeName,
+        _: Option<DeploymentRevision>,
+        _: Option<&str>,
+        _: &AuthCtx,
+    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_active_routes_for_domain(
+        &self,
+        _: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_active_compiled_mcps_for_domain(
+        &self,
+        _: &Domain,
+    ) -> Result<CompiledMcp, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_current_environment_state(
+        &self,
+        _: EnvironmentId,
+    ) -> Result<EnvironmentState, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_agent_secret_revision(
+        &self,
+        _: EnvironmentId,
+        _: AgentSecretId,
+        _: CanonicalAgentSecretPath,
+        _: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_definition_by_id(
+        &self,
+        _: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_definition_by_name(
+        &self,
+        _: EnvironmentId,
+        _: ResourceName,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn subscribe_registry_invalidations(
+        &self,
+        _: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        unimplemented!()
+    }
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        _: &'static str,
+        _: Option<tokio_util::sync::CancellationToken>,
+        _: Arc<dyn RegistryInvalidationHandler>,
+    ) {
+        unimplemented!()
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_keys_results_and_error_classification() {
+    let registry = Arc::new(MockRegistryService::default());
+    let env_cedar = EnvironmentId::new();
+    let env_orchid = EnvironmentId::new();
+    let revision_17 = DeploymentRevision::try_from(17_u64).unwrap();
+    let revision_43 = DeploymentRevision::try_from(43_u64).unwrap();
+    let revision_89 = DeploymentRevision::try_from(89_u64).unwrap();
+    registry.script_exact(
+        (env_cedar, revision_17),
+        [Ok(Some(empty_deployment(revision_17)))],
+    );
+    registry.script_exact(
+        (env_orchid, revision_17),
+        [Ok(Some(empty_deployment(revision_17)))],
+    );
+    registry.script_exact(
+        (env_cedar, revision_43),
+        [Ok(Some(empty_deployment(revision_43)))],
+    );
+    registry.script_exact((env_orchid, revision_43), [Ok(None)]);
+    registry.script_exact(
+        (env_cedar, revision_89),
+        [
+            Err(RegistryServiceError::InternalServerError(
+                "temporary".to_string(),
+            )),
+            Ok(Some(empty_deployment(revision_89))),
+        ],
+    );
+    let service = registry.service();
+
+    for (environment, revision) in [
+        (env_cedar, revision_17),
+        (env_orchid, revision_17),
+        (env_cedar, revision_43),
+    ] {
+        let state = service
+            .get_tool_deployment_state_at_revision(environment, revision)
+            .await
+            .unwrap();
+        assert_eq!(state.deployment_revision, revision);
+        assert!(
+            state.registered_tools.is_empty(),
+            "valid empty state must be returned"
+        );
+    }
+    assert!(matches!(
+        service
+            .get_tool_deployment_state_at_revision(env_orchid, revision_43)
+            .await,
+        Err(ToolDiscoveryError::MissingDeploymentRevision {
+            environment_id,
+            deployment_revision
+        }) if environment_id == env_orchid && deployment_revision == revision_43
+    ));
+    assert!(matches!(
+        service
+            .get_tool_deployment_state_at_revision(env_cedar, revision_89)
+            .await,
+        Err(ToolDiscoveryError::Retrieval(_))
+    ));
+    assert_eq!(
+        service
+            .get_tool_deployment_state_at_revision(env_cedar, revision_89)
+            .await
+            .unwrap()
+            .deployment_revision,
+        revision_89
+    );
+    assert_eq!(
+        *registry.exact_calls.lock().unwrap(),
+        vec![
+            (env_cedar, revision_17),
+            (env_orchid, revision_17),
+            (env_cedar, revision_43),
+            (env_orchid, revision_43),
+            (env_cedar, revision_89),
+            (env_cedar, revision_89),
+        ]
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_rejects_a_response_for_another_revision() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let requested_revision = DeploymentRevision::try_from(17_u64).unwrap();
+    let returned_revision = DeploymentRevision::try_from(43_u64).unwrap();
+    registry.script_exact(
+        (environment, requested_revision),
+        [
+            Ok(Some(empty_deployment(returned_revision))),
+            Ok(Some(empty_deployment(requested_revision))),
+        ],
+    );
+    let service = registry.service();
+
+    let result = service
+        .get_tool_deployment_state_at_revision(environment, requested_revision)
+        .await;
+
+    assert!(
+        matches!(result, Err(ToolDiscoveryError::InconsistentSnapshot { .. })),
+        "an exact-revision lookup must not accept state for a different revision: {result:?}"
+    );
+    assert_eq!(
+        service
+            .get_tool_deployment_state_at_revision(environment, requested_revision)
+            .await
+            .unwrap()
+            .deployment_revision,
+        requested_revision
+    );
+    assert_eq!(registry.exact_calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_coalesces_and_survives_initial_caller_cancellation() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let revision = DeploymentRevision::try_from(137_u64).unwrap();
+    registry.script_exact(
+        (environment, revision),
+        [Ok(Some(empty_deployment(revision)))],
+    );
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *registry.exact_gate.lock().unwrap() = Some((started.clone(), release.clone()));
+    let service = registry.service();
+
+    let initial = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .get_tool_deployment_state_at_revision(environment, revision)
+                .await
+        }
+    });
+    started.notified().await;
+    let followers = (0..6)
+        .map(|_| {
+            let service = service.clone();
+            tokio::spawn(async move {
+                service
+                    .get_tool_deployment_state_at_revision(environment, revision)
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    tokio::task::yield_now().await;
+    initial.abort();
+    assert!(initial.await.unwrap_err().is_cancelled());
+    release.notify_one();
+    let states = futures::future::join_all(followers)
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        registry.exact_calls.lock().unwrap().as_slice(),
+        &[(environment, revision)]
+    );
+    assert!(
+        states
+            .iter()
+            .all(|state| state.deployment_revision == revision)
+    );
+    assert!(
+        states
+            .windows(2)
+            .all(|states| Arc::ptr_eq(&states[0], &states[1]))
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn invalidation_refreshes_live_state_but_preserves_exact_state() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let component = ComponentId::new();
+    let component_revision = ComponentRevision::try_from(23_u64).unwrap();
+    let revision_n = DeploymentRevision::try_from(211_u64).unwrap();
+    let revision_next = DeploymentRevision::try_from(223_u64).unwrap();
+    let live_key = (environment, component, component_revision);
+    registry
+        .live
+        .lock()
+        .unwrap()
+        .insert(live_key, Some(empty_deployment(revision_n)));
+    registry.script_exact(
+        (environment, revision_n),
+        [Ok(Some(empty_deployment(revision_n)))],
+    );
+    let service = registry.service();
+
+    assert_eq!(
+        service
+            .get_live_tool_deployment_state(environment, component, component_revision)
+            .await
+            .unwrap()
+            .unwrap()
+            .deployment_revision,
+        revision_n
+    );
+    let exact_n = service
+        .get_tool_deployment_state_at_revision(environment, revision_n)
+        .await
+        .unwrap();
+    registry
+        .live
+        .lock()
+        .unwrap()
+        .insert(live_key, Some(empty_deployment(revision_next)));
+    service.invalidate_environment(environment).await;
+    assert_eq!(
+        service
+            .get_live_tool_deployment_state(environment, component, component_revision)
+            .await
+            .unwrap()
+            .unwrap()
+            .deployment_revision,
+        revision_next
+    );
+    service.invalidate_all().await;
+    let exact_after_both_invalidations = service
+        .get_tool_deployment_state_at_revision(environment, revision_n)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&exact_n, &exact_after_both_invalidations));
+    assert_eq!(
+        registry.live_calls.lock().unwrap().as_slice(),
+        &[live_key, live_key]
+    );
+    assert_eq!(
+        registry.exact_calls.lock().unwrap().as_slice(),
+        &[(environment, revision_n)]
+    );
+
+    registry.script_exact(
+        (environment, revision_n),
+        [Ok(Some(empty_deployment(revision_n)))],
+    );
+    let cold_service = registry.service();
+    assert_eq!(
+        cold_service
+            .get_tool_deployment_state_at_revision(environment, revision_n)
+            .await
+            .unwrap()
+            .deployment_revision,
+        revision_n
+    );
+    assert_eq!(registry.exact_calls.lock().unwrap().len(), 2);
 }

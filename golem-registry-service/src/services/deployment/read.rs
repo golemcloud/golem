@@ -432,6 +432,19 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
+    pub async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
     pub async fn get_latest_tool_deployment_state_by_component_revision(
         &self,
         environment_id: EnvironmentId,

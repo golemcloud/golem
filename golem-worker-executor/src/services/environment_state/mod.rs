@@ -19,6 +19,7 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
     EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
 };
@@ -42,9 +43,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 type ToolDiscoveryCacheKey = (EnvironmentId, ComponentId, ComponentRevision);
+type ToolDeploymentRevisionCacheKey = (EnvironmentId, DeploymentRevision);
 
 struct CachedToolDeployment {
-    state: ToolDeploymentState,
+    state: Arc<ToolDeploymentState>,
     discovery: ToolDiscoverySnapshot,
 }
 
@@ -52,7 +54,7 @@ impl From<ToolDeploymentState> for CachedToolDeployment {
     fn from(state: ToolDeploymentState) -> Self {
         Self {
             discovery: state.clone().into(),
-            state,
+            state: Arc::new(state),
         }
     }
 }
@@ -125,11 +127,17 @@ impl ToolDiscoveryCache {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ToolDiscoveryError {
     Retrieval(WorkerExecutorError),
     AgentContextRequired,
-    InconsistentSnapshot { details: String },
+    MissingDeploymentRevision {
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    },
+    InconsistentSnapshot {
+        details: String,
+    },
 }
 
 impl ToolDiscoveryError {
@@ -148,6 +156,13 @@ impl Display for ToolDiscoveryError {
         match self {
             Self::Retrieval(error) => error.fmt(f),
             Self::AgentContextRequired => write!(f, "Tool discovery requires an agent context"),
+            Self::MissingDeploymentRevision {
+                environment_id,
+                deployment_revision,
+            } => write!(
+                f,
+                "Tool deployment revision {deployment_revision} does not exist in environment {environment_id}"
+            ),
             Self::InconsistentSnapshot { details } => {
                 write!(f, "Inconsistent tool deployment snapshot: {details}")
             }
@@ -159,7 +174,9 @@ impl Error for ToolDiscoveryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Retrieval(error) => Some(error),
-            Self::AgentContextRequired | Self::InconsistentSnapshot { .. } => None,
+            Self::AgentContextRequired
+            | Self::MissingDeploymentRevision { .. }
+            | Self::InconsistentSnapshot { .. } => None,
         }
     }
 }
@@ -423,6 +440,26 @@ pub trait EnvironmentStateService: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError>;
 
+    async fn get_live_tool_deployment_state(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
+        Ok(None)
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Arc<ToolDeploymentState>, ToolDiscoveryError> {
+        Err(ToolDiscoveryError::MissingDeploymentRevision {
+            environment_id,
+            deployment_revision,
+        })
+    }
+
     async fn get_tool_activation(
         &self,
         _environment_id: EnvironmentId,
@@ -463,6 +500,8 @@ pub struct GrpcEnvironmentStateService {
     client: Arc<dyn RegistryService>,
     cached_environment_state: Cache<EnvironmentId, (), Arc<EnvironmentState>, WorkerExecutorError>,
     cached_tool_discovery: ToolDiscoveryCache,
+    cached_tool_deployment_revisions:
+        Cache<ToolDeploymentRevisionCacheKey, (), Arc<ToolDeploymentState>, ToolDiscoveryError>,
 }
 
 impl GrpcEnvironmentStateService {
@@ -487,6 +526,15 @@ impl GrpcEnvironmentStateService {
                 cache_capacity,
                 cache_ttl,
                 cache_eviction_interval,
+            ),
+            cached_tool_deployment_revisions: Cache::new(
+                Some(cache_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::OlderThan {
+                    ttl: cache_ttl,
+                    period: cache_eviction_interval,
+                },
+                "grpc_environment_state_service_tool_deployment_revisions",
             ),
         }
     }
@@ -583,6 +631,54 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         Ok(environment_state.retry_policies.clone())
     }
 
+    async fn get_live_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
+        Ok(self
+            .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
+            .await?
+            .map(|deployment| deployment.state.clone()))
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Arc<ToolDeploymentState>, ToolDiscoveryError> {
+        let client = self.client.clone();
+        self.cached_tool_deployment_revisions
+            .get_or_insert_simple_spawned(
+                &(environment_id, deployment_revision),
+                move || async move {
+                    let state = client
+                        .get_tool_deployment_state_at_revision(environment_id, deployment_revision)
+                        .await
+                        .map_err(|error| {
+                            ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime(format!(
+                                "Failed to get tool deployment state at revision: {error}"
+                            )))
+                        })?
+                        .ok_or(ToolDiscoveryError::MissingDeploymentRevision {
+                            environment_id,
+                            deployment_revision,
+                        })?;
+                    if state.deployment_revision != deployment_revision {
+                        return Err(ToolDiscoveryError::InconsistentSnapshot {
+                            details: format!(
+                                "registry returned tool deployment revision {} when revision {deployment_revision} was requested",
+                                state.deployment_revision
+                            ),
+                        });
+                    }
+                    Ok(Arc::new(state))
+                },
+            )
+            .await
+    }
+
     async fn get_tool_activation(
         &self,
         environment_id: EnvironmentId,
@@ -595,7 +691,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
             .await?;
         get_tool_activation_from_deployment(
-            snapshot.as_deref().map(|snapshot| &snapshot.state),
+            snapshot.as_deref().map(|snapshot| snapshot.state.as_ref()),
             agent_type,
             tool_name,
         )
