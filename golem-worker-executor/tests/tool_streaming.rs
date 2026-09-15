@@ -63,6 +63,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod moonbit_exports;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
@@ -128,6 +130,13 @@ struct ScalaCleanupEvidence {
     error: String,
     stdin_cancelled: bool,
     stdout_terminal: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct ScalaOutputEvidence {
+    bytes: Vec<i32>,
+    terminal: String,
+    result: String,
 }
 
 fn deployment_state(
@@ -5457,6 +5466,34 @@ async fn scala_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, "scala-marker:scala-live");
     assert_eq!(evidence.bytes_read, 10);
+
+    for (mode, terminal, result) in [
+        ("finish", "finished", "done"),
+        ("fail", "failed:stream producer failed", "done"),
+        ("unit", "finished", "unit"),
+        ("plain", "none", "plain"),
+    ] {
+        let output: ScalaOutputEvidence = executor
+            .invoke_and_await_agent(
+                &stored_component,
+                &agent_id,
+                "outputEvidence",
+                data_value!(mode),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(
+            output.bytes,
+            if mode == "plain" {
+                vec![]
+            } else {
+                vec![0, 127, 128, 255]
+            },
+            "{mode}"
+        );
+        assert_eq!(output.terminal, terminal, "{mode}");
+        assert_eq!(output.result, result, "{mode}");
+    }
 
     let cleanup: ScalaCleanupEvidence = executor
         .invoke_and_await_agent(
