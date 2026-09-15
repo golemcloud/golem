@@ -242,6 +242,12 @@ to make different calls; when no matching `Start` exists, replay fails with a di
 Tolerance machinery (poll-ID stabilisation, response reordering, synthesized readiness, "skip
 unmatched entries") hides the first real bug and must not be added.
 
+Primary `mark_begin_operation` uses `get_primary_atomic_begin`: a pending `Start` stays unconsumed
+while its parent ancestry reaches an active historical reconstruction body in another Store.
+Cursor progress or body settlement wakes the reader. Unrelated or settled ancestry returns the
+unconsumed mismatch for strict validation; same-Store work is not waited on. This specialized
+reader does not change `mark_end_operation` or `get_oplog_index`.
+
 ## Replay-to-live
 
 Three different facts are involved, each with its own owner:
