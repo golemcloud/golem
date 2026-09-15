@@ -234,7 +234,7 @@ impl RouteResolver {
 
         for route in compiled_routes.routes {
             route.route_match.validate(&route.path, &route.behavior)?;
-            let security = compile_route_security(&security_schemes, route.security)?;
+            let security = compile_route_security(&security_schemes, route.security);
 
             let enriched = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
@@ -311,21 +311,20 @@ fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
 fn compile_route_security(
     security_schemes: &HashMap<SecuritySchemeId, Arc<SecuritySchemeDetails>>,
     security: RouteSecurity,
-) -> Result<RichRouteSecurity, String> {
+) -> RichRouteSecurity {
     match security {
-        RouteSecurity::None => Ok(RichRouteSecurity::None),
-        RouteSecurity::SessionFromHeader(inner) => Ok(RichRouteSecurity::SessionFromHeader(inner)),
+        RouteSecurity::None => RichRouteSecurity::None,
+        RouteSecurity::Unavailable => RichRouteSecurity::Unavailable,
+        RouteSecurity::SessionFromHeader(inner) => RichRouteSecurity::SessionFromHeader(inner),
         RouteSecurity::SecurityScheme(inner) => {
-            let security_scheme_id = inner.security_scheme_id;
-
-            let security_scheme = security_schemes
-                .get(&security_scheme_id)
-                .ok_or(format!("Security scheme {security_scheme_id} not found"))?
-                .clone();
-
-            Ok(RichRouteSecurity::SecurityScheme(
-                RichSecuritySchemeRouteSecurity { security_scheme },
-            ))
+            match security_schemes.get(&inner.security_scheme_id) {
+                Some(security_scheme) => {
+                    RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity {
+                        security_scheme: security_scheme.clone(),
+                    })
+                }
+                None => RichRouteSecurity::Unavailable,
+            }
         }
     }
 }
@@ -712,6 +711,70 @@ pub(super) mod tests {
                 routers[usize::from(!trailing)]
                     .route(&http::Method::GET, &segments)
                     .is_none()
+            );
+        }
+    }
+
+    struct ChangingSecurityLookup(std::sync::atomic::AtomicBool);
+
+    #[async_trait::async_trait]
+    impl HttpApiDefinitionsLookup for ChangingSecurityLookup {
+        async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+            let mut routes = LiteralLookup(vec!["protected".into()]).get(domain).await?;
+            let id = SecuritySchemeId(uuid::Uuid::nil());
+            routes.routes[0].security = RouteSecurity::SecurityScheme(
+                golem_service_base::custom_api::SecuritySchemeRouteSecurity {
+                    security_scheme_id: id,
+                },
+            );
+            if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                routes.security_schemes.insert(
+                    id,
+                    SecuritySchemeDetails {
+                        id,
+                        name: golem_common::model::security_scheme::SecuritySchemeName(
+                            "current".into(),
+                        ),
+                        provider_type: golem_common::model::security_scheme::Provider::Google(
+                            Empty {},
+                        ),
+                        client_id: openidconnect::ClientId::new("test".into()),
+                        client_secret: openidconnect::ClientSecret::new("test".into()),
+                        redirect_url: openidconnect::RedirectUrl::new(
+                            "https://example.com/callback".into(),
+                        )
+                        .unwrap(),
+                        scopes: vec![],
+                    },
+                );
+            }
+            Ok(routes)
+        }
+    }
+
+    #[test]
+    async fn security_invalidation_reloads_current_policy_without_changing_selected_route() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let lookup = Arc::new(ChangingSecurityLookup(AtomicBool::new(false)));
+        let resolver = RouteResolver::new(&RouteResolverConfig::default(), lookup.clone());
+        for available in [false, true, false] {
+            lookup.0.store(available, Ordering::SeqCst);
+            resolver
+                .invalidate_domains_for_environment(EnvironmentId(uuid::Uuid::nil()))
+                .await;
+            let request = poem::Request::builder()
+                .uri("/protected".parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            assert_eq!(route.route.route_id, 7);
+            assert_eq!(
+                matches!(route.route.security, RichRouteSecurity::SecurityScheme(_)),
+                available
+            );
+            assert_eq!(
+                matches!(route.route.security, RichRouteSecurity::Unavailable),
+                !available
             );
         }
     }

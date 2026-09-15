@@ -616,6 +616,7 @@ pub enum RouteSecurity {
     None,
     SessionFromHeader(SessionFromHeaderRouteSecurity),
     SecurityScheme(SecuritySchemeRouteSecurity),
+    Unavailable,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

@@ -303,9 +303,11 @@ message RouteSecurity {
     None none = 1;
     SessionFromHeader session_from_header = 2;
     SecurityScheme security_scheme = 3;
+    Unavailable unavailable = 4;
   }
 
   message None {}
+  message Unavailable {}
 
   message SessionFromHeader {
     string header_name = 1;

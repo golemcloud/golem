@@ -110,6 +110,7 @@ pub enum RichRouteSecurity {
     None,
     SessionFromHeader(SessionFromHeaderRouteSecurity),
     SecurityScheme(RichSecuritySchemeRouteSecurity),
+    Unavailable,
 }
 
 #[derive(Debug, Clone)]

@@ -552,7 +552,9 @@ fn add_read_only_cache_headers(
 fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     match security {
         RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
-        RichRouteSecurity::None | RichRouteSecurity::SecurityScheme(_) => "Authorization",
+        RichRouteSecurity::None
+        | RichRouteSecurity::SecurityScheme(_)
+        | RichRouteSecurity::Unavailable => "Authorization",
     }
 }
 

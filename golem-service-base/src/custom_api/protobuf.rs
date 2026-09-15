@@ -524,6 +524,7 @@ impl TryFrom<proto::golem::customapi::RouteSecurity> for RouteSecurity {
 
         match value.kind.ok_or("RouteSecurity.kind missing")? {
             Kind::None(_) => Ok(RouteSecurity::None),
+            Kind::Unavailable(_) => Ok(RouteSecurity::Unavailable),
             Kind::SessionFromHeader(session_from_header) => Ok(RouteSecurity::SessionFromHeader(
                 SessionFromHeaderRouteSecurity {
                     header_name: session_from_header.header_name,
@@ -548,6 +549,11 @@ impl From<RouteSecurity> for proto::golem::customapi::RouteSecurity {
         match value {
             RouteSecurity::None => Self {
                 kind: Some(Kind::None(proto::golem::customapi::route_security::None {})),
+            },
+            RouteSecurity::Unavailable => Self {
+                kind: Some(Kind::Unavailable(
+                    proto::golem::customapi::route_security::Unavailable {},
+                )),
             },
             RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity { header_name }) => {
                 Self {
@@ -1055,6 +1061,15 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
     use test_r::test;
+
+    #[test]
+    fn unavailable_route_security_roundtrip_is_not_public() {
+        let encoded: proto::golem::customapi::RouteSecurity = RouteSecurity::Unavailable.into();
+        assert!(matches!(
+            RouteSecurity::try_from(encoded).unwrap(),
+            RouteSecurity::Unavailable
+        ));
+    }
 
     fn input() -> CompiledInputSchema {
         CompiledInputSchema {

@@ -89,34 +89,65 @@ pub fn handle_cors_preflight_behaviour(
     })
 }
 
-pub async fn apply_cors_outgoing_middleware(
-    result: &mut RouteExecutionResult,
+pub fn apply_cors_outgoing_middleware(
+    response: &mut poem::Response,
     request: &RichRequest,
     resolved_route: &ResolvedRouteEntry,
 ) -> Result<(), RequestHandlerError> {
     debug!("Begin executing SetCorsResponseHeadersMiddleware");
 
+    if matches!(
+        resolved_route.route.behavior,
+        super::RichRouteBehaviour::CorsPreflight(_)
+    ) {
+        return Ok(());
+    }
+    for name in [
+        http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+        http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        http::header::ACCESS_CONTROL_ALLOW_METHODS,
+        http::header::ACCESS_CONTROL_MAX_AGE,
+        http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+    ] {
+        response.headers_mut().remove(name);
+    }
     let cors = &resolved_route.route.cors;
 
     if cors.allowed_patterns.is_empty() {
         return Ok(());
     }
 
-    merge_vary_header(&mut result.headers, &["Origin"]);
+    let mut headers = HashMap::new();
+    let vary = response
+        .headers()
+        .get_all(http::header::VARY)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(", ");
+    headers.insert(http::header::VARY, vary);
+    merge_vary_header(&mut headers, &["Origin"]);
 
     if let Some(origin) = request.origin()?
         && cors.allowed_patterns.iter().any(|p| p.matches(origin))
     {
-        result.headers.insert(
+        headers.insert(
             http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
             origin.to_string(),
         );
-        result.headers.insert(
+        headers.insert(
             http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
             "true".to_string(),
         );
     }
 
+    for (name, value) in headers {
+        response.headers_mut().insert(
+            name,
+            http::HeaderValue::from_str(&value).map_err(anyhow::Error::from)?,
+        );
+    }
     Ok(())
 }
 
@@ -327,26 +358,22 @@ mod tests {
             .header(http::header::ORIGIN, "https://blocked.example.com")
             .body(Body::empty());
         let request = RichRequest::new(request);
-        let mut result = RouteExecutionResult {
-            status: StatusCode::OK,
-            headers: HashMap::from([(http::header::VARY, "Accept-Encoding".to_string())]),
-            body: ResponseBody::NoBody,
-        };
+        let mut result = poem::Response::builder()
+            .header(http::header::VARY, "Accept-Encoding")
+            .finish();
         let resolved_route = resolved_route_with_cors(vec![OriginPattern(
             "https://frontend.example.com".to_string(),
         )]);
 
-        apply_cors_outgoing_middleware(&mut result, &request, &resolved_route)
-            .await
-            .unwrap();
+        apply_cors_outgoing_middleware(&mut result, &request, &resolved_route).unwrap();
 
         assert_eq!(
-            result.headers.get(&http::header::VARY),
-            Some(&"Accept-Encoding, Origin".to_string())
+            result.headers().get(&http::header::VARY).unwrap(),
+            "Accept-Encoding, Origin"
         );
         assert!(
             !result
-                .headers
+                .headers()
                 .contains_key(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
         );
     }

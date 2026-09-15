@@ -21,7 +21,7 @@ use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhooks::WebhookCallbackHandler;
-use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
+use super::{OidcCallbackBehaviour, ResponseBody, RichRouteSecurity, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_schema::schema::render::json_value::to_json_value_redacted;
@@ -40,6 +40,21 @@ pub struct RequestHandler {
     webhook_callback_handler: Arc<WebhookCallbackHandler>,
 }
 
+#[derive(Debug)]
+pub struct RequestFailure {
+    pub error: RequestHandlerError,
+    pub cors_headers: http::HeaderMap,
+}
+
+impl From<RequestHandlerError> for RequestFailure {
+    fn from(error: RequestHandlerError) -> Self {
+        Self {
+            error,
+            cors_headers: http::HeaderMap::new(),
+        }
+    }
+}
+
 #[allow(irrefutable_let_patterns)]
 impl RequestHandler {
     pub fn new(
@@ -56,15 +71,19 @@ impl RequestHandler {
         }
     }
 
-    pub async fn handle_request(&self, request: Request) -> Result<Response, RequestHandlerError> {
+    pub async fn handle_request(&self, request: Request) -> Result<Response, RequestFailure> {
         debug!("Begin http request handling for request {request:?}");
 
-        let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
+        let matching_route = self
+            .route_resolver
+            .resolve_matching_route(&request)
+            .await
+            .map_err(RequestHandlerError::from)?;
         let mut request = RichRequest::new(request);
         let request_method = request.underlying.method().clone();
 
-        let execution_result = self
-            .execute_route_and_middlewares(&mut request, &matching_route)
+        let execution_result = require_available_security(&matching_route,
+            self.execute_route_and_middlewares(&mut request, &matching_route))
             .instrument(tracing::span!(
                 tracing::Level::INFO,
                 "handle_route",
@@ -72,11 +91,9 @@ impl RequestHandler {
                 method = %request_method,
                 route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
             ))
-            .await?;
+            .await;
 
-        let response = route_execution_result_to_response(execution_result)?;
-
-        Ok(response)
+        finish_selected_response(execution_result, &request, &matching_route)
     }
 
     async fn execute_route_and_middlewares(
@@ -98,11 +115,7 @@ impl RequestHandler {
             return Ok(short_circuit);
         }
 
-        let mut result = self.execute_route(request, resolved_route).await?;
-
-        apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
-
-        Ok(result)
+        self.execute_route(request, resolved_route).await
     }
 
     async fn execute_route(
@@ -151,6 +164,42 @@ impl RequestHandler {
             RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
                 dispatch_mount(request, resolved_route, &mut PendingMountBackend).await
             }
+        }
+    }
+}
+
+async fn require_available_security(
+    selected: &ResolvedRouteEntry,
+    execute: impl std::future::Future<Output = Result<RouteExecutionResult, RequestHandlerError>>,
+) -> Result<RouteExecutionResult, RequestHandlerError> {
+    if matches!(selected.route.security, RichRouteSecurity::Unavailable) {
+        Ok(RouteExecutionResult {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            headers: HashMap::new(),
+            body: ResponseBody::NoBody,
+        })
+    } else {
+        execute.await
+    }
+}
+
+fn finish_selected_response(
+    result: Result<RouteExecutionResult, RequestHandlerError>,
+    request: &RichRequest,
+    selected: &ResolvedRouteEntry,
+) -> Result<Response, RequestFailure> {
+    match result.and_then(route_execution_result_to_response) {
+        Ok(mut response) => {
+            apply_cors_outgoing_middleware(&mut response, request, selected)?;
+            Ok(response)
+        }
+        Err(error) => {
+            let mut response = Response::default();
+            apply_cors_outgoing_middleware(&mut response, request, selected)?;
+            Err(RequestFailure {
+                error,
+                cors_headers: response.headers().clone(),
+            })
         }
     }
 }
@@ -221,6 +270,138 @@ fn route_execution_result_to_response(
             };
 
             Ok(response)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::common::ApiEndpointError;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_service_base::custom_api::{
+        OriginPattern, RouteSecurity, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    };
+    use poem::IntoResponse;
+    use test_r::test;
+
+    #[test]
+    async fn unavailable_security_keeps_selected_barrier_and_cors_without_polling_dispatch() {
+        for (method, kind) in [(None, "router"), (Some("GET"), "typed")] {
+            for security in [
+                RouteSecurity::Unavailable,
+                RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+                    security_scheme_id: golem_common::model::security_scheme::SecuritySchemeId::new(
+                    ),
+                }),
+            ] {
+                let mut route = test_route(2, "/private", method, kind);
+                route.security = security;
+                route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+                let resolver = test_resolver(vec![test_route(1, "/", None, "router"), route]);
+                let request = Request::builder()
+                    .uri("/private".parse().unwrap())
+                    .header("host", "example.com")
+                    .header("origin", "https://client.example")
+                    .finish();
+                let selected = resolver.resolve_matching_route(&request).await.unwrap();
+                assert_eq!(selected.route.route_id, 2);
+                let result = require_available_security(&selected, async {
+                    panic!("Unavailable route must not authenticate or dispatch")
+                })
+                .await;
+                let response =
+                    finish_selected_response(result, &RichRequest::new(request), &selected)
+                        .unwrap();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(
+                    response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                    "https://client.example"
+                );
+                assert_eq!(response.headers()[http::header::VARY], "Origin");
+            }
+        }
+    }
+
+    #[test]
+    async fn selected_errors_and_auth_short_circuits_keep_cors_without_guest_override() {
+        let mut route = test_route(1, "/", None, "router");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "x-session".into(),
+        });
+        route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+        let resolver = test_resolver(vec![route]);
+        let request = Request::builder()
+            .uri("/".parse().unwrap())
+            .header("host", "example.com")
+            .header("origin", "https://client.example")
+            .finish();
+        let selected = resolver.resolve_matching_route(&request).await.unwrap();
+        let mut request = RichRequest::new(request);
+        let auth = apply_session_from_header_security_middleware(&mut request, &selected)
+            .unwrap()
+            .unwrap();
+        assert_eq!(auth.status, StatusCode::UNAUTHORIZED);
+        for (result, status) in [
+            (Ok(auth), StatusCode::UNAUTHORIZED),
+            (
+                Err(RequestHandlerError::ValueParsingFailed {
+                    value: "bad".into(),
+                    expected: "u64",
+                }),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Err(anyhow!("storage failed").into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                Ok(RouteExecutionResult {
+                    status: StatusCode::FORBIDDEN,
+                    headers: HashMap::from([
+                        (
+                            http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                            "https://evil.example".into(),
+                        ),
+                        (
+                            http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                            "x-secret".into(),
+                        ),
+                        (http::header::VARY, "Accept-Encoding".into()),
+                    ]),
+                    body: ResponseBody::NoBody,
+                }),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let failed = result.is_err();
+            let result = finish_selected_response(result, &request, &selected);
+            assert_eq!(
+                result.is_err(),
+                failed,
+                "Execution errors must retain failure accounting"
+            );
+            let response = result.unwrap_or_else(|failure| {
+                let mut response = ApiEndpointError::from(failure.error).into_response();
+                response.headers_mut().extend(failure.cors_headers);
+                response
+            });
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://client.example"
+            );
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(http::header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            );
+            assert!(
+                response.headers()[http::header::VARY]
+                    .to_str()
+                    .unwrap()
+                    .contains("Origin")
+            );
         }
     }
 }

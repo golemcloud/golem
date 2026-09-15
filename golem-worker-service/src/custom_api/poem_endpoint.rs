@@ -15,7 +15,7 @@
 use crate::api::common::ApiEndpointError;
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::request_handler::RequestHandler;
-use futures::{FutureExt, TryFutureExt};
+use futures::FutureExt;
 use golem_common::recorded_http_api_request;
 use poem::{Endpoint, IntoResponse, Request, Response};
 use std::future::Future;
@@ -40,14 +40,20 @@ impl CustomApiPoemEndpoint {
         let response = self
             .request_handler
             .handle_request(request)
-            .inspect_err(log_internal_errors)
             .instrument(record.span.clone())
-            .map_err(ApiEndpointError::from)
             .await;
 
-        record
-            .result(response)
-            .unwrap_or_else(IntoResponse::into_response)
+        match response {
+            Ok(response) => record.succeed(response),
+            Err(failure) => {
+                log_internal_errors(&failure.error);
+                let mut error = ApiEndpointError::from(failure.error);
+                record.fail((), &mut error);
+                let mut response = error.into_response();
+                response.headers_mut().extend(failure.cors_headers);
+                response
+            }
+        }
     }
 }
 
