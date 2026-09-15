@@ -523,6 +523,18 @@ impl DurableStreamStore {
             }))
     }
 
+    /// Bounds terminal copies and serialization buffers retained during session finalization.
+    pub(crate) fn finish_session_retained_bytes(result: &Result<(), Vec<u8>>) -> usize {
+        let terminal_bytes = result
+            .as_ref()
+            .err()
+            .map_or(0, |bytes| bytes.len())
+            .max(b"output stream ended without a terminal".len());
+        terminal_bytes
+            .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
+            .saturating_mul(4)
+    }
+
     /// Records the session terminal after all required stream finalization is durable.
     pub(crate) async fn finish_session(
         &self,
@@ -540,16 +552,7 @@ impl DurableStreamStore {
         {
             return Ok(());
         }
-        // Finalization can duplicate the error in every output terminal and Finished,
-        // with additional copies held while the ordinary batch is serialized.
-        let terminal_bytes = result
-            .as_ref()
-            .err()
-            .map_or(0, |bytes| bytes.len())
-            .max(b"output stream ended without a terminal".len());
-        let memory = terminal_bytes
-            .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
-            .saturating_mul(4);
+        let memory = Self::finish_session_retained_bytes(&result);
         self.run_lifecycle(context, memory, move |owner, context| async move {
             owner
                 .finish_session_owned(

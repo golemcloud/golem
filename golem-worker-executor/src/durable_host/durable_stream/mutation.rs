@@ -24,21 +24,31 @@ struct MutationCompletion {
     finish: BoxFuture<'static, ()>,
 }
 
-pub(super) struct MutationQueue(std::sync::Mutex<Option<mpsc::UnboundedSender<Mutation>>>);
+enum MutationJob {
+    Write(Mutation),
+    Detached(BoxFuture<'static, ()>),
+}
+
+pub(super) struct MutationQueue(std::sync::Mutex<Option<mpsc::UnboundedSender<MutationJob>>>);
 
 impl MutationQueue {
     pub(super) fn new() -> Self {
         // Admission bounds both queued mutations and their outstanding delivery work.
-        let (sender, mut receiver) = mpsc::unbounded_channel::<Mutation>();
+        let (sender, mut receiver) = mpsc::unbounded_channel::<MutationJob>();
         tokio::spawn(async move {
             let mut current: Option<Mutation> = None;
+            let mut pending = std::collections::VecDeque::new();
             let mut completions = FuturesUnordered::new();
             let mut closed = false;
             loop {
+                if current.is_none() {
+                    current = pending.pop_front();
+                }
                 tokio::select! {
-                    job = receiver.recv(), if !closed && current.is_none() => {
+                    job = receiver.recv(), if !closed => {
                         match job {
-                            Some(job) => current = Some(job),
+                            Some(MutationJob::Write(job)) => pending.push_back(job),
+                            Some(MutationJob::Detached(job)) => completions.push(job),
                             None => closed = true,
                         }
                     }
@@ -54,12 +64,12 @@ impl MutationQueue {
         Self(std::sync::Mutex::new(Some(sender)))
     }
 
-    fn send(&self, mutation: Mutation) -> Result<(), StreamStoreError> {
+    fn send(&self, job: MutationJob) -> Result<(), StreamStoreError> {
         let sender = self.0.lock().unwrap();
         sender
             .as_ref()
             .ok_or(StreamStoreError::RecoveryRequired)?
-            .send(mutation)
+            .send(job)
             .map_err(|_| StreamStoreError::RecoveryRequired)
     }
 
@@ -70,13 +80,39 @@ impl MutationQueue {
 
 struct ProducerMutationScope {
     producer: Arc<DurableStreamStore>,
+    admission: Arc<StreamWriteAdmission>,
     commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
     session_records_changed: AtomicBool,
+}
+
+/// Bounds a detached operation across local writes and remote waits without readmission.
+pub(crate) struct StreamWriteAdmission {
+    producer: Arc<DurableStreamStore>,
+    status_receipts: std::sync::Mutex<Vec<oneshot::Receiver<Result<(), StreamStoreError>>>>,
     publications: std::sync::Mutex<Vec<PublicationReceipt>>,
-    remote_cancellations:
-        std::sync::Mutex<Vec<futures::future::BoxFuture<'static, Result<(), StreamStoreError>>>>,
     _operation: OwnedSemaphorePermit,
     _memory: OwnedSemaphorePermit,
+}
+
+impl StreamWriteAdmission {
+    /// Queues a local write and waits for durability; the admitted operation joins status callbacks.
+    pub(crate) async fn submit<T, E, F, Fut>(self: &Arc<Self>, operation: F) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<DurableStreamStore>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.producer.submit(self.clone(), operation).await
+    }
+
+    /// Defers live delivery until the operation has released its session lock.
+    pub(crate) fn defer_publication(&self, publication: PublicationReceipt) {
+        self.publications
+            .lock()
+            .expect("publication receipt list lock poisoned")
+            .push(publication);
+    }
 }
 
 /// An admitted write's effects and completion obligations, passed explicitly to nested writes.
@@ -163,19 +199,6 @@ impl StreamWriteContext {
         self.effects.pending.store(false, Ordering::Release);
     }
 
-    /// Defers cancellation until local durability and status callbacks have completed.
-    pub(crate) fn defer_remote_cancellation(
-        &self,
-        cancellation: impl Future<Output = Result<(), StreamStoreError>> + Send + 'static,
-    ) {
-        self.assert_owner(&self.scope.producer);
-        self.scope
-            .remote_cancellations
-            .lock()
-            .expect("remote cancellation list lock poisoned")
-            .push(Box::pin(cancellation));
-    }
-
     /// Defers reader notifications until the committed session status has been published.
     pub(crate) fn notify_session_records_changed(&self) {
         self.assert_owner(&self.scope.producer);
@@ -187,17 +210,13 @@ impl StreamWriteContext {
     /// Keeps admission charged while the live bus retains this write's payloads.
     pub(super) fn publication_keepalive(&self) -> Arc<dyn Send + Sync> {
         self.assert_owner(&self.scope.producer);
-        self.scope.clone()
+        self.scope.admission.clone()
     }
 
     /// Defers delivery backpressure until the serial write body has released the queue.
     pub(crate) fn defer_publication(&self, publication: PublicationReceipt) {
         self.assert_owner(&self.scope.producer);
-        self.scope
-            .publications
-            .lock()
-            .expect("publication receipt list lock poisoned")
-            .push(publication);
+        self.scope.admission.defer_publication(publication);
     }
 }
 
@@ -236,11 +255,13 @@ impl DurableStreamStore {
         &self,
         remote: impl Future<Output = Result<T, StreamStoreError>>,
     ) -> Result<T, StreamStoreError> {
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             _ = self.retirement.cancelled() => Err(StreamStoreError::RecoveryRequired),
             result = remote => result,
-        }
+        }?;
+        self.ensure_healthy()?;
+        Ok(result)
     }
 
     /// Retires only when no durable or metadata work remains active.
@@ -326,6 +347,35 @@ impl DurableStreamStore {
             context.assert_owner(self);
             return context.run_nested(operation).await;
         }
+        self.run_admitted(
+            None,
+            retained_bytes,
+            lifecycle,
+            move |_, admission| async move { admission.submit(operation).await },
+        )
+        .await
+    }
+
+    /// Runs detached orchestration under one reservation, outside the serial local writer.
+    /// Reusing an admission avoids acquiring a second count or byte reservation for nested work.
+    pub(crate) async fn run_admitted<T, E, F, Fut>(
+        &self,
+        admission: Option<&Arc<StreamWriteAdmission>>,
+        retained_bytes: usize,
+        lifecycle: bool,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, Arc<StreamWriteAdmission>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        if let Some(admission) = admission {
+            assert!(std::ptr::eq(admission.producer.as_ref(), self));
+            return operation(admission.producer.clone(), admission.clone()).await;
+        }
         let producer = self
             .self_weak
             .upgrade()
@@ -353,115 +403,71 @@ impl DurableStreamStore {
             .await
             .map_err(|_| StreamStoreError::RecoveryRequired)?;
         self.ensure_healthy()?;
-        let activity = self
-            .durable_activity
-            .try_enter()
-            .ok_or(StreamStoreError::RecoveryRequired)?;
-        let (reply, result) = oneshot::channel();
-        let scope = Arc::new(ProducerMutationScope {
+        let admission = Arc::new(StreamWriteAdmission {
             producer: producer.clone(),
-            commit_tails: std::sync::Mutex::new(Vec::new()),
-            session_records_changed: AtomicBool::new(false),
+            status_receipts: std::sync::Mutex::new(Vec::new()),
             publications: std::sync::Mutex::new(Vec::new()),
-            remote_cancellations: std::sync::Mutex::new(Vec::new()),
             _operation: permit,
             _memory: memory,
         });
-        self.mutations.send(Box::pin(async move {
-            let mut outcome = match std::panic::AssertUnwindSafe(async {
-                producer.ensure_healthy()?;
-                activity
-                    .clone()
-                    .scope(StreamWriteContext::execute(scope.clone(), operation))
-                    .await
-            })
-            .catch_unwind()
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => {
-                    producer.poison();
-                    Err(StreamStoreError::Oplog("durable stream mutation panicked".into()).into())
+        let (reply, result) = oneshot::channel();
+        self.mutations
+            .send(MutationJob::Detached(Box::pin(async move {
+                let mut outcome = match std::panic::AssertUnwindSafe(async {
+                    producer.ensure_healthy()?;
+                    operation(producer.clone(), admission.clone()).await
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        producer.poison();
+                        Err(
+                            StreamStoreError::Oplog("durable stream operation panicked".into())
+                                .into(),
+                        )
+                    }
+                };
+                let status_receipts = std::mem::take(
+                    &mut *admission
+                        .status_receipts
+                        .lock()
+                        .expect("status receipt list lock poisoned"),
+                );
+                for receipt in status_receipts {
+                    if let Err(error) = receipt
+                        .await
+                        .unwrap_or(Err(StreamStoreError::RecoveryRequired))
+                    {
+                        producer.poison();
+                        outcome = Err(error.into());
+                    }
                 }
-            };
-            // Callback tails, remote calls and live fanout must not block the
-            // next mutation or reuse its write context. The queue drives
-            // these completions alongside the next durable mutation.
-            MutationCompletion {
-                finish: async move {
-                    let mut publications = std::mem::take(
-                        &mut *scope
-                            .publications
-                            .lock()
-                            .expect("publication receipt list lock poisoned"),
-                    );
-                    let tails = std::mem::take(
-                        &mut *scope
-                            .commit_tails
-                            .lock()
-                            .expect("commit tail list lock poisoned"),
-                    );
-                    for tail in tails {
-                        if let Err(error) = tail.await {
+                let mut publications = std::mem::take(
+                    &mut *admission
+                        .publications
+                        .lock()
+                        .expect("publication receipt list lock poisoned"),
+                );
+                if !lifecycle {
+                    for publication in publications.drain(..) {
+                        if let Err(error) = publication
+                            .await
+                            .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
+                        {
                             producer.poison();
-                            outcome = Err(StreamStoreError::Oplog(format!(
-                                "durable stream commit callback failed: {error}"
-                            ))
-                            .into());
+                            outcome = Err(StreamStoreError::from(error).into());
                         }
                     }
-                    // Slot readers use published worker status, which is folded after the
-                    // durability receipt but before the commit callback completes.
-                    if scope.session_records_changed.load(Ordering::Acquire) {
-                        producer.session_records_changed.notify_waiters();
-                    }
-                    // Draining storage work excludes live fanout. The separate count/byte
-                    // reservations still bound normal publications until delivery completes.
-                    drop(activity);
-                    let cancellations = std::mem::take(
-                        &mut *scope
-                            .remote_cancellations
-                            .lock()
-                            .expect("remote cancellation list lock poisoned"),
-                    );
-                    if outcome.is_ok() {
-                        for cancellation in cancellations {
-                            match std::panic::AssertUnwindSafe(cancellation)
-                                .catch_unwind()
-                                .await
-                            {
-                                Ok(Ok(())) => {}
-                                Ok(Err(error)) => outcome = Err(error.into()),
-                                Err(_) => {
-                                    outcome = Err(StreamStoreError::Oplog(
-                                        "remote stream cancellation panicked".into(),
-                                    )
-                                    .into());
-                                }
-                            }
-                        }
-                    }
-                    if !lifecycle {
-                        for publication in publications.drain(..) {
-                            if let Err(error) = publication
-                                .await
-                                .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
-                            {
-                                producer.poison();
-                                outcome = Err(StreamStoreError::from(error).into());
-                            }
-                        }
-                    }
-                    let _ = reply.send((outcome, publications));
                 }
-                .boxed(),
-            }
-        }))?;
+                // Lifecycle admission must not be held by an abandoned or backpressured reader.
+                drop(admission);
+                let _ = reply.send((outcome, publications));
+            })))?;
         let (mut outcome, publications) = result
             .await
-            .expect("durable stream producer-owned operation terminated");
-        // Terminal delivery is owned by the shared dispatcher. The request still observes
-        // backpressure, but neither a stalled nor an abandoned request holds lifecycle admission.
+            .expect("durable stream admitted operation terminated");
         for publication in publications {
             if let Err(error) = publication
                 .await
@@ -472,6 +478,93 @@ impl DurableStreamStore {
             }
         }
         outcome
+    }
+
+    async fn submit<T, E, F, Fut>(
+        &self,
+        admission: Arc<StreamWriteAdmission>,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        let activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let producer = admission.producer.clone();
+        let (reply, result) = oneshot::channel();
+        let (status_reply, status_receipt) = oneshot::channel();
+        admission
+            .status_receipts
+            .lock()
+            .expect("status receipt list lock poisoned")
+            .push(status_receipt);
+        let scope = Arc::new(ProducerMutationScope {
+            producer: producer.clone(),
+            admission,
+            commit_tails: std::sync::Mutex::new(Vec::new()),
+            session_records_changed: AtomicBool::new(false),
+        });
+        self.mutations
+            .send(MutationJob::Write(Box::pin(async move {
+                let outcome = match std::panic::AssertUnwindSafe(async {
+                    producer.ensure_healthy()?;
+                    activity
+                        .clone()
+                        .scope(StreamWriteContext::execute(scope.clone(), operation))
+                        .await
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        producer.poison();
+                        Err(
+                            StreamStoreError::Oplog("durable stream mutation panicked".into())
+                                .into(),
+                        )
+                    }
+                };
+                let _ = reply.send(outcome);
+                // The session lock covers the write body, not status publication.
+                MutationCompletion {
+                    finish: async move {
+                        let mut status = Ok(());
+                        let tails = std::mem::take(
+                            &mut *scope
+                                .commit_tails
+                                .lock()
+                                .expect("commit tail list lock poisoned"),
+                        );
+                        for tail in tails {
+                            if let Err(error) = tail.await {
+                                producer.poison();
+                                status = Err(StreamStoreError::Oplog(format!(
+                                    "durable stream commit callback failed: {error}"
+                                )));
+                            }
+                        }
+                        // Slot readers use published worker status, which is folded after the
+                        // durability receipt but before the commit callback completes.
+                        if scope.session_records_changed.load(Ordering::Acquire) {
+                            producer.session_records_changed.notify_waiters();
+                        }
+                        drop(activity);
+                        drop(scope);
+                        let _ = status_reply.send(status);
+                    }
+                    .boxed(),
+                }
+            })))?;
+        result
+            .await
+            .expect("durable stream producer-owned write terminated")
     }
 
     pub(super) async fn commit(&self, context: &StreamWriteContext) {

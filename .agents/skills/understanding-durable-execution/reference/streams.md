@@ -136,22 +136,31 @@ producer-less empty close remains idempotent. No resident dedupe state or new re
 ### Mutation ownership
 
 Each resident `DurableStreamStore` retains one local mutation task and request channel; this is the
-existing store, not a new actor or wrapper. It runs durable mutation bodies serially; nested
-same-store calls run inline only when passed the active `StreamWriteContext`. A root write (`None`)
-inside a queued body would wait behind itself. Each nested context tracks unfinished effects
-independently, so a successful sibling cannot hide another write's failure. Contexts must belong
-to the receiving store and cannot be reused after their operation completes.
-Dropping a caller's reply receiver does not cancel an accepted
-mutation. Retirement closes the channel, lets an already-running body drain, and rejects queued
-bodies before they start.
+existing store, not a new actor or wrapper. `StreamWriteAdmission` reserves count and bytes for a
+detached operation across local writes and remote waits. The same task polls these operations
+independently of the serial local writer. Operations acquire the session lock before calling
+`admission.submit`; queued bodies never acquire that lock or wait for peer attachment RPCs.
+Finish keeps the lock through topology validation and the durable session terminal.
 
-The same task polls completion work separately from mutation bodies: commit callback tails,
-remote cancellations, and live publication waits cannot prevent the next mutation from running.
-These completions receive no write context, so a routed cancellation back to the same
-producer enters the queue normally. Durable activity lasts through callback/status-fold completion,
-but excludes remote RPC and live fanout. Count/byte admission still bounds outstanding work;
-the separate lifecycle lane prevents blocked data delivery from starving cancellation. Metadata
-reads and spawned storage work retain activity tracking independently of the mutation queue.
+Each submit receives a `StreamWriteContext` and returns after the durability receipt. The admitted
+operation joins status callbacks after releasing its session lock and before returning to its
+caller. A peer RPC that depends on folded status follows `commit_consumer_journal`, which waits
+for that fold on the serial status actor. Neither status folds nor live delivery block the next
+same-session write. Nested same-store writes pass their context and run inline with
+independent unfinished-effect tracking: a successful sibling cannot hide another write's failure.
+Contexts cannot cross stores or outlive their write. Operations reuse admission for subsequent
+submits rather than acquiring another reservation. Neither producer-index guards nor session
+control-metadata guards may remain held across a submit or a remote call.
+
+Live publication receipts accumulate on the admission and are awaited only after the operation
+returns and releases its session lock. Normal publication retains admission until delivery;
+lifecycle admission is released before the caller waits for terminal delivery, so stalled readers
+cannot exhaust cancellation capacity. Dropping a caller does not cancel admitted work.
+Durable activity covers each local write through its status callback, not the remote waits
+between writes. Retirement can therefore interrupt an operation between submits: peer waits are
+cancelled and the next submit fails closed; already committed records drive recovery. Metadata
+reads and spawned storage retain their own activity tracking. Retirement closes admission and
+rejects queued writes while active local work drains.
 
 ### External cancellation and deleted URLs
 
@@ -178,7 +187,9 @@ producer commit and this receipt retries cancellation idempotently. Pending inte
 into `AgentStatusRecord` and keep even idle workers in assignment recovery, including caller-side
 sessions without local `Prepared`. Applied intents no longer keep the recovery catalogue alive;
 the original intent remains available for authorization and replay. Remote retry and receipt
-writing acquire lifecycle admission separately, never while holding the session lock across RPC.
+writing share one lifecycle admission, with the remote call outside the local writer and without
+holding the session lock. A peer result observed after local retirement is discarded; recovery
+retries from the committed intent.
 
 ### Tests
 

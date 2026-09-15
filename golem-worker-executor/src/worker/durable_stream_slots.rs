@@ -657,9 +657,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(name) = request.slot {
             let worker = self.clone();
             producer
-                .run_lifecycle(None, 0, move |owner, context| async move {
+                .run_admitted(None, 0, true, move |owner, admission| async move {
                     let lock = owner.session_lock(&prepared.attempt.session_key);
-                    let guard = lock.lock().await;
+                    let guard = lock.lock_owned().await;
                     let Some(slot) = worker
                         .resolve_stream_slot(
                             &request.session,
@@ -684,7 +684,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         SlotSource::Value { .. } | SlotSource::Pending { .. } => None,
                     };
                     let applied = streams
-                        .tombstone_slot_owned(&context, slot.name, stream, guard)
+                        .tombstone_slot_owned(&admission, slot.name, stream, guard)
                         .await?;
                     Ok(if applied {
                         ExportStreamControlResult::Applied

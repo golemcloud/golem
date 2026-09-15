@@ -345,11 +345,8 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         let admitted = admitted.clone();
         operations.spawn(async move {
             producer
-                .run_owned(None, 0, move |_, context| async move {
-                    context.defer_remote_cancellation(async move {
-                        admitted.wait().await;
-                        Ok(())
-                    });
+                .run_admitted(None, 0, false, move |_, _admission| async move {
+                    admitted.wait().await;
                     Ok::<_, String>(())
                 })
                 .await
@@ -1463,7 +1460,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
         assert!(streams.session_lock.try_lock().is_ok());
         return;
     }
-    tokio::time::timeout(
+    let error = tokio::time::timeout(
         Duration::from_secs(5),
         streams.cancel_stream(
             7,
@@ -1475,7 +1472,8 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
     )
     .await
     .expect("RPC callback could not drain local producer")
-    .unwrap();
+    .unwrap_err();
+    assert_eq!(error, StreamStoreError::RecoveryRequired.to_string());
     assert!(matches!(
         producer.ensure_healthy(),
         Err(StreamStoreError::RecoveryRequired)
@@ -1893,10 +1891,10 @@ async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {
             let session = streams.clone();
             let root = root.clone();
             let (_, drains) = producer
-                .run_lifecycle(None, 0, move |_, context| async move {
+                .run_admitted(None, 0, false, move |_, admission| async move {
                     session
                         .materialize_result_owned(
-                            &context,
+                            &admission,
                             value,
                             SchemaGraph::anonymous(root.clone()),
                             root,
@@ -2017,11 +2015,11 @@ async fn slot_tombstone_persists_without_cancelling_other_slots() {
             let stream = (!pending_output).then(|| (handle.clone(), SessionStreamRole::Input));
             let before = streams.oplog.current_oplog_index().await;
             let changed = producer
-                .run_lifecycle(None, 0, move |_, context| async move {
+                .run_admitted(None, 0, true, move |_, admission| async move {
                     let lock = session.producer.session_lock(&session.session_key);
-                    let guard = lock.lock().await;
+                    let guard = lock.lock_owned().await;
                     session
-                        .tombstone_slot_owned(&context, slot.into(), stream, guard)
+                        .tombstone_slot_owned(&admission, slot.into(), stream, guard)
                         .await
                 })
                 .await

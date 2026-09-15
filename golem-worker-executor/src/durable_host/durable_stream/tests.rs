@@ -19,9 +19,9 @@ use super::{
     CommittedProducerStreamEventPayload, ConsumerAttachmentStatus, ConsumerJournalSummary,
     DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
     DurableStreamStore, ExternalAppendOutcome, ExternalProducer, IndexedConsumerJournal,
-    ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
-    ProducerStreamIndex, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-    StreamAttachmentState, StreamSegmentSource, StreamStoreError,
+    ProducerMetadataKey, ProducerOutputRegistration, ProducerOutputSource,
+    ProducerRegistrationRequest, ProducerStreamIndex, StreamAttachmentConsumerProbe,
+    StreamAttachmentControl, StreamAttachmentState, StreamSegmentSource, StreamStoreError,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
@@ -445,21 +445,21 @@ async fn mutation_queue_completion_can_route_back_to_the_same_producer() {
     let (entered, ready) = oneshot::channel();
     let (release, released) = oneshot::channel();
     let (completed, completion) = oneshot::channel();
-    let mut caller = Box::pin(
-        live.run_lifecycle(None, 0, move |owner, context| async move {
-            let routed_owner = owner.clone();
-            context.defer_remote_cancellation(async move {
+    let mut caller =
+        Box::pin(
+            live.run_admitted(None, 0, true, move |owner, admission| async move {
+                admission
+                    .submit(|_, _| async { Ok::<(), StreamStoreError>(()) })
+                    .await?;
                 entered.send(()).unwrap();
                 released.await.unwrap();
-                routed_owner
+                owner
                     .run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
                     .await?;
                 completed.send(()).unwrap();
-                Ok(())
-            });
-            Ok::<(), StreamStoreError>(())
-        }),
-    );
+                Ok::<(), StreamStoreError>(())
+            }),
+        );
     assert!(futures::poll!(caller.as_mut()).is_pending());
     ready.await.unwrap();
     drop(caller);
@@ -499,6 +499,222 @@ async fn write_context_rejects_a_different_store_and_use_after_completion() {
         .is_err()
     );
     assert_eq!(live.ensure_healthy(), Ok(()));
+}
+
+#[test]
+#[timeout("30s")]
+async fn saturated_admitted_operations_finish_after_callers_disconnect() {
+    for lifecycle in [false, true] {
+        let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+        let entered = Arc::new(tokio::sync::Barrier::new(17));
+        let release = Arc::new(tokio::sync::Barrier::new(17));
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (completed, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        let mut callers = Vec::new();
+        for _ in 0..16 {
+            let live = live.clone();
+            let entered = entered.clone();
+            let release = release.clone();
+            let writes = writes.clone();
+            let completed = completed.clone();
+            callers.push(tokio::spawn(async move {
+                live.run_admitted(None, 7, lifecycle, move |_, admission| async move {
+                    let first = writes.clone();
+                    admission
+                        .submit(move |_, _| async move {
+                            first.fetch_add(1, Ordering::SeqCst);
+                            Ok::<(), StreamStoreError>(())
+                        })
+                        .await?;
+                    entered.wait().await;
+                    release.wait().await;
+                    admission
+                        .submit(move |_, _| async move {
+                            writes.fetch_add(1, Ordering::SeqCst);
+                            Ok::<(), StreamStoreError>(())
+                        })
+                        .await?;
+                    completed.send(()).unwrap();
+                    Ok::<(), StreamStoreError>(())
+                })
+                .await
+            }));
+        }
+        entered.wait().await;
+        assert_eq!(writes.load(Ordering::SeqCst), 16);
+        let lane = if lifecycle {
+            &live.lifecycle_operations
+        } else {
+            &live.owned_operations
+        };
+        assert_eq!(lane.available_permits(), 0);
+        for caller in callers {
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+        }
+        release.wait().await;
+        for _ in 0..16 {
+            completion.recv().await.unwrap();
+        }
+        let all_permits = lane.clone().acquire_many_owned(16).await.unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 32);
+        assert_eq!(live.ensure_healthy(), Ok(()));
+        drop(all_permits);
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn admitted_peer_waits_do_not_block_each_others_local_writer() {
+    let left = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let right = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let entered = Arc::new(tokio::sync::Barrier::new(2));
+    let mut tasks = Vec::new();
+    for (local, remote) in [(left.clone(), right.clone()), (right, left)] {
+        let entered = entered.clone();
+        tasks.push(tokio::spawn(async move {
+            local
+                .run_admitted(None, 0, false, move |owner, admission| async move {
+                    admission
+                        .submit(|_, _| async { Ok::<(), StreamStoreError>(()) })
+                        .await?;
+                    entered.wait().await;
+                    let remote_value =
+                        owner
+                            .remote_until_retired(remote.run_lifecycle(None, 0, |_, _| async {
+                                Ok::<_, StreamStoreError>(37)
+                            }))
+                            .await?;
+                    admission
+                        .submit(
+                            move |_, _| async move { Ok::<_, StreamStoreError>(remote_value + 5) },
+                        )
+                        .await
+                })
+                .await
+        }));
+    }
+    for task in tasks {
+        assert_eq!(task.await.unwrap().unwrap(), 42);
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn publication_waits_until_admitted_session_lock_is_released() {
+    for lifecycle in [false, true] {
+        let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let (published, publication) = oneshot::channel();
+        let (written, write_done) = oneshot::channel();
+        let operation = tokio::spawn({
+            let live = live.clone();
+            let lock = lock.clone();
+            async move {
+                live.run_admitted(None, 11, lifecycle, move |_, admission| async move {
+                    let _guard = lock.lock().await;
+                    admission
+                        .submit(move |_, context| async move {
+                            context.defer_publication(Box::pin(async move {
+                                Ok(publication.await.unwrap())
+                            }));
+                            Ok::<(), StreamStoreError>(())
+                        })
+                        .await?;
+                    written.send(()).unwrap();
+                    Ok::<(), StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        write_done.await.unwrap();
+        let _guard = lock.lock().await;
+        if lifecycle {
+            let permits = live
+                .lifecycle_operations
+                .clone()
+                .acquire_many_owned(16)
+                .await
+                .unwrap();
+            assert!(!operation.is_finished());
+            drop(permits);
+        } else {
+            assert_eq!(live.owned_operations.available_permits(), 15);
+        }
+        published.send(Ok(())).unwrap();
+        operation.await.unwrap().unwrap();
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let commit: DurableStreamCommit = Arc::new({
+        let oplog = oplog.clone();
+        let reached = reached.clone();
+        let release = release.clone();
+        move |published| {
+            let oplog = oplog.clone();
+            let reached = reached.clone();
+            let release = release.clone();
+            Box::pin(async move {
+                oplog.commit(CommitLevel::Always).await;
+                reached.notify_one();
+                release.notified().await;
+                if let Some(published) = published {
+                    published.send(()).unwrap();
+                }
+            })
+        }
+    });
+    let live = DurableStreamStore::load_with_commit(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+        commit,
+    )
+    .await
+    .unwrap();
+    let session = crate::durable_host::durable_session::StreamSession::new(
+        live.clone(),
+        oplog.clone(),
+        identity.invocation.clone(),
+        [],
+    );
+    let lock = live.session_lock(&identity.invocation);
+    let guard = lock.lock().await;
+    let mut finish = Box::pin(session.fail("x".repeat(300 * 1024)));
+    assert!(futures::poll!(finish.as_mut()).is_pending());
+    // A 300 KiB error copied across the maximum terminal batch exhausts the byte lane.
+    assert_eq!(live.lifecycle_operation_bytes.available_permits(), 0);
+    drop(guard);
+    let (result, ()) = tokio::join!(finish, async {
+        reached.notified().await;
+        assert!(
+            lock.try_lock().is_err(),
+            "finish released the session lock before its commit"
+        );
+        release.notify_one();
+    });
+    result.unwrap();
+    assert!(lock.try_lock().is_ok());
+    assert_eq!(
+        live.lifecycle_operation_bytes.available_permits(),
+        256 * 1024 * 1024
+    );
+    assert!(
+        live.index_for([ProducerMetadataKey::Session(identity.invocation.clone())])
+            .await
+            .unwrap()
+            .finished_sessions
+            .contains(&identity.invocation)
+    );
 }
 
 #[test]
@@ -5933,20 +6149,19 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
         let caller = tokio::spawn({
             let live = live.clone();
             async move {
-                live.run_lifecycle(None, 7, move |owner, context| async move {
-                    let routed_owner = owner.clone();
-                    context.defer_remote_cancellation(async move {
-                        started.send(()).unwrap();
-                        released.await.unwrap();
-                        assert_eq!(
-                            routed_owner
-                                .run_owned(None, 0, |_, _| async { Ok::<(), StreamStoreError>(()) })
-                                .await,
-                            Err(StreamStoreError::RecoveryRequired)
-                        );
-                        Err(StreamStoreError::Oplog("remote failure".into()))
-                    });
-                    Ok::<(), StreamStoreError>(())
+                live.run_admitted(None, 7, true, move |_, admission| async move {
+                    admission
+                        .submit(|_, _| async { Ok::<(), StreamStoreError>(()) })
+                        .await?;
+                    started.send(()).unwrap();
+                    released.await.unwrap();
+                    assert_eq!(
+                        admission
+                            .submit(|_, _| async { Ok::<(), StreamStoreError>(()) })
+                            .await,
+                        Err(StreamStoreError::RecoveryRequired)
+                    );
+                    Err::<(), _>(StreamStoreError::Oplog("remote failure".into()))
                 })
                 .await
             }

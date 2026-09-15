@@ -20,7 +20,7 @@ use crate::durable_host::durable_stream::{
     ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
     RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl, SessionControlMetadata,
     StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource, StreamStoreError,
-    StreamWriteContext,
+    StreamWriteAdmission, StreamWriteContext,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -574,14 +574,19 @@ impl StreamSession {
     pub(crate) async fn detach_current(&self) -> Result<bool, String> {
         let session = self.clone();
         self.producer
-            .run_lifecycle(None, 0, move |_, context| async move {
-                session.detach_current_owned(&context).await
+            .run_admitted(None, 0, true, move |_, admission| async move {
+                let _session_guard = session.session_lock.lock().await;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |_, context| async move {
+                        session_for_write.detach_current_owned(&context).await
+                    })
+                    .await
             })
             .await
     }
 
     async fn detach_current_owned(&self, context: &StreamWriteContext) -> Result<bool, String> {
-        let _session_guard = self.session_lock.lock().await;
         let (epoch, attempt_id, attached) = self.authoritative_attachment_state().await?;
         if !attached
             || epoch != self.attachment_epoch
@@ -628,8 +633,16 @@ impl StreamSession {
         let memory = golem_common::serialization::serialize(&record)?.len();
         let session = self.clone();
         self.producer
-            .run_lifecycle(None, memory, move |_, context| async move {
-                session.commit_resume_attempt_owned(&context, record).await
+            .run_admitted(None, memory, true, move |_, admission| async move {
+                let _session_guard = session.session_lock.lock().await;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |_, context| async move {
+                        session_for_write
+                            .commit_resume_attempt_owned(&context, record)
+                            .await
+                    })
+                    .await
             })
             .await
     }
@@ -639,7 +652,6 @@ impl StreamSession {
         context: &StreamWriteContext,
         record: StreamSessionResumeAttemptRecord,
     ) -> Result<(), String> {
-        let _session_guard = self.session_lock.lock().await;
         let (current_epoch, _, attached) = self.authoritative_attachment_state().await?;
         if record.attempt.expected_epoch < current_epoch {
             return Err(format!(
@@ -723,11 +735,16 @@ impl StreamSession {
 
     async fn try_append_record(
         &self,
-        context: Option<&StreamWriteContext>,
+        admission: &Arc<StreamWriteAdmission>,
         record: StreamSessionRecord,
     ) -> Result<(), String> {
-        self.producer
-            .append_session_record_attributed(context, self.entity_parent_start_index, record)
+        let attribution = self.entity_parent_start_index;
+        admission
+            .submit(move |owner, context| async move {
+                owner
+                    .append_session_record_attributed(Some(&context), attribution, record)
+                    .await
+            })
             .await
             .map_err(|error| error.to_string())
     }
@@ -736,8 +753,14 @@ impl StreamSession {
     pub(crate) async fn caller_attempt_id(&self) -> Result<AttemptId, String> {
         let session = self.clone();
         self.producer
-            .run_owned(None, 0, move |_, context| async move {
-                session.caller_attempt_id_owned(&context).await
+            .run_admitted(None, 0, false, move |_, admission| async move {
+                let _guard = session.session_lock.lock().await;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |_, context| async move {
+                        session_for_write.caller_attempt_id_owned(&context).await
+                    })
+                    .await
             })
             .await
     }
@@ -746,7 +769,6 @@ impl StreamSession {
         &self,
         context: &StreamWriteContext,
     ) -> Result<AttemptId, String> {
-        let _guard = self.session_lock.lock().await;
         let metadata = self.current_control_metadata().await?;
         if metadata.caller_attempt_conflict {
             return Err(
@@ -896,11 +918,11 @@ impl StreamSession {
             + golem_common::serialization::serialize(&mapping)?.len();
         let session = self.clone();
         self.producer
-            .run_owned(None, memory, move |_, context| async move {
+            .run_admitted(None, memory, false, move |_, admission| async move {
                 let _session_guard = session.session_lock.lock().await;
                 session
                     .activate_forwarded_mapping_under_lock(
-                        &context,
+                        &admission,
                         attachment,
                         mapping,
                         producer_control.as_ref(),
@@ -913,7 +935,7 @@ impl StreamSession {
 
     async fn activate_forwarded_mapping_under_lock(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         attachment: StreamAttachmentKey,
         mapping: StreamSessionMappingRecord,
         producer_control: &(dyn StreamAttachmentControl + Send + Sync),
@@ -946,7 +968,7 @@ impl StreamSession {
         }
         if topology == ConsumerAttachmentStatus::Missing {
             self.try_append_record(
-                Some(context),
+                admission,
                 StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: self.session_key.clone(),
@@ -966,7 +988,7 @@ impl StreamSession {
         if topology != ConsumerAttachmentStatus::Active {
             self.require_local_session_attachment(&attachment).await?;
             self.try_append_record(
-                Some(context),
+                admission,
                 StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: self.session_key.clone(),
@@ -981,7 +1003,15 @@ impl StreamSession {
             .remote_until_retired(producer_control.activate_attachment(attachment, now_millis))
             .await
             .map_err(|error| error.to_string())?;
-        self.append_mapping_once(context, mapping.clone()).await?;
+        let session = self.clone();
+        let persisted_mapping = mapping.clone();
+        admission
+            .submit(move |_, context| async move {
+                session
+                    .append_mapping_once(&context, persisted_mapping)
+                    .await
+            })
+            .await?;
         self.commit_consumer_journal().await?;
         self.insert_mapping(mapping)
     }
@@ -1321,9 +1351,9 @@ impl StreamSession {
         let memory = golem_common::serialization::serialize(&mapping)?.len();
         let session = self.clone();
         self.producer
-            .run_owned(None, memory, move |_, context| async move {
+            .run_admitted(None, memory, false, move |_, admission| async move {
                 session
-                    .prepare_foreign_mapping_owned(&context, mapping, epoch)
+                    .prepare_foreign_mapping_owned(&admission, mapping, epoch)
                     .await
             })
             .await
@@ -1331,7 +1361,7 @@ impl StreamSession {
 
     async fn prepare_foreign_mapping_owned(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         mapping: StreamSessionMappingRecord,
         epoch: u64,
     ) -> Result<(), String> {
@@ -1378,7 +1408,7 @@ impl StreamSession {
                     .map_err(|error| error.to_string())?;
             }
             self.try_append_record(
-                Some(context),
+                admission,
                 StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: self.session_key.clone(),
@@ -1415,17 +1445,17 @@ impl StreamSession {
 
     async fn ensure_nested_mapping(
         &self,
-        context: Option<&StreamWriteContext>,
+        context: Option<&Arc<StreamWriteAdmission>>,
         handle: DurableStreamHandle,
         role: SessionStreamRole,
     ) -> Result<StreamSessionMappingRecord, String> {
         let memory = golem_common::serialization::serialize(&handle)?.len();
         let session = self.clone();
         self.producer
-            .run_owned(context, memory, move |_, context| async move {
+            .run_admitted(context, memory, false, move |_, admission| async move {
                 let _session_guard = session.session_lock.lock().await;
                 session
-                    .ensure_nested_mapping_under_lock(&context, handle, role)
+                    .ensure_nested_mapping_under_lock(&admission, handle, role)
                     .await
             })
             .await
@@ -1433,7 +1463,7 @@ impl StreamSession {
 
     async fn ensure_nested_mapping_under_lock(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         handle: DurableStreamHandle,
         role: SessionStreamRole,
     ) -> Result<StreamSessionMappingRecord, String> {
@@ -1446,7 +1476,15 @@ impl StreamSession {
             role,
         };
         if self.producer.owns_handle_identity(&mapping.handle) {
-            self.append_mapping_once(context, mapping.clone()).await?;
+            let session = self.clone();
+            let persisted_mapping = mapping.clone();
+            admission
+                .submit(move |_, context| async move {
+                    session
+                        .append_mapping_once(&context, persisted_mapping)
+                        .await
+                })
+                .await?;
             self.insert_mapping(mapping.clone())?;
         } else {
             let rpc = self.rpc.clone().ok_or_else(|| {
@@ -1458,7 +1496,7 @@ impl StreamSession {
             let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
             let control = RoutedStreamAttachmentControl::new(rpc, mapping.clone(), auth_ctx);
             self.activate_forwarded_mapping_under_lock(
-                context,
+                admission,
                 attachment,
                 mapping.clone(),
                 &control,
@@ -1495,7 +1533,7 @@ impl StreamSession {
     /// Validates, commits, and acknowledges one input frame for the current attachment.
     pub(crate) async fn write_input(
         &self,
-        context: Option<&StreamWriteContext>,
+        context: Option<&Arc<StreamWriteAdmission>>,
         transport_stream_id: u64,
         first_sequence: u64,
         payload: StreamItemsPayload,
@@ -1511,9 +1549,20 @@ impl StreamSession {
         let memory = DurableStreamStore::retained_payload_bytes(&payload)?;
         let session = self.clone();
         self.producer
-            .run_owned(context, memory, move |_, context| async move {
-                session
-                    .write_input_owned(&context, transport_stream_id, first_sequence, payload)
+            .run_admitted(context, memory, false, move |_, admission| async move {
+                let _session_guard = session.session_lock.lock().await;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |_, context| async move {
+                        session_for_write
+                            .write_input_owned(
+                                &context,
+                                transport_stream_id,
+                                first_sequence,
+                                payload,
+                            )
+                            .await
+                    })
                     .await
             })
             .await
@@ -1534,7 +1583,6 @@ impl StreamSession {
         )>,
         String,
     > {
-        let _session_guard = self.session_lock.lock().await;
         self.ensure_current_attachment().await?;
         let handle = self
             .handle(transport_stream_id)
@@ -1766,9 +1814,15 @@ impl StreamSession {
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, String> {
         let session = self.clone();
         self.producer
-            .run_owned(None, 0, move |_, context| async move {
-                session
-                    .end_input_owned(&context, transport_stream_id, sequence)
+            .run_admitted(None, 0, false, move |_, admission| async move {
+                let _session_guard = session.session_lock.lock().await;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |_, context| async move {
+                        session_for_write
+                            .end_input_owned(&context, transport_stream_id, sequence)
+                            .await
+                    })
                     .await
             })
             .await
@@ -1780,7 +1834,6 @@ impl StreamSession {
         transport_stream_id: u64,
         sequence: u64,
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, String> {
-        let _session_guard = self.session_lock.lock().await;
         self.ensure_current_attachment().await?;
         let handle = self
             .handle(transport_stream_id)
@@ -1836,10 +1889,9 @@ impl StreamSession {
             return Err("session cancellation requires the session owner".into());
         }
         let session = self.clone();
-        let exists = self
-            .producer
-            .run_lifecycle(None, 0, move |owner, context| async move {
-                let _guard = session.session_lock.lock().await;
+        self.producer
+            .run_admitted(None, 0, true, move |_, admission| async move {
+                let guard = session.session_lock.lock().await;
                 let metadata = session.current_control_metadata().await?;
                 if metadata.prepared.is_none() {
                     return Ok::<_, String>(false);
@@ -1882,31 +1934,32 @@ impl StreamSession {
                 }
                 drop(metadata);
                 if !records.is_empty() {
-                    owner
-                        .append_session_records_owned(
-                            &context,
-                            session.entity_parent_start_index,
-                            records,
-                        )
+                    let attribution = session.entity_parent_start_index;
+                    admission
+                        .submit(move |owner, context| async move {
+                            owner
+                                .append_session_records_owned(&context, attribution, records)
+                                .await
+                        })
                         .await
                         .map_err(|error| error.to_string())?;
                 }
+                drop(guard);
+                session
+                    .reconcile_local_cancellation_intents(Some(&admission))
+                    .await?;
                 Ok(true)
             })
-            .await?;
-        if exists {
-            self.reconcile_local_cancellation_intents(None).await?;
-        }
-        Ok(exists)
+            .await
     }
 
     /// The caller resolves the canonical slot under this session guard inside an owned lifecycle operation.
     pub(crate) async fn tombstone_slot_owned(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         slot: String,
         stream: Option<(DurableStreamHandle, SessionStreamRole)>,
-        session_guard: tokio::sync::MutexGuard<'_, ()>,
+        session_guard: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<bool, String> {
         if !self.has_local_session_authority() {
             return Err("slot deletion requires the session owner".into());
@@ -1955,12 +2008,17 @@ impl StreamSession {
             }
         }
         drop(metadata);
-        self.producer
-            .append_session_records_owned(context, self.entity_parent_start_index, records)
+        let attribution = self.entity_parent_start_index;
+        admission
+            .submit(move |owner, context| async move {
+                owner
+                    .append_session_records_owned(&context, attribution, records)
+                    .await
+            })
             .await
             .map_err(|error| error.to_string())?;
         drop(session_guard);
-        self.reconcile_local_cancellation_intents(Some(context))
+        self.reconcile_local_cancellation_intents(Some(admission))
             .await?;
         Ok(true)
     }
@@ -1976,13 +2034,14 @@ impl StreamSession {
     ) -> Result<(), String> {
         let session = self.clone();
         self.producer
-            .run_lifecycle(
+            .run_admitted(
                 None,
                 details.as_ref().map_or(0, String::len),
-                move |_, context| async move {
+                true,
+                move |_, admission| async move {
                     session
                         .cancel_stream_owned(
-                            &context,
+                            &admission,
                             transport_stream_id,
                             role,
                             reason,
@@ -1997,7 +2056,7 @@ impl StreamSession {
 
     async fn cancel_stream_owned(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         transport_stream_id: u64,
         role: StreamCancelRole,
         reason: StreamCancelReason,
@@ -2066,23 +2125,23 @@ impl StreamSession {
         let intent = match persisted_intent {
             Some(existing) => existing,
             None => {
-                self.append_record(
-                    Some(context),
+                self.try_append_record(
+                    admission,
                     StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
                 )
-                .await;
+                .await?;
                 self.commit_consumer_journal().await?;
                 intent
             }
         };
-        self.apply_cancel_intent_owned(context, mapping, intent, session_guard)
+        self.apply_cancel_intent_owned(admission, mapping, intent, session_guard)
             .await
     }
 
     /// Applies committed cancellation intents to streams produced by the local agent.
     pub(crate) async fn reconcile_local_cancellation_intents(
         &self,
-        context: Option<&StreamWriteContext>,
+        admission: Option<&Arc<StreamWriteAdmission>>,
     ) -> Result<(), String> {
         let metadata = self.current_control_metadata().await?;
         let mut pending = Vec::new();
@@ -2110,44 +2169,51 @@ impl StreamSession {
         for (mapping, intent) in pending {
             let session = self.clone();
             self.producer
-                .run_lifecycle(
-                    context,
+                .run_admitted(
+                    admission,
                     intent.details.as_ref().map_or(0, String::len),
-                    move |_, context| async move {
+                    true,
+                    move |_, admission| async move {
                         let _guard = session.session_lock.lock().await;
-                        session
-                            .producer
-                            .validate_handle(&mapping.handle)
+                        let session_for_write = session.clone();
+                        admission
+                            .submit(move |_, context| async move {
+                                let session = session_for_write;
+                                session
+                                    .producer
+                                    .validate_handle(&mapping.handle)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                // The terminal dispatcher owns publication; recovery only waits for
+                                // durable cancellation, not for a slow live reader to make room.
+                                session
+                                    .producer
+                                    .commit_cancel_open(
+                                        Some(&context),
+                                        mapping.handle.stream_id,
+                                        intent.role,
+                                        intent.reason,
+                                        intent.details.clone(),
+                                    )
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                session
+                                    .producer
+                                    .append_session_record_owned(
+                                        &context,
+                                        session.entity_parent_start_index,
+                                        StreamSessionRecord::ConsumerCancelApplied(
+                                            StreamConsumerCancelAppliedRecord {
+                                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                                intent,
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                Ok::<_, String>(())
+                            })
                             .await
-                            .map_err(|error| error.to_string())?;
-                        // The terminal dispatcher owns publication; recovery only waits for
-                        // durable cancellation, not for a slow live reader to make room.
-                        session
-                            .producer
-                            .commit_cancel_open(
-                                Some(&context),
-                                mapping.handle.stream_id,
-                                intent.role,
-                                intent.reason,
-                                intent.details.clone(),
-                            )
-                            .await
-                            .map_err(|error| error.to_string())?;
-                        session
-                            .producer
-                            .append_session_record_owned(
-                                &context,
-                                session.entity_parent_start_index,
-                                StreamSessionRecord::ConsumerCancelApplied(
-                                    StreamConsumerCancelAppliedRecord {
-                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                        intent,
-                                    },
-                                ),
-                            )
-                            .await
-                            .map_err(|error| error.to_string())?;
-                        Ok::<_, String>(())
                     },
                 )
                 .await?;
@@ -2209,53 +2275,44 @@ impl StreamSession {
                 .clone()
                 .ok_or("foreign cancellation authorization is unavailable")?;
             let receipt_intent = intent.clone();
+            let attribution = self.entity_parent_start_index;
             let result = self
                 .producer
-                .run_lifecycle(
+                .run_admitted(
                     None,
                     intent.details.as_ref().map_or(0, String::len),
-                    move |_, context| async move {
-                        context.defer_remote_cancellation(async move {
-                            tokio::time::timeout(
-                                timeout,
-                                RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
-                                    .cancel_stream(key, intent.role, intent.reason, intent.details),
-                            )
+                    true,
+                    move |_, admission| async move {
+                        tokio::time::timeout(
+                            timeout,
+                            RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
+                                .cancel_stream(key, intent.role, intent.reason, intent.details),
+                        )
+                        .await
+                        .map_err(|_| StreamStoreError::RecoveryRequired)?
+                        .map_err(String::from)?;
+                        admission
+                            .submit(move |owner, context| async move {
+                                owner
+                                    .append_session_record_owned(
+                                        &context,
+                                        attribution,
+                                        StreamSessionRecord::ConsumerCancelApplied(
+                                            StreamConsumerCancelAppliedRecord {
+                                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                                intent: receipt_intent,
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                    .map_err(|error| error.to_string())
+                            })
                             .await
-                            .map_err(|_| StreamStoreError::RecoveryRequired)?
-                            .map(|_| ())
-                        });
-                        Ok::<_, String>(())
                     },
                 )
                 .await;
             if let Err(error) = result {
                 first_error.get_or_insert(error);
-            } else {
-                // The routed operation has released its lifecycle admission before the
-                // acknowledgment takes a new one. A lost acknowledgment safely retries.
-                let attribution = self.entity_parent_start_index;
-                let receipt = self
-                    .producer
-                    .run_lifecycle(None, 0, move |owner, context| async move {
-                        owner
-                            .append_session_record_owned(
-                                &context,
-                                attribution,
-                                StreamSessionRecord::ConsumerCancelApplied(
-                                    StreamConsumerCancelAppliedRecord {
-                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                        intent: receipt_intent,
-                                    },
-                                ),
-                            )
-                            .await
-                            .map_err(|error| error.to_string())
-                    })
-                    .await;
-                if let Err(error) = receipt {
-                    first_error.get_or_insert(error);
-                }
             }
         }
         first_error.map_or(Ok(()), Err)
@@ -2263,7 +2320,7 @@ impl StreamSession {
 
     async fn apply_cancel_intent_owned(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         mapping: StreamSessionMappingRecord,
         intent: StreamConsumerCancelIntentRecord,
         session_guard: tokio::sync::MutexGuard<'_, ()>,
@@ -2277,35 +2334,42 @@ impl StreamSession {
             return Ok(());
         }
         if self.producer.owns_handle_identity(&mapping.handle) {
-            let pending = self
-                .producer
-                .commit_cancel_open(
-                    Some(context),
-                    mapping.handle.stream_id,
-                    intent.role,
-                    intent.reason,
-                    intent.details.clone(),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-            self.producer
-                .append_session_record_owned(
-                    context,
-                    self.entity_parent_start_index,
-                    StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        intent: intent.clone(),
-                    }),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
+            let attribution = self.entity_parent_start_index;
+            admission
+                .submit(move |owner, context| async move {
+                    let pending = owner
+                        .commit_cancel_open(
+                            Some(&context),
+                            mapping.handle.stream_id,
+                            intent.role,
+                            intent.reason,
+                            intent.details.clone(),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    owner
+                        .append_session_record_owned(
+                            &context,
+                            attribution,
+                            StreamSessionRecord::ConsumerCancelApplied(
+                                StreamConsumerCancelAppliedRecord {
+                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                    intent: intent.clone(),
+                                },
+                            ),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    if let Some(pending) = pending {
+                        owner
+                            .publish_committed_cancellation(Some(&context), pending)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok::<_, String>(())
+                })
+                .await?;
             drop(session_guard);
-            if let Some(pending) = pending {
-                self.producer
-                    .publish_committed_cancellation(Some(context), pending)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            }
         } else {
             drop(session_guard);
             let rpc = self.rpc.clone().ok_or_else(|| {
@@ -2315,12 +2379,17 @@ impl StreamSession {
                 "foreign durable stream cancellation authorization is unavailable".to_string()
             })?;
             let key = self.attachment_key(&mapping.handle, intent.epoch)?;
-            context.defer_remote_cancellation(async move {
-                RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
-                    .cancel_stream(key, intent.role, intent.reason, intent.details)
-                    .await
-                    .map(|_| ())
-            });
+            self.producer
+                .remote_until_retired(
+                    RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx).cancel_stream(
+                        key,
+                        intent.role,
+                        intent.reason,
+                        intent.details,
+                    ),
+                )
+                .await
+                .map_err(String::from)?;
         }
         Ok(())
     }
@@ -2377,11 +2446,28 @@ impl StreamSession {
         let graph = graph.clone();
         let root = root.clone();
         self.producer
-            .run_owned(None, retained_bytes, move |_, context| async move {
-                session
-                    .materialize_agent_input_owned(&context, value, graph, root, component_revision)
-                    .await
-            })
+            .run_admitted(
+                None,
+                retained_bytes,
+                false,
+                move |_, admission| async move {
+                    let _guard = session.session_lock.lock().await;
+                    let session_for_write = session.clone();
+                    admission
+                        .submit(move |_, context| async move {
+                            session_for_write
+                                .materialize_agent_input_owned(
+                                    &context,
+                                    value,
+                                    graph,
+                                    root,
+                                    component_revision,
+                                )
+                                .await
+                        })
+                        .await
+                },
+            )
             .await
     }
 
@@ -2401,7 +2487,6 @@ impl StreamSession {
             element_schema_fingerprint: SchemaFingerprintV1,
         }
 
-        let _session_guard = self.session_lock.lock().await;
         self.recover_session_mappings().await?;
         validate_forwarded_durable_input_schemas(
             &value,
@@ -2497,7 +2582,6 @@ impl StreamSession {
         if !mappings.is_empty() {
             self.commit_consumer_journal().await?;
         }
-        drop(_session_guard);
 
         if !drains.is_empty() {
             let streams = self.clone();
@@ -2581,17 +2665,28 @@ impl StreamSession {
         let root = root.clone();
         let (result, drain) = self
             .producer
-            .run_owned(None, retained_bytes, move |_, context| async move {
-                let (result, drains) = session
-                    .materialize_result_owned(&context, value, graph, root, component_revision)
-                    .await?;
-                let drain = tokio::spawn(async move {
-                    session
-                        .drain_materialized_result(drains, Arc::new(drain_graph))
-                        .await
-                });
-                Ok::<_, String>((result, drain))
-            })
+            .run_admitted(
+                None,
+                retained_bytes,
+                false,
+                move |_, admission| async move {
+                    let (result, drains) = session
+                        .materialize_result_owned(
+                            &admission,
+                            value,
+                            graph,
+                            root,
+                            component_revision,
+                        )
+                        .await?;
+                    let drain = tokio::spawn(async move {
+                        session
+                            .drain_materialized_result(drains, Arc::new(drain_graph))
+                            .await
+                    });
+                    Ok::<_, String>((result, drain))
+                },
+            )
             .await?;
 
         // Drains may live for the lifetime of the guest stream, so they must not retain the
@@ -2604,7 +2699,7 @@ impl StreamSession {
 
     async fn materialize_result_owned(
         &self,
-        context: &StreamWriteContext,
+        admission: &Arc<StreamWriteAdmission>,
         value: SchemaValue,
         graph: SchemaGraph,
         root: SchemaType,
@@ -2753,7 +2848,7 @@ impl StreamSession {
                         .unwrap_or_else(|| self.allocate_transport_stream_id())?
                 } else {
                     self.ensure_nested_mapping_under_lock(
-                        context,
+                        admission,
                         handle.clone(),
                         SessionStreamRole::Output,
                     )
@@ -2802,18 +2897,24 @@ impl StreamSession {
                 },
             )
             .collect::<Vec<_>>();
-        let (owned_handles, _) = self
-            .producer
-            .register_result_streams(
-                Some(context),
-                self.session_key.clone(),
-                result_bytes,
-                outputs,
-                self.entity_parent_start_index,
-            )
+        let session_key = self.session_key.clone();
+        let attribution = self.entity_parent_start_index;
+        let (owned_handles, _) = admission
+            .submit(move |owner, context| async move {
+                let result = owner
+                    .register_result_streams(
+                        Some(&context),
+                        session_key,
+                        result_bytes,
+                        outputs,
+                        attribution,
+                    )
+                    .await?;
+                owner.notify_session_records_changed(Some(&context));
+                Ok::<_, StreamStoreError>(result)
+            })
             .await
             .map_err(|error| error.to_string())?;
-        self.producer.notify_session_records_changed(Some(context));
 
         let mut drains = Vec::with_capacity(pending.len());
         let mut owned_handles = owned_handles.into_iter();
@@ -3334,27 +3435,44 @@ impl StreamSession {
                                 let session = self.clone();
                                 let nested_tx = nested_tx.clone();
                                 self.producer
-                                    .run_owned(None, memory, move |_, context| async move {
-                                        let _session_guard = session.session_lock.lock().await;
-                                        for (output, nested_handle) in
-                                            nested_outputs.into_iter().zip(nested_handles)
-                                        {
-                                            let transport_stream_id = session
-                                                .mapping_for_handle(&nested_handle, role)
-                                                .map(|mapping| mapping.transport_stream_id)
-                                                .map(Ok)
-                                                .unwrap_or_else(|| {
-                                                    session.allocate_transport_stream_id()
-                                                })?;
-                                            let mapping = StreamSessionMappingRecord {
-                                                transport_stream_id,
-                                                handle: nested_handle.clone(),
-                                                role,
-                                            };
-                                            session.insert_mapping(mapping.clone())?;
-                                            session.append_mapping_once(&context, mapping).await?;
-                                            if let Some(endpoint) = output.endpoint {
-                                                nested_tx
+                                    .run_admitted(
+                                        None,
+                                        memory,
+                                        false,
+                                        move |_, admission| async move {
+                                            let _session_guard = session.session_lock.lock().await;
+                                            let session_for_write = session.clone();
+                                            admission
+                                                .submit(move |_, context| async move {
+                                                    let session = session_for_write;
+                                                    for (output, nested_handle) in nested_outputs
+                                                        .into_iter()
+                                                        .zip(nested_handles)
+                                                    {
+                                                        let transport_stream_id = session
+                                                            .mapping_for_handle(
+                                                                &nested_handle,
+                                                                role,
+                                                            )
+                                                            .map(|mapping| {
+                                                                mapping.transport_stream_id
+                                                            })
+                                                            .map(Ok)
+                                                            .unwrap_or_else(|| {
+                                                                session
+                                                                    .allocate_transport_stream_id()
+                                                            })?;
+                                                        let mapping = StreamSessionMappingRecord {
+                                                            transport_stream_id,
+                                                            handle: nested_handle.clone(),
+                                                            role,
+                                                        };
+                                                        session.insert_mapping(mapping.clone())?;
+                                                        session
+                                                            .append_mapping_once(&context, mapping)
+                                                            .await?;
+                                                        if let Some(endpoint) = output.endpoint {
+                                                            nested_tx
                                                     .send(PendingOwnedStreamDrain {
                                                         handle: nested_handle,
                                                         endpoint,
@@ -3365,10 +3483,13 @@ impl StreamSession {
                                                         "durable output drain coordinator stopped"
                                                             .to_string()
                                                     })?;
-                                            }
-                                        }
-                                        Ok::<_, String>(())
-                                    })
+                                                        }
+                                                    }
+                                                    Ok::<_, String>(())
+                                                })
+                                                .await
+                                        },
+                                    )
                                     .await?;
                             }
                             Ok(())
@@ -3448,22 +3569,30 @@ impl StreamSession {
         if self.has_committed_finished().await? {
             return Ok(());
         }
-        let outcome = async {
-            let session_guard = self.session_lock.lock().await;
-            self.validate_topology_complete().await?;
-            drop(session_guard);
-            self.producer
-                .finish_session(
-                    None,
-                    self.session_key.clone(),
-                    self.entity_parent_start_index,
-                    result,
-                    input_cancel_reason,
-                )
-                .await
-                .map_err(|error| error.to_string())
-        }
-        .await;
+        let session = self.clone();
+        let retained_bytes = DurableStreamStore::finish_session_retained_bytes(&result);
+        let outcome = self
+            .producer
+            .run_admitted(None, retained_bytes, true, move |_, admission| async move {
+                let _session_guard = session.session_lock.lock().await;
+                session.validate_topology_complete().await?;
+                let session_for_write = session.clone();
+                admission
+                    .submit(move |owner, context| async move {
+                        owner
+                            .finish_session(
+                                Some(&context),
+                                session_for_write.session_key.clone(),
+                                session_for_write.entity_parent_start_index,
+                                result,
+                                input_cancel_reason,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+            })
+            .await;
         match outcome {
             Ok(()) => Ok(()),
             Err(error) => match self.has_committed_finished().await {
@@ -3839,9 +3968,13 @@ impl StreamSession {
                     let memory = bytes.len()
                         + golem_common::serialization::serialize(&event.nested_handles)?.len();
                     let session = self.clone();
-                    let mapping_update =
-                        move |_: Arc<DurableStreamStore>, context: StreamWriteContext| async move {
+                    let (response, introduced) = self
+                        .producer
+                        .run_admitted(None, memory, false, move |_, admission| async move {
                             let _session_guard = session.session_lock.lock().await;
+                            let session_for_write = session.clone();
+                            admission.submit(move |_: Arc<DurableStreamStore>, context: StreamWriteContext| async move {
+                            let session = session_for_write;
                             session.ensure_current_attachment().await?;
                             session.recover_session_mappings().await?;
                             let mut nested_streams = Vec::new();
@@ -3923,10 +4056,8 @@ impl StreamSession {
                                     logical_item_count: 1,
                                 });
                             Ok::<_, String>((response, nested_streams))
-                        };
-                    let (response, introduced) = self
-                        .producer
-                        .run_owned(None, memory, mapping_update)
+                            }).await
+                        })
                         .await?;
                     nested_streams.extend(introduced);
                     response
