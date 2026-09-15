@@ -1234,10 +1234,13 @@ fn validate_final_http_api_router(
     let mut router = golem_service_base::custom_api::router::Router::new();
 
     for compiled_route in compiled_routes {
+        let Some(route_method) = compiled_route.route_match.method() else {
+            continue;
+        };
         let method: http::Method = ok_or_continue!(
-            compiled_route.method.clone().try_into().map_err(|_| {
+            route_method.clone().try_into().map_err(|_| {
                 DeployValidationError::InvalidHttpMethod {
-                    method: compiled_route.method.clone(),
+                    method: route_method.clone(),
                 }
             }),
             errors
@@ -1257,7 +1260,7 @@ fn validate_final_http_api_router(
         if !router.add_route(method, compiled_route.path.clone(), ()) {
             errors.push(DeployValidationError::RouteIsAmbiguous {
                 domain: domain.clone(),
-                method: compiled_route.method.clone(),
+                method: route_method.clone(),
                 path: compiled_route.path.clone(),
             })
         }

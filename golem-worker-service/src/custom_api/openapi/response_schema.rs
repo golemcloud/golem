@@ -158,6 +158,9 @@ pub fn get_route_response_schema(
                 },
             );
         }
+        RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
+            responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
+        }
     }
 
     Ok(RouteResponseOpenApiSchema {

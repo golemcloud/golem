@@ -396,8 +396,9 @@ mod tests {
                 account_id: AccountId(uuid::Uuid::nil()),
                 account_email: golem_common::model::account::AccountEmail::new("test@golem"),
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
+                deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
                 route_id: 1,
-                method: Method::GET,
+                route_match: HttpMethod::Get(Empty {}).into(),
                 path: vec![PathSegment::Literal {
                     value: "notes".to_string(),
                 }],

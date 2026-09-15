@@ -44,11 +44,18 @@ impl HttpApiOpenApiSpec {
         let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
 
         for (route, route_schema) in routes.iter().zip(document.per_route.iter()) {
+            let Some(method) = route.route_match.method() else {
+                continue;
+            };
+            let method: http::Method = method
+                .clone()
+                .try_into()
+                .map_err(|e| format!("Invalid route method: {e}"))?;
             collect_security_scheme(route, &mut security_schemes);
 
             let operation = build_operation(route, route_schema, graph, &mut component_schemas)?;
             let path_item = paths.entry(render_full_path(&route.path)).or_default();
-            insert_operation(path_item, route.method.as_str(), operation);
+            insert_operation(path_item, method.as_str(), operation);
         }
 
         let mut components = Map::new();

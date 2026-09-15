@@ -60,6 +60,7 @@ impl RequestHandler {
 
         let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
         let mut request = RichRequest::new(request);
+        let request_method = request.underlying.method().clone();
 
         let execution_result = self
             .execute_route_and_middlewares(&mut request, &matching_route)
@@ -67,7 +68,7 @@ impl RequestHandler {
                 tracing::Level::INFO,
                 "handle_route",
                 domain = %matching_route.domain,
-                method = %matching_route.route.method,
+                method = %request_method,
                 route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
             ))
             .await?;
@@ -145,6 +146,13 @@ impl RequestHandler {
                 self.webhook_callback_handler
                     .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
                     .await
+            }
+            RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
+                Ok(RouteExecutionResult {
+                    status: StatusCode::NOT_IMPLEMENTED,
+                    headers: HashMap::new(),
+                    body: ResponseBody::NoBody,
+                })
             }
         }
     }

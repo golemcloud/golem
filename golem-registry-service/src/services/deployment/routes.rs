@@ -109,7 +109,7 @@ impl DeployedRoutesService {
 
             let converted = CompiledRoute {
                 route_id: route.route.route_id,
-                method: route.route.method,
+                route_match: route.route.route_match,
                 path: route.route.path,
                 body: route.route.body,
                 behavior: route.route.behaviour,

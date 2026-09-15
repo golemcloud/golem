@@ -29,7 +29,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
-    CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
+    CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteMatch, RouteSecurity,
     SecuritySchemeDetails,
 };
 use std::collections::HashMap;
@@ -167,6 +167,7 @@ impl RouteResolver {
                 return Ok(DomainHttpApi {
                     environment_id: EnvironmentId(uuid::Uuid::nil()),
                     router: Router::new(),
+                    mounts: Arc::new(Vec::new()),
                     openapi_spec: None,
                 });
             }
@@ -193,11 +194,15 @@ impl RouteResolver {
             }
         };
 
-        let router = build_router(finalized_routes);
+        let (mounts, concrete_routes): (Vec<_>, Vec<_>) = finalized_routes
+            .into_iter()
+            .partition(|route| matches!(route.route_match, RouteMatch::MountPrefix));
+        let router = build_router(concrete_routes);
 
         Ok(DomainHttpApi {
             environment_id,
             router,
+            mounts: Arc::new(mounts),
             openapi_spec,
         })
     }
@@ -214,17 +219,16 @@ impl RouteResolver {
         let mut enriched_routes = Vec::with_capacity(compiled_routes.routes.len());
 
         for route in compiled_routes.routes {
+            route.route_match.validate(&route.path, &route.behavior)?;
             let security = compile_route_security(&security_schemes, route.security)?;
 
             let enriched = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
                 account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
+                deployment_revision: compiled_routes.deployment_revision,
                 route_id: route.route_id,
-                method: route
-                    .method
-                    .try_into()
-                    .map_err(|e| format!("Failed converting HttpMethod to http::Method: {e}"))?,
+                route_match: route.route_match,
                 path: route.path,
                 body: route.body,
                 behavior: route.behavior.into(),
@@ -254,9 +258,13 @@ impl RouteResolver {
                 account_id: compiled_routes.account_id,
                 account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
+                deployment_revision: compiled_routes.deployment_revision,
                 // TODO: Have some helper for synthethic vs user defined routes
                 route_id: -1,
-                method: http::Method::GET,
+                route_match: golem_common::model::agent::HttpMethod::Get(
+                    golem_common::model::Empty {},
+                )
+                .into(),
                 path: redirect_url_path_segments,
                 body: RequestBodySchema::Unused,
                 behavior: RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour {
@@ -308,8 +316,14 @@ fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>
 
     for route in routes {
         let route_id = route.route_id;
-
-        if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
+        let RouteMatch::Method { method, .. } = &route.route_match else {
+            continue;
+        };
+        let method = method
+            .clone()
+            .try_into()
+            .expect("finalized route has a valid concrete method");
+        if !router.add_route(method, route.path.clone(), Arc::new(route)) {
             tracing::warn!("Failed to add route with route_id {route_id}");
         }
     }
@@ -321,6 +335,8 @@ fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>
 struct DomainHttpApi {
     environment_id: EnvironmentId,
     router: Router<Arc<RichCompiledRoute>>,
+    #[allow(dead_code)]
+    mounts: Arc<Vec<RichCompiledRoute>>,
     openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }
 
@@ -348,7 +364,7 @@ mod tests {
                 security_schemes: HashMap::new(),
                 routes: vec![CompiledRoute {
                     route_id: 7,
-                    method: HttpMethod::Get(Empty {}),
+                    route_match: HttpMethod::Get(Empty {}).into(),
                     path: self
                         .0
                         .iter()

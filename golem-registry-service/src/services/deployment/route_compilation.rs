@@ -193,7 +193,7 @@ pub fn add_agent_method_http_routes(
             let compiled = UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
-                method: http_endpoint.http_method.clone(),
+                route_match: http_endpoint.http_method.clone().into(),
                 path: path_segments.clone(),
                 body,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
@@ -309,6 +309,9 @@ pub fn add_cors_preflight_http_routes(
     let mut preflight_map: HashMap<Vec<PathSegment>, PreflightMapEntry> = HashMap::new();
 
     for compiled_route in compiled_routes.iter() {
+        let Some(method) = compiled_route.route_match.method() else {
+            continue;
+        };
         if !compiled_route.cors.allowed_patterns.is_empty() {
             let entry = preflight_map
                 .entry(compiled_route.path.clone())
@@ -316,7 +319,7 @@ pub fn add_cors_preflight_http_routes(
 
             let method_policy = entry
                 .method_policies
-                .entry(compiled_route.method.clone())
+                .entry(method.clone())
                 .or_insert_with(|| PreflightMethodPolicyEntry {
                     allowed_origins: BTreeSet::new(),
                     allowed_headers: BTreeSet::new(),
@@ -348,7 +351,7 @@ pub fn add_cors_preflight_http_routes(
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            method: HttpMethod::Options(Empty {}),
+            route_match: HttpMethod::Options(Empty {}).into(),
             path: path_segments,
             body: RequestBodySchema::Unused,
             behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour { method_policies }),
@@ -424,7 +427,7 @@ pub fn add_webhook_callback_routes(
         let compiled = UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            method: HttpMethod::Post(Empty {}),
+            route_match: HttpMethod::Post(Empty {}).into(),
             path: typed_segments,
             body: RequestBodySchema::BinaryBody {
                 expected: CompiledSchema {
@@ -468,7 +471,7 @@ pub fn add_openapi_spec_routes(
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            method: HttpMethod::Get(Empty {}),
+            route_match: HttpMethod::Get(Empty {}).into(),
             path,
             body: RequestBodySchema::Unused,
             behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }),
@@ -1058,7 +1061,7 @@ mod tests {
             UnboundCompiledRoute {
                 domain: Domain("example.com".to_string()),
                 route_id: 1,
-                method: HttpMethod::Get(Empty {}),
+                route_match: HttpMethod::Get(Empty {}).into(),
                 path: path.clone(),
                 body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
@@ -1091,7 +1094,7 @@ mod tests {
             UnboundCompiledRoute {
                 domain: Domain("example.com".to_string()),
                 route_id: 2,
-                method: HttpMethod::Post(Empty {}),
+                route_match: HttpMethod::Post(Empty {}).into(),
                 path: path.clone(),
                 body: RequestBodySchema::JsonBody {
                     expected: CompiledSchema {
