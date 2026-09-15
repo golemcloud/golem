@@ -5843,7 +5843,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Ok(Some(RetryDecision::None));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -6112,7 +6114,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
-            Err(error @ WorkerExecutorError::PreviousInvocationFailed { .. }) => Err(error),
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
@@ -9091,6 +9096,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {

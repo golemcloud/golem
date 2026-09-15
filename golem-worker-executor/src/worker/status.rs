@@ -2298,6 +2298,47 @@ mod test {
     }
 
     #[test]
+    fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_state() {
+        let invocation_retry_from = OplogIndex::from_u64(10);
+        let recovery_retry_from = OplogIndex::from_u64(20);
+        let mut retry_state =
+            HashMap::from([(invocation_retry_from, RetryPolicyState::Counter(2))]);
+
+        for attempt in 0..5 {
+            let entries = BTreeMap::from([(
+                OplogIndex::from_u64(21 + attempt),
+                OplogEntry::error(
+                    None,
+                    OplogErrorKind::Recovery,
+                    AgentError::Unknown("component service unavailable".to_string()),
+                    recovery_retry_from,
+                    false,
+                    None,
+                ),
+            )]);
+            let (status, kind, updated_retry_state, _) = calculate_latest_worker_status(
+                AgentStatus::Retrying,
+                Some(OplogErrorKind::Recovery),
+                retry_state,
+                None,
+                &RetryConfig::default(),
+                &DeletedRegions::default(),
+                &DeletedRegions::default(),
+                &entries,
+            );
+
+            assert_eq!(status, AgentStatus::Retrying);
+            assert_eq!(kind, Some(OplogErrorKind::Recovery));
+            assert_eq!(
+                updated_retry_state.get(&invocation_retry_from),
+                Some(&RetryPolicyState::Counter(2))
+            );
+            assert!(!updated_retry_state.contains_key(&recovery_retry_from));
+            retry_state = updated_retry_state;
+        }
+    }
+
+    #[test]
     async fn invocation_failure_is_classified_separately_from_recovery_failure() {
         let retry_from = OplogIndex::from_u64(1);
         let test_case = TestCase::builder(0)

@@ -146,15 +146,20 @@ never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
-underlying classification: transient infrastructure failures advance the effective retry policy,
-while invalid components, exports, snapshot baselines, and other permanent failures are terminal.
+underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:
+they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
+activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
+Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
 An authoritative manual-update snapshot that cannot be loaded is terminal even when the immediate
 cause is a payload download failure, because recovery has no compatible replay fallback. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
 `prepare_instance` and an unresolved recovery error exists. Routine suspend/recovery writes no
-success marker.
+success marker. Structured metadata reports the underlying `Failed`/`Retrying` status and
+`last_error_kind: Recovery`; the human CLI table labels terminal recovery failures `Unavailable`.
+A queued update still starts a terminally failed worker but does not cosmetically change that
+durable health status until recovery succeeds.
 
 Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
 `Resumed` hint while the instance lock still proves the worker is unloaded. This happens only

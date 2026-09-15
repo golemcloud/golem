@@ -936,8 +936,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     filesystem_cleanup_failed,
                 }) => {
                     warn!("Failed to start the worker: {err}");
-                    let err = if matches!(err, WorkerExecutorError::PreviousInvocationFailed { .. })
-                    {
+                    let err = if matches!(
+                        err,
+                        WorkerExecutorError::PreviousInvocationFailed { .. }
+                            | WorkerExecutorError::PreviousInvocationExited
+                    ) {
                         err
                     } else {
                         self.parent.record_recovery_failure(&err).await;

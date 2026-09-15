@@ -2422,6 +2422,14 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
     // A failed start stays on the worker until it is resumed or unloaded, like any other
     // instance-creation failure; the resume is the next start attempt.
     executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+    let recovered_metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(recovered_metadata.status, AgentStatus::Idle);
+    assert_eq!(recovered_metadata.last_error_kind, None);
+    assert_eq!(recovered_metadata.last_error, None);
+
     let after_retry = executor
         .invoke_and_await_agent(
             &component,

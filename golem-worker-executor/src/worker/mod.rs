@@ -33,7 +33,6 @@ use self::agent_config::{
     effective_agent_config, ensure_required_agent_secrets_are_configured,
     parse_worker_creation_agent_config,
 };
-use crate::durable_host::durability::evaluate_named_policy_step_resetting_on_invalid_state;
 use crate::durable_host::durable_session::{
     DurableSessionStreams, DurableStreamConsumerJournal, SessionControlMetadata,
 };
@@ -132,9 +131,9 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, NamedRetryPolicy,
-    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryContext,
-    RetryPolicyState, RetryVerdict, Timestamp, TimestampedAgentInvocation,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -730,14 +729,39 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
         WorkerExecutorError::UnexpectedOplogEntry { expected, got } => AgentError::InternalError(
             format!("Unexpected oplog entry during replay: expected {expected}, got {got}"),
         ),
+        WorkerExecutorError::ComponentParseFailed { .. } => {
+            AgentError::InternalError(error.to_string())
+        }
         WorkerExecutorError::Runtime { .. }
         | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
         | WorkerExecutorError::ComponentDownloadFailed { .. }
         | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
         | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
         | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
         | WorkerExecutorError::ShardingNotReady => AgentError::Unknown(error.to_string()),
         _ => AgentError::InternalError(error.to_string()),
+    }
+}
+
+fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_infrastructure_recovery_error(reason)
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => true,
+        _ => false,
     }
 }
 
@@ -1802,13 +1826,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
-        drop(instance_guard);
-
         if is_active
-            && self.last_known_status.load().last_error_kind == Some(OplogErrorKind::Recovery)
+            && self
+                .get_non_detached_last_known_status()
+                .await
+                .last_error_kind
+                == Some(OplogErrorKind::Recovery)
         {
-            self.add_and_commit_oplog(OplogEntry::recovery_succeeded())
-                .await;
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::recovery_succeeded(),
+                None,
+            )
+            .await;
         }
 
         let completed = match &result {
@@ -1821,6 +1851,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
+        drop(instance_guard);
         is_active
     }
 
@@ -1841,30 +1872,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .as_ref()
             .map(|error| error.retry_from)
             .unwrap_or(self.oplog.current_oplog_index().await);
-        let config = self.config();
-        let retry_config = latest_status
-            .overridden_retry_config
-            .as_ref()
-            .unwrap_or(&config.retry);
-        let retry_policy = NamedRetryPolicy::default_from_config(retry_config);
-        let retry_properties = RetryContext::trap("recovery", None);
-        let current_retry_state = latest_status.current_retry_state.get(&retry_from);
+        let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
-        let retry_policy_state = match error {
-            AgentError::Unknown(_) | AgentError::TransientError(_) => Some(
-                match evaluate_named_policy_step_resetting_on_invalid_state(
-                    &retry_policy,
-                    &retry_properties,
-                    current_retry_state,
-                ) {
-                    Ok((state, RetryVerdict::Retry(_))) => state,
-                    Ok((state, RetryVerdict::GiveUp)) => state.exhausted(),
-                    Ok((_, RetryVerdict::Error(_))) | Err(_) => RetryPolicyState::Terminal,
-                },
-            ),
-            AgentError::OutOfMemory => None,
-            _ => Some(RetryPolicyState::Terminal),
-        };
+        let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
+            .then_some(RetryPolicyState::Terminal);
         self.add_and_commit_oplog(OplogEntry::error(
             None,
             OplogErrorKind::Recovery,
@@ -8324,6 +8335,17 @@ mod tests {
                 reason: "invalid wasm".to_string(),
             }),
             AgentError::InternalError(message) if message.contains("invalid wasm")
+        ));
+        let component_id = ComponentId::new();
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(!is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentParseFailed {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }
         ));
     }
 

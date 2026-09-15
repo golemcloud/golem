@@ -20,6 +20,15 @@ the number of recorded `Error` entries with the same `retry_from`
 (`count_oplog_errors_for`, `current_retry_state_for`). After a trap and replay the in-memory
 count resets but the oplog count does not, so a policy exhausted inline stays exhausted.
 
+Startup and replay infrastructure failures are separate from both paths. They append
+`Error { kind: Recovery, retry_policy_state: None, .. }`, so metadata truthfully remains
+`Retrying` but the failure neither reads nor advances the agent's semantic invocation retry
+budget. Recovery retrying is demand-driven: invoke, explicit resume, scheduler activation, or
+shard reassignment starts another reconstruction attempt. The executor does not retain the
+instance or schedule an unbounded timer loop during an infrastructure outage. Permanent recovery
+failures, including replay divergence and invalid manual-update snapshot baselines, append a
+terminal retry state and report `Failed`.
+
 ## When inline retry is allowed
 
 `decide_retry_with_properties` returns `Retry(delay)` only when all of these hold:
