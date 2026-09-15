@@ -160,7 +160,7 @@ impl FileMapping {
     }
 }
 
-pub(crate) fn valid_decoded_segment(segment: &str) -> bool {
+pub fn valid_decoded_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
         && segment != ".."

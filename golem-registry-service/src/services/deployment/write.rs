@@ -346,14 +346,11 @@ impl DeploymentWriteService {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes =
-            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
-
         let security_schemes_list = self
             .security_scheme_service
             .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
-            .unwrap_or_default();
+            .map_err(anyhow::Error::new)?;
 
         let security_schemes_map: HashMap<
             SecuritySchemeName,
@@ -373,6 +370,12 @@ impl DeploymentWriteService {
                 (s.name, details)
             })
             .collect();
+
+        let compiled_routes = deployment_context.compile_http_api_routes(
+            &security_schemes_map,
+            &mut errors,
+            &mut warnings,
+        );
 
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,

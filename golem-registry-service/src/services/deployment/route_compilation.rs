@@ -39,10 +39,11 @@ use golem_common::schema::{
     OutputSchema, SchemaGraph, SchemaType,
 };
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
-    ConstructorParameter, CorsOptions, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
-    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment,
-    RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
+    CompiledSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
+    CorsPreflightMethodPolicy, HttpRouterBehaviour, MethodParameter, OpenApiSpecBehaviour,
+    OpenApiSpecFormat, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch,
+    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -92,6 +93,98 @@ fn compiled_output(agent: &AgentTypeSchema, output: &OutputSchema) -> CompiledOu
         graph: graph_with_agent_defs(agent, root),
         output_schema: output.clone(),
     }
+}
+
+pub fn compile_fallback_mount(
+    environment: &Environment,
+    deployment: &HttpApiDeployment,
+    agent: &AgentTypeSchema,
+    implementer: &RegisteredAgentTypeImplementer,
+    mount: &HttpMountDetails,
+    constructor_parameters: Vec<ConstructorParameter>,
+    options: &HttpApiDeploymentAgentOptions,
+    route_id: i32,
+) -> Result<Option<UnboundCompiledRoute>, DeployValidationError> {
+    let invalid = make_invalid_agent_mount_error_maker(deployment, mount, agent);
+    let behavior = if agent.kind == golem_common::schema::AgentTypeKind::HttpRouter {
+        let compile_method = |method: &AgentMethodSchema| RouterMethod {
+            method_name: method.name.clone(),
+            input: compiled_input(agent, &method.input_schema),
+            output: compiled_output(agent, &method.output_schema),
+        };
+        RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+            component_id: implementer.component_id,
+            component_revision: implementer.component_revision,
+            agent_type: agent.type_name.clone(),
+            constructor_input: compiled_input(agent, &agent.constructor.input_schema),
+            handler: agent
+                .methods
+                .iter()
+                .find(|method| !method.http_endpoint.is_empty())
+                .map(compile_method),
+            openapi_provider: mount
+                .openapi_provider
+                .as_ref()
+                .and_then(|name| agent.methods.iter().find(|method| &method.name == name))
+                .map(compile_method),
+            static_bindings: mount.static_bindings.clone(),
+            file_index: Vec::new(),
+        })
+    } else if !mount.filesystem_bindings.is_empty() {
+        let captures = mount
+            .path_prefix
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    golem_common::model::agent::PathSegment::PathVariable(_)
+                )
+            })
+            .count();
+        if captures != constructor_parameters.len() {
+            return Err(invalid(
+                "Filesystem mount captures must bind exactly the constructor parameters".into(),
+            ));
+        }
+        RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
+            component_id: implementer.component_id,
+            component_revision: implementer.component_revision,
+            agent_type: agent.type_name.clone(),
+            constructor_input: compiled_input(agent, &agent.constructor.input_schema),
+            constructor_parameters,
+            filesystem_bindings: mount.filesystem_bindings.clone(),
+        })
+    } else {
+        return Ok(None);
+    };
+    let path = mount
+        .path_prefix
+        .iter()
+        .map(|segment| compile_agent_path_segment(agent, implementer, segment))
+        .collect::<Vec<_>>();
+    RouteMatch::MountPrefix
+        .validate(&path, &behavior)
+        .map_err(invalid)?;
+    let security = resolve_route_security(environment, options, agent, mount, None)?;
+    let mut allowed_patterns = mount
+        .cors_options
+        .allowed_patterns
+        .iter()
+        .cloned()
+        .map(OriginPattern)
+        .collect::<Vec<_>>();
+    allowed_patterns.sort();
+    allowed_patterns.dedup();
+    Ok(Some(UnboundCompiledRoute {
+        domain: deployment.domain.clone(),
+        route_id,
+        route_match: RouteMatch::MountPrefix,
+        path,
+        body: RequestBodySchema::Unused,
+        behaviour: behavior,
+        security,
+        cors: CorsOptions { allowed_patterns },
+    }))
 }
 
 pub fn add_agent_method_http_routes(
@@ -185,7 +278,7 @@ pub fn add_agent_method_http_routes(
                     deployment_agent_options,
                     agent,
                     http_mount,
-                    http_endpoint,
+                    Some(http_endpoint),
                 ),
                 errors
             );
@@ -453,8 +546,9 @@ pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
-) {
-    let openapi_prefix = parse_literal_only_path_segments(&deployment.openapi_endpoint_prefix);
+) -> Result<(), DeployValidationError> {
+    let openapi_prefix = parse_literal_only_path_segments(&deployment.openapi_endpoint_prefix)
+        .map_err(DeployValidationError::HttpApiDefinitionInvalidPathPattern)?;
 
     for (format, openapi_path) in [
         (OpenApiSpecFormat::Json, "openapi.json"),
@@ -481,6 +575,7 @@ pub fn add_openapi_spec_routes(
             },
         });
     }
+    Ok(())
 }
 
 pub fn build_agent_http_api_deployment_details(
@@ -519,7 +614,8 @@ pub fn build_agent_http_api_deployment_details(
     };
 
     let agent_webhook_prefix: Vec<PathSegment> =
-        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_prefix);
+        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_prefix)
+            .map_err(DeployValidationError::HttpApiDefinitionInvalidPathPattern)?;
 
     let mut agent_webhook_suffix: Vec<PathSegment> = agent_http_mount
         .webhook_suffix
@@ -680,14 +776,18 @@ fn compile_agent_path_segment(
     }
 }
 
-fn parse_literal_only_path_segments(input: &str) -> Vec<PathSegment> {
-    input
-        .split('/')
-        .filter(|s| !s.is_empty())
+fn parse_literal_only_path_segments(input: &str) -> Result<Vec<PathSegment>, String> {
+    let target = golem_common::model::agent::http_files::HttpRequestTarget::parse(input)?;
+    if target.query().is_some() {
+        return Err("Configured HTTP prefix cannot contain a query".into());
+    }
+    Ok(target
+        .segments()
+        .iter()
         .map(|segment| PathSegment::Literal {
-            value: segment.to_string(),
+            value: segment.clone(),
         })
-        .collect()
+        .collect())
 }
 
 fn resolve_route_security(
@@ -695,7 +795,7 @@ fn resolve_route_security(
     deployment_agent_options: &HttpApiDeploymentAgentOptions,
     agent: &AgentTypeSchema,
     http_mount: &HttpMountDetails,
-    http_endpoint: &HttpEndpointDetails,
+    http_endpoint: Option<&HttpEndpointDetails>,
 ) -> Result<UnboundRouteSecurity, DeployValidationError> {
     let mut auth_required = false;
 
@@ -703,7 +803,7 @@ fn resolve_route_security(
         auth_required = auth_details.required;
     }
 
-    if let Some(auth_details) = &http_endpoint.auth_details {
+    if let Some(auth_details) = http_endpoint.and_then(|endpoint| endpoint.auth_details.as_ref()) {
         auth_required = auth_details.required;
     }
 
@@ -740,15 +840,14 @@ pub fn validate_path_segments(
     segments: &[PathSegment],
     domain: &Domain,
 ) -> Result<(), &'static str> {
-    let rendered_path = segments
-        .iter()
-        .map(|p| match p {
-            PathSegment::Literal { value } => value.clone(),
-            PathSegment::Variable { .. } | PathSegment::CatchAll { .. } => "_".to_string(),
-        })
-        .join("/");
-
-    let url_to_validate = format!("http://{}/{}", domain.0, rendered_path);
+    for segment in segments {
+        if let PathSegment::Literal { value } = segment {
+            if !golem_common::model::agent::http_files::valid_decoded_segment(value) {
+                return Err("Invalid decoded path segment");
+            }
+        }
+    }
+    let url_to_validate = format!("http://{}/", domain.0);
 
     let Ok(url) = Url::parse(&url_to_validate) else {
         return Err("Does not form a valid url");
@@ -951,7 +1050,7 @@ mod tests {
 
     #[test]
     fn parses_mixed_segments_as_literals() {
-        let result = parse_literal_only_path_segments("/foo/{id}/*/bar");
+        let result = parse_literal_only_path_segments("/foo/%7Bid%7D/*/bar").unwrap();
 
         let expected = vec![
             PathSegment::Literal {
@@ -970,17 +1069,23 @@ mod tests {
     }
 
     #[test]
-    fn ignores_leading_trailing_and_repeated_slashes() {
-        let result = parse_literal_only_path_segments("///");
-
-        let expected: Vec<PathSegment> = Vec::new();
-
-        assert_eq!(result, expected);
+    fn rejects_unsafe_configured_prefixes() {
+        for path in [
+            "///",
+            "/a//b",
+            "/a/%2f",
+            "/a/%2e%2e",
+            "/a?query",
+            "/a#fragment",
+            "/a/%zz",
+        ] {
+            assert!(parse_literal_only_path_segments(path).is_err(), "{path}");
+        }
     }
 
     #[test]
     fn parses_single_segment() {
-        let result = parse_literal_only_path_segments("foo");
+        let result = parse_literal_only_path_segments("/foo").unwrap();
 
         let expected = vec![PathSegment::Literal {
             value: "foo".into(),
@@ -990,19 +1095,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_path_without_leading_slash() {
-        let result = parse_literal_only_path_segments("foo/bar");
-
-        let expected = vec![
-            PathSegment::Literal {
-                value: "foo".into(),
-            },
-            PathSegment::Literal {
-                value: "bar".into(),
-            },
-        ];
-
-        assert_eq!(result, expected);
+    fn configured_prefix_requires_absolute_path_and_decodes_once() {
+        assert!(parse_literal_only_path_segments("foo/bar").is_err());
+        assert_eq!(
+            parse_literal_only_path_segments("/foo/%252e/").unwrap(),
+            vec![
+                PathSegment::Literal {
+                    value: "foo".into()
+                },
+                PathSegment::Literal {
+                    value: "%2e".into()
+                }
+            ]
+        );
     }
 
     #[test]
@@ -1011,7 +1116,7 @@ mod tests {
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
 
-        add_openapi_spec_routes(&deployment, &mut route_id, &mut compiled_routes);
+        add_openapi_spec_routes(&deployment, &mut route_id, &mut compiled_routes).unwrap();
 
         assert_eq!(compiled_routes.len(), 2);
 
