@@ -479,7 +479,9 @@ impl S3BlobStorage {
     ) -> Option<String> {
         match error {
             SdkError::ServiceError(service_error) => {
-                if matches!(service_error.err(), NoSuchKey(_)) {
+                if matches!(service_error.err(), NoSuchKey(_))
+                    || Self::is_range_not_satisfiable(service_error.raw())
+                {
                     None
                 } else {
                     Some(Self::error_string(error))
@@ -640,7 +642,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
-            Self::sdk_error_as_loggable_string,
+            Self::get_object_error_as_loggable,
             false,
         )
         .await;
