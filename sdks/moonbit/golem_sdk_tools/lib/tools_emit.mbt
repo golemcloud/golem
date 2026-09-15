@@ -1985,6 +1985,11 @@ fn emit_invoker(
         "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
       )
     }
+    if output_stream_source(command) is None {
+      buf.write_string(
+        "      if __golem_stdout is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n      }\n",
+      )
+    }
     for arg in args {
       match arg.placement {
         Hidden(_) => ()
