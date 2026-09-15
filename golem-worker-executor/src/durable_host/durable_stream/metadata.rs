@@ -21,6 +21,7 @@ use golem_common::serialization::serialize;
 const ATTACHMENT_PAGE_SIZE: u64 = 128;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
+/// Stable metadata projection key derived from producer oplog records.
 pub enum ProducerMetadataKey {
     Global,
     Stream(StreamId),
@@ -40,6 +41,7 @@ pub enum ProducerMetadataKey {
 }
 
 impl ProducerMetadataKey {
+    /// Encodes this key for the producer metadata store.
     pub(crate) fn field(&self) -> Result<String, String> {
         Ok(format!("producer:{}", hex::encode(serialize(self)?)))
     }
@@ -136,6 +138,7 @@ impl ProducerMetadataKey {
 }
 
 #[derive(Clone, desert_rust::BinaryCodec)]
+/// Projected registration and terminal metadata for one producer stream.
 pub struct ProducerStreamMetadata {
     registration: StreamRegisteredRecord,
     session_key: StreamSessionKey,
@@ -148,6 +151,7 @@ pub struct ProducerStreamMetadata {
 }
 
 #[derive(Clone, desert_rust::BinaryCodec)]
+/// Projected durable state for one stream session.
 pub struct ProducerSessionMetadata {
     mappings: HashSet<(DurableStreamHandle, SessionStreamRole)>,
     references: HashSet<StreamId>,
@@ -158,6 +162,7 @@ pub struct ProducerSessionMetadata {
 }
 
 #[derive(Clone, desert_rust::BinaryCodec)]
+/// Typed row persisted in the producer metadata projection.
 pub enum ProducerMetadataRow {
     Global {
         open_streams: usize,
@@ -680,6 +685,7 @@ impl Projection<'_> {
     }
 }
 
+/// Rebuilds metadata rows from committed producer history without changing that history.
 pub(crate) async fn project_producer_metadata(
     storage: &(dyn KeyValueStorage + Send + Sync),
     namespace: KeyValueStorageNamespace,
@@ -865,6 +871,7 @@ pub(crate) async fn project_producer_metadata(
 }
 
 impl DurableStreamProducer {
+    /// Loads a producer index from durable metadata, falling back to committed oplog records.
     pub(crate) async fn load_indexed_with_commit(
         oplog: Arc<dyn Oplog>,
         owner: OwnedAgentId,
@@ -1409,6 +1416,7 @@ impl DurableStreamProducer {
         Ok(Some((deleting, candidates)))
     }
 
+    /// Counts committed source events beyond the consumer's last journaled offset.
     pub(crate) async fn journal_lag_events(
         &self,
         handle: &DurableStreamHandle,

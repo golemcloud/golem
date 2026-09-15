@@ -16,6 +16,7 @@ use super::index::validate_items_payload;
 use super::*;
 
 impl DurableStreamProducer {
+    /// Admits one externally sequenced input and commits it before reporting acceptance.
     pub(crate) async fn append_external_input(
         self: &Arc<Self>,
         session_key: &StreamSessionKey,

@@ -17,6 +17,7 @@ use super::*;
 
 impl DurableStreamProducer {
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
+    /// Durably registers a stream before its handle can be exposed to a consumer.
     pub(crate) async fn register(
         &self,
         request: ProducerRegistrationRequest,
@@ -161,6 +162,7 @@ impl DurableStreamProducer {
         })
     }
 
+    /// Registers or validates every stream discovered in an invocation result.
     pub(crate) async fn register_result_streams(
         &self,
         session_key: StreamSessionKey,
@@ -566,6 +568,7 @@ impl DurableStreamProducer {
         ))
     }
 
+    /// Rejects registration reuse whose durable identity or schema differs.
     pub(crate) async fn validate_registration(
         &self,
         request: &ProducerRegistrationRequest,
@@ -588,6 +591,7 @@ impl DurableStreamProducer {
         Ok(registration.handle.clone())
     }
 
+    /// Enforces the per-session limit before any additional registrations are appended.
     pub(crate) async fn validate_new_session_stream_count(
         &self,
         session_key: &StreamSessionKey,

@@ -75,6 +75,7 @@ impl DurableStreamProducer {
         Ok(())
     }
 
+    /// Commits the stream's single end terminal before publishing it to live readers.
     pub(crate) async fn end(
         &self,
         stream_id: StreamId,
@@ -358,6 +359,7 @@ impl DurableStreamProducer {
         })
     }
 
+    /// Publishes an already committed cancellation and waits for postcommit ordering.
     pub(crate) async fn publish_committed_cancellation(
         &self,
         pending: PendingCommittedCancellation,
@@ -379,6 +381,7 @@ impl DurableStreamProducer {
         pending.outcome
     }
 
+    /// Commits cancellation for an open stream without yet completing live publication.
     pub(crate) async fn commit_cancel_open(
         &self,
         stream_id: StreamId,
@@ -422,6 +425,7 @@ impl DurableStreamProducer {
             .map(Some)
     }
 
+    /// Commits and publishes cancellation for an open stream exactly once.
     pub(crate) async fn cancel_open(
         self: &Arc<Self>,
         stream_id: StreamId,
@@ -456,6 +460,7 @@ impl DurableStreamProducer {
         Ok(())
     }
 
+    /// Installs a disposable signal used to stop active source work after durable cancellation.
     pub(crate) fn register_source_cancellation(
         &self,
         stream_id: StreamId,
@@ -478,6 +483,7 @@ impl DurableStreamProducer {
         registration_id
     }
 
+    /// Removes the signal only if it still belongs to the registering source task.
     pub(crate) fn unregister_source_cancellation(&self, stream_id: StreamId, registration_id: u64) {
         let mut registrations = self
             .source_cancellations
@@ -502,6 +508,7 @@ impl DurableStreamProducer {
         }
     }
 
+    /// Appends a protocol-authored end to one stream unless it already has a terminal.
     pub(crate) async fn end_open(
         &self,
         stream_id: StreamId,

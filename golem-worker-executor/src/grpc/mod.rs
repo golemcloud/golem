@@ -14,6 +14,7 @@
 
 mod invocation;
 mod invocation_session;
+mod stream_slots;
 
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
@@ -31,14 +32,14 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::{ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode};
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
-use crate::worker::{Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
@@ -92,6 +93,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
+use prost::Message;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -490,10 +492,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "export stream control requires a system caller and no attachment fields",
                 ));
             }
-            let result = match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
-                Some(worker) => worker.control_export_stream(control).await?,
-                None => golem_api_grpc::proto::golem::workerexecutor::v1::ExportStreamControlResult::NotFound,
-            };
+            let result =
+                match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
+                    Some(worker) => worker.control_export_stream(control.into()).await?,
+                    None => DomainExportResult::NotFound,
+                };
+            let result = golem::workerexecutor::v1::ExportStreamControlResult::from(result);
             return Ok(
                 durable_stream_attachment_control_response::Result::ExportResult(result.into()),
             );
@@ -700,7 +704,69 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
-        worker.create_stream_session(request, key).await
+        let revision = worker.stream_session_revision(&key).await?;
+        let component = worker
+            .component_service()
+            .get_metadata(worker.component_id(), Some(revision))
+            .await?;
+        let method_name = request
+            .method_name
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
+        let proto_input = request
+            .input
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("input not found"))?;
+        let input_len = proto_input.encoded_len();
+        let input =
+            decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
+        let parsed = ParsedAgentId::parse(&worker.agent_id().agent_id, &component.metadata)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if !crate::worker::invocation::validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed),
+            &method_name,
+            &input,
+        )? {
+            return Err(WorkerExecutorError::invalid_request(
+                "Durable Streams requires a streaming method",
+            ));
+        }
+        let mut request = request;
+        request.attempt_id = Some(uuid::Uuid::new_v4().into());
+        request.expected_callee_fingerprint =
+            Some(worker.get_initial_worker_metadata().fingerprint.0.into());
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: key.clone(),
+            method_name,
+            input,
+            invocation_context: from_proto_invocation_context(&request.context)
+                .limit_depth(worker.config().limits.max_invocation_context_stack_depth),
+            principal: request.principal(),
+            scope_card: request
+                .scope_card
+                .clone()
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(WorkerExecutorError::permission_denied)?,
+        };
+        let (committed, _receipt) = tokio::sync::oneshot::channel();
+        let domain_request = build_durable_streaming_request(
+            &request,
+            &component.metadata,
+            revision,
+            worker.get_initial_worker_metadata().fingerprint,
+            invocation,
+            input_len,
+            committed,
+            worker
+                .config()
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
+        )?;
+        let result = worker.create_stream_session(domain_request).await?;
+        Ok(result.into())
     }
 
     async fn fork_worker_internal(
@@ -3009,11 +3075,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Err(error) => Err(error),
         };
         let result = match worker {
-            Ok(worker) => worker.read_stream_slot(request).await,
+            Ok(worker) => match request.try_into() {
+                Ok(request) => worker.read_stream_slot(request).await,
+                Err(error) => Err(DurableStreamReadError::Other(error)),
+            },
             Err(error) => Err(error.into()),
         };
         let result = match result {
-            Ok(Some(value)) => Outcome::Success(value),
+            Ok(Some(value)) => Outcome::Success(value.into()),
             Ok(None) => Outcome::NotFound(golem::common::Empty {}),
             Err(DurableStreamReadError::Other(error)) => Outcome::Failure(error.into()),
             Err(DurableStreamReadError::Unavailable) => {
@@ -3036,10 +3105,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let result = async {
             let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-            self.stream_slot_worker(&id, request.auth_ctx.clone())
+            let auth_ctx = request.auth_ctx.clone();
+            let outcome = self
+                .stream_slot_worker(&id, auth_ctx)
                 .await?
-                .append_to_stream_slot(request)
-                .await
+                .append_to_stream_slot(request.into())
+                .await?;
+            Ok::<_, WorkerExecutorError>(AppendToStreamSlotResponse::from(outcome))
         }
         .await;
         Ok(Response::new(result.unwrap_or_else(|error| {

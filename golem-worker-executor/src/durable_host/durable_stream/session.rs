@@ -18,6 +18,7 @@ use super::registration::registration_record;
 use super::*;
 
 impl DurableStreamProducer {
+    /// Installs the runtime service used to project durable session control metadata.
     pub(crate) fn set_control_metadata_provider(
         &self,
         service: Arc<dyn WorkerService>,
@@ -26,6 +27,7 @@ impl DurableStreamProducer {
         assert!(self.control_metadata_provider.set((service, mode)).is_ok());
     }
 
+    /// Loads control metadata reconstructed from committed session records.
     pub(crate) async fn persisted_control_metadata(
         &self,
         key: &StreamSessionKey,
@@ -45,6 +47,7 @@ impl DurableStreamProducer {
             .map(Some)
     }
 
+    /// Loads committed per-stream consumer ordinals and source offsets.
     pub(crate) async fn persisted_consumer_positions(
         &self,
         key: &StreamSessionKey,
@@ -89,6 +92,7 @@ impl DurableStreamProducer {
             .await
     }
 
+    /// Appends a session fact under the producer's default attribution.
     pub(crate) async fn append_session_record(
         &self,
         record: StreamSessionRecord,
@@ -96,6 +100,7 @@ impl DurableStreamProducer {
         self.append_session_record_attributed(None, record).await
     }
 
+    /// Appends a session fact with explicit entity ownership attribution.
     pub(crate) async fn append_session_record_attributed(
         &self,
         entity_parent_start_index: Option<OplogIndex>,
@@ -112,6 +117,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    /// Serializes, commits, and indexes one session mutation.
     pub(crate) async fn append_session_record_owned(
         &self,
         entity_parent_start_index: Option<OplogIndex>,
@@ -121,6 +127,7 @@ impl DurableStreamProducer {
             .await
     }
 
+    /// Serializes and commits an ordered batch of session mutations.
     pub(crate) async fn append_session_records_owned(
         &self,
         entity_parent_start_index: Option<OplogIndex>,
@@ -203,6 +210,7 @@ impl DurableStreamProducer {
         Ok(())
     }
 
+    /// Returns the process-local serialization lock for a durable session identity.
     pub(crate) fn session_lock(
         &self,
         session_key: &StreamSessionKey,
@@ -222,6 +230,7 @@ impl DurableStreamProducer {
         lock
     }
 
+    /// Rejects new records once the durable session has reached a terminal state.
     pub(crate) async fn ensure_session_accepts_new_events(
         &self,
         session_key: &StreamSessionKey,
@@ -240,10 +249,12 @@ impl DurableStreamProducer {
         }
     }
 
+    /// Returns the notification used to recheck durable session state.
     pub(crate) fn session_records_changed(&self) -> &Notify {
         &self.session_records_changed
     }
 
+    /// Wakes waiters after the corresponding session records have been committed.
     pub(crate) fn notify_session_records_changed(&self) {
         let deferred = MUTATION_SCOPE
             .try_with(|scope| {
@@ -260,7 +271,7 @@ impl DurableStreamProducer {
         }
     }
 
-    /// Atomically registers root input streams, prepares the session, and attaches its invocation.
+    /// Atomically persists root inputs, the session descriptor, and invocation attachment before acceptance.
     pub(crate) async fn prepare_session(
         &self,
         requests: Vec<(u64, ProducerRegistrationRequest)>,
@@ -479,6 +490,7 @@ impl DurableStreamProducer {
         Ok(prepared)
     }
 
+    /// Returns whether a forwarded input still requires source history or a terminal.
     pub(crate) async fn has_open_forwarded_session_input(
         &self,
         session_key: &StreamSessionKey,
@@ -508,6 +520,7 @@ impl DurableStreamProducer {
             }))
     }
 
+    /// Records the session terminal after all required stream finalization is durable.
     pub(crate) async fn finish_session(
         &self,
         session_key: StreamSessionKey,

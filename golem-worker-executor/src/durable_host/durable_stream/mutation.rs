@@ -99,6 +99,7 @@ impl Drop for ProducerMutationEffects {
 }
 
 impl DurableStreamProducer {
+    /// Rejects work after the resident producer has been poisoned or retired.
     pub(crate) fn ensure_healthy(&self) -> Result<(), DurableStreamProducerError> {
         if self.poisoned.load(Ordering::Acquire) {
             Err(DurableStreamProducerError::RecoveryRequired)
@@ -107,10 +108,12 @@ impl DurableStreamProducer {
         }
     }
 
+    /// Waits until every admitted durable effect has completed.
     pub(crate) async fn wait_durable_drained(&self) {
         self.durable_activity.wait_drained().await;
     }
 
+    /// Keeps retirement from completing while metadata is being read or projected.
     pub(crate) async fn with_metadata_activity<T>(
         &self,
         lookup: impl Future<Output = T>,
@@ -125,7 +128,7 @@ impl DurableStreamProducer {
         Ok(result)
     }
 
-    /// Cancels only a remote waiter; local durable mutations must finish independently.
+    /// Cancels only the forwarded waiter on retirement; local durable mutations finish independently.
     pub(crate) async fn remote_until_retired<T>(
         &self,
         remote: impl Future<Output = Result<T, DurableStreamProducerError>>,
@@ -137,6 +140,7 @@ impl DurableStreamProducer {
         }
     }
 
+    /// Retires only when no durable or metadata work remains active.
     pub(crate) fn try_retire_quiescent(&self) -> bool {
         if self.ensure_healthy().is_err() || !self.durable_activity.try_close_if_idle() {
             return false;
@@ -145,6 +149,7 @@ impl DurableStreamProducer {
         true
     }
 
+    /// Prevents new work and cancels resident forwarded operations after failure or retirement.
     pub(crate) fn poison(&self) {
         self.poisoned.store(true, Ordering::Release);
         self.retirement.cancel();
@@ -202,6 +207,7 @@ impl DurableStreamProducer {
         )
     }
 
+    /// Queues one producer mutation and resolves after its durable callback completes.
     pub(crate) async fn run_owned<T, E, F, Fut>(
         &self,
         retained_bytes: usize,
@@ -217,6 +223,7 @@ impl DurableStreamProducer {
             .await
     }
 
+    /// Queues lifecycle work separately from ordinary producer mutations.
     pub(crate) async fn run_lifecycle<T, E, F, Fut>(
         &self,
         retained_bytes: usize,
@@ -232,6 +239,7 @@ impl DurableStreamProducer {
             .await
     }
 
+    /// Defers remote cancellation until the current mutation has reached its durable boundary.
     pub(crate) fn defer_remote_cancellation(
         &self,
         cancellation: impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static,
@@ -361,7 +369,7 @@ impl DurableStreamProducer {
                             if scope.session_records_changed.load(Ordering::Acquire) {
                                 producer.session_records_changed.notify_waiters();
                             }
-                            // Storage quiescence excludes live fanout. The separate count/byte
+                            // Draining storage work excludes live fanout. The separate count/byte
                             // reservations still bound normal publications until delivery completes.
                             drop(activity);
                             let cancellations = std::mem::take(

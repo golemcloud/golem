@@ -120,6 +120,7 @@ pub(super) fn encoded_event_bytes(event: &CommittedProducerStreamEvent) -> usize
 }
 
 impl DurableStreamProducer {
+    /// Returns bytes retained only as a disposable live-publication optimization.
     pub(crate) fn retained_payload_bytes(
         payload: &StreamItemsPayload,
     ) -> Result<usize, DurableStreamProducerError> {

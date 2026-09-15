@@ -23,6 +23,7 @@ use super::*;
 
 impl DurableStreamProducer {
     #[cfg(test)]
+    /// Appends values in producer order and returns only after their durable receipt.
     pub(crate) async fn write_items(
         &self,
         stream_id: StreamId,
@@ -33,6 +34,7 @@ impl DurableStreamProducer {
             .await
     }
 
+    /// Resolves a registration coordinate to its fingerprint-bound durable handle.
     pub(crate) async fn handle_for_coordinate(
         &self,
         coordinate: &StreamRegistrationCoordinate,
@@ -47,6 +49,7 @@ impl DurableStreamProducer {
             .map(|registration| registration.handle.clone()))
     }
 
+    /// Returns the latest committed offset and terminal state for a validated handle.
     pub(crate) async fn stream_head(
         &self,
         handle: &DurableStreamHandle,
@@ -69,6 +72,7 @@ impl DurableStreamProducer {
         Ok((stream.last_offset, stream.terminal, cancelled))
     }
 
+    /// Reads committed events by offset; resident publication state is not authoritative.
     pub(crate) async fn read_by_handle(
         self: &Arc<Self>,
         request: golem_common::model::durable_stream::StreamHandleReadRequest,
@@ -149,6 +153,7 @@ impl DurableStreamProducer {
         })
     }
 
+    /// Resolves nested stream handles carried by the selected committed item range.
     pub(crate) async fn nested_handles(
         &self,
         stream_id: StreamId,
@@ -285,6 +290,7 @@ impl DurableStreamProducer {
             .collect()
     }
 
+    /// Returns the committed producer sequence through which an input stream may resume.
     pub(crate) async fn input_high_water(
         &self,
         stream_id: StreamId,
@@ -310,6 +316,7 @@ impl DurableStreamProducer {
         }))
     }
 
+    /// Returns the input high-water mark while validating the consumer attachment.
     pub(crate) async fn attached_input_high_water(
         &self,
         session_key: &StreamSessionKey,
@@ -360,6 +367,7 @@ impl DurableStreamProducer {
     }
 
     #[cfg(test)]
+    /// Commits values and their nested stream registrations as one ordered producer mutation.
     pub(crate) async fn write_items_with_nested(
         &self,
         stream_id: StreamId,
@@ -381,6 +389,7 @@ impl DurableStreamProducer {
     }
 
     #[cfg(test)]
+    /// Writes nested values while enforcing the protocol traversal-depth limit.
     pub(crate) async fn write_items_with_nested_at_depth(
         &self,
         stream_id: StreamId,
@@ -402,6 +411,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    /// Persists values together with newly registered or forwarded nested stream sources.
     pub(crate) async fn write_items_with_nested_sources(
         &self,
         stream_id: StreamId,
@@ -443,6 +453,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    /// Writes forwarded values after checking that the source attachment is still active.
     pub(crate) async fn write_attached_items_with_nested(
         self: &Arc<Self>,
         session_key: &StreamSessionKey,
@@ -582,6 +593,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    /// Resolves an attached source offset to its committed producer sequence.
     pub(crate) async fn attached_global_sequence(
         &self,
         session_key: &StreamSessionKey,

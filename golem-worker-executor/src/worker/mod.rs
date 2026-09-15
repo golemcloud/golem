@@ -17,6 +17,12 @@ pub mod cut_point;
 mod durable_stream_producer;
 pub(crate) use durable_stream_producer::EphemeralResponseLease;
 mod durable_stream_slots;
+pub(crate) use durable_stream_slots::{
+    AppendStreamSlotPayload, AppendToStreamSlotRequest, AppendToStreamSlotResult,
+    CreateStreamSessionResult, ExportStreamControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotResult, StreamSlotItem, StreamSlotItemContent,
+    StreamSlotProducer,
+};
 pub mod entity_invocation;
 pub mod entity_slot;
 pub mod instance;

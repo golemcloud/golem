@@ -15,6 +15,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Durable consumer evidence used when reconciling a producer attachment.
 pub(crate) enum ConsumerAttachmentStatus {
     Prepared,
     Active,
@@ -25,18 +26,22 @@ pub(crate) enum ConsumerAttachmentStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Consumer terminal and progress facts recovered from its journal.
 pub(crate) struct ConsumerJournalInspection {
     pub(crate) source_offsets: Vec<StreamOffset>,
     pub(crate) source_unavailable: Option<StreamOffset>,
 }
 
 #[async_trait]
+/// Queries consumer-side durable state without relying on its resident session runtime.
 pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
+    /// Inspects whether the consumer can still require the attachment's source history.
     async fn status(
         &self,
         key: &StreamAttachmentKey,
     ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError>;
 
+    /// Inspects an attachment while requiring an exact durable mapping when supplied.
     async fn status_exact(
         &self,
         key: &StreamAttachmentKey,
@@ -45,6 +50,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
         self.status(key).await
     }
 
+    /// Returns committed consumer offsets needed for source-loss reconciliation.
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
@@ -52,6 +58,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
         Ok(None)
     }
 
+    /// Returns folded consumer progress without loading journal payloads.
     async fn journal_summary(
         &self,
         _key: &StreamAttachmentKey,
@@ -59,6 +66,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
         Ok(None)
     }
 
+    /// Commits deterministic source loss before producer history is removed.
     async fn commit_source_unavailable(
         &self,
         _key: &StreamAttachmentKey,
@@ -71,6 +79,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
     }
 }
 
+/// Consumer probe that reads local metadata or routes to the owning shard.
 pub(crate) struct DbDirectStreamAttachmentConsumerProbe {
     worker_service: Arc<dyn WorkerService>,
     oplog_service: Arc<dyn OplogService>,
@@ -78,6 +87,7 @@ pub(crate) struct DbDirectStreamAttachmentConsumerProbe {
 }
 
 impl DbDirectStreamAttachmentConsumerProbe {
+    /// Creates a probe backed only by the supplied metadata service.
     pub(crate) fn new(
         worker_service: Arc<dyn WorkerService>,
         oplog_service: Arc<dyn OplogService>,
@@ -89,6 +99,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         }
     }
 
+    /// Creates a probe that can route inspection to remote consumer owners.
     pub(crate) fn new_routed(
         worker_service: Arc<dyn WorkerService>,
         oplog_service: Arc<dyn OplogService>,
@@ -101,6 +112,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         }
     }
 
+    /// Returns whether a matching cancellation intent or terminal is durably recorded.
     pub(crate) async fn committed_cancellation_status(
         &self,
         key: &StreamAttachmentKey,

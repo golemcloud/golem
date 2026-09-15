@@ -18,12 +18,6 @@ use crate::durable_host::durable_stream::{
     ExternalProducer, StreamHandleReadResult,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    AppendAccepted, AppendDuplicate, AppendEpochFenced, AppendSequenceGap,
-    AppendToStreamSlotRequest, AppendToStreamSlotResponse, ExportStreamControl,
-    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess, StreamSlotItem,
-    append_to_stream_slot_request, append_to_stream_slot_response, stream_slot_item,
-};
 use golem_common::model::durable_stream::{
     DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, StreamHandleReadRequest,
     StreamItemsPayload, StreamOffset, StreamSessionKey,
@@ -35,6 +29,107 @@ use golem_common::schema::{
 use golem_schema::schema::fingerprint::schema_fingerprint_v1;
 use golem_schema::schema::validation::validate_value;
 use prost::Message;
+
+/// Domain result of creating or replay-attaching a stream session.
+pub(crate) struct CreateStreamSessionResult {
+    pub(crate) session: String,
+    pub(crate) replayed: bool,
+    pub(crate) component_revision: ComponentRevision,
+}
+
+/// Domain request for reading one invocation stream slot.
+pub(crate) struct ReadStreamSlotRequest {
+    pub(crate) session: String,
+    pub(crate) slot: String,
+    pub(crate) from_offset: Option<StreamOffset>,
+    pub(crate) max_items: u32,
+    pub(crate) max_bytes: u64,
+    pub(crate) wait_millis: u64,
+    pub(crate) expected_method: String,
+}
+
+/// One domain item returned by a stream-slot read.
+pub(crate) struct StreamSlotItem {
+    pub(crate) offset: StreamOffset,
+    pub(crate) content: StreamSlotItemContent,
+}
+
+/// Encoding selected by the slot's pinned element schema.
+pub(crate) enum StreamSlotItemContent {
+    Value(Vec<u8>),
+    PackedU8(Vec<u8>),
+}
+
+/// Domain result of reading one invocation stream slot.
+pub(crate) struct ReadStreamSlotResult {
+    pub(crate) items: Vec<StreamSlotItem>,
+    pub(crate) next_offset: Option<StreamOffset>,
+    pub(crate) closed: bool,
+    pub(crate) cancelled: bool,
+    pub(crate) element_schema: SchemaGraph,
+    pub(crate) content_type: &'static str,
+    pub(crate) up_to_date: bool,
+    pub(crate) head_offset: Option<StreamOffset>,
+    pub(crate) stream_identity: String,
+    pub(crate) slots: Vec<String>,
+    pub(crate) tombstoned: bool,
+    pub(crate) writable: bool,
+}
+
+/// Domain target for cancelling a session or tombstoning one export slot.
+pub(crate) struct ExportStreamControlRequest {
+    pub(crate) session: String,
+    pub(crate) slot: Option<String>,
+    pub(crate) expected_method: String,
+}
+
+/// Stable outcome of an export stream control operation.
+pub(crate) enum ExportStreamControlResult {
+    Applied,
+    NotFound,
+    Gone,
+}
+
+/// Domain payload accepted by an input stream slot.
+pub(crate) enum AppendStreamSlotPayload {
+    Values(Vec<Vec<u8>>),
+    PackedU8(Vec<u8>),
+}
+
+/// Client producer coordinates for idempotent external appends.
+pub(crate) struct StreamSlotProducer {
+    pub(crate) id: String,
+    pub(crate) epoch: u64,
+    pub(crate) sequence: u64,
+}
+
+/// Domain request for appending to one input stream slot.
+pub(crate) struct AppendToStreamSlotRequest {
+    pub(crate) session: String,
+    pub(crate) slot: String,
+    pub(crate) payload: Option<AppendStreamSlotPayload>,
+    pub(crate) close: bool,
+    pub(crate) producer: Option<StreamSlotProducer>,
+    pub(crate) expected_method: String,
+}
+
+/// Domain outcome of an input stream-slot append.
+pub(crate) enum AppendToStreamSlotResult {
+    Accepted(StreamOffset),
+    Duplicate {
+        offset: StreamOffset,
+        highest_sequence: Option<u64>,
+    },
+    EpochFenced(u64),
+    SequenceGap {
+        expected: u64,
+        received: u64,
+    },
+    Closed,
+    NotFound,
+    Gone,
+    ReadOnly,
+}
 
 struct Slot {
     session: StreamSessionKey,
@@ -48,12 +143,23 @@ struct Slot {
 
 enum SlotSource {
     Stream(DurableStreamHandle),
-    Value(Vec<u8>, StreamOffset),
-    Pending { finished: bool },
+    Value {
+        encoded: Vec<u8>,
+        offset: StreamOffset,
+    },
+    Pending {
+        finished: bool,
+    },
     Tombstoned,
 }
 
-type SlotSchema = (SchemaType, Option<usize>, bool, bool);
+#[derive(Debug, PartialEq)]
+struct SlotSchema {
+    element: SchemaType,
+    field_index: Option<usize>,
+    writable: bool,
+    is_stream: bool,
+}
 
 fn append_error(error: DurableStreamProducerError) -> WorkerExecutorError {
     match error {
@@ -68,117 +174,137 @@ fn append_error(error: DurableStreamProducerError) -> WorkerExecutorError {
     }
 }
 
-/// Returns the element type, root record-field index, direction and whether the slot is a stream.
-fn slot_schema(
-    graph: &SchemaGraph,
-    method: &AgentMethodSchema,
-    name: &str,
-) -> Result<Option<SlotSchema>, WorkerExecutorError> {
-    let resolve = |ty| {
-        graph
-            .resolve_ref(ty)
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
-    };
-    for (index, field) in method
-        .input_schema
-        .fields()
-        .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .enumerate()
-    {
-        if field.name == name
-            && let SchemaType::Stream {
-                inner: Some(element),
-                ..
-            } = resolve(&field.schema)?
+impl SlotSchema {
+    /// Looks up a canonical input or output slot in the method's pinned schema.
+    fn lookup(
+        graph: &SchemaGraph,
+        method: &AgentMethodSchema,
+        name: &str,
+    ) -> Result<Option<Self>, WorkerExecutorError> {
+        let resolve = |ty| {
+            graph
+                .resolve_ref(ty)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+        };
+        for (index, field) in method
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .enumerate()
         {
-            return Ok(Some(((**element).clone(), Some(index), true, true)));
-        }
-    }
-    let OutputSchema::Single(output) = &method.output_schema else {
-        return Ok(None);
-    };
-    match resolve(output)? {
-        SchemaType::Stream {
-            inner: Some(element),
-            ..
-        } if name == "$result" => Ok(Some(((**element).clone(), None, false, true))),
-        SchemaType::Record { fields, .. } => {
-            if let Some((index, field)) = fields
-                .iter()
-                .enumerate()
-                .find(|(_, field)| field.name == name)
+            if field.name == name
                 && let SchemaType::Stream {
                     inner: Some(element),
                     ..
-                } = resolve(&field.body)?
+                } = resolve(&field.schema)?
             {
-                return Ok(Some(((**element).clone(), Some(index), false, true)));
-            }
-            if name == "$result"
-                && !golem_common::schema::agent::contains_stream_in_graph(graph, output)
-            {
-                Ok(Some(((**output).clone(), None, false, false)))
-            } else {
-                Ok(None)
+                return Ok(Some(Self {
+                    element: (**element).clone(),
+                    field_index: Some(index),
+                    writable: true,
+                    is_stream: true,
+                }));
             }
         }
-        _ if name == "$result"
-            && !golem_common::schema::agent::contains_stream_in_graph(graph, output) =>
-        {
-            Ok(Some(((**output).clone(), None, false, false)))
+        let OutputSchema::Single(output) = &method.output_schema else {
+            return Ok(None);
+        };
+        match resolve(output)? {
+            SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } if name == "$result" => Ok(Some(Self {
+                element: (**element).clone(),
+                field_index: None,
+                writable: false,
+                is_stream: true,
+            })),
+            SchemaType::Record { fields, .. } => {
+                if let Some((index, field)) = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, field)| field.name == name)
+                    && let SchemaType::Stream {
+                        inner: Some(element),
+                        ..
+                    } = resolve(&field.body)?
+                {
+                    return Ok(Some(Self {
+                        element: (**element).clone(),
+                        field_index: Some(index),
+                        writable: false,
+                        is_stream: true,
+                    }));
+                }
+                if name == "$result"
+                    && !golem_common::schema::agent::contains_stream_in_graph(graph, output)
+                {
+                    Ok(Some(Self {
+                        element: (**output).clone(),
+                        field_index: None,
+                        writable: false,
+                        is_stream: false,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ if name == "$result"
+                && !golem_common::schema::agent::contains_stream_in_graph(graph, output) =>
+            {
+                Ok(Some(Self {
+                    element: (**output).clone(),
+                    field_index: None,
+                    writable: false,
+                    is_stream: false,
+                }))
+            }
+            _ => Ok(None),
         }
-        _ => Ok(None),
     }
-}
 
-fn slot_handle(
-    encoded: &[u8],
-    field: Option<usize>,
-    handles: &[DurableStreamHandle],
-) -> Result<DurableStreamHandle, WorkerExecutorError> {
-    let mut value = ProtoValue::decode(encoded)
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-    if let Some(index) = field {
-        let Some(schema_value::Value::RecordValue(record)) = value.value else {
+    /// Extracts this slot's canonical durable handle from a persisted value.
+    fn extract_handle(
+        &self,
+        encoded: &[u8],
+        handles: &[DurableStreamHandle],
+    ) -> Result<DurableStreamHandle, WorkerExecutorError> {
+        let mut value = ProtoValue::decode(encoded)
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        if let Some(index) = self.field_index {
+            let Some(schema_value::Value::RecordValue(record)) = value.value else {
+                return Err(WorkerExecutorError::runtime(
+                    "persisted slot value is not a record",
+                ));
+            };
+            value =
+                record.fields.get(index).cloned().ok_or_else(|| {
+                    WorkerExecutorError::runtime("persisted slot field is missing")
+                })?;
+        }
+        let Some(schema_value::Value::StreamReference(reference)) = value.value else {
             return Err(WorkerExecutorError::runtime(
-                "persisted slot value is not a record",
+                "persisted slot is not a stream reference",
             ));
         };
-        value = record
-            .fields
-            .get(index)
+        usize::try_from(reference.stream_id)
+            .ok()
+            .and_then(|index| handles.get(index))
             .cloned()
-            .ok_or_else(|| WorkerExecutorError::runtime("persisted slot field is missing"))?;
+            .ok_or_else(|| WorkerExecutorError::runtime("persisted slot has no durable handle"))
     }
-    let Some(schema_value::Value::StreamReference(reference)) = value.value else {
-        return Err(WorkerExecutorError::runtime(
-            "persisted slot is not a stream reference",
-        ));
-    };
-    usize::try_from(reference.stream_id)
-        .ok()
-        .and_then(|index| handles.get(index))
-        .cloned()
-        .ok_or_else(|| WorkerExecutorError::runtime("persisted slot has no durable handle"))
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    pub(crate) async fn create_stream_session(
-        self: &Arc<Self>,
-        mut request: golem_api_grpc::proto::golem::worker::InvocationStart,
-        key: IdempotencyKey,
-    ) -> Result<
-        golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess,
-        WorkerExecutorError,
-    > {
-        use crate::grpc::{
-            CanStartWorker, build_durable_streaming_request, decode_invocation_input,
-        };
-
+    /// Resolves the pinned revision for a stream-slot session before transport decoding.
+    pub(crate) async fn stream_session_revision(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<ComponentRevision, WorkerExecutorError> {
         let producer = self.durable_stream_producer().await?;
         let pinned = producer
-            .with_metadata_activity(self.prepared_stream_session(&key))
+            .with_metadata_activity(self.prepared_stream_session(key))
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         if pinned.is_none() && self.agent_mode() != AgentMode::Ephemeral {
@@ -190,79 +316,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         }
-        let revision = match &pinned {
+        Ok(match pinned {
             Some(prepared) => prepared.attempt.invocation.target_component_revision,
             None => self.get_last_known_status().await.component_revision,
-        };
-        let component = self
-            .component_service()
-            .get_metadata(self.owned_agent_id.component_id(), Some(revision))
-            .await?;
-        let method_name = request
-            .method_name
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
-        let proto_input = request
-            .input
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("input not found"))?;
-        let input_len = proto_input.encoded_len();
-        let input =
-            decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
-        let parsed =
-            ParsedAgentId::parse(&self.owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(WorkerExecutorError::invalid_request)?;
-        if !crate::worker::invocation::validate_agent_method_invocation(
-            &component.metadata,
-            Some(&parsed),
-            &method_name,
-            &input,
-        )? {
-            return Err(WorkerExecutorError::invalid_request(
-                "Durable Streams requires a streaming method",
-            ));
-        }
-        request.attempt_id = Some(uuid::Uuid::new_v4().into());
-        request.expected_callee_fingerprint =
-            Some(self.get_initial_worker_metadata().fingerprint.0.into());
-        let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
-            method_name,
-            input,
-            invocation_context: crate::grpc::from_proto_invocation_context(&request.context)
-                .limit_depth(self.config().limits.max_invocation_context_stack_depth),
-            principal: request.principal(),
-            scope_card: request
-                .scope_card
-                .clone()
-                .map(TryInto::try_into)
-                .transpose()
-                .map_err(WorkerExecutorError::permission_denied)?,
-        };
-        let (committed, _receipt) = tokio::sync::oneshot::channel();
-        let invocation = build_durable_streaming_request(
-            &request,
-            &component.metadata,
-            revision,
-            self.get_initial_worker_metadata().fingerprint,
-            invocation,
-            input_len,
-            committed,
-            self.config()
-                .limits
-                .live_stream_event_broadcast_capacity
-                .get(),
-        )?;
-        let acceptance = self
-            .accept_durable_stream_slot_invocation(invocation)
-            .await?;
-        Ok(
-            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess {
-                session: key.value,
-                replayed: acceptance.replayed,
-                component_revision: revision.into(),
-            },
-        )
+        })
+    }
+
+    /// Accepts a fully domain-built streaming invocation and returns its stable session identity.
+    pub(crate) async fn create_stream_session(
+        self: &Arc<Self>,
+        request: DurableStreamingInvocationRequest,
+    ) -> Result<CreateStreamSessionResult, WorkerExecutorError> {
+        let session = request.attempt.session_key.idempotency_key.value.clone();
+        let component_revision = request.attempt.invocation.target_component_revision;
+        let acceptance = self.accept_durable_stream_slot_invocation(request).await?;
+        Ok(CreateStreamSessionResult {
+            session,
+            replayed: acceptance.replayed,
+            component_revision,
+        })
     }
 
     async fn resolve_stream_slot(
@@ -329,7 +401,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut slots = Vec::new();
         for candidate in candidates {
             if !slots.contains(&candidate)
-                && slot_schema(&agent.schema, method, &candidate)?.is_some()
+                && SlotSchema::lookup(&agent.schema, method, &candidate)?.is_some()
             {
                 slots.push(candidate);
             }
@@ -342,18 +414,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             name
         };
-        let Some((element, field, writable, is_stream)) = slot_schema(&agent.schema, method, name)?
-        else {
+        let Some(schema) = SlotSchema::lookup(&agent.schema, method, name)? else {
             return Ok(None);
         };
         let source = if status.tombstoned_slots.contains(name) {
             SlotSource::Tombstoned
-        } else if writable {
-            SlotSource::Stream(slot_handle(
-                &descriptor.invocation_value,
-                field,
-                &descriptor.stream_handles,
-            )?)
+        } else if schema.writable {
+            SlotSource::Stream(
+                schema.extract_handle(&descriptor.invocation_value, &descriptor.stream_handles)?,
+            )
         } else if let Some(result_index) = status.invocation_result {
             let StreamSessionRecord::InvocationResult(result) =
                 self.read_stream_session_record(result_index).await?
@@ -362,18 +431,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "session result locator is invalid",
                 ));
             };
-            if is_stream {
-                SlotSource::Stream(slot_handle(&result.result, field, &result.output_streams)?)
+            if schema.is_stream {
+                SlotSource::Stream(schema.extract_handle(&result.result, &result.output_streams)?)
             } else {
-                SlotSource::Value(result.result, StreamOffset::new(result_index, 0))
+                SlotSource::Value {
+                    encoded: result.result,
+                    offset: StreamOffset::new(result_index, 0),
+                }
             }
         } else {
             SlotSource::Pending {
-                finished: status.finished.is_some() || (is_stream && status.cancellation_requested),
+                finished: status.finished.is_some()
+                    || (schema.is_stream && status.cancellation_requested),
             }
         };
         if let SlotSource::Stream(handle) = &source {
-            let fingerprint = schema_fingerprint_v1(&agent.schema, Some(&element))
+            let fingerprint = schema_fingerprint_v1(&agent.schema, Some(&schema.element))
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             if fingerprint != handle.element_schema_fingerprint {
                 return Err(WorkerExecutorError::runtime(
@@ -384,41 +457,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let bytes = matches!(
             agent
                 .schema
-                .resolve_ref(&element)
+                .resolve_ref(&schema.element)
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
             SchemaType::U8 { .. }
-        ) && is_stream;
+        ) && schema.is_stream;
         Ok(Some(Slot {
             session: prepared.attempt.session_key,
             name: name.to_owned(),
             slots,
             graph: SchemaGraph {
                 defs: agent.schema.defs.clone(),
-                root: element,
+                root: schema.element,
             },
-            writable,
+            writable: schema.writable,
             bytes,
             source,
         }))
     }
 
+    /// Reads data and metadata from a slot resolved against the session's pinned schema.
     pub(crate) async fn read_stream_slot(
         &self,
         request: ReadStreamSlotRequest,
-    ) -> Result<Option<ReadStreamSlotSuccess>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Option<ReadStreamSlotResult>, DurableStreamReadError<WorkerExecutorError>> {
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_millis(request.wait_millis.min(30_000));
-        let after = if request.from_offset.is_empty() {
-            None
-        } else {
-            let bytes = request.from_offset.as_slice().try_into().map_err(|_| {
-                WorkerExecutorError::invalid_request("offset must contain 24 bytes")
-            })?;
-            Some(
-                StreamOffset::from_bytes(bytes)
-                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
-            )
-        };
+        let after = request.from_offset;
         let producer = self.load_durable_stream_producer().await.map_err(|error| {
             DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
         })?;
@@ -449,7 +513,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let stream_id = match &slot.source {
             SlotSource::Stream(handle) => Some(handle.stream_id),
-            SlotSource::Value(..) | SlotSource::Pending { .. } | SlotSource::Tombstoned => None,
+            SlotSource::Value { .. } | SlotSource::Pending { .. } | SlotSource::Tombstoned => None,
         };
         let identity = golem_common::serialization::serialize(&(
             slot.session.clone(),
@@ -457,20 +521,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             stream_id,
         ))
         .map_err(WorkerExecutorError::runtime)?;
-        let mut response = ReadStreamSlotSuccess {
+        let mut response = ReadStreamSlotResult {
             items: Vec::new(),
-            next_offset: request.from_offset.clone(),
+            next_offset: after,
             closed: false,
             cancelled: false,
-            element_schema: Some(slot.graph.into()),
+            element_schema: slot.graph,
             content_type: if slot.bytes {
                 "application/octet-stream"
             } else {
                 "application/json"
-            }
-            .into(),
+            },
             up_to_date: true,
-            head_offset: Vec::new(),
+            head_offset: None,
             stream_identity: blake3::hash(&identity).to_hex().to_string(),
             slots: slot.slots,
             tombstoned: matches!(slot.source, SlotSource::Tombstoned),
@@ -499,37 +562,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })?;
                 let read: StreamHandleReadResult = golem_common::serialization::deserialize(&bytes)
                     .map_err(WorkerExecutorError::runtime)?;
-                response.next_offset = read
-                    .next_offset
-                    .map(|offset| offset.0.to_vec())
-                    .unwrap_or_default();
-                response.head_offset = read
-                    .head_offset
-                    .map(|offset| offset.0.to_vec())
-                    .unwrap_or_default();
+                response.next_offset = read.next_offset;
+                response.head_offset = read.head_offset;
                 response.closed = read.closed;
                 response.cancelled = read.cancelled;
                 response.up_to_date = read.next_offset >= read.head_offset;
                 for event in read.events {
                     let content = match event.payload {
                         CommittedProducerStreamEventPayload::Value(value) => {
-                            Some(stream_slot_item::Content::Value(value))
+                            Some(StreamSlotItemContent::Value(value))
                         }
                         CommittedProducerStreamEventPayload::PackedU8(byte) => {
-                            Some(stream_slot_item::Content::PackedU8(vec![byte]))
+                            Some(StreamSlotItemContent::PackedU8(vec![byte]))
                         }
                         _ => None,
                     };
                     if let Some(content) = content {
                         response.items.push(StreamSlotItem {
-                            offset: event.offset.0.to_vec(),
-                            content: Some(content),
+                            offset: event.offset,
+                            content,
                         });
                     }
                 }
             }
-            SlotSource::Value(value, offset) => {
-                response.head_offset = offset.0.to_vec();
+            SlotSource::Value {
+                encoded: value,
+                offset,
+            } => {
+                response.head_offset = Some(offset);
                 response.closed = true;
                 if request.max_items > 0 && after.is_none_or(|after| after < offset) {
                     if value.len() as u64 > request.max_bytes {
@@ -538,10 +598,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .into());
                     }
-                    response.next_offset = offset.0.to_vec();
+                    response.next_offset = Some(offset);
                     response.items.push(StreamSlotItem {
-                        offset: offset.0.to_vec(),
-                        content: Some(stream_slot_item::Content::Value(value)),
+                        offset,
+                        content: StreamSlotItemContent::Value(value),
                     });
                 }
                 response.up_to_date = response.next_offset >= response.head_offset;
@@ -558,9 +618,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Some(response))
     }
 
+    /// Cancels all session streams or tombstones one canonical export slot.
     pub(crate) async fn control_export_stream(
         self: &Arc<Self>,
-        request: ExportStreamControl,
+        request: ExportStreamControlRequest,
     ) -> Result<ExportStreamControlResult, WorkerExecutorError> {
         validate_durable_stream_session_id(&request.session)
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -626,7 +687,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 SessionStreamRole::Output
                             },
                         )),
-                        SlotSource::Value(..) | SlotSource::Pending { .. } => None,
+                        SlotSource::Value { .. } | SlotSource::Pending { .. } => None,
                     };
                     let applied = streams
                         .tombstone_slot_owned(slot.name, stream, guard)
@@ -654,12 +715,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Validates and durably appends a batch to one writable stream slot.
     pub(crate) async fn append_to_stream_slot(
         &self,
         request: AppendToStreamSlotRequest,
-    ) -> Result<AppendToStreamSlotResponse, WorkerExecutorError> {
-        use append_to_stream_slot_response::Result as Outcome;
-        let empty = || golem_api_grpc::proto::golem::common::Empty {};
+    ) -> Result<AppendToStreamSlotResult, WorkerExecutorError> {
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
             .with_metadata_activity(self.resolve_stream_slot(
@@ -670,29 +730,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
         else {
-            return Ok(AppendToStreamSlotResponse {
-                result: Some(Outcome::NotFound(empty())),
-            });
+            return Ok(AppendToStreamSlotResult::NotFound);
         };
         if matches!(slot.source, SlotSource::Tombstoned) {
-            return Ok(AppendToStreamSlotResponse {
-                result: Some(Outcome::Gone(empty())),
-            });
+            return Ok(AppendToStreamSlotResult::Gone);
         }
         if !slot.writable {
-            return Ok(AppendToStreamSlotResponse {
-                result: Some(Outcome::ReadOnly(empty())),
-            });
+            return Ok(AppendToStreamSlotResult::ReadOnly);
         }
         let SlotSource::Stream(handle) = slot.source else {
             return Err(WorkerExecutorError::runtime("input slot has no stream"));
         };
         let payload = match request.payload {
-            Some(append_to_stream_slot_request::Payload::PackedU8(bytes)) if slot.bytes => {
+            Some(AppendStreamSlotPayload::PackedU8(bytes)) if slot.bytes => {
                 Some(StreamItemsPayload::PackedU8(bytes))
             }
-            Some(append_to_stream_slot_request::Payload::Values(values)) if !slot.bytes => {
-                for encoded in &values.values {
+            Some(AppendStreamSlotPayload::Values(values)) if !slot.bytes => {
+                for encoded in &values {
                     let proto = ProtoValue::decode(encoded.as_slice())
                         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
                     let value: SchemaValue = proto
@@ -704,7 +758,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ))
                     })?;
                 }
-                Some(StreamItemsPayload::Values(values.values))
+                Some(StreamItemsPayload::Values(values))
             }
             None => None,
             _ => {
@@ -731,27 +785,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             .map_err(append_error)?;
-        Ok(AppendToStreamSlotResponse {
-            result: Some(match result {
-                ExternalAppendOutcome::Accepted(offset) => Outcome::Accepted(AppendAccepted {
-                    offset: offset.0.to_vec(),
-                }),
-                ExternalAppendOutcome::Duplicate {
-                    offset,
-                    highest_sequence,
-                } => Outcome::Duplicate(AppendDuplicate {
-                    offset: offset.0.to_vec(),
-                    highest_sequence,
-                }),
-                ExternalAppendOutcome::EpochFenced(current_epoch) => {
-                    Outcome::EpochFenced(AppendEpochFenced { current_epoch })
-                }
-                ExternalAppendOutcome::SeqGap { expected, received } => {
-                    Outcome::SequenceGap(AppendSequenceGap { expected, received })
-                }
-                ExternalAppendOutcome::Closed => Outcome::Closed(empty()),
-                ExternalAppendOutcome::NotFound => Outcome::NotFound(empty()),
-            }),
+        Ok(match result {
+            ExternalAppendOutcome::Accepted(offset) => AppendToStreamSlotResult::Accepted(offset),
+            ExternalAppendOutcome::Duplicate {
+                offset,
+                highest_sequence,
+            } => AppendToStreamSlotResult::Duplicate {
+                offset,
+                highest_sequence,
+            },
+            ExternalAppendOutcome::EpochFenced(current_epoch) => {
+                AppendToStreamSlotResult::EpochFenced(current_epoch)
+            }
+            ExternalAppendOutcome::SeqGap { expected, received } => {
+                AppendToStreamSlotResult::SequenceGap { expected, received }
+            }
+            ExternalAppendOutcome::Closed => AppendToStreamSlotResult::Closed,
+            ExternalAppendOutcome::NotFound => AppendToStreamSlotResult::NotFound,
         })
     }
 }
@@ -789,33 +839,61 @@ mod tests {
             read_only: None,
         };
         assert_eq!(
-            slot_schema(&graph, &method, "input").unwrap(),
-            Some((SchemaType::string(), Some(1), true, true))
+            SlotSchema::lookup(&graph, &method, "input").unwrap(),
+            Some(SlotSchema {
+                element: SchemaType::string(),
+                field_index: Some(1),
+                writable: true,
+                is_stream: true
+            })
         );
         assert_eq!(
-            slot_schema(&graph, &method, "bytes").unwrap(),
-            Some((SchemaType::u8(), Some(1), false, true))
+            SlotSchema::lookup(&graph, &method, "bytes").unwrap(),
+            Some(SlotSchema {
+                element: SchemaType::u8(),
+                field_index: Some(1),
+                writable: false,
+                is_stream: true
+            })
         );
         method.input_schema = InputSchema::parameters(vec![NamedField::user_supplied(
             "bytes",
             SchemaType::string(),
         )]);
         assert_eq!(
-            slot_schema(&graph, &method, "bytes").unwrap(),
-            Some((SchemaType::u8(), Some(1), false, true))
+            SlotSchema::lookup(&graph, &method, "bytes").unwrap(),
+            Some(SlotSchema {
+                element: SchemaType::u8(),
+                field_index: Some(1),
+                writable: false,
+                is_stream: true
+            })
         );
-        assert_eq!(slot_schema(&graph, &method, "count").unwrap(), None);
-        assert_eq!(slot_schema(&graph, &method, "$result").unwrap(), None);
+        assert_eq!(SlotSchema::lookup(&graph, &method, "count").unwrap(), None);
+        assert_eq!(
+            SlotSchema::lookup(&graph, &method, "$result").unwrap(),
+            None
+        );
         method.output_schema = OutputSchema::Single(Box::new(SchemaType::u64()));
         assert_eq!(
-            slot_schema(&graph, &method, "$result").unwrap(),
-            Some((SchemaType::u64(), None, false, false))
+            SlotSchema::lookup(&graph, &method, "$result").unwrap(),
+            Some(SlotSchema {
+                element: SchemaType::u64(),
+                field_index: None,
+                writable: false,
+                is_stream: false
+            })
         );
         method.output_schema =
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8()))));
         assert_eq!(
-            slot_schema(&graph, &method, "$result").unwrap(),
-            Some((SchemaType::u8(), None, false, true))
+            SlotSchema::lookup(&graph, &method, "$result").unwrap(),
+            Some(SlotSchema {
+                element: SchemaType::u8(),
+                field_index: None,
+                writable: false,
+                is_stream: true
+            })
         );
     }
 
@@ -860,23 +938,36 @@ mod tests {
             )),
         };
         assert_eq!(
-            slot_handle(
-                &record.encode_to_vec(),
-                Some(0),
-                &[first.clone(), second.clone()]
-            )
+            SlotSchema {
+                element: SchemaType::u8(),
+                field_index: Some(0),
+                writable: false,
+                is_stream: true
+            }
+            .extract_handle(&record.encode_to_vec(), &[first.clone(), second.clone()])
             .unwrap(),
             second
         );
         assert_eq!(
-            slot_handle(
-                &reference.encode_to_vec(),
-                None,
-                &[first.clone(), second.clone()]
-            )
+            SlotSchema {
+                element: SchemaType::u8(),
+                field_index: None,
+                writable: false,
+                is_stream: true
+            }
+            .extract_handle(&reference.encode_to_vec(), &[first.clone(), second.clone()])
             .unwrap(),
             second
         );
-        assert!(slot_handle(&record.encode_to_vec(), Some(0), &[first]).is_err());
+        assert!(
+            SlotSchema {
+                element: SchemaType::u8(),
+                field_index: Some(0),
+                writable: false,
+                is_stream: true
+            }
+            .extract_handle(&record.encode_to_vec(), &[first])
+            .is_err()
+        );
     }
 }
