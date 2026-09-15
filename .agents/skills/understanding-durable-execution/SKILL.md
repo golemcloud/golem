@@ -93,12 +93,16 @@ says how strict that commit is: `Always` waits for durable storage; `DurableOnly
 for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
 level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
 
-A primary oplog can also commit automatically when its append buffer reaches the configured
-threshold. Those entries are durable, but the status reducer still has to see them: the primary
-oplog retains every committed-but-unreported entry and returns it with the next explicit commit,
-whose caller delivers the complete range to the reducer. Archiving may transfer and remove only
-entries already reported this way; otherwise a durable entry could disappear from the primary
-before status ever folded it.
+`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+commit and ignores receipt entries already folded into the published status. Primary/ephemeral
+threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
+may hide a committed suffix. Unless the remaining receipt is exactly the contiguous suffix after
+the last published index, the status actor catches up with `status::try_fold_status_from`: committed
+storage is read in bounded chunks, external `StreamSession` payloads are hydrated, and the result
+is published once. This avoids retaining an unbounded auto-flushed tail and adds neither oplog
+entries nor a protocol change. Gap recovery conservatively invalidates authority snapshots after
+the fold. Ephemeral `DurableOnly` intentionally remains non-flushing and keeps its no-I/O fast
+path. This is status reconstruction, not replay tolerance.
 
 ## Component map
 
