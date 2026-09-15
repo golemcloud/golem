@@ -21,6 +21,12 @@ use std::collections::hash_map::Entry;
 /// The declarations of initial files, at their paths relative to the filesystem root.
 pub(super) type Declarations = HashMap<Box<Path>, InitialAgentFile>;
 
+/// The declarations that one operation reads, borrowed from the maps that hold them.
+pub(super) type DeclarationView<'a> = HashMap<&'a Path, &'a InitialAgentFile>;
+
+/// The files that the lifecycle installed, at their paths relative to the filesystem root.
+pub(super) type InstalledFiles = HashMap<Arc<Path>, InstalledFile>;
+
 /// The number of bytes that one read takes when an install reads the content of a file.
 const CONTENT_READ_BYTES: usize = 64 * 1024;
 
@@ -28,18 +34,20 @@ const CONTENT_READ_BYTES: usize = 64 * 1024;
 ///
 /// `initial` holds the declarations of the component revision, and `provisioned` the declarations
 /// of entity provisioning. `installed` holds, for read-only paths of the declarations, the file
-/// that the lifecycle installed at the path.
-#[derive(Clone, Default)]
+/// that the lifecycle installed at the path. The state does not change after it is made: an
+/// install makes a new state, which keeps the declarations of the old state that it does not
+/// replace.
+#[derive(Default)]
 pub(super) struct InitialFileState {
-    pub(super) initial: Declarations,
-    pub(super) provisioned: Declarations,
-    pub(super) installed: HashMap<Box<Path>, InstalledFile>,
+    pub(super) initial: Arc<Declarations>,
+    pub(super) provisioned: Arc<Declarations>,
+    pub(super) installed: InstalledFiles,
 }
 
 impl InitialFileState {
     /// Gives the initial and the provisioned declarations together.
-    pub(super) fn declarations(&self) -> Declarations {
-        merged_declarations(&self.initial, &self.provisioned)
+    pub(super) fn declarations(&self) -> DeclarationView<'_> {
+        declaration_view([&*self.initial, &*self.provisioned])
     }
 }
 
@@ -140,19 +148,21 @@ impl<'a> Step<'a> {
 ///
 /// The result gives the steps in path order, or the first path in path order that has a conflict.
 pub(super) fn plan<'a>(
-    old: &'a Declarations,
-    new: &'a Declarations,
+    old: &DeclarationView<'a>,
+    new: &DeclarationView<'a>,
     state: impl Fn(&Path) -> PathState,
 ) -> Result<Box<[Step<'a>]>, &'a Path> {
     let paths = old
         .keys()
         .chain(new.keys())
-        .map(AsRef::as_ref)
-        .collect::<BTreeSet<&Path>>();
+        .copied()
+        .collect::<BTreeSet<&'a Path>>();
     let unlinked = paths
         .iter()
         .copied()
-        .filter(|path| rule(old.get(*path), new.get(*path), state(path)) == Decision::Unlink)
+        .filter(|path| {
+            rule(old.get(path).copied(), new.get(path).copied(), state(path)) == Decision::Unlink
+        })
         .collect::<BTreeSet<&Path>>();
     paths
         .into_iter()
@@ -172,7 +182,7 @@ pub(super) fn plan<'a>(
                 PathState::DirectoryOfDroppedFiles => PathState::Absent,
                 observed => observed,
             };
-            match rule(old.get(path), new.get(path), resolved) {
+            match rule(old.get(path).copied(), new.get(path).copied(), resolved) {
                 Decision::Keep => {}
                 Decision::Seed(file, placement) => {
                     if observed == PathState::DirectoryOfDroppedFiles {
@@ -244,15 +254,15 @@ fn rule<'a>(
 /// its first change, so a conflict or a failed load changes nothing. A failure after the plan
 /// passes and the sources load invalidates the generation. The result gives the files that the
 /// lifecycle installed for `new`.
-pub(super) async fn install<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
     sources: InitialFileSources,
-    old: &Declarations,
-    installed: &HashMap<Box<Path>, InstalledFile>,
-    new: &Declarations,
-    states: &HashMap<Box<Path>, PathState>,
-) -> Result<HashMap<Box<Path>, InstalledFile>, Error> {
+    old: &DeclarationView<'a>,
+    installed: &InstalledFiles,
+    new: &DeclarationView<'a>,
+    states: &HashMap<&Path, PathState>,
+) -> Result<InstalledFiles, Error> {
     let steps = plan(old, new, |path| {
         states.get(path).copied().unwrap_or(PathState::Absent)
     })
@@ -279,23 +289,28 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     sources: &InitialFileSources,
     steps: &[Step<'_>],
-) -> Result<Vec<(Box<Path>, InstalledFile)>, Error> {
-    let (unlinks, mut directories, seeds) = steps.iter().fold(
-        (Vec::new(), Vec::new(), Vec::new()),
-        |(mut unlinks, mut directories, mut seeds), step| {
-            match *step {
-                Step::Unlink { path } => unlinks.push(path),
-                Step::RemoveDirectory { path } => directories.push(path),
-                Step::Seed {
-                    path,
-                    file,
-                    placement,
-                } => seeds.push((path, file, placement)),
-            }
-            (unlinks, directories, seeds)
-        },
-    );
+) -> Result<Vec<(Arc<Path>, InstalledFile)>, Error> {
+    let unlinks = steps.iter().filter_map(|step| match *step {
+        Step::Unlink { path } => Some(path),
+        Step::Seed { .. } | Step::RemoveDirectory { .. } => None,
+    });
+    // The directories are sorted after they are collected, so they are a vector.
+    let mut directories = steps
+        .iter()
+        .filter_map(|step| match *step {
+            Step::RemoveDirectory { path } => Some(path),
+            Step::Seed { .. } | Step::Unlink { .. } => None,
+        })
+        .collect::<Vec<&Path>>();
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let seeds = steps.iter().filter_map(|step| match *step {
+        Step::Seed {
+            path,
+            file,
+            placement,
+        } => Some((path, file, placement)),
+        Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
+    });
     futures::stream::iter(unlinks)
         .map(Ok)
         .try_for_each(|path| async move {
@@ -330,13 +345,13 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
                     },
                     placement,
                 };
-                seed_with_retry(generation, sandbox, entry).await?;
+                seed_with_retry(generation, sandbox, entry, RetryPreparation::None).await?;
                 if read_only {
                     let attributes = sandbox
                         .get_path_attributes(SandboxPath::at_root(path), SandboxFollow::No)
                         .await
                         .map_err(Error::Sandbox)?;
-                    recorded.push((Box::from(path), InstalledFile::of(&attributes)));
+                    recorded.push((Arc::from(path), InstalledFile::of(&attributes)));
                 }
                 Ok(recorded)
             },
@@ -350,40 +365,51 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
 /// holds the files that the install seeded. A recorded file removes an entry of the same object at
 /// another path, because that path no longer holds the file that the lifecycle installed there.
 fn installed_after(
-    previous: &HashMap<Box<Path>, InstalledFile>,
-    new: &Declarations,
+    previous: &InstalledFiles,
+    new: &DeclarationView<'_>,
     steps: &[Step<'_>],
-    recorded: Vec<(Box<Path>, InstalledFile)>,
-) -> HashMap<Box<Path>, InstalledFile> {
+    recorded: Vec<(Arc<Path>, InstalledFile)>,
+) -> InstalledFiles {
     let changed = steps.iter().map(Step::path).collect::<HashSet<&Path>>();
+    // A later entry of one object replaces the earlier entry in the map by object.
     previous
         .iter()
         .filter(|(path, _)| {
             !changed.contains(path.as_ref())
                 && new
-                    .get(*path)
+                    .get(path.as_ref())
                     .is_some_and(|file| file.permissions == AgentFilePermissions::ReadOnly)
         })
-        .map(|(path, file)| (path.clone(), file.clone()))
+        .map(|(path, file)| (Arc::clone(path), file.clone()))
         .chain(recorded)
-        .fold(
-            (HashMap::new(), HashMap::new()),
-            |(mut installed, mut paths), (path, file)| {
-                if let Some(older) = paths.insert(file.object.clone(), path.clone()) {
-                    installed.remove(&older);
-                }
-                installed.insert(path, file);
-                (installed, paths)
-            },
-        )
-        .0
+        .map(|(path, file)| (file.object, path))
+        .collect::<HashMap<SandboxObjectId, Arc<Path>>>()
+        .into_iter()
+        .map(|(object, path)| (path, InstalledFile { object }))
+        .collect()
+}
+
+/// What a retry of a seed does before it runs the seed again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetryPreparation {
+    /// Nothing. A seed of one file writes a temporary file and gives it its name in one step, so a
+    /// failed attempt leaves nothing at the target.
+    None,
+    /// Removes all that is under the root of the sandbox. A seed of a tree keeps the entries that
+    /// it made before the failure, and the root of a new generation held nothing before the seed.
+    EmptyRoot,
 }
 
 /// Seeds one entry, with the retry, capacity reclaim and classification of initial-file seeding.
+///
+/// `preparation` runs before each retry, and a failure of it invalidates the generation. When the
+/// decision is a failure, what the failed attempts made stays in the sandbox: the cleanup of the
+/// sealed filesystem removes it with the sandbox.
 pub(super) async fn seed_with_retry<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
     entry: SeedEntry,
+    preparation: RetryPreparation,
 ) -> Result<(), Error> {
     let entry = &entry;
     // An attempt that retries gives no outcome. The stream stops after the first outcome.
@@ -395,7 +421,19 @@ pub(super) async fn seed_with_retry<Adapter: SandboxFilesystemAdapter>(
                 match decide_write_effect(generation, &error, EffectEvidence::NoEffect, budget)
                     .await
                 {
-                    EffectDecision::RetryAfterProvenNoEffect if budget.consume() => None,
+                    EffectDecision::RetryAfterProvenNoEffect if budget.consume() => {
+                        match prepare_retry(sandbox, preparation).await {
+                            Ok(()) => None,
+                            Err(failure) => {
+                                tracing::warn!(
+                                    error = %failure,
+                                    "Failed to prepare the retry of an initial-file seed"
+                                );
+                                generation.invalidate();
+                                Some(Err(Error::RuntimeInvalidated))
+                            }
+                        }
+                    }
                     EffectDecision::ReturnFailure(cause) => {
                         Some(Err(classified_error(cause, error)))
                     }
@@ -422,6 +460,74 @@ pub(super) async fn seed_with_retry<Adapter: SandboxFilesystemAdapter>(
         .expect("seed attempts end with an outcome")
 }
 
+/// Runs `preparation` before a retry of a seed.
+async fn prepare_retry<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    preparation: RetryPreparation,
+) -> Result<(), FilesystemStorageError> {
+    match preparation {
+        RetryPreparation::None => Ok(()),
+        RetryPreparation::EmptyRoot => remove_contents(sandbox, Path::new("")).await,
+    }
+}
+
+/// Removes all that is under the directory at the root-relative `path`, and keeps the directory.
+///
+/// The function unlinks the files and symlinks of a directory when it reads the directory, and
+/// removes the directories under `path` after all reads, the deepest directory first.
+async fn remove_contents<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<(), FilesystemStorageError> {
+    // The pending directories are a stack that the read pushes to and pops from.
+    let directories =
+        futures::stream::try_unfold(vec![Box::<Path>::from(path)], |mut pending| async move {
+            let Some(directory) = pending.pop() else {
+                return Ok(None);
+            };
+            let entries = directory_entries(sandbox, &directory).await?;
+            futures::stream::iter(
+                entries
+                    .iter()
+                    .filter(|entry| entry.kind != SandboxObjectKind::Directory),
+            )
+            .map(Ok)
+            .try_for_each(|entry| {
+                sandbox.unlink_file(SandboxPath::at_root(directory.join(&entry.name)))
+            })
+            .await?;
+            pending.extend(
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                    .map(|entry| directory.join(entry.name).into_boxed_path()),
+            );
+            Ok::<_, FilesystemStorageError>(Some((directory, pending)))
+        })
+        .try_collect::<Vec<Box<Path>>>()
+        .await?;
+    // The read gives a directory before the directories under it.
+    futures::stream::iter(
+        directories
+            .iter()
+            .rev()
+            .filter(|directory| directory.as_ref() != path),
+    )
+    .map(Ok)
+    .try_for_each(|directory| sandbox.remove_directory(SandboxPath::at_root(&**directory)))
+    .await
+}
+
+/// Gives the sandbox path of the root-relative `path`. The sandbox refuses an empty path, as
+/// POSIX does, so the root is named `.`.
+pub(super) fn sandbox_path(path: &Path) -> SandboxPath {
+    if path.as_os_str().is_empty() {
+        SandboxPath::at_root(".")
+    } else {
+        SandboxPath::at_root(path)
+    }
+}
+
 /// The sources of the files that an install seeds, loaded once for each content hash.
 pub(super) struct InitialFileSources {
     loader: Arc<FileLoader>,
@@ -440,13 +546,10 @@ impl InitialFileSources {
 
     /// Loads the source of each file that `steps` seed, where it is not loaded yet.
     async fn load(self, steps: &[Step<'_>]) -> Result<Self, Error> {
-        let seeded = steps
-            .iter()
-            .filter_map(|step| match *step {
-                Step::Seed { path, file, .. } => Some((path, file)),
-                Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
-            })
-            .collect::<Vec<(&Path, &InitialAgentFile)>>();
+        let seeded = steps.iter().filter_map(|step| match *step {
+            Step::Seed { path, file, .. } => Some((path, file)),
+            Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
+        });
         futures::stream::iter(seeded)
             .map(Ok)
             .try_fold(self, |mut sources, (path, file)| async move {
@@ -526,25 +629,26 @@ impl PreparedInitialFiles {
 /// declare. Such a path is a path that `new` declares. The read of one directory stops at the first
 /// object that is not Golem's file at a path that `new` does not declare, and at the first
 /// directory that holds nothing.
-pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
-    old: &Declarations,
-    new: &Declarations,
-    installed: &HashMap<Box<Path>, InstalledFile>,
-) -> Result<HashMap<Box<Path>, PathState>, FilesystemStorageError> {
+    old: &DeclarationView<'a>,
+    new: &DeclarationView<'a>,
+    installed: &InstalledFiles,
+) -> Result<HashMap<&'a Path, PathState>, FilesystemStorageError> {
     let changed = old
         .keys()
         .chain(new.keys())
-        .filter(|path| old.get(*path) != new.get(*path))
-        .map(AsRef::as_ref)
-        .collect::<BTreeSet<&Path>>();
+        .copied()
+        .filter(|path| old.get(path) != new.get(path))
+        .collect::<BTreeSet<&'a Path>>();
+    // The directories are collected by the fold that reads the paths, so they are a vector.
     let (_, states, directories) = futures::stream::iter(changed)
         .map(Ok)
         .try_fold(
             (PathReader::default(), HashMap::new(), Vec::new()),
             |(reader, mut states, mut directories), path| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
-                let state = match (lookup, old.get(path)) {
+                let state = match (lookup, old.get(path).copied()) {
                     (PathLookup::Absent, _) => PathState::Absent,
                     (PathLookup::Blocked, _) => PathState::Blocked,
                     (PathLookup::Found(attributes), Some(declared)) => {
@@ -569,7 +673,7 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
                         PathState::Other
                     }
                 };
-                states.insert(Box::from(path), state);
+                states.insert(path, state);
                 Ok((reader, states, directories))
             },
         )
@@ -578,7 +682,7 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
         .map(Ok)
         .try_fold(states, |mut states, path| async move {
             if holds_only_dropped_files(sandbox, path, old, new, &states).await? {
-                states.insert(Box::from(path), PathState::DirectoryOfDroppedFiles);
+                states.insert(path, PathState::DirectoryOfDroppedFiles);
             }
             Ok(states)
         })
@@ -594,10 +698,11 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
 async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
-    old: &Declarations,
-    new: &Declarations,
-    states: &HashMap<Box<Path>, PathState>,
+    old: &DeclarationView<'_>,
+    new: &DeclarationView<'_>,
+    states: &HashMap<&Path, PathState>,
 ) -> Result<bool, FilesystemStorageError> {
+    // The pending directories are a stack that the read pushes to and pops from.
     futures::stream::try_unfold(vec![Box::<Path>::from(path)], |mut pending| async move {
         let Some(directory) = pending.pop() else {
             return Ok(None);
@@ -634,9 +739,9 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
 /// `states` gives what is at the paths whose declarations differ.
 fn dropped_golem_file(
     object: &Path,
-    old: &Declarations,
-    new: &Declarations,
-    states: &HashMap<Box<Path>, PathState>,
+    old: &DeclarationView<'_>,
+    new: &DeclarationView<'_>,
+    states: &HashMap<&Path, PathState>,
 ) -> bool {
     old.contains_key(object)
         && !new.contains_key(object)
@@ -651,7 +756,7 @@ async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<Vec<crate::sandbox_filesystem::SandboxDirectoryEntry>, FilesystemStorageError> {
     let node = sandbox
         .open(
-            SandboxPath::at_root(path),
+            sandbox_path(path),
             SandboxOpenOptions::Existing {
                 expected: SandboxObjectKind::Directory,
                 access: SandboxAccessMode::Read,
@@ -770,12 +875,13 @@ impl PathReader {
         sandbox: &Adapter,
         path: &Path,
     ) -> Result<(Self, PathLookup), FilesystemStorageError> {
+        // The ancestors are collected because the read goes through them from the root down.
         let ancestors = path
             .ancestors()
             .skip(1)
             .filter(|ancestor| !ancestor.as_os_str().is_empty())
-            .collect::<Vec<_>>();
-        let (reader, stopped) = futures::stream::iter(ancestors.into_iter().rev())
+            .collect::<Box<[&Path]>>();
+        let (reader, stopped) = futures::stream::iter(ancestors.iter().rev().copied())
             .map(Ok)
             .try_fold((self, None), |(mut reader, stopped), ancestor| async move {
                 if stopped.is_some() || reader.directories.contains(ancestor) {
@@ -827,15 +933,18 @@ pub(super) async fn update<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<(), Error> {
     let _update = generation.initial_file_updates.lock().await;
     let initial = declarations_of(files, "materialize unique initial-file update target")?;
-    let state = generation.initial_files.lock().unwrap().clone();
-    validate_compatible(&initial, &state.provisioned)?;
-    let new = merged_declarations(&initial, &state.provisioned);
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    validate_compatible(
+        &declaration_view([&initial]),
+        &declaration_view([&*state.provisioned]),
+    )?;
+    let new = declaration_view([&initial, &*state.provisioned]);
     let installed = install_resident(generation, sources, &state, &new).await?;
-    *generation.initial_files.lock().unwrap() = InitialFileState {
-        initial,
-        provisioned: state.provisioned,
+    *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
+        initial: Arc::new(initial),
+        provisioned: Arc::clone(&state.provisioned),
         installed,
-    };
+    });
     Ok(())
 }
 
@@ -847,19 +956,24 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<(), Error> {
     let _update = generation.initial_file_updates.lock().await;
     let requested = declarations_of(files, "materialize unique entity-provisioned file target")?;
-    let state = generation.initial_files.lock().unwrap().clone();
-    validate_compatible(&requested, &state.declarations())?;
-    let provisioned = merged_declarations(&state.provisioned, &requested);
-    if provisioned == state.provisioned {
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    validate_compatible(&declaration_view([&requested]), &state.declarations())?;
+    let provisioned = state
+        .provisioned
+        .iter()
+        .chain(&requested)
+        .map(|(path, file)| (path.clone(), file.clone()))
+        .collect::<Declarations>();
+    if provisioned == *state.provisioned {
         return Ok(());
     }
-    let new = merged_declarations(&state.initial, &provisioned);
+    let new = declaration_view([&*state.initial, &provisioned]);
     let installed = install_resident(generation, sources, &state, &new).await?;
-    *generation.initial_files.lock().unwrap() = InitialFileState {
-        initial: state.initial,
-        provisioned,
+    *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
+        initial: Arc::clone(&state.initial),
+        provisioned: Arc::new(provisioned),
         installed,
-    };
+    });
     Ok(())
 }
 
@@ -868,8 +982,8 @@ async fn install_resident<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sources: InitialFileSources,
     state: &InitialFileState,
-    new: &Declarations,
-) -> Result<HashMap<Box<Path>, InstalledFile>, Error> {
+    new: &DeclarationView<'_>,
+) -> Result<InstalledFiles, Error> {
     let sandbox = generation
         .sandbox
         .read()
@@ -918,8 +1032,8 @@ pub(super) fn declarations_of(
 
 /// Refuses a declaration in `requested` that describes another file than `existing` at its path.
 pub(super) fn validate_compatible(
-    requested: &Declarations,
-    existing: &Declarations,
+    requested: &DeclarationView<'_>,
+    existing: &DeclarationView<'_>,
 ) -> Result<(), Error> {
     requested
         .iter()
@@ -936,12 +1050,14 @@ pub(super) fn validate_compatible(
         })
 }
 
-/// Gives the declarations of `first` and `second` together.
-pub(super) fn merged_declarations(first: &Declarations, second: &Declarations) -> Declarations {
-    first
-        .iter()
-        .chain(second)
-        .map(|(path, file)| (path.clone(), file.clone()))
+/// Gives one view of the declarations of `maps`, borrowed from the maps. Where two maps declare
+/// one path, the later map gives the declaration.
+pub(super) fn declaration_view<'a>(
+    maps: impl IntoIterator<Item = &'a Declarations>,
+) -> DeclarationView<'a> {
+    maps.into_iter()
+        .flatten()
+        .map(|(path, file)| (path.as_ref(), file))
         .collect()
 }
 
@@ -973,18 +1089,19 @@ mod tests {
         let file = |object| InstalledFile {
             object: SandboxObjectId::scripted(object),
         };
-        let previous = HashMap::from([
-            (Box::<Path>::from(Path::new("kept")), file(1)),
-            (Box::<Path>::from(Path::new("reused")), file(2)),
-            (Box::<Path>::from(Path::new("dropped")), file(3)),
-            (Box::<Path>::from(Path::new("made-writable")), file(4)),
+        let previous = InstalledFiles::from([
+            (Arc::<Path>::from(Path::new("kept")), file(1)),
+            (Arc::<Path>::from(Path::new("reused")), file(2)),
+            (Arc::<Path>::from(Path::new("dropped")), file(3)),
+            (Arc::<Path>::from(Path::new("made-writable")), file(4)),
         ]);
-        let new = Declarations::from([
+        let declared = Declarations::from([
             (Box::<Path>::from(Path::new("kept")), read_only(1)),
             (Box::<Path>::from(Path::new("reused")), read_only(1)),
             (Box::<Path>::from(Path::new("made-writable")), read_write(1)),
             (Box::<Path>::from(Path::new("seeded")), read_only(1)),
         ]);
+        let new = declaration_view([&declared]);
         let seeded = new.get(Path::new("seeded")).unwrap();
         let steps = [Step::Seed {
             path: Path::new("seeded"),
@@ -996,14 +1113,14 @@ mod tests {
             &previous,
             &new,
             &steps,
-            vec![(Box::from(Path::new("seeded")), file(2))],
+            vec![(Arc::from(Path::new("seeded")), file(2))],
         );
 
         assert_eq!(
             installed,
-            HashMap::from([
-                (Box::<Path>::from(Path::new("kept")), file(1)),
-                (Box::<Path>::from(Path::new("seeded")), file(2)),
+            InstalledFiles::from([
+                (Arc::<Path>::from(Path::new("kept")), file(1)),
+                (Arc::<Path>::from(Path::new("seeded")), file(2)),
             ])
         );
     }

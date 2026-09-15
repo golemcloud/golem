@@ -139,6 +139,14 @@ fn write_capture_directory(into: &Path, files: &[(&str, &[u8])], record: &serde_
     .unwrap();
 }
 
+/// Sets the modification time of the file or directory at `path`.
+fn set_modified(path: &Path, modified: std::time::SystemTime) {
+    std::fs::File::open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
 fn record(
     initial: &[&InitialAgentFile],
     left_out: serde_json::Value,
@@ -317,6 +325,28 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
 }
 
 #[test]
+#[timeout("10s")]
+async fn a_deletion_waits_for_a_capture_whose_future_the_caller_dropped() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let scratch = scratch_of(&filesystem);
+    control.push_copy_contents(Ok(Box::new([])));
+    let copy = control.block("copy_contents");
+    drop(capture(&filesystem, Duration::from_secs(30)));
+    copy.wait_started().await;
+    control.push_delete_and_verify(Ok(()));
+
+    let deletion = tokio::spawn(delete(seal(filesystem)));
+
+    assert!(
+        !holds_within(Duration::from_millis(200), || deletion.is_finished()).await,
+        "the deletion must wait for the capture"
+    );
+    copy.release();
+    deletion.await.unwrap().unwrap();
+    eventually(|| scratch_is_empty(&scratch)).await;
+}
+
+#[test]
 async fn capture_leaves_out_the_read_only_files_that_hold_golem_s_file_with_a_single_name() {
     let store = InitialFileStore::new().await;
     let read_only = |path: &'static str| {
@@ -446,6 +476,10 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
     control.push_hard_link(Ok(()));
     control.push_seed(Ok(()));
     control.push_get_attributes(Ok(file_attributes(1, 0, 1, true)));
+    control.push_set_times(Ok(()));
+    control.push_set_times(Ok(()));
+    let root_modified = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_010);
+    let data_modified = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_020);
     let restored_into = Arc::new(Mutex::new(None));
     let restore = FixtureRestore({
         let control = control.clone();
@@ -456,6 +490,8 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
                 "the restore must run before the first seed"
             );
             write_capture_directory(into, &[("data/a", b"linked")], &capture_record);
+            set_modified(&into.join("tree/data"), data_modified);
+            set_modified(&into.join("tree"), root_modified);
             *restored_into.lock().unwrap() = Some(into.to_path_buf());
             Ok(())
         }
@@ -478,7 +514,35 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
             .iter()
             .map(|call| call.split_once('(').unwrap().0)
             .collect::<Vec<_>>(),
-        ["seed", "hard_link", "seed", "get_path_attributes"]
+        [
+            "seed",
+            "hard_link",
+            "seed",
+            "get_path_attributes",
+            "set_path_times",
+            "set_path_times"
+        ],
+        "{calls:#?}"
+    );
+    // The root and the directory that got a link get the times of the restored tree, in path order.
+    let time_change = |path: &str, modified| {
+        format!(
+            "path: \"{path}\" }}, follow=No, times={:?}",
+            SandboxTimeChanges {
+                accessed: SandboxTimeChange::Keep,
+                modified: SandboxTimeChange::Set(modified),
+            }
+        )
+    };
+    assert!(
+        calls[4].contains(&time_change(".", root_modified)),
+        "{}",
+        calls[4]
+    );
+    assert!(
+        calls[5].contains(&time_change("data", data_modified)),
+        "{}",
+        calls[5]
     );
     assert!(
         calls[0].contains(&format!(
@@ -542,6 +606,7 @@ async fn a_manual_update_from_a_restore_seeds_the_old_left_out_file_before_the_r
     control.push_seed(Ok(()));
     control.push_seed(Ok(()));
     control.push_get_attributes(Ok(file_attributes(1, 0, 1, true)));
+    control.push_set_times(Ok(()));
     control.push_get_attributes(Ok(file_attributes(1, old.size, 1, true)));
     control.push_seed(Ok(()));
     control.push_get_attributes(Ok(file_attributes(2, 0, 1, true)));
@@ -598,6 +663,7 @@ async fn a_failed_discard_of_the_restore_directory_keeps_the_baseline_successful
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Ok(()));
+    control.push_set_times(Ok(()));
     let restored_into = Arc::new(Mutex::new(None));
     let restore = FixtureRestore({
         let restored_into = Arc::clone(&restored_into);
@@ -985,6 +1051,92 @@ async fn a_failed_hard_link_of_a_restored_tree_returns_the_sealed_filesystem() {
 }
 
 #[test]
+async fn a_retry_of_the_restored_tree_seed_removes_what_the_failed_attempt_made() {
+    let store = InitialFileStore::new().await;
+    let capture_record = record(&[], serde_json::json!([]), serde_json::json!([]));
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let entry = |name: &str, kind| crate::sandbox_filesystem::SandboxDirectoryEntry {
+        name: name.into(),
+        kind,
+    };
+    control.push_seed(Err(sandbox_error(
+        "seed restored tree",
+        std::io::ErrorKind::WouldBlock,
+    )));
+    // The root holds a file and a directory with a file from the failed attempt.
+    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_read_directory(Ok(vec![
+        entry("kept.txt", SandboxObjectKind::File),
+        entry("data", SandboxObjectKind::Directory),
+    ]));
+    control.push_close(Ok(()));
+    control.push_unlink_file(Ok(()));
+    control.push_open(Ok(SandboxOpened::scripted_directory(2)));
+    control.push_read_directory(Ok(vec![entry("inner.txt", SandboxObjectKind::File)]));
+    control.push_close(Ok(()));
+    control.push_unlink_file(Ok(()));
+    control.push_remove_directory(Ok(()));
+    control.push_seed(Ok(()));
+    control.push_set_times(Ok(()));
+
+    let filesystem = materialize_baseline(
+        filesystem,
+        store.prepare(&[]).await,
+        Some(FixtureRestore(move |into: &Path| {
+            write_capture_directory(into, &[("kept.txt", b"kept")], &capture_record);
+            Ok(())
+        })),
+    )
+    .await
+    .unwrap();
+
+    let calls = control
+        .calls()
+        .into_iter()
+        .filter(|call| !call.starts_with("create_fresh("))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.split_once('(').unwrap().0)
+            .collect::<Vec<_>>(),
+        [
+            "seed",
+            "open",
+            "read_directory",
+            "close",
+            "unlink_file",
+            "open",
+            "read_directory",
+            "close",
+            "unlink_file",
+            "remove_directory",
+            "seed",
+            "set_path_times"
+        ],
+        "{calls:#?}"
+    );
+    [
+        (1, "."),
+        (4, "kept.txt"),
+        (5, "data"),
+        (8, "data/inner.txt"),
+        (9, "data"),
+    ]
+    .into_iter()
+    .for_each(|(index, path)| {
+        assert!(
+            calls[index].contains(&format!(r#"base: Root, path: "{path}" }}"#)),
+            "{}",
+            calls[index]
+        );
+    });
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_conflict_does_not() {
     let store = InitialFileStore::new().await;
     let old = store
@@ -1221,7 +1373,8 @@ fn copying_restore(
     })
 }
 
-/// Copies what is under `from` into `into` with permissions and file modification times.
+/// Copies what is under `from` into `into` with permissions and modification times. A directory
+/// gets its time after its contents, because each object made in it changes its time.
 fn copy_directory_contents(from: &Path, into: &Path) {
     std::fs::read_dir(from)
         .unwrap()
@@ -1230,18 +1383,23 @@ fn copy_directory_contents(from: &Path, into: &Path) {
             let source = entry.path();
             let target = into.join(entry.file_name());
             let metadata = std::fs::symlink_metadata(&source).unwrap();
+            let modified = metadata.modified().unwrap();
             if metadata.file_type().is_symlink() {
                 std::os::unix::fs::symlink(std::fs::read_link(&source).unwrap(), &target).unwrap();
+                fs_set_times::set_symlink_times(
+                    &target,
+                    None,
+                    Some(fs_set_times::SystemTimeSpec::Absolute(modified)),
+                )
+                .unwrap();
             } else if metadata.is_dir() {
                 std::fs::create_dir(&target).unwrap();
                 copy_directory_contents(&source, &target);
                 std::fs::set_permissions(&target, metadata.permissions()).unwrap();
+                set_modified(&target, modified);
             } else {
                 std::fs::copy(&source, &target).unwrap();
-                std::fs::File::open(&target)
-                    .unwrap()
-                    .set_modified(metadata.modified().unwrap())
-                    .unwrap();
+                set_modified(&target, modified);
             }
         });
 }
@@ -1692,7 +1850,8 @@ struct Expected<'a> {
     model_tree: &'a Tree,
 }
 
-/// What a step gave. An error keeps only the facts that do not name a host path.
+/// What a step gave. An error keeps only the facts that do not name a host path. A conflict keeps
+/// the conflicting path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StepOutcome {
     Done,
@@ -1978,17 +2137,14 @@ fn declarations_at(
         })
 }
 
+/// Gives the outcome of a failed step. This is the only function that recognizes a conflict.
 fn error_outcome(error: Error) -> StepOutcome {
     match error {
         Error::Access(error) => StepOutcome::Access(error),
-        Error::Sandbox(error)
-            if error
-                .to_string()
-                .contains("install initial files because of a conflict at") =>
-        {
-            StepOutcome::Conflict(error.to_string())
-        }
-        Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
+        Error::Sandbox(error) => match error.to_string().strip_prefix(CONFLICT_ERROR_START) {
+            Some(path) => StepOutcome::Conflict(path.to_string()),
+            None => StepOutcome::Sandbox(error.io_kind()),
+        },
         Error::AgentQuota(_) => StepOutcome::AgentQuota,
         Error::PhysicalCapacity(_) => StepOutcome::PhysicalCapacity,
         Error::Baseline(_) => StepOutcome::Baseline,
@@ -2257,6 +2413,50 @@ fn tree_without_times(root: &Path) -> Tree {
     }
 }
 
+/// A tree with the modification times that a restore keeps.
+#[derive(Debug, Eq, PartialEq)]
+struct TimedTree {
+    tree: Tree,
+    /// The modification time of the root, at the empty path, of each directory and symlink, and of
+    /// each file that a capture holds.
+    modified: BTreeMap<String, std::time::SystemTime>,
+}
+
+/// Reads the tree under `root` as `tree_without_times` reads it, with the modification time of the
+/// root, of each directory and symlink, and of each file that is not in `left_out`. The time of a
+/// left-out file comes from the cache of the restore, so a restore does not keep it.
+fn tree_with_times(root: &Path, left_out: &BTreeSet<String>) -> TimedTree {
+    let root_modified = std::fs::symlink_metadata(root).unwrap().modified().unwrap();
+    let modified = std::iter::once((String::new(), root_modified))
+        .chain(
+            list_entries(root, PathBuf::new(), Vec::new())
+                .into_iter()
+                .filter(|(path, metadata)| !metadata.is_file() || !left_out.contains(path))
+                .map(|(path, metadata)| (path, metadata.modified().unwrap())),
+        )
+        .collect();
+    TimedTree {
+        tree: tree_without_times(root),
+        modified,
+    }
+}
+
+/// Gives the left-out paths of the record of `capture`.
+fn left_out_of(capture: &FilesystemCapture) -> BTreeSet<String> {
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(capture.directory().join("record.json")).unwrap())
+            .unwrap();
+    record["left_out"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The number of histories in which the restore property compared the tree with times.
+static TIMES_CHECKS: AtomicUsize = AtomicUsize::new(0);
+
 /// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
     agents: &UnmanagedAgents,
@@ -2323,12 +2523,12 @@ enum ResultClass {
     Unexpected(String),
 }
 
-/// The start of the error that a conflicting install gives. The conflicting path follows it.
+/// The start of the error text that a conflicting install gives. The conflicting path follows it.
 const CONFLICT_ERROR_START: &str =
     "failed to install initial files because of a conflict at filesystem ";
 
-/// Gives the class of a lifecycle step result. This is the only function that maps lifecycle
-/// errors to the classes of the reference model.
+/// Gives the class of a lifecycle step result. This is the only function that maps step outcomes
+/// to the classes of the reference model.
 fn result_class(outcome: &StepOutcome) -> ResultClass {
     match outcome {
         StepOutcome::Done => ResultClass::Ok,
@@ -2341,12 +2541,7 @@ fn result_class(outcome: &StepOutcome) -> ResultClass {
             | std::io::ErrorKind::IsADirectory
             | std::io::ErrorKind::InvalidInput,
         )) => ResultClass::InvalidTarget,
-        StepOutcome::Conflict(message) => ResultClass::Conflict(
-            message
-                .strip_prefix(CONFLICT_ERROR_START)
-                .unwrap_or(message)
-                .to_string(),
-        ),
+        StepOutcome::Conflict(path) => ResultClass::Conflict(path.clone()),
         other => ResultClass::Unexpected(format!("{other:?}")),
     }
 }
@@ -2373,9 +2568,11 @@ enum ModelInstall {
     Remove,
 }
 
-/// A reference model of an agent filesystem with initial files. It follows the text of the GOL-577
-/// issue: the initial-file rule, the read-only semantics and the sentence about equal declarations.
-/// It uses no helper of the lifecycle, and it records no object that an install puts in place.
+/// A reference model of an agent filesystem with initial files. It implements the initial-file
+/// rule as the documentation of `plan` states it, from the tree and the declarations alone: a path
+/// with equal declarations keeps what is at it, a read-only file refuses changes to its content and
+/// its times, and a hard link or a rename moves the file with its permissions. It shares no code
+/// with the lifecycle, and it records no object that an install puts in place.
 ///
 /// `paths` gives the object at each path, and two paths with one object are hard links. `objects`
 /// holds each object that the model made; the index of an object is its id. `component` holds the
@@ -2945,7 +3142,8 @@ impl ReferenceModel {
 /// capture is an update, agent D starts from the same restore with the declarations of that update,
 /// and runs the steps after it. A replay step must not make the filesystem invalid. The reference
 /// model gives the result class of each replay step and the final tree, and the trees of agents A,
-/// C and D must equal the tree of the model.
+/// C and D must equal the tree of the model. Right after its start, the tree of agent C with the
+/// modification times that a restore keeps must equal the tree of agent B at the capture.
 async fn check_restore_against_replay(
     history: &History,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
@@ -3025,13 +3223,29 @@ async fn check_restore_against_replay(
         ));
     }
     let snapshot = capture(&captured, Duration::from_secs(5)).await;
+    let at_capture = snapshot.as_ref().ok().map(|snapshot| {
+        let left_out = left_out_of(snapshot);
+        (
+            tree_with_times(&agents.root(&captured_agent), &left_out),
+            left_out,
+        )
+    });
     delete(seal(captured)).await.unwrap();
-    match snapshot {
-        Err(error) => problems.push(format!("the capture failed: {error}")),
-        Ok(snapshot) => {
+    match (snapshot, at_capture) {
+        (Err(error), _) => problems.push(format!("the capture failed: {error}")),
+        (Ok(_), None) => unreachable!("a capture that succeeded gives the tree at the capture"),
+        (Ok(snapshot), Some((captured_tree, left_out))) => {
             let current = declarations_at(&history.initial, before, &prefix);
             match start_restored(&agents, "restored", &current, &snapshot).await {
                 (agent, Ok(restored)) => {
+                    TIMES_CHECKS.fetch_add(1, Ordering::Relaxed);
+                    let restored_tree = tree_with_times(&agents.root(&agent), &left_out);
+                    if restored_tree != captured_tree {
+                        problems.push(format!(
+                            "agent C holds {restored_tree:?} after its start, and the captured \
+                             agent held {captured_tree:?} at the capture"
+                        ));
+                    }
                     let expected = Expected {
                         outcomes: &replay_outcomes[capture_at..],
                         tree: &replay_tree,
@@ -3129,8 +3343,10 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
 
     let elapsed = started.elapsed();
     eprintln!(
-        "restore property: {cases} histories in {elapsed:?}, {:?} for each history",
-        elapsed / cases.max(1)
+        "restore property: {cases} histories in {elapsed:?}, {:?} for each history, the tree with \
+         times compared in {} histories",
+        elapsed / cases.max(1),
+        TIMES_CHECKS.load(Ordering::Relaxed)
     );
     if let Err(error) = result {
         panic!("{error}");

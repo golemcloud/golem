@@ -136,7 +136,7 @@ struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
     allocation_reader: Adapter::AllocationReader,
     registry: Arc<GenerationRegistry>,
     limits: Mutex<ResolvedStorageLimits>,
-    initial_files: Mutex<InitialFileState>,
+    initial_files: Mutex<Arc<InitialFileState>>,
     initial_file_updates: tokio::sync::Mutex<()>,
     pressure_recovery: Option<FilesystemWriteRecovery>,
     namespace: Arc<NamespaceCoordinator>,
@@ -472,7 +472,7 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
             allocation_reader,
             registry: Arc::new(GenerationRegistry::new()),
             limits: Mutex::new(limits),
-            initial_files: Mutex::new(InitialFileState::default()),
+            initial_files: Mutex::new(Arc::default()),
             initial_file_updates: tokio::sync::Mutex::new(()),
             pressure_recovery,
             namespace: Arc::new(NamespaceCoordinator::new()),
@@ -2361,28 +2361,28 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
         let opened = execute_open(Arc::clone(&generation), target, options).await?;
         return generation.register_opened(opened, opened_access).await;
     };
+    let follow = match options {
+        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => follow,
+    };
+    let change = open_requires_mutable_target(options).then(|| sandbox_follow(follow));
     loop {
-        let resolved = resolve_namespace_target(&generation, target.clone()).await?;
-        let mut coordination = generation
-            .namespace
-            .coordinate(kind, vec![resolved.coordination_key()])
-            .await;
-        authorize_resolved_open(&generation, &resolved, options)?;
+        let Some(CoordinatedTarget {
+            mut coordination,
+            resolved,
+        }) = coordinated_target(&generation, &target, kind, change).await?
+        else {
+            continue;
+        };
+        let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
         if open_returns_directory(options) {
-            let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
             let directory_key = opened
                 .directory_coordination_key()
                 .expect("sandbox directory open must carry a coordination identity");
-            if !coordination.extend(vec![directory_key.clone()]) {
+            if !coordination.extend(vec![directory_key]) {
                 drop(opened);
                 continue;
             }
-            return generation.register_opened(opened, opened_access).await;
         }
-        if !coordination.extend(Vec::new()) {
-            continue;
-        }
-        let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
         return generation.register_opened(opened, opened_access).await;
     }
 }
@@ -2399,18 +2399,50 @@ async fn resolve_namespace_target<Adapter: SandboxFilesystemAdapter>(
         .map_err(|source| classify_query_error(generation, source))
 }
 
-fn authorize_resolved_open<Adapter: SandboxFilesystemAdapter>(
+/// A namespace entry under coordination, with a resolution of the entry.
+struct CoordinatedTarget {
+    coordination: NamespaceCoordination,
+    resolved: SandboxResolvedNamespaceTarget,
+}
+
+/// Coordinates the entry at `target` with `kind`, and gives a resolution of the entry.
+///
+/// `change` gives the follow of an operation that changes the contents or the times of the object
+/// at the entry. The entry is then resolved again under the coordination, and the change is
+/// authorized from that resolution: an edit of the entry can complete between the first
+/// resolution and the coordination, so the first resolution can be stale. Without a change, the
+/// first resolution is given. The result is `None` when the coordination could not be installed,
+/// or when the key of the entry changed between the two resolutions; the caller starts again.
+async fn coordinated_target<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
-    target: &SandboxResolvedNamespaceTarget,
-    options: OpenOptions,
-) -> Result<(), Error> {
-    if !open_requires_mutable_target(options) {
-        return Ok(());
+    target: &SandboxPath,
+    kind: NamespaceCoordinationKind,
+    change: Option<SandboxFollow>,
+) -> Result<Option<CoordinatedTarget>, Error> {
+    let resolved = resolve_namespace_target(generation, target.clone()).await?;
+    let key = resolved.coordination_key();
+    let mut coordination = generation
+        .namespace
+        .coordinate(kind, vec![key.clone()])
+        .await;
+    if !coordination.extend(Vec::new()) {
+        return Ok(None);
     }
-    let follow = match options {
-        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => follow,
+    let Some(follow) = change else {
+        return Ok(Some(CoordinatedTarget {
+            coordination,
+            resolved,
+        }));
     };
-    authorize_writable_target(generation, target, sandbox_follow(follow))
+    let resolved = resolve_namespace_target(generation, target.clone()).await?;
+    if resolved.coordination_key() != key {
+        return Ok(None);
+    }
+    authorize_writable_target(generation, &resolved, follow)?;
+    Ok(Some(CoordinatedTarget {
+        coordination,
+        resolved,
+    }))
 }
 
 /// Refuses a change to the contents or times of a regular file without write permission.
@@ -2579,18 +2611,19 @@ async fn execute_coordinated_path_attribute_changes<Adapter: SandboxFilesystemAd
     changes: AttributeChanges,
 ) -> Result<(), Error> {
     loop {
-        let resolved = resolve_namespace_target(&generation, target.clone()).await?;
-        let mut coordination = generation
-            .namespace
-            .coordinate(
-                NamespaceCoordinationKind::Observe,
-                vec![resolved.coordination_key()],
-            )
-            .await;
-        if !coordination.extend(Vec::new()) {
+        let Some(CoordinatedTarget {
+            coordination: _coordination,
+            resolved,
+        }) = coordinated_target(
+            &generation,
+            &target,
+            NamespaceCoordinationKind::Observe,
+            Some(sandbox_follow(follow)),
+        )
+        .await?
+        else {
             continue;
-        }
-        authorize_writable_target(&generation, &resolved, sandbox_follow(follow))?;
+        };
         return execute_attribute_changes(
             generation,
             AttributeTarget::Path {

@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::initial_files::{
-    Declarations, InitialFileSources, PathLookup, PathReader, declarations_of, holds_golem_file,
-    install, merged_declarations, observe, seed_with_retry, validate_compatible,
+    DeclarationView, Declarations, InitialFileSources, PathLookup, PathReader, RetryPreparation,
+    declaration_view, declarations_of, holds_golem_file, install, observe, sandbox_path,
+    seed_with_retry, validate_compatible,
 };
 use super::*;
 use crate::sandbox_filesystem::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -220,17 +221,17 @@ async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
     result
 }
 
+/// Copies the tree into a new directory in the scratch directory.
+///
+/// The read guard of the sandbox is held for the whole copy. The deletion of the filesystem takes
+/// the write guard after the calls and nodes drain, and the copy holds no call or node lease, so
+/// the guard is what makes the deletion wait for the copy.
 async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
 ) -> Result<FilesystemCapture, CaptureError> {
-    let sandbox = generation
-        .sandbox
-        .read()
-        .await
-        .as_ref()
-        .cloned()
-        .ok_or(CaptureError::Invalidated)?;
-    let state = generation.initial_files.lock().unwrap().clone();
+    let sandbox = generation.sandbox.read().await;
+    let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
     let left_out = left_out_files(sandbox.as_ref(), &state)
         .await
         .map_err(CaptureError::Sandbox)?;
@@ -257,11 +258,10 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
 ) -> Result<Box<[Box<Path>]>, FilesystemStorageError> {
-    let declarations = state.declarations();
-    let read_only = declarations
-        .iter()
+    let read_only = state
+        .declarations()
+        .into_iter()
         .filter(|(_, file)| file.permissions == AgentFilePermissions::ReadOnly)
-        .map(|(path, file)| (path.as_ref(), file))
         .collect::<BTreeMap<&Path, &InitialAgentFile>>();
     futures::stream::iter(read_only)
         .map(Ok)
@@ -303,9 +303,7 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
         .map_err(|error| {
             FilesystemStorageError::io("create filesystem capture tree", tree.as_path(), error)
         })?;
-    let excluded = Arc::new(TreeExclusions::new(
-        left_out.iter().map(|path| path.to_path_buf()),
-    ));
+    let excluded = Arc::new(TreeExclusions::new(left_out.iter()));
     let link_groups = sandbox
         .copy_contents(SandboxPath::at_root(""), excluded, &tree)
         .await?;
@@ -403,7 +401,7 @@ async fn complete_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTr
     };
     match result {
         Ok(state) => {
-            *generation.initial_files.lock().unwrap() = state;
+            *generation.initial_files.lock().unwrap() = Arc::new(state);
             stage.initial_files_materialized = true;
             generation.registry.enable_replay_access();
             Ok(AgentFilesystem {
@@ -429,15 +427,15 @@ async fn install_initial_files<Adapter: SandboxFilesystemAdapter>(
         generation,
         sandbox,
         sources,
-        &Declarations::new(),
+        &DeclarationView::new(),
         &HashMap::new(),
-        &initial,
+        &declaration_view([&initial]),
         &HashMap::new(),
     )
     .await?;
     Ok(InitialFileState {
-        initial,
-        provisioned: Declarations::new(),
+        initial: Arc::new(initial),
+        provisioned: Arc::default(),
         installed,
     })
 }
@@ -468,10 +466,16 @@ async fn restore_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTre
 /// Restores into `directory` and puts the baseline in place.
 ///
 /// The order is: the restore, the seed of the restored tree, the other names of each hard-link
-/// group, and a seed of each left-out file with the content of its recorded declaration. The tree
-/// then equals the tree at the capture. Then the initial-file rule runs from the declarations of
-/// the record to the declarations of `prepared` and the provisioned declarations of the record, as
-/// an automatic update runs it.
+/// group, a seed of each left-out file with the content of its recorded declaration, and the
+/// modification times of the root and of each directory that got a name from a link or a left-out
+/// seed, from the same directories under `tree/`. The tree then equals the tree at the capture,
+/// except in the times of the left-out files. Then the initial-file rule runs from the
+/// declarations of the record to the declarations of `prepared` and the provisioned declarations
+/// of the record, as an automatic update runs it.
+///
+/// A retry of the seed of the restored tree first removes all that is under the root, because a
+/// failed seed keeps the entries it made. When the seed fails, what its attempts made stays for the
+/// cleanup of the sealed filesystem, as every failure of the baseline does.
 async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
@@ -493,18 +497,19 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         provisioned_files.into_vec(),
         "restore unique entity-provisioned file declaration",
     )?;
-    let old = merged_declarations(
-        &declarations_of(
-            initial_files.into_vec(),
-            "restore unique initial-file declaration",
-        )?,
-        &provisioned,
-    );
+    let recorded = declarations_of(
+        initial_files.into_vec(),
+        "restore unique initial-file declaration",
+    )?;
+    let old = declaration_view([&recorded, &provisioned]);
     let captured = captured_declarations(&old, &left_out)?;
     let left_out_sources =
         InitialFileSources::new(Arc::clone(&prepared.loader), prepared.environment_id);
     let (initial, sources) = prepared.into_parts();
-    validate_compatible(&provisioned, &initial)?;
+    validate_compatible(
+        &declaration_view([&provisioned]),
+        &declaration_view([&initial]),
+    )?;
     let tree = directory
         .child(OsStr::new(TREE_DIRECTORY))
         .map_err(Error::Sandbox)?;
@@ -512,11 +517,12 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         generation,
         sandbox,
         SeedEntry {
-            source: tree,
+            source: tree.clone(),
             target: SandboxPath::at_root(""),
             access: SeedAccess::FromSource,
             placement: SeedPlacement::CreateNew,
         },
+        RetryPreparation::EmptyRoot,
     )
     .await?;
     link_other_names(sandbox, &link_groups).await?;
@@ -532,24 +538,36 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         &HashMap::new(),
     )
     .await?;
-    let new = merged_declarations(&initial, &provisioned);
+    // The seed into the root keeps the time of the root, and a name that a link or a seed adds to
+    // a directory changes the time of that directory.
+    let changed_directories = std::iter::once(Path::new(""))
+        .chain(
+            link_groups
+                .iter()
+                .flat_map(|group| group.others.iter())
+                .filter_map(|other| other.parent()),
+        )
+        .chain(left_out.iter().filter_map(|path| path.parent()))
+        .collect::<BTreeSet<&Path>>();
+    restore_directory_times(sandbox, &tree, changed_directories).await?;
+    let new = declaration_view([&initial, &provisioned]);
     let states = observe(sandbox, &old, &new, &seeded)
         .await
         .map_err(|source| classify_query_error(generation, source))?;
     let installed = install(generation, sandbox, sources, &old, &seeded, &new, &states).await?;
     Ok(InitialFileState {
-        initial,
-        provisioned,
+        initial: Arc::new(initial),
+        provisioned: Arc::new(provisioned),
         installed,
     })
 }
 
 /// Gives `declarations` without the paths `left_out`. Refuses a left-out path that has no read-only
 /// declaration, because a restore cannot seed a file at it.
-fn captured_declarations(
-    declarations: &Declarations,
+fn captured_declarations<'a>(
+    declarations: &DeclarationView<'a>,
     left_out: &[Box<Path>],
-) -> Result<Declarations, Error> {
+) -> Result<DeclarationView<'a>, Error> {
     let left_out = left_out
         .iter()
         .map(AsRef::as_ref)
@@ -565,10 +583,46 @@ fn captured_declarations(
         ))),
         None => Ok(declarations
             .iter()
-            .filter(|(path, _)| !left_out.contains(path.as_ref()))
-            .map(|(path, file)| (path.clone(), file.clone()))
+            .filter(|(path, _)| !left_out.contains(*path))
+            .map(|(path, file)| (*path, *file))
             .collect()),
     }
+}
+
+/// Gives each directory in `directories` the modification time of the same directory under
+/// `tree`, in path order. The root is the empty path.
+async fn restore_directory_times<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    tree: &HostPath,
+    directories: BTreeSet<&Path>,
+) -> Result<(), Error> {
+    futures::stream::iter(directories)
+        .map(Ok)
+        .try_for_each(|directory| async move {
+            let source = tree.as_path().join(directory);
+            let modified = tokio::fs::symlink_metadata(&source)
+                .await
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "read the time of a restored directory",
+                        &source,
+                        error,
+                    )
+                })?;
+            sandbox
+                .set_path_times(
+                    sandbox_path(directory),
+                    SandboxFollow::No,
+                    SandboxTimeChanges {
+                        accessed: SandboxTimeChange::Keep,
+                        modified: SandboxTimeChange::Set(modified),
+                    },
+                )
+                .await
+                .map_err(Error::Sandbox)
+        })
+        .await
 }
 
 /// Makes the other names of each group into hard links to its first name.
@@ -576,22 +630,21 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     groups: &[LinkGroup],
 ) -> Result<(), Error> {
-    let names = groups
-        .iter()
-        .flat_map(|group| {
-            group
-                .others
-                .iter()
-                .map(|other| (group.first.as_ref(), other.as_ref()))
-        })
-        .collect::<Vec<(&Path, &Path)>>();
-    futures::stream::iter(names)
+    futures::stream::iter(groups)
         .map(Ok)
-        .try_for_each(|(first, other)| async move {
-            sandbox
-                .hard_link(SandboxPath::at_root(first), SandboxPath::at_root(other))
+        .try_for_each(|group| async move {
+            futures::stream::iter(group.others.iter())
+                .map(Ok)
+                .try_for_each(|other| async move {
+                    sandbox
+                        .hard_link(
+                            SandboxPath::at_root(&*group.first),
+                            SandboxPath::at_root(&**other),
+                        )
+                        .await
+                        .map_err(Error::Sandbox)
+                })
                 .await
-                .map_err(Error::Sandbox)
         })
         .await
 }

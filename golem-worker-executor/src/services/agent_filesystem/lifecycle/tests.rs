@@ -3214,6 +3214,106 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
 }
 
 #[test]
+#[timeout("10s")]
+async fn a_time_change_authorizes_from_a_resolution_made_under_its_namespace_coordination() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let target = PathTarget::at_root(&generation_handle, "f").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    control.push_read_only_resolution(1, "f", false, false);
+    let resolution = control.block("resolve_namespace_target");
+    let changing = tokio::spawn(
+        set_attributes(
+            &generation_handle,
+            Target::Path(&target, Follow::No),
+            AttributeChanges::Times(times),
+        )
+        .unwrap(),
+    );
+    resolution.wait_started().await;
+    // A rename puts a read-only file at f while the change waits for its first resolution.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "f").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    // The resolution under the coordination finds the read-only file. A change that runs from
+    // the first resolution would succeed with these outcomes.
+    control.push_read_only_resolution(1, "f", true, true);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_set_times(Ok(()));
+    resolution.release();
+
+    let changed = changing.await.unwrap();
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    assert!(!has_call(&control, "set_path_times("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_coordination() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_read_only_resolution(1, "f", false, false);
+    let resolution = control.block("resolve_namespace_target");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "f").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::No,
+            },
+        )
+        .unwrap(),
+    );
+    resolution.wait_started().await;
+    // A rename puts a read-only file at f while the open waits for its first resolution.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "f").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    // The resolution under the coordination finds the read-only file. An open that runs from
+    // the first resolution would succeed with this outcome.
+    control.push_read_only_resolution(1, "f", true, true);
+    control.push_open(Ok(SandboxOpened::scripted_file(700)));
+    resolution.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(matches!(
+        opened,
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    assert!(!has_call(&control, "open("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_namespace_edits() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -3229,6 +3329,9 @@ async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_nam
         matches!(result, Err(Error::Access(AccessError::NotPermitted)))
     };
 
+    // Each open or time change of the target resolves it twice: once before its namespace
+    // coordination, and once under it.
+    control.push_read_only_resolution(700, "read-only", true, true);
     control.push_read_only_resolution(700, "read-only", true, true);
     let root_write = open(
         &generation_handle,
@@ -3244,6 +3347,7 @@ async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_nam
     assert!(not_permitted(&root_write));
 
     control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "read-only", true, true);
     let parent_truncate = open(
         &generation_handle,
         PathTarget::at(&parent, "read-only"),
@@ -3258,6 +3362,7 @@ async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_nam
     assert!(not_permitted(&parent_truncate));
 
     control.push_read_only_resolution(700, "alias", false, true);
+    control.push_read_only_resolution(700, "alias", false, true);
     let alias_write = open(
         &generation_handle,
         PathTarget::at(&parent, "alias"),
@@ -3271,6 +3376,7 @@ async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_nam
     .await;
     assert!(not_permitted(&alias_write));
 
+    control.push_read_only_resolution(700, "read-only", true, true);
     control.push_read_only_resolution(700, "read-only", true, true);
     let path_times = set_attributes(
         &generation_handle,

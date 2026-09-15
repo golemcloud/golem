@@ -53,12 +53,11 @@ impl TreeExclusions {
     /// current-directory components are removed from a path. A path with a parent or prefix
     /// component names no entry, so the set does not keep it. The set also does not keep a path
     /// that is empty after the removal.
-    pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub(crate) fn new(paths: impl IntoIterator<Item: AsRef<Path>>) -> Self {
         Self {
             paths: paths
                 .into_iter()
-                .filter_map(normalize_exclusion)
-                .map(PathBuf::into_boxed_path)
+                .filter_map(|path| normalize_exclusion(path.as_ref()))
                 .collect(),
         }
     }
@@ -74,12 +73,12 @@ impl TreeExclusions {
     }
 }
 
-fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
+fn normalize_exclusion(path: &Path) -> Option<Box<Path>> {
     if path
         .components()
         .all(|component| matches!(component, Component::Normal(_)))
     {
-        return (!path.as_os_str().is_empty()).then_some(path);
+        return (!path.as_os_str().is_empty()).then(|| Box::from(path));
     }
     let mut normalized = PathBuf::new();
     path.components()
@@ -91,7 +90,7 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
             Component::RootDir | Component::CurDir => Some(()),
             Component::ParentDir | Component::Prefix(_) => None,
         })?;
-    (!normalized.as_os_str().is_empty()).then_some(normalized)
+    (!normalized.as_os_str().is_empty()).then(|| normalized.into_boxed_path())
 }
 
 /// Lists a tree, parents before children, without the excluded root-relative paths.
@@ -204,7 +203,9 @@ fn tree_entry(
 /// `destination` must be an empty directory and not a symlink: a missing path gives a `NotFound`
 /// error, another kind of object gives a `NotADirectory` error, and a directory with an entry
 /// gives a `DirectoryNotEmpty` error. Directories and symlinks are made again. Permissions and
-/// modification times are copied. Each regular file is transferred with `copy_mode`.
+/// modification times are copied, and `destination` gets the permissions and the modification
+/// time of `source` after all entries are copied. Each regular file is transferred with
+/// `copy_mode`.
 ///
 /// A regular file or a symlink with more than one name is copied once, at the first name that the
 /// listing gives. The result gives the names of each such object as a [`LinkGroup`].
@@ -234,6 +235,12 @@ pub(super) fn copy_contents(
         .rev()
         .filter(|entry| entry.kind == TreeEntryKind::Directory)
         .try_for_each(|entry| set_copied_directory_attributes(destination, entry))?;
+    let source_metadata = source.dir_metadata()?;
+    set_host_directory_attributes(
+        destination,
+        &source_metadata.permissions(),
+        source_metadata.modified().ok().map(|time| time.into_std()),
+    )?;
     Ok(links.into_groups())
 }
 
@@ -344,12 +351,23 @@ fn copy_out_entry(
 /// Gives a directory under the host directory `destination` the permissions and the modification
 /// time of its listed entry.
 fn set_copied_directory_attributes(destination: &Path, entry: &TreeEntry) -> std::io::Result<()> {
-    let directory = File::open(destination.join(&entry.relative))?;
-    directory.set_permissions(host_permissions(&entry.permissions, &directory)?)?;
-    if let Some(modified) = entry.modified {
-        directory.set_modified(modified)?;
-    }
-    Ok(())
+    set_host_directory_attributes(
+        &destination.join(&entry.relative),
+        &entry.permissions,
+        entry.modified,
+    )
+}
+
+/// Gives the host directory at `directory` the permissions `permissions` and, where it is given,
+/// the modification time `modified`.
+fn set_host_directory_attributes(
+    directory: &Path,
+    permissions: &cap_std::fs::Permissions,
+    modified: Option<SystemTime>,
+) -> std::io::Result<()> {
+    let directory = File::open(directory)?;
+    directory.set_permissions(host_permissions(permissions, &directory)?)?;
+    modified.map_or(Ok(()), |modified| directory.set_modified(modified))
 }
 
 /// What a seed entry needs to make objects in one sandbox.
@@ -997,6 +1015,12 @@ mod tests {
     fn copy_contents_copies_everything_except_the_exclusions() {
         let source = tempfile::tempdir().unwrap();
         fixture_tree(source.path());
+        std::fs::set_permissions(source.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+        let root_modified = UNIX_EPOCH + Duration::from_secs(1_700_000_006);
+        File::open(source.path())
+            .unwrap()
+            .set_modified(root_modified)
+            .unwrap();
         let destination = tempfile::tempdir().unwrap();
 
         copy_contents(
@@ -1008,6 +1032,9 @@ mod tests {
         )
         .unwrap();
 
+        let root = std::fs::metadata(destination.path()).unwrap();
+        assert_eq!(root.permissions().mode() & 0o777, 0o750);
+        assert_eq!(root.modified().unwrap(), root_modified);
         let mut expected = tree_listing(source.path());
         ["static/asset.bin", "data/nested", "data/nested/note.txt"]
             .into_iter()
