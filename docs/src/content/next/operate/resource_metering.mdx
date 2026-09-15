@@ -24,13 +24,28 @@ memory = true
 filesystem = false
 ```
 
-The equivalent environment variables are:
+For the local single-binary server, the equivalent environment variables also require a monthly amount for each enabled dimension:
 
 ```shell
 GOLEM__RESOURCE_USAGE_METERING__COMPUTE=true
 GOLEM__RESOURCE_USAGE_METERING__MEMORY=true
 GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM=false
+GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU=1000
+GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS=100000
 ```
+
+The local server preserves whether each amount was supplied. If an enabled dimension has no amount, startup fails instead of treating the omission as a zero hard cap. An explicit `0` is valid and creates an exhausted hard cap. Amounts supplied for disabled dimensions are preserved in the local Plan, and each dimension remains independent.
+
+Filesystem metering requires a managed XFS root and separate durable and ephemeral amounts:
+
+```shell
+GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM=true
+GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH=100
+GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH=25
+GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR=/var/lib/golem/managed-xfs
+```
+
+The managed XFS root cannot be combined with the deterministic agent filesystem root. Durable and ephemeral storage are separate limits; configuring one does not provide or change the other. When filesystem metering is disabled, managed XFS may still be configured for project quotas without enabling storage billing.
 
 ## Metering and enforcement
 

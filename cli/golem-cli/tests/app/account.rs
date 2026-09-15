@@ -408,6 +408,10 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
 
     let mut ctx = TestContext::new();
     ctx.add_env_var("GOLEM__RESOURCE_USAGE_METERING__MEMORY", "true");
+    ctx.add_env_var(
+        "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+        "1000",
+    );
     ctx.start_server().await;
 
     let app_name = "memory-billing";
@@ -508,4 +512,20 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+
+    let output = ctx
+        .cli([cmd::ACCOUNT, "limits", "show", flag::FORMAT, "json"])
+        .await;
+    assert!(output.success_or_dump());
+    let limits = output
+        .stdout_json::<AccountLimitsView>()
+        .into_iter()
+        .next()
+        .expect("account limits show produced no JSON output");
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert_eq!(limits.monthly.memory_gb_seconds.plan_amount, Some(1000));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(1000)
+    );
 }
