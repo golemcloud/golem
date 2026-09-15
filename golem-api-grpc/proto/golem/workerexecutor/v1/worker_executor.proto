@@ -392,25 +392,19 @@ message GetFileContentsRequest {
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
   golem.common.EnvironmentId environment_id = 3;
-  string file_path = 4;
+  golem.worker.FileReadTarget target = 4;
   golem.auth.AuthCtx auth_ctx = 5;
   optional golem.component.Principal principal = 6;
+  golem.worker.FileByteSelection selection = 7;
 }
 
 message GetFileContentsResponse {
   oneof result {
     // must always be the first chunk (except if failure) and will never be sent again.
-    GetFileContentsResponseHeader header = 1;
+    golem.worker.FileReadHead header = 1;
     bytes success = 2;
     golem.worker.v1.WorkerExecutionError failure = 3;
-  }
-}
-
-message GetFileContentsResponseHeader {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.common.Empty not_found = 2;
-    golem.common.Empty not_a_file = 3;
+    golem.worker.FileReadError read_failure = 4;
   }
 }
 

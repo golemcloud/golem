@@ -70,6 +70,11 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
+[file_read]
+max_outstanding = 128
+max_queued_per_agent = 16
+timeout = "1m"
+
 [filesystem_storage.cleanup_retry]
 max_attempts = 4
 max_delay = "250ms"
@@ -493,6 +498,11 @@ without_time = false
 # nanos = 0
 # secs = 300
 #
+# [file_read]
+# max_outstanding = 128
+# max_queued_per_agent = 16
+# timeout = "1m"
+#
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
@@ -888,6 +898,11 @@ without_time = false
 # [environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
+#
+# [file_read]
+# max_outstanding = 128
+# max_queued_per_agent = 16
+# timeout = "1m"
 #
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4

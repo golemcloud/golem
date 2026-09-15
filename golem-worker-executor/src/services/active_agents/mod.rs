@@ -78,6 +78,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -781,13 +783,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
+        let card_interest_index = self.card_interest_index.clone();
+        let origin = TraceOrigin::capture_current();
         let active_agent = self
             .agents
-            .get_or_insert_simple(&cache_key, || {
-                Box::pin(async move {
+            .get_or_insert_simple_spawned(&cache_key, move || {
+                let span = related_span!(
+                    origin,
+                    tracing::Level::INFO,
+                    "create_active_agent",
+                    agent_id = %owned_agent_id.agent_id,
+                );
+                async move {
                     let worker = Worker::new(
                         &deps,
-                        self.card_interest_index.clone(),
+                        card_interest_index,
                         owned_agent_id.clone(),
                         worker_env,
                         worker_agent_config,
@@ -797,7 +807,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         principal,
                         freshness_disposition,
                     )
-                    .in_current_span()
                     .await;
 
                     worker.map(|worker| {
@@ -805,7 +814,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         Worker::start_durable_stream_attachment_reconciler(&worker);
                         Arc::new(ActiveAgent::new(worker))
                     })
-                })
+                }
+                .instrument(span)
             })
             .await?;
         Ok(active_agent.primary())

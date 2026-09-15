@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -600,10 +600,6 @@ pub trait FileSystemReading {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context

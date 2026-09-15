@@ -2804,16 +2804,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "drop-stream"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf3ad5e2193e855cdd101d6d4ad09f0b3fa9aa5bd5169f483b4accd6eef96cfe"
-dependencies = [
- "futures-core",
- "pin-project",
-]
-
-[[package]]
 name = "dtor"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4385,7 +4375,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "desert_rust",
- "drop-stream",
  "evicting_cache_map",
  "figment",
  "fred",

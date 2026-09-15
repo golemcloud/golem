@@ -2,7 +2,9 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "golem/common/empty.proto";
 import "golem/component/agent_files.proto";
+import "google/protobuf/timestamp.proto";
 
 message FileFileSystemNode {
   string name = 1;
@@ -21,4 +23,68 @@ message FileSystemNode {
     DirectoryFileSystemNode directory = 1;
     FileFileSystemNode file = 2;
   }
+}
+
+// Filesystem text, never URI syntax. Each suffix element is one checked segment.
+message RootBoundedFileReadTarget {
+  string root = 1;
+  repeated string suffix = 2;
+  bool directory_request = 3;
+}
+
+message FileReadTarget {
+  oneof target {
+    string exact = 1;
+    RootBoundedFileReadTarget within_root = 2;
+  }
+}
+
+message BoundedFileByteSelection {
+  uint64 start = 1;
+  uint64 end_inclusive = 2;
+}
+
+message FileByteSelection {
+  oneof selection {
+    golem.common.Empty full = 1;
+    BoundedFileByteSelection bounded = 2;
+    uint64 open_ended = 3;
+    uint64 suffix = 4;
+    golem.common.Empty metadata_only = 5;
+  }
+}
+
+message FileReadExtent {
+  uint64 offset = 1;
+  uint64 length = 2;
+}
+
+message FileReadMetadata {
+  uint64 total_size = 1;
+  oneof selection {
+    FileReadExtent selected = 2;
+    golem.common.Empty unsatisfiable = 3;
+  }
+  google.protobuf.Timestamp modified_at = 4;
+}
+
+message FileReadHead {
+  oneof outcome {
+    FileReadMetadata file = 1;
+    golem.common.Empty absent = 2;
+    golem.common.Empty not_regular = 3;
+    golem.common.Empty symlink = 4;
+    golem.common.Empty permission_denied = 5;
+  }
+}
+
+enum FileReadError {
+  FILE_READ_ERROR_UNSPECIFIED = 0;
+  FILE_READ_ERROR_INVALID_TARGET = 1;
+  FILE_READ_ERROR_INVALID_SELECTION = 2;
+  FILE_READ_ERROR_RESOURCE_EXHAUSTED = 3;
+  FILE_READ_ERROR_DEADLINE_EXCEEDED = 4;
+  FILE_READ_ERROR_LIFECYCLE = 5;
+  FILE_READ_ERROR_STORAGE = 6;
+  FILE_READ_ERROR_INVALID_RESPONSE = 7;
 }

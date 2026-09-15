@@ -14,7 +14,10 @@
 
 use super::*;
 use bytes::Bytes;
-use cap_fs_ext::{FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
+use cap_fs_ext::{
+    FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt, OpenOptionsMaybeDirExt,
+    OpenOptionsSyncExt,
+};
 use cap_std::fs::FileExt as _;
 use fs_set_times::{SetTimes as _, SystemTimeSpec};
 use std::ffi::OsString;
@@ -635,6 +638,8 @@ pub(crate) enum SandboxFileDisposition {
 /// that may create or truncate a regular file and must not be used for directories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SandboxOpenOptions {
+    /// Read-only, no-follow inspection of one path component, rejecting special files.
+    Inspection { expected: SandboxObjectKind },
     Existing {
         expected: SandboxObjectKind,
         access: SandboxAccessMode,
@@ -645,6 +650,47 @@ pub(crate) enum SandboxOpenOptions {
         disposition: SandboxFileDisposition,
         follow: SandboxFollow,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SandboxInspectionFailure {
+    Symlink,
+    NotRegular,
+}
+
+impl Display for SandboxInspectionFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Symlink => "inspection target is a symlink",
+            Self::NotRegular => "inspection target has the wrong file type",
+        })
+    }
+}
+
+impl std::error::Error for SandboxInspectionFailure {}
+
+fn check_inspection_kind(
+    metadata: &cap_std::fs::Metadata,
+    expected: SandboxObjectKind,
+) -> std::io::Result<()> {
+    let failure = if metadata.is_symlink() {
+        Some(SandboxInspectionFailure::Symlink)
+    } else if match expected {
+        SandboxObjectKind::Directory => metadata.is_dir(),
+        SandboxObjectKind::File => metadata.is_file(),
+        SandboxObjectKind::Symlink => false,
+    } {
+        None
+    } else {
+        Some(SandboxInspectionFailure::NotRegular)
+    };
+    match failure {
+        Some(failure) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            failure,
+        )),
+        None => Ok(()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -992,6 +1038,24 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 let mut native_options = cap_std::fs::OpenOptions::new();
                 native_options.maybe_dir(true);
                 let (expected, access, follow, disposition) = match options {
+                    SandboxOpenOptions::Inspection { expected } => {
+                        let mut components = target.path.components();
+                        if !matches!(components.next(), Some(Component::Normal(name)) if name == target.path.as_os_str())
+                            || components.next().is_some()
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "inspection requires a single normal path component",
+                            ));
+                        }
+                        // Reject FIFOs/devices before opening. Recheck the opened descriptor below.
+                        check_inspection_kind(
+                            &directory.symlink_metadata(&target.path)?,
+                            expected,
+                        )?;
+                        native_options.nonblock(true);
+                        (expected, SandboxAccessMode::Read, SandboxFollow::No, None)
+                    }
                     SandboxOpenOptions::Existing {
                         expected,
                         access,
@@ -1039,6 +1103,9 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 });
                 let opened = directory.open_with(&target.path, &native_options)?;
                 let metadata = opened.metadata()?;
+                if let SandboxOpenOptions::Inspection { expected } = options {
+                    check_inspection_kind(&metadata, expected)?;
+                }
                 let kind = object_kind(&metadata);
                 if kind != expected {
                     return Err(std::io::Error::new(

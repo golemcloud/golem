@@ -21,6 +21,7 @@ use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::filesystem::FileReadError;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -51,6 +52,8 @@ pub enum WorkerServiceError {
     #[error("Bad file type: {0}")]
     BadFileType(CanonicalFilePath),
     #[error(transparent)]
+    FileRead(#[from] FileReadError),
+    #[error(transparent)]
     RegistryServiceError(#[from] RegistryServiceError),
 }
 
@@ -67,6 +70,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::InternalCallError(inner) => inner.to_safe_string(),
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
+            Self::FileRead(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
             Self::AuthError(inner) => inner.to_safe_string(),
             Self::RegistryServiceError(inner) => inner.to_safe_string(),
@@ -140,6 +144,17 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
             WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],
                 code: api::error_code::BAD_FILE_TYPE.to_string(),
+            }),
+            WorkerServiceError::FileRead(
+                FileReadError::InvalidTarget | FileReadError::InvalidSelection,
+            ) => Self::BadRequest(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+            }),
+            WorkerServiceError::FileRead(_) => Self::InternalError(WorkerExecutionError {
+                error: Some(GrpcError::Unknown(UnknownError {
+                    details: error.to_safe_string(),
+                })),
             }),
             WorkerServiceError::TypeChecker(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],
