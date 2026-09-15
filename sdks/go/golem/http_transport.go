@@ -131,7 +131,14 @@ func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// happens while we read the body stream below.
 	doneW, doneR := httptypes.MakeFutureResultUnitErrorCode()
 	go doneW.Write(witTypes.Ok[witTypes.Unit, httptypes.ErrorCode](witTypes.Unit{}))
-	bodyStream, _ := httptypes.ResponseConsumeBody(resp, doneR)
+	// consume-body hands back the body stream AND the trailers future. The
+	// trailers future is the transfer's completion signal: the host resolves it
+	// once the body terminal has been observed and the durable consume-body
+	// scope is finalized. A client must await it after EOF — exactly what the
+	// reference wasip3 client does (`StreamResult::Dropped => trailers.await`);
+	// returning without it lets the guest run ahead of the scope's End, which an
+	// enclosing atomic region then refuses to close over.
+	bodyStream, trailers := httptypes.ResponseConsumeBody(resp, doneR)
 
 	return &http.Response{
 		StatusCode:    status,
@@ -140,7 +147,7 @@ func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        header,
-		Body:          &responseBody{stream: bodyStream},
+		Body:          &responseBody{stream: bodyStream, trailers: trailers},
 		ContentLength: contentLength(header),
 		Request:       req,
 	}, nil
@@ -174,8 +181,19 @@ func requestBody(req *http.Request) witTypes.Option[*witTypes.StreamReader[uint8
 
 // responseBody adapts a wasi stream<u8> to io.ReadCloser.
 type responseBody struct {
-	stream *witTypes.StreamReader[uint8]
-	buf    []byte // leftover bytes from the last stream read
+	stream   *witTypes.StreamReader[uint8]
+	buf      []byte // leftover bytes from the last stream read
+	trailers *witTypes.FutureReader[witTypes.Result[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode]]
+}
+
+// awaitTrailers blocks until the host has finalized the body transfer. Called
+// once, after the stream reported EOF; net/http exposes no trailers here, so the
+// value is discarded — the wait is what matters.
+func (b *responseBody) awaitTrailers() {
+	if t := b.trailers; t != nil {
+		b.trailers = nil
+		t.Read()
+	}
 }
 
 func (b *responseBody) Read(p []byte) (int, error) {
@@ -184,6 +202,7 @@ func (b *responseBody) Read(p []byte) (int, error) {
 		n := b.stream.Read(chunk)
 		if n == 0 {
 			if b.stream.WriterDropped() {
+				b.awaitTrailers()
 				return 0, io.EOF
 			}
 			return 0, nil
@@ -197,6 +216,9 @@ func (b *responseBody) Read(p []byte) (int, error) {
 
 func (b *responseBody) Close() error {
 	b.stream.Drop()
+	// Closing before EOF cancels the transfer; the trailers future still
+	// resolves once the host has finalized, so wait for that as well.
+	b.awaitTrailers()
 	return nil
 }
 
