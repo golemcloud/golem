@@ -1646,7 +1646,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             });
         let selection = request
             .selection
-            .clone()
             .ok_or(FileReadError::InvalidSelection)
             .and_then(FileByteSelection::try_from);
         let (target, selection, deadline) =

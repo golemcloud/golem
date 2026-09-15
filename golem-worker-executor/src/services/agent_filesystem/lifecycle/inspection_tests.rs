@@ -155,12 +155,26 @@ async fn inspection_root_symlink_fifo_and_directory_intent() {
     std::fs::create_dir(root.join("public")).unwrap();
     std::fs::write(root.join("public/file"), b"abc").unwrap();
     std::os::unix::fs::symlink(root.join("public"), root.join("alias")).unwrap();
+    std::os::unix::fs::symlink("file", root.join("public/link-to-file")).unwrap();
+    std::os::unix::fs::symlink(".", root.join("public/link-dir")).unwrap();
     let fifo =
         std::ffi::CString::new(root.join("public/fifo").as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let handle = resident_generation_handle(&resident);
     for (root, suffix, directory_request, expected) in [
         ("/alias", vec!["file"], false, FileReadHead::Symlink),
+        (
+            "/public",
+            vec!["link-to-file"],
+            false,
+            FileReadHead::Symlink,
+        ),
+        (
+            "/public",
+            vec!["link-dir", "file"],
+            false,
+            FileReadHead::Symlink,
+        ),
         ("/public", vec!["fifo"], false, FileReadHead::NotRegular),
         (
             "/public/fifo",

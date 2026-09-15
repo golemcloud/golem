@@ -1588,127 +1588,125 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// When the main queue becomes empty, process items from last_known_status:
     /// first pending_updates, then pending_invocations
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
-        loop {
-            let status = self.parent.get_non_detached_last_known_status().await;
+        let status = self.parent.get_non_detached_last_known_status().await;
 
-            // First, try to process a pending update
-            if status.pending_updates.front().is_some() {
-                // if the update made it to pending_updates (instead of pending invocations), it is ready
-                // to be processed on next restart. So just restart here and let the recovery logic take over
-                break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
-            }
-
-            // Then, try to process a pending invocation
-            if let Some(pending_invocation) = status.pending_invocations.first() {
-                let idempotency_key = pending_invocation.idempotency_key();
-                let origin = match idempotency_key {
-                    Some(idempotency_key) => self
-                        .parent
-                        .external_invocation_origins
-                        .read()
-                        .await
-                        .get(idempotency_key)
-                        .cloned(),
-                    None => None,
-                };
-
-                // An invocation with no recorded origin was enqueued in an earlier
-                // process, so there is nothing in-process to relate it to.
-                let origin = origin.unwrap_or_else(TraceOrigin::none);
-
-                // The status record only stores a lightweight reference to the pending invocation;
-                // hydrate the full invocation (including its payload) from the oplog before running.
-                let timestamped_invocation = match self
-                    .parent
-                    .hydrate_pending_invocation(pending_invocation)
-                    .await
-                {
-                    Ok(invocation) => invocation,
-                    Err(error) => {
-                        warn!(
-                            agent_id = %self.owned_agent_id.agent_id,
-                            "Failed to hydrate pending invocation from oplog: {error}"
-                        );
-                        break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
-                    }
-                };
-
-                // The span for picking work off the queue and running it: the root
-                // of its own trace, linked back to whatever enqueued the work.
-                // `otel.kind = consumer` is what the OpenTelemetry messaging
-                // conventions prescribe for processing work a producer handed off.
-                let pickup_span = related_span!(
-                    origin,
-                    Level::INFO,
-                    "invocation_queue_pickup",
-                    agent_id = %self.owned_agent_id.agent_id,
-                    agent_type = %self.worker_trace.agent_type,
-                    // The root of the execution's own trace, so it has to say which
-                    // invocation it is: the link points back at the producer, but
-                    // this key is what a search can join the two traces on. Left
-                    // unset rather than empty when there is none, so a search for
-                    // one key cannot collide with every keyless pickup.
-                    idempotency_key = tracing::field::Empty,
-                    otel.kind = "consumer",
-                );
-
-                if let Some(idempotency_key) = idempotency_key {
-                    pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
-                }
-
-                let outcome = async {
-                    let mut store = self.store.lock().await;
-                    let mut invocation = Invocation {
-                        owned_agent_id: self.owned_agent_id.clone(),
-                        parent: self.parent.clone(),
-                        instance: self.instance,
-                        store: store.deref_mut(),
-                        uses_streams: false,
-                    };
-                    invocation.external_invocation(timestamped_invocation).await
-                }
-                .instrument(pickup_span)
-                .await;
-
-                match outcome {
-                    CommandOutcome::Continue => {
-                        if self.on_external_invocation_completed().await {
-                            break CommandOutcome::Continue;
-                        }
-                        // Fairness: after completing one external durable
-                        // invocation, yield to the scheduler so other same-account
-                        // agents get a chance to run. The worker will self-wake
-                        // and re-acquire its permit through the FIFO queue if
-                        // more durable work remains.
-                        let status = self.parent.get_non_detached_last_known_status().await;
-                        if !status.pending_invocations.is_empty() {
-                            // More durable work remains — self-wake so we return
-                            // to the outer loop, release the permit (entering
-                            // idle), and re-enter through the scheduler queue.
-                            break CommandOutcome::WaitForWakeup;
-                        }
-                        // The last older invocation may have released an inspection cutoff.
-                        // Revisit internal work before deciding the worker can become idle.
-                        break CommandOutcome::Continue;
-                    }
-                    other => break other,
-                }
-            }
-
-            match self.periodic_snapshot_action(&status) {
-                PeriodicSnapshotAction::DueNow => {
-                    self.inject_snapshot_as_next_action().await;
-                    break CommandOutcome::Continue;
-                }
-                PeriodicSnapshotAction::Wait(delay) => {
-                    self.schedule_idle_snapshot(delay);
-                    break CommandOutcome::WaitForWakeup;
-                }
-                PeriodicSnapshotAction::NotNeeded => {}
-            }
-
-            break CommandOutcome::WaitForWakeup;
+        // First, try to process a pending update
+        if status.pending_updates.front().is_some() {
+            // if the update made it to pending_updates (instead of pending invocations), it is ready
+            // to be processed on next restart. So just restart here and let the recovery logic take over
+            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
         }
+
+        // Then, try to process a pending invocation
+        if let Some(pending_invocation) = status.pending_invocations.first() {
+            let idempotency_key = pending_invocation.idempotency_key();
+            let origin = match idempotency_key {
+                Some(idempotency_key) => self
+                    .parent
+                    .external_invocation_origins
+                    .read()
+                    .await
+                    .get(idempotency_key)
+                    .cloned(),
+                None => None,
+            };
+
+            // An invocation with no recorded origin was enqueued in an earlier
+            // process, so there is nothing in-process to relate it to.
+            let origin = origin.unwrap_or_else(TraceOrigin::none);
+
+            // The status record only stores a lightweight reference to the pending invocation;
+            // hydrate the full invocation (including its payload) from the oplog before running.
+            let timestamped_invocation = match self
+                .parent
+                .hydrate_pending_invocation(pending_invocation)
+                .await
+            {
+                Ok(invocation) => invocation,
+                Err(error) => {
+                    warn!(
+                        agent_id = %self.owned_agent_id.agent_id,
+                        "Failed to hydrate pending invocation from oplog: {error}"
+                    );
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                }
+            };
+
+            // The span for picking work off the queue and running it: the root
+            // of its own trace, linked back to whatever enqueued the work.
+            // `otel.kind = consumer` is what the OpenTelemetry messaging
+            // conventions prescribe for processing work a producer handed off.
+            let pickup_span = related_span!(
+                origin,
+                Level::INFO,
+                "invocation_queue_pickup",
+                agent_id = %self.owned_agent_id.agent_id,
+                agent_type = %self.worker_trace.agent_type,
+                // The root of the execution's own trace, so it has to say which
+                // invocation it is: the link points back at the producer, but
+                // this key is what a search can join the two traces on. Left
+                // unset rather than empty when there is none, so a search for
+                // one key cannot collide with every keyless pickup.
+                idempotency_key = tracing::field::Empty,
+                otel.kind = "consumer",
+            );
+
+            if let Some(idempotency_key) = idempotency_key {
+                pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
+            }
+
+            let outcome = async {
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                    uses_streams: false,
+                };
+                invocation.external_invocation(timestamped_invocation).await
+            }
+            .instrument(pickup_span)
+            .await;
+
+            match outcome {
+                CommandOutcome::Continue => {
+                    if self.on_external_invocation_completed().await {
+                        return CommandOutcome::Continue;
+                    }
+                    // Fairness: after completing one external durable
+                    // invocation, yield to the scheduler so other same-account
+                    // agents get a chance to run. The worker will self-wake
+                    // and re-acquire its permit through the FIFO queue if
+                    // more durable work remains.
+                    let status = self.parent.get_non_detached_last_known_status().await;
+                    if !status.pending_invocations.is_empty() {
+                        // More durable work remains — self-wake so we return
+                        // to the outer loop, release the permit (entering
+                        // idle), and re-enter through the scheduler queue.
+                        return CommandOutcome::WaitForWakeup;
+                    }
+                    // The last older invocation may have released an inspection cutoff.
+                    // Revisit internal work before deciding the worker can become idle.
+                    return CommandOutcome::Continue;
+                }
+                other => return other,
+            }
+        }
+
+        match self.periodic_snapshot_action(&status) {
+            PeriodicSnapshotAction::DueNow => {
+                self.inject_snapshot_as_next_action().await;
+                return CommandOutcome::Continue;
+            }
+            PeriodicSnapshotAction::Wait(delay) => {
+                self.schedule_idle_snapshot(delay);
+                return CommandOutcome::WaitForWakeup;
+            }
+            PeriodicSnapshotAction::NotNeeded => {}
+        }
+
+        CommandOutcome::WaitForWakeup
     }
 
     async fn on_external_invocation_completed(&mut self) -> bool {
