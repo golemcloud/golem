@@ -1,0 +1,23 @@
+error: type_name requires exactly one static constructor returning Self
+ --> tests/ui/fail/agent_client_contract_tiers.rs:4:7
+  |
+4 | trait NamedOnly {
+  |       ^^^^^^^^^
+
+error: a constructor returning Self requires type_name
+ --> tests/ui/fail/agent_client_contract_tiers.rs:9:7
+  |
+9 | trait ConstructorOnly {
+  |       ^^^^^^^^^^^^^^^
+
+error: mode requires a complete contract with type_name and a constructor
+  --> tests/ui/fail/agent_client_contract_tiers.rs:15:7
+   |
+15 | trait ModeOnly {
+   |       ^^^^^^^^
+
+error: complete agent_client traits must declare exactly one constructor returning Self
+  --> tests/ui/fail/agent_client_contract_tiers.rs:20:7
+   |
+20 | trait TooMany {
+   |       ^^^^^^^

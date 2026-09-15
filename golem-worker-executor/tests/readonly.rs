@@ -42,6 +42,10 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 const AGENT_TYPE: &str = "ReadonlyAgent";
@@ -370,9 +374,10 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
 ///
 /// Instead of using a test-only forced-eviction hook, we drive the
 /// **production memory-pressure eviction path**: the executor is started with
-/// a tight worker-memory budget so that loading a second worker forces the
-/// first one to be unloaded by `ActiveAgents::try_free_up_memory`. The
-/// `Worker` shell (and its read-only cache) stays alive in `ActiveAgents`.
+/// a bounded worker-memory budget, then a pressure worker grows its linear
+/// memory until the cached worker is unloaded by
+/// `ActiveAgents::try_free_up_memory`. The `Worker` shell (and its read-only
+/// cache) stays alive in `ActiveAgents`.
 /// Then we issue another `get_count` on the evicted worker and assert:
 ///   1. it returns the cached value without recording a new
 ///      `AgentInvocationStarted/Finished` pair on the oplog (cache hit), and
@@ -385,38 +390,18 @@ async fn t5_read_only_bypasses_agent_loading(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
 
-    // Tight memory budget: enough for one agent_sdk_rust worker, not two.
-    //
-    // Under the measured-headroom admission gate, the first resident worker of a
-    // component reserves *two* things against the budget: its own linear-memory
-    // requirement (`Worker::memory_requirement()`, ~`r_req`) and its component's
-    // shared compiled-module charge (`component_size_coefficient * component_size`,
-    // paid once per resident component). R and Q here are the *same* component, so
-    // the module charge is paid once and Q adds only another `r_req`. The eviction
-    // regime is therefore `module + r_req <= budget < module + 2*r_req`: R loads
-    // standalone, but loading Q would exceed the budget and must evict R.
-    //
-    // - `worker_memory_ratio = 1.0` makes the usable worker pool == the budget so
-    //   the math is easy to reason about.
-    // - `component_size_coefficient` is pinned so the assertions below can recompute
-    //   the module charge deterministically from `component_size`.
-    // - The budget is chosen experimentally to sit inside that window for the Rust
-    //   `agent_sdk` component. The assertions verify the calibration is still valid —
-    //   if the component's module or linear memory grows or shrinks materially, the
-    //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 8 * 1024 * 1024;
-    const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
+    const SYSTEM_MEMORY: u64 = 32 * 1024 * 1024;
+    const GROWTH_MIB: u64 = 30;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.memory.system_memory_override = Some(SYSTEM_MEMORY);
             config.memory.worker_memory_ratio = 1.0;
-            config.memory.component_size_coefficient = COMPONENT_SIZE_COEFFICIENT;
-            // Tight `acquire_retry_delay` so Q's permit-wait doesn't hang the
-            // test if memory pressure eviction takes a moment to settle.
+            config.memory.component_size_coefficient = 0.0;
             config.memory.acquire_retry_delay = Duration::from_millis(25);
         })),
         ..Default::default()
@@ -436,30 +421,42 @@ async fn t5_read_only_bypasses_agent_loading(
         .await?;
     let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
 
+    let pressure_component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+
     // Warm R's read-only cache: cache miss + populate via the detached observer.
     let _ = executor
         .invoke_and_await_agent(&component, &r_agent_id, "get_count", data_value!())
         .await?;
     wait_for_cache_hit(&executor, &component, &r_agent_id, &r_worker_id).await?;
 
-    // Sanity-check the memory budget. The test only makes sense in the regime
-    // `module + r_req <= budget < module + 2*r_req`, which forces Q's load to
-    // evict R but lets R load standalone. `module` is the shared compiled-module
-    // charge the gate reserves for the first resident worker of the component;
-    // R and Q share it, so the second worker only adds another `r_req`.
+    // The pressure worker starts small enough to coexist with R, then grows enough
+    // that it can proceed only after the production admission path evicts R.
+    let pressure_agent_id = agent_id!(
+        "LargeDynamicMemoryAgent",
+        format!("t5-pressure-{unique_id}")
+    );
+    let pressure_worker_id = executor
+        .start_agent(&pressure_component.id, pressure_agent_id.clone())
+        .await?;
+    let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker_id);
+
     let r_req = executor.worker_memory_requirement(&r_owned).await?;
-    let module_charge = (COMPONENT_SIZE_COEFFICIENT * component.component_size as f64) as u64;
-    let one_worker = module_charge + r_req;
-    let two_workers = module_charge + 2 * r_req;
+    let pressure_req = executor.worker_memory_requirement(&pressure_owned).await?;
+    let growth_bytes = GROWTH_MIB * 1024 * 1024;
     assert!(
-        one_worker <= SYSTEM_MEMORY,
-        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs module {module_charge} + r_req {r_req} = {one_worker}. Increase SYSTEM_MEMORY."
+        r_req + pressure_req <= SYSTEM_MEMORY,
+        "both initial workers must fit before growth: R={r_req}, pressure={pressure_req}, pool={SYSTEM_MEMORY}"
     );
     assert!(
-        two_workers > SYSTEM_MEMORY,
-        "memory budget too generous: budget={SYSTEM_MEMORY}, but module {module_charge} + 2*r_req {} = {two_workers} fits inside budget so loading Q would not evict R. \
-         Decrease SYSTEM_MEMORY (or the component grew significantly).",
-        2 * r_req
+        pressure_req + growth_bytes <= SYSTEM_MEMORY,
+        "the pressure worker plus its requested growth must fit after eviction: pressure={pressure_req}, growth={growth_bytes}, pool={SYSTEM_MEMORY}"
+    );
+    assert!(
+        r_req + pressure_req + growth_bytes > SYSTEM_MEMORY,
+        "R must make the pressure worker's requested growth exceed headroom: R={r_req}, pressure={pressure_req}, growth={growth_bytes}, pool={SYSTEM_MEMORY}"
     );
 
     // Wait until R is `LoadedIdle` — only then will `try_free_up_memory`
@@ -467,32 +464,25 @@ async fn t5_read_only_bypasses_agent_loading(
     wait_for_eviction_class(&executor, &r_owned, EvictionClass::LoadedIdle).await?;
     assert!(executor.worker_is_loaded(&r_owned).await);
 
-    // Q: a second worker of the same agent type. Loading Q reserves another
-    // `r_req` against the budget (Q shares R's already-charged module), which
-    // forces eviction of R.
-    let q_agent_id = agent_id!(AGENT_TYPE, format!("t5-q-{unique_id}"));
-    let q_worker_id = executor
-        .start_agent(&component.id, q_agent_id.clone())
-        .await?;
-    let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id);
-
-    // Trigger Q's instance load. The invocation forces the worker out of
-    // `Unloaded`, which acquires memory from `ActiveAgents` and runs
-    // `try_free_up_memory` if necessary.
-    let q_result = tokio::time::timeout(
+    let pressure_result = tokio::time::timeout(
         Duration::from_secs(10),
-        executor.invoke_and_await_agent(&component, &q_agent_id, "get_count", data_value!()),
+        executor.invoke_and_await_agent(
+            &pressure_component,
+            &pressure_agent_id,
+            "run_with_memory_and_work",
+            data_value!(GROWTH_MIB, 0u64),
+        ),
     )
     .await
     .map_err(|_| {
         anyhow::anyhow!(
-            "Q startup did not complete within 10s. Likely cause: memory budget miscalibrated \
-             (R never evicted) — check that `R req = {r_req}` plus the second copy actually \
-             exceeds budget {SYSTEM_MEMORY}, and that R reached `LoadedIdle` before Q started."
+            "pressure worker growth did not complete within 10s: R={r_req}, pressure={pressure_req}, \
+             growth={growth_bytes}, pool={SYSTEM_MEMORY}. Check that R reached `LoadedIdle` and \
+             remained eligible for eviction."
         )
     })??
     .into_typed::<u64>()?;
-    assert_eq!(q_result, 0);
+    assert_eq!(pressure_result, 0);
 
     // The production eviction path should have unloaded R while keeping its
     // `Worker` shell (and read-only cache) resident. Poll briefly because
@@ -503,13 +493,13 @@ async fn t5_read_only_bypasses_agent_loading(
     .await
     .map_err(|_| {
         anyhow::anyhow!(
-            "R was not unloaded by the production memory-pressure path after Q started. \
+            "R was not unloaded by the production memory-pressure path after the pressure worker grew. \
              Eviction candidate selection may have changed, or another loaded worker \
              absorbed the eviction."
         )
     })?;
     assert!(!executor.worker_is_loaded(&r_owned).await);
-    assert!(executor.worker_is_loaded(&q_owned).await);
+    assert!(executor.worker_is_loaded(&pressure_owned).await);
 
     // Cache-hit invariant: a `get_count` on R after eviction must not produce
     // a new Started/Finished pair on the oplog ...

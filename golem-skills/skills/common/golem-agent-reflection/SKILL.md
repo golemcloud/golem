@@ -14,7 +14,7 @@ Use the narrowest client surface that matches what the caller knows:
 
 Agent identity strings are environment-scoped. Reflection identities do not include a component ID: the runtime resolves the agent type's implementing component within the caller's environment. Component-bearing IDs belong to lower-level host-management APIs, not reflection clients.
 
-Discovery lookups are optional: a name or identity lookup returns no type when the deployment is missing, the identity is malformed, or the caller cannot view it. Parsing an identity is strict and reports malformed input. Identity discovery never creates the target agent.
+Discovery lookups never create the target agent. When the deployment is missing, the identity is malformed, or the caller cannot view it, SDKs surface the miss as either no type or a language-specific lookup error. Parsing an identity is strict and reports malformed input.
 
 Reflected schema graphs are immutable snapshots of the deployed contract. Validate or pack JSON through the reflected constructor or method schema, and treat a missing or malformed declared output as a remote output error.
 
