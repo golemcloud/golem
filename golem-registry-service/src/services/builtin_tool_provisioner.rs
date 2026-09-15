@@ -343,6 +343,7 @@ async fn deploy(
         .create_deployment(
             env,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),

@@ -131,6 +131,7 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
                     BTreeMap::from([(beta_name.clone(), binding(&agent_b, &beta_name, &beta))]),
                 ),
             ]),
+            mcp_imports: Vec::new(),
         },
         agent_a,
         agent_b,
@@ -153,6 +154,7 @@ fn empty_deployment(revision: DeploymentRevision) -> ToolDeploymentState {
         deployment_revision: revision,
         registered_tools: BTreeMap::new(),
         agent_tool_bindings: BTreeMap::new(),
+        mcp_imports: Vec::new(),
     }
 }
 

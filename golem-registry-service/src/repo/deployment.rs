@@ -23,9 +23,9 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentAgentToolBindingRecord, DeploymentCompiledRouteRecord,
     DeploymentComponentRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
-    DeploymentMcpDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
-    DeploymentRegisteredAgentTypeScopedRecord, DeploymentRegisteredToolRecord,
-    DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
+    DeploymentMcpDeploymentRevisionRecord, DeploymentMcpImportIdentityRecord,
+    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredAgentTypeScopedRecord,
+    DeploymentRegisteredToolRecord, DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
@@ -48,6 +48,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::mcp_import::McpImportCredential;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -154,6 +155,13 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>>;
 
     async fn get_current_tool_deployment_state(
         &self,
@@ -464,6 +472,25 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         self.repo
             .get_tool_deployment_state(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>> {
+        self.repo
+            .get_deployment_mcp_import_credential(
+                environment_id,
+                deployment_revision_id,
+                import_index,
+            )
             .instrument(Self::span_env_and_revision(
                 environment_id,
                 deployment_revision_id,
@@ -801,6 +828,19 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(revision_id),
             )
             .await?;
+        let mcp_imports = self
+            .with_ro("get_deployment_mcp_import_identities")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT import_index, import_hash
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY import_index
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await?;
         Ok(Some(DeployedDeploymentIdentity {
             deployment_revision,
             identity: DeploymentIdentity {
@@ -812,6 +852,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     .get_deployed_mcp_deployments(environment_id, revision_id)
                     .await?,
                 tools,
+                mcp_imports,
             },
         }))
     }
@@ -932,6 +973,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                     for agent_tool_binding in &deployment_creation.agent_tool_bindings {
                         Self::create_deployment_agent_tool_binding(tx, agent_tool_binding).await?;
+                    }
+
+                    for mcp_import in &deployment_creation.mcp_imports {
+                        Self::create_deployment_mcp_import(tx, mcp_import).await?;
                     }
 
                     for compiled_mcp in &deployment_creation.compiled_mcp {
@@ -1428,11 +1473,49 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
+        let mcp_imports = self
+            .with_ro("list_deployment_mcp_imports")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, deployment_revision_id, import_index,
+                           import_hash, import_config
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY import_index
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
         Ok(Some(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
+            mcp_imports,
         }))
+    }
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>> {
+        let credential: Option<(Blob<McpImportCredential>,)> = self
+            .with_ro("get_deployment_mcp_import_credential")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT inline_credential
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2 AND import_index = $3
+                        AND inline_credential IS NOT NULL
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(i64::from(import_index)),
+            )
+            .await?;
+        Ok(credential.map(|(credential,)| credential.into_value()))
     }
 
     async fn get_current_tool_deployment_state(
@@ -1866,6 +1949,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
     ) -> RepoResult<Vec<DeploymentToolIdentityRecord>>;
 
+    async fn get_staged_mcp_imports(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentMcpImportIdentityRecord>>;
+
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
         environment_id: Uuid,
@@ -1906,6 +1994,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn create_deployment_agent_tool_binding(
         tx: &mut Self::Tx,
         agent_tool_binding: &DeploymentAgentToolBindingRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_mcp_import(
+        tx: &mut Self::Tx,
+        mcp_import: &super::model::deployment::DeploymentMcpImportCreationRecord,
     ) -> RepoResult<()>;
 
     async fn set_current_deployment_internal(
@@ -1986,6 +2079,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?,
             mcp_deployments: Self::get_staged_mcp_deployments(api, environment_id).await?,
             tools: Self::get_staged_tools(api, environment_id).await?,
+            mcp_imports: Self::get_staged_mcp_imports(api, environment_id).await?,
         })
     }
 
@@ -2059,6 +2153,28 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     AND r.deployment_revision_id = cdr.deployment_revision_id
                 WHERE cd.environment_id = $1
                 ORDER BY r.tool_name
+            "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_mcp_imports(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentMcpImportIdentityRecord>> {
+        api.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT r.import_index, r.import_hash
+                FROM current_deployments cd
+                JOIN current_deployment_revisions cdr
+                    ON cdr.environment_id = cd.environment_id
+                    AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_mcp_imports r
+                    ON r.environment_id = cdr.environment_id
+                    AND r.deployment_revision_id = cdr.deployment_revision_id
+                WHERE cd.environment_id = $1
+                ORDER BY r.import_index
             "#})
             .bind(environment_id),
         )
@@ -2144,6 +2260,29 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         )
         .await?;
 
+        Ok(())
+    }
+
+    async fn create_deployment_mcp_import(
+        tx: &mut Self::Tx,
+        mcp_import: &super::model::deployment::DeploymentMcpImportCreationRecord,
+    ) -> RepoResult<()> {
+        let deployment = &mcp_import.deployment;
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_mcp_imports
+                    (environment_id, deployment_revision_id, import_index, import_hash,
+                     import_config, inline_credential)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            "#})
+            .bind(deployment.environment_id)
+            .bind(deployment.deployment_revision_id)
+            .bind(deployment.import_index)
+            .bind(deployment.import_hash)
+            .bind(&deployment.import_config)
+            .bind(&mcp_import.inline_credential),
+        )
+        .await?;
         Ok(())
     }
 

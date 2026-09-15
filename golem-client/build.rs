@@ -224,6 +224,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::deployment::DeploymentPlanComponentEntry",
             ),
             (
+                "DeploymentPlanMcpImportEntry",
+                "golem_common::model::deployment::DeploymentPlanMcpImportEntry",
+            ),
+            (
+                "McpImportDeployment",
+                "golem_common::model::mcp_import::McpImportDeployment",
+            ),
+            (
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
             ),

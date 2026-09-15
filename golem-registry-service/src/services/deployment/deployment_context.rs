@@ -40,6 +40,7 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::mcp_import::McpImport;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
@@ -133,6 +134,7 @@ impl DeploymentContext {
         &self,
         compiled_tools: &CompiledTools,
         published_tools: &[ToolName],
+        mcp_imports: &[McpImport],
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let diffable = diff::Deployment {
@@ -156,6 +158,11 @@ impl DeploymentContext {
                 compiled_tools.agent_tool_bindings.clone(),
                 &published_tools,
             )?,
+            mcp_imports: mcp_imports
+                .iter()
+                .enumerate()
+                .map(|(index, import)| (index.to_string(), HashOf::form_value(import.clone())))
+                .collect(),
             published_tools,
         };
         diffable.hash()

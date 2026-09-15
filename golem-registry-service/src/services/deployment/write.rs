@@ -40,6 +40,7 @@ use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
+use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::RemoteToolDeployment;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
@@ -193,6 +194,26 @@ impl DeploymentWriteService {
             })?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
+
+        let mcp_imports = data
+            .mcp_imports
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| {
+                import
+                    .into_parts(environment_id)
+                    .map(|(import, credential)| (index as u32, import, credential))
+                    .map_err(|reason| {
+                        DeploymentWriteError::DeploymentValidationFailed(vec![
+                            DeployValidationError::InvalidMcpImport {
+                                index: index as u32,
+                                reason,
+                            },
+                        ])
+                    })
+            })
+            .collect::<Result<Vec<(u32, McpImport, Option<McpImportCredential>)>, _>>()?;
 
         if data.current_revision
             != environment
@@ -374,6 +395,17 @@ impl DeploymentWriteService {
             })
             .collect();
 
+        for (index, import, _) in &mcp_imports {
+            if let Some(security_scheme) = &import.security_scheme
+                && !security_schemes_map.contains_key(security_scheme)
+            {
+                errors.push(DeployValidationError::McpImportSecuritySchemeNotFound {
+                    index: *index,
+                    security_scheme: security_scheme.clone(),
+                });
+            }
+        }
+
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
@@ -458,7 +490,14 @@ impl DeploymentWriteService {
         }
 
         let actual_hash = deployment_context
-            .hash_with_tools(&compiled_tools, &data.publish_tools)
+            .hash_with_tools(
+                &compiled_tools,
+                &data.publish_tools,
+                &mcp_imports
+                    .iter()
+                    .map(|(_, import, _)| import.clone())
+                    .collect::<Vec<_>>(),
+            )
             .map_err(anyhow::Error::new)?;
         if data.expected_deployment_hash != actual_hash {
             return Err(DeploymentWriteError::DeploymentHashMismatch {
@@ -498,6 +537,7 @@ impl DeploymentWriteService {
                 .collect(),
             compiled_tools.registered_tools,
             compiled_tools.agent_tool_bindings,
+            mcp_imports,
             tool_releases,
             new_agent_secrets,
             updated_agent_secrets,

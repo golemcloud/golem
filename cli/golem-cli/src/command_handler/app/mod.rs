@@ -90,6 +90,9 @@ use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantId,
     EnvironmentToolGrantReconciliation, EnvironmentToolGrantWithDetails, EnvironmentToolValidation,
 };
+use golem_common::model::mcp_import::{
+    McpImportAuthInput, McpImportBasicAuth, McpImportDeployment,
+};
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::{ToolPublication, ToolReleaseReference};
 use golem_common::schema::schema_type::SchemaType;
@@ -103,6 +106,68 @@ use tracing::debug;
 mod deploy_diff;
 mod template;
 mod version_strategy;
+
+fn resolve_mcp_import_env_vars(
+    import: McpImportDeployment,
+    index: usize,
+) -> anyhow::Result<McpImportDeployment> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+    let render = |field: &str, value: String| {
+        renderer.render_str(&value).map_err(|err| {
+            let missing = renderer.missing_env_vars(&value, &err);
+            if missing.is_empty() {
+                anyhow::anyhow!("Failed to resolve MCP import {index} field {field}")
+            } else {
+                anyhow::anyhow!(
+                    "Failed to resolve MCP import {index} field {field}; missing environment variables: {}",
+                    missing.join(", ")
+                )
+            }
+        })
+    };
+    let render_list = |field: &str, values: Option<Vec<String>>| {
+        values
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| render(field, value))
+                    .collect()
+            })
+            .transpose()
+    };
+
+    Ok(McpImportDeployment {
+        url: render("url", import.url)?,
+        auth: import
+            .auth
+            .map(|auth| {
+                Ok::<_, anyhow::Error>(McpImportAuthInput {
+                    bearer: auth.bearer.map(|v| render("auth.bearer", v)).transpose()?,
+                    basic: auth
+                        .basic
+                        .map(|basic| {
+                            Ok::<_, anyhow::Error>(McpImportBasicAuth {
+                                user: render("auth.basic.user", basic.user)?,
+                                password: render("auth.basic.password", basic.password)?,
+                            })
+                        })
+                        .transpose()?,
+                })
+            })
+            .transpose()?,
+        security_scheme: import
+            .security_scheme
+            .map(|name| {
+                render("securityScheme", name.0)
+                    .map(golem_common::model::security_scheme::SecuritySchemeName)
+            })
+            .transpose()?,
+        prefix: import.prefix.map(|v| render("prefix", v)).transpose()?,
+        include: render_list("include", import.include)?,
+        exclude: render_list("exclude", import.exclude)?,
+        version: import.version.map(|v| render("version", v)).transpose()?,
+    })
+}
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -1286,6 +1351,16 @@ impl AppCommandHandler {
             .deployable_manifest_mcp_deployments(&environment.environment_name)
             .await?;
 
+        let deployable_manifest_mcp_imports = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_mcp_imports(&environment.environment_name)
+            .await?
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
         let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
             for (component_name, component_deploy_properties) in &components {
@@ -1341,10 +1416,23 @@ impl AppCommandHandler {
             diffable_local_mcp_deployments
         };
 
+        let diffable_local_mcp_imports = deployable_manifest_mcp_imports
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, import)| {
+                import
+                    .into_parts(environment.environment_id.clone())
+                    .map(|(descriptor, _)| (index.to_string(), descriptor.into()))
+                    .map_err(|err| anyhow::anyhow!("Invalid MCP import at index {index}: {err}"))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: diffable_local_mcp_deployments,
+            mcp_imports: diffable_local_mcp_imports,
             remote_tools: remote_tools.diffable_deployments.clone(),
             published_tools: tools_to_publish.iter().map(ToString::to_string).collect(),
         };
@@ -1361,6 +1449,7 @@ impl AppCommandHandler {
                 remote_tools,
                 http_api_deployments: deployable_manifest_http_api_deployments,
                 mcp_deployments: deployable_manifest_mcp_deployments,
+                mcp_imports: deployable_manifest_mcp_imports,
             },
             diffable_local_deployment,
             local_deployment_hash,
@@ -2562,6 +2651,7 @@ impl AppCommandHandler {
                         },
                         quota_resource_defaults: environment_setup.resource_defaults.clone(),
                         retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
+                        mcp_imports: deploy_diff.deployable_manifest.mcp_imports.clone(),
                         replace_incompatible_agent_secrets,
                     },
                 )
@@ -3413,7 +3503,10 @@ fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tool_grant_reconciliation_plan, duplicate_component_matches};
+    use super::{
+        build_tool_grant_reconciliation_plan, duplicate_component_matches,
+        resolve_mcp_import_env_vars,
+    };
     use crate::fuzzy::Match;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
     use chrono::Utc;
@@ -3432,6 +3525,30 @@ mod tests {
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use test_r::test;
+
+    #[test]
+    fn mcp_import_render_error_does_not_expose_secret_template() {
+        let secret_template = "{{ definitely_missing_gol36_secret }}";
+        let import = golem_common::model::mcp_import::McpImportDeployment {
+            url: "https://example.com/mcp".into(),
+            auth: Some(golem_common::model::mcp_import::McpImportAuthInput {
+                bearer: Some(secret_template.into()),
+                basic: None,
+            }),
+            security_scheme: None,
+            prefix: None,
+            include: None,
+            exclude: None,
+            version: None,
+        };
+
+        let error = resolve_mcp_import_env_vars(import, 4)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("auth.bearer"));
+        assert!(error.contains("definitely_missing_gol36_secret"));
+        assert!(!error.contains(secret_template));
+    }
 
     fn matched(option: &str, pattern: &str) -> Match {
         Match {

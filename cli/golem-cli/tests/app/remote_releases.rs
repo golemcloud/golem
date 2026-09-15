@@ -243,6 +243,7 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 retry_policy_defaults: Vec::new(),
                 publish_tools: vec![tool_name.clone()],
                 remote_tools: Vec::new(),
+                mcp_imports: Vec::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )

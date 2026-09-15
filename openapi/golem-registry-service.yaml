@@ -12490,6 +12490,11 @@ components:
           default: []
           items:
             $ref: '#/components/schemas/RemoteToolDeployment'
+        mcpImports:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
         replaceIncompatibleAgentSecrets:
           type: boolean
           default: false
@@ -12502,6 +12507,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - ambientTools
@@ -12524,6 +12530,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -12644,6 +12654,19 @@ components:
         hash:
           type: string
           format: hash
+    DeploymentPlanMcpImportEntry:
+      type: object
+      title: DeploymentPlanMcpImportEntry
+      required:
+      - index
+      - hash
+      properties:
+        index:
+          type: integer
+          format: uint32
+        hash:
+          type: string
+          format: hash
     DeploymentPlanRemoteToolEntry:
       type: object
       title: DeploymentPlanRemoteToolEntry
@@ -12698,6 +12721,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       properties:
@@ -12719,6 +12743,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -14389,6 +14417,49 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+    McpImportAuthInput:
+      type: object
+      title: McpImportAuthInput
+      properties:
+        bearer:
+          type: string
+        basic:
+          $ref: '#/components/schemas/McpImportBasicAuth'
+    McpImportBasicAuth:
+      type: object
+      title: McpImportBasicAuth
+      required:
+      - user
+      - password
+      properties:
+        user:
+          type: string
+        password:
+          type: string
+    McpImportDeployment:
+      type: object
+      title: McpImportDeployment
+      required:
+      - url
+      properties:
+        url:
+          type: string
+        auth:
+          $ref: '#/components/schemas/McpImportAuthInput'
+        securityScheme:
+          type: string
+        prefix:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+        version:
+          type: string
     MemoryLimit:
       type: object
       title: MemoryLimit

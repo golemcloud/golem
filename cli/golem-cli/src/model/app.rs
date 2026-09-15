@@ -593,6 +593,8 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+    mcp_imports:
+        BTreeMap<EnvironmentName, Vec<golem_common::model::mcp_import::McpImportDeployment>>,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -1418,6 +1420,13 @@ impl Application {
         environment: &EnvironmentName,
     ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
         self.mcp_deployments.get(environment)
+    }
+
+    pub fn mcp_imports(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Option<&Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+        self.mcp_imports.get(environment)
     }
 }
 
@@ -3386,6 +3395,7 @@ mod app_builder {
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
+        McpImports(EnvironmentName),
         Bridge,
         LocalServer,
         Version,
@@ -3407,6 +3417,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::McpImports(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
                 UniqueSourceCheckedEntityKey::Version => property,
@@ -3464,6 +3475,11 @@ mod app_builder {
                         "resourceDefaults".log_color_highlight(),
                         environment_name.0.log_color_highlight()
                     )
+                }
+                UniqueSourceCheckedEntityKey::McpImports(environment_name) => {
+                    format!("mcp.imports.{}", environment_name.0)
+                        .log_color_highlight()
+                        .to_string()
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
@@ -3677,6 +3693,8 @@ mod app_builder {
 
         mcp_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+        mcp_imports:
+            BTreeMap<EnvironmentName, Vec<golem_common::model::mcp_import::McpImportDeployment>>,
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
@@ -3747,6 +3765,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
                 app_root_dir,
@@ -3767,6 +3786,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
+                mcp_imports: builder.mcp_imports,
                 agent_secrets_defaults: builder.agent_secret_defaults,
                 retry_policy_defaults: builder.retry_policy_defaults,
                 resource_definition_defaults: builder.resource_definition_defaults,
@@ -4043,6 +4063,14 @@ mod app_builder {
                     }
 
                     if let Some(mcp) = app.application.mcp {
+                        for (environment, imports) in mcp.imports {
+                            if self.add_entity_source(
+                                UniqueSourceCheckedEntityKey::McpImports(environment.clone()),
+                                &app.source,
+                            ) {
+                                self.mcp_imports.insert(environment, imports);
+                            }
+                        }
                         for (environment, deployments) in mcp.deployments {
                             for mcp_deployment in deployments {
                                 let Some(domain) = resolve_mcp_domain(
@@ -4982,6 +5010,25 @@ mod app_builder {
             }
         }
 
+        fn validate_mcp_imports(
+            &self,
+            validation: &mut ValidationBuilder,
+            environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
+        ) {
+            for environment in self.mcp_imports.keys() {
+                if !environments.contains_key(environment) {
+                    validation.add_warn(format!(
+                        "Unknown environment in manifest: {}\n\n{}",
+                        environment.0.log_color_highlight(),
+                        self.available_profiles(
+                            environments.keys().map(|p| p.0.as_str()),
+                            &environment.0
+                        )
+                    ));
+                }
+            }
+        }
+
         fn available_profiles<'a, I: IntoIterator<Item = &'a str>>(
             &self,
             available_profiles: I,
@@ -5625,6 +5672,61 @@ mod test {
                 .iter()
                 .any(|error| error.contains("DuplicateDeclaration")),
             "unexpected errors: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn mcp_imports_keep_order_and_reject_duplicate_environment_sources() {
+        let source = indoc! {r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            mcp:
+              imports:
+                local:
+                  - url: https://z.example/mcp
+                  - url: https://a.example/mcp
+        "#};
+        let (app, _dir) = load_app(source, &selector("local", &[]));
+        assert_eq!(
+            app.mcp_imports(&EnvironmentName("local".into()))
+                .unwrap()
+                .iter()
+                .map(|import| import.url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://z.example/mcp", "https://a.example/mcp"]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_string(dir.path().join("golem.yaml"), source)
+                .unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_string(
+                dir.path().join("included.yaml"),
+                "mcp:\n  imports:\n    local: []\n",
+            )
+            .unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            apps,
+        )
+        .into_product();
+        assert!(
+            errors.iter().any(|error| error.contains("mcp.imports")),
+            "{errors:?}"
         );
     }
 

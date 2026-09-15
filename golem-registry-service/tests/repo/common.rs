@@ -4682,6 +4682,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 tool_releases: Vec::new(),
                 registered_tools: Vec::new(),
                 agent_tool_bindings: Vec::new(),
+                mcp_imports: Vec::new(),
                 created_agent_secrets: Vec::new(),
                 updated_agent_secrets: Vec::new(),
                 replaced_agent_secrets: Vec::new(),
@@ -5276,6 +5277,13 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
 }
 
 pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
+    use golem_common::model::mcp_import::{
+        McpImportAuthInput, McpImportBasicAuth, McpImportCredential, McpImportDeployment,
+    };
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentMcpImportCreationRecord, DeploymentMcpImportRecord,
+    };
+
     let owner = deps.create_account().await;
     let owner_account_id = owner.revision.account_id;
     let owner_account_email = owner.revision.email.clone();
@@ -5313,6 +5321,30 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let component_id = component.revision.component_id;
     let component_revision_id = component.revision.revision_id;
     let agent_type_name = format!("Agent{}", new_repo_uuid().simple());
+
+    let import_input = |revision: i64, index: u32| McpImportDeployment {
+        url: format!("http://upstream-{index}.example/revision-{revision}/mcp"),
+        auth: match index {
+            0 => Some(McpImportAuthInput {
+                bearer: Some(format!("private-token-{revision}")),
+                basic: None,
+            }),
+            1 => Some(McpImportAuthInput {
+                bearer: None,
+                basic: Some(McpImportBasicAuth {
+                    user: "test-user".into(),
+                    password: format!("private-password-{revision}"),
+                }),
+            }),
+            _ => None,
+        },
+        security_scheme: (index == 2)
+            .then(|| golem_common::model::security_scheme::SecuritySchemeName("test-oauth".into())),
+        prefix: Some(format!("source-{index}")),
+        include: (index == 0).then(Vec::new),
+        exclude: None,
+        version: None,
+    };
 
     let deployment_creation = |deployment_revision_id: i64,
                                component_revision_id: i64,
@@ -5439,6 +5471,28 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             tool_releases,
             registered_tools,
             agent_tool_bindings,
+            mcp_imports: if deployment_revision_id <= 2 {
+                (0..12)
+                    .rev()
+                    .map(|index| {
+                        let (import, credential) = import_input(deployment_revision_id, index)
+                            .into_parts(EnvironmentId(environment_id))
+                            .unwrap();
+                        DeploymentMcpImportCreationRecord {
+                            deployment: DeploymentMcpImportRecord {
+                                environment_id,
+                                deployment_revision_id,
+                                import_index: i64::from(index),
+                                import_hash: import.hash().unwrap().into(),
+                                import_config: Blob::new(import),
+                            },
+                            inline_credential: credential.map(Blob::new),
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             created_agent_secrets: Vec::new(),
             updated_agent_secrets: Vec::new(),
             replaced_agent_secrets: Vec::new(),
@@ -5500,6 +5554,54 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap();
     let alpha = ToolName::try_from("alpha").unwrap();
     let agent_type = AgentTypeName(agent_type_name.clone());
+    for (revision, snapshot) in [(1, &exact_first_state), (2, &exact_second_state)] {
+        let expected = (0..12)
+            .map(|index| {
+                import_input(revision, index)
+                    .into_parts(EnvironmentId(environment_id))
+                    .unwrap()
+                    .0
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.mcp_imports, expected);
+        let serialized = serde_json::to_string(snapshot).unwrap();
+        assert!(!serialized.contains("private-token"));
+        assert!(!serialized.contains("private-password"));
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 0)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Bearer {
+                token: format!("private-token-{revision}"),
+            })
+        );
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 1)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Basic {
+                user: "test-user".into(),
+                password: format!("private-password-{revision}"),
+            })
+        );
+    }
+    for (env, revision, index) in [
+        (environment_id, 1, 2),
+        (environment_id, 1, 3),
+        (environment_id, 1, 12),
+        (environment_id, 999, 0),
+        (new_repo_uuid(), 1, 0),
+    ] {
+        assert!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(env, revision, index)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     assert_eq!(exact_first_state.deployment_revision.get(), 1);
     assert_eq!(
         exact_first_state.agent_tool_bindings[&agent_type][&alpha]
@@ -5583,6 +5685,22 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         vec![ToolName::try_from("zeta").unwrap()]
     );
     assert!(first_summary.remote_tools.is_empty());
+    assert_eq!(
+        first_summary
+            .mcp_imports
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        (0..12).collect::<Vec<_>>()
+    );
+    for entry in &first_summary.mcp_imports {
+        assert_eq!(
+            entry.hash,
+            exact_first_state.mcp_imports[entry.index as usize]
+                .hash()
+                .unwrap()
+        );
+    }
 
     let current: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
@@ -5593,6 +5711,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(current.deployment_revision.get(), 2);
+    assert_eq!(current.mcp_imports, exact_second_state.mcp_imports);
     assert_eq!(
         current.registered_tools[&ToolName::try_from("alpha").unwrap()]
             .definition
@@ -5631,6 +5750,15 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_current_tool_deployment_state(environment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.mcp_imports, exact_first_state.mcp_imports);
     let staged_after_component_update = deps
         .full_deployment_repo
         .get_staged_identity(environment_id)
@@ -5643,6 +5771,15 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         ["zeta".to_string()].into_iter().collect()
     );
     assert!(staged_after_component_update.remote_tools.is_empty());
+    assert_eq!(staged_after_component_update.mcp_imports.len(), 12);
+    for (index, import) in exact_first_state.mcp_imports.iter().enumerate() {
+        assert_eq!(
+            staged_after_component_update.mcp_imports[&index.to_string()]
+                .hash()
+                .unwrap(),
+            import.hash().unwrap()
+        );
+    }
 
     deps.full_deployment_repo
         .deploy(
@@ -5676,6 +5813,10 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_component.deployment_revision.get(), 2);
+    assert_eq!(
+        latest_for_component.mcp_imports,
+        exact_second_state.mcp_imports
+    );
     let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
         .get_latest_tool_deployment_state_by_component_revision(
@@ -5689,6 +5830,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
+    assert!(latest_for_updated_component.mcp_imports.is_empty());
     let republished_zeta =
         &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
     assert_eq!(
@@ -6385,6 +6527,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         tool_releases: vec![],
         registered_tools: vec![],
         agent_tool_bindings: vec![],
+        mcp_imports: vec![],
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
         replaced_agent_secrets: vec![],

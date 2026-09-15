@@ -1,7 +1,7 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
-Status: implementation in progress. Step 1 completed after tests, Oracle review,
-and the bug-finder loop; step 2 is next. Middleware remains an implementation
+Status: implementation in progress. Steps 1–2 completed after tests, Oracle review,
+and the bug-finder loop; step 3 is in progress. Middleware remains an implementation
 dependency. The finalized planning snapshot is attached to GOL-36 in Linear.
 
 This is the living record of the requirements, decisions, implementation plan, and
@@ -520,7 +520,7 @@ Generated artifacts accompany each contract change.
   config-only redeploys (new live operations see N+1; earlier observations replay
   N), cold-cache rehydration, and missing-revision failure. No new worker pin,
   lifecycle rules, or CLI targeting choices.
-- [ ] **2. Add ordered import configuration and dynamic source models.** Extend
+- [x] **2. Add ordered import configuration and dynamic source models.** Extend
   manifest validation, deployment persistence, source/activation identity, diff
   and hashing, APIs, and generated artifacts. Keep configuration separate from
   mutable cached projections; keep the fixed native catalog unchanged.
@@ -673,6 +673,56 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   resolved, with no new or recurring findings. Stopped the converged loop.
 - These tests validate retrieval/cache behavior, not oplog replay changes. Native
   snapshot removal and end-to-end replay rehydration remain step 6.
+
+### Step 2 — completed
+
+- Imports are request-carried ordered deployment configuration, separate from
+  MCP export staging and the fixed native catalog. Staged identity mirrors the
+  current deployment's import hashes, as for existing request-carried tools.
+- `McpImportDeployment` is the secret-bearing write input; `McpImport` is a
+  secret-free descriptor. Credentials are stored separately in the same atomic
+  deployment transaction and read only through a dedicated internal repository
+  operation. Public plans/summaries carry index/hash identities, while tool
+  snapshots carry complete descriptors. Dynamic source identity is environment,
+  deployment revision, import index, and original upstream name; dispatch wiring
+  remains in the bridge step rather than adding a nonfunctional source arm now.
+- Inline credentials use the current manifest `{{ VAR }}` substitution mechanism;
+  the historical `${VAR}` example does not introduce another interpolation engine.
+  Missing variable errors identify the field without printing its credential
+  template. Import order, auth identity, filters, prefix, and protocol override
+  contribute to the shared CLI/server deployment hash (diff model v7).
+- Credential identities are domain-separated, environment-scoped, length-prefixed
+  BLAKE3 digests for change detection, not password hashes. Deterministic deployment
+  hashes can permit offline guessing of weak inline passwords by deployment
+  viewers. Use high-entropy upstream credentials. At-rest credential protection
+  follows the registry's existing secret-column storage model.
+- Oracle required fixes to staged/current import identity and import-only text
+  plan output; both are implemented. Unified YAML diffs also include imports.
+  Empty Basic fields remain permitted because Basic authentication does not itself
+  prohibit them; transport-specific bearer validation belongs with step 4.
+- Bug-finder run 1 reproduced acceptance of an endpoint containing an embedded
+  ASCII control character. Accepted and fixed with an explicit rejection before
+  URL parsing; the reproducer is retained. Run 2 confirmed it resolved with no
+  new or recurring findings; stopped the converged loop.
+- `cargo make generate-openapi` completed and regenerated REST reference MDX;
+  `cargo build -p golem-client` passed. The combined registry/client/CLI
+  `cargo check --all-targets` passed after updating a remaining deployment
+  constructor in the remote-release integration test.
+- Targeted common metadata/protobuf/fingerprint tests: **9 passed**; MCP model
+  follow-up: **5 passed**; registry HTTP validation: **1 passed**; expanded
+  deployment repository test: **3 passed** (SQLite, PostgreSQL, PostgreSQL TLS);
+  CLI MCP/output-schema tests: **22 passed**; raw manifest module: **23 passed**;
+  executor environment-state module: **22 passed**.
+- Native-tool deployment regression: **1 passed**. Remote-release CLI integration
+  regression: **1 passed**. Built the missing Rust streaming fixtures through the
+  CLI and retained their SDK dependency lockfile update; built the single-binary
+  server and TypeScript guest runtimes before the CLI regression. An initial
+  test build exhausted disk space; the rerun passed after clearing completed
+  build caches and disabling incremental compilation.
+- Package-scoped format checks and `git diff --check`: passed.
+- The later live credential resolver must resolve the descriptor first: an absent
+  optional inline credential is valid for anonymous/security-scheme imports, but
+  is not a substitute for a missing import or a missing required inline secret.
 
 ## Review and decision history
 

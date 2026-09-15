@@ -5323,6 +5323,7 @@
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
         "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpImports": { "$ref": "#/definitions/DeploymentDiffSection" },
         "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
         "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" }
       },
@@ -5993,6 +5994,9 @@
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpImports": {
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "remoteTools": {

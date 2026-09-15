@@ -21012,6 +21012,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RemoteToolDeployment'
+        mcpImports:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean
@@ -21044,6 +21049,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -21067,6 +21076,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - ambientTools
@@ -21172,6 +21182,19 @@ components:
       - revision
       - domain
       - hash
+    DeploymentPlanMcpImportEntry:
+      title: DeploymentPlanMcpImportEntry
+      type: object
+      properties:
+        index:
+          type: integer
+          format: uint32
+        hash:
+          type: string
+          format: hash
+      required:
+      - index
+      - hash
     DeploymentPlanRemoteToolEntry:
       title: DeploymentPlanRemoteToolEntry
       type: object
@@ -21239,6 +21262,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -21253,6 +21280,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
     Doc:
@@ -22285,6 +22313,49 @@ components:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - currentRevision
+    McpImportAuthInput:
+      title: McpImportAuthInput
+      type: object
+      properties:
+        bearer:
+          type: string
+        basic:
+          $ref: '#/components/schemas/McpImportBasicAuth'
+    McpImportBasicAuth:
+      title: McpImportBasicAuth
+      type: object
+      properties:
+        user:
+          type: string
+        password:
+          type: string
+      required:
+      - user
+      - password
+    McpImportDeployment:
+      title: McpImportDeployment
+      type: object
+      properties:
+        url:
+          type: string
+        auth:
+          $ref: '#/components/schemas/McpImportAuthInput'
+        securityScheme:
+          type: string
+        prefix:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+        version:
+          type: string
+      required:
+      - url
     MemoryLimit:
       title: MemoryLimit
       type: object

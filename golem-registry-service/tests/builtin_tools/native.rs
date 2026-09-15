@@ -152,6 +152,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .create_deployment(
             env.id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: stale_plan.current_revision,
                 expected_deployment_hash: stale_request.0,
                 version: DeploymentVersion("stale".into()),
@@ -203,6 +204,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .create_deployment(
             env.id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: request.0,
                 version: DeploymentVersion("first".into()),
@@ -237,6 +239,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .create_deployment(
             env.id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: canonical_request.0,
                 version: DeploymentVersion("duplicate".into()),
@@ -261,6 +264,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .create_deployment(
             env.id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: canonical_request.0,
                 version: DeploymentVersion("first".into()),

@@ -153,6 +153,12 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
+        DeployValidationError::InvalidMcpImport { .. } => {
+            api::error_code::deployment_validation::FAILED
+        }
+        DeployValidationError::McpImportSecuritySchemeNotFound { .. } => {
+            api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
+        }
         DeployValidationError::SecurityOverrideDisabled => {
             api::error_code::deployment_validation::SECURITY_OVERRIDE_DISABLED
         }
@@ -1348,6 +1354,18 @@ mod tests {
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
     use test_r::test;
+
+    #[test]
+    fn invalid_mcp_import_is_a_deployment_bad_request() {
+        let body = bad_request_from_validations(vec![DeployValidationError::InvalidMcpImport {
+            index: 3,
+            reason: "auth and securityScheme are mutually exclusive".into(),
+        }]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains("Invalid MCP import 3"));
+        assert!(body.errors[0].contains("mutually exclusive"));
+    }
 
     #[test]
     fn resource_override_errors_use_distinct_http_statuses() {

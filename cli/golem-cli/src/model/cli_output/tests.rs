@@ -1782,6 +1782,7 @@ fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         components: BTreeMap::new(),
         http_api_deployments: BTreeMap::new(),
         mcp_deployments: BTreeMap::new(),
+        mcp_imports: BTreeMap::new(),
         remote_tools: BTreeMap::new(),
         published_tools: Default::default(),
     }

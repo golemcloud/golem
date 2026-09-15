@@ -1515,6 +1515,29 @@ mod protobuf {
                     .flat_map(BTreeMap::into_values)
                     .map(Into::into)
                     .collect(),
+                mcp_imports: value
+                    .mcp_imports
+                    .into_iter()
+                    .map(|import| golem_api_grpc::proto::golem::registry::McpImport {
+                        url: import.url,
+                        auth: import.auth.map(|auth| {
+                            golem_api_grpc::proto::golem::registry::McpImportAuth {
+                                kind: match auth.kind {
+                                    crate::model::mcp_import::McpInlineCredentialKind::Bearer => golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Bearer.into(),
+                                    crate::model::mcp_import::McpInlineCredentialKind::Basic => golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Basic.into(),
+                                },
+                                credential_digest: Some(auth.credential_digest.into()),
+                            }
+                        }),
+                        security_scheme: import.security_scheme.map(|name| name.0),
+                        prefix: import.prefix,
+                        has_include: import.include.is_some(),
+                        include: import.include.unwrap_or_default(),
+                        has_exclude: import.exclude.is_some(),
+                        exclude: import.exclude.unwrap_or_default(),
+                        version: import.version,
+                    })
+                    .collect(),
             }
         }
     }
@@ -1597,6 +1620,31 @@ mod protobuf {
                 deployment_revision,
                 registered_tools,
                 agent_tool_bindings,
+                mcp_imports: value
+                    .mcp_imports
+                    .into_iter()
+                    .map(|import| {
+                        Ok(crate::model::mcp_import::McpImport {
+                            url: import.url,
+                            auth: import.auth.map(|auth| {
+                                let kind = match golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::try_from(auth.kind).map_err(|_| "invalid MCP inline credential kind")? {
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Bearer => crate::model::mcp_import::McpInlineCredentialKind::Bearer,
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Basic => crate::model::mcp_import::McpInlineCredentialKind::Basic,
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Unspecified => return Err("missing MCP inline credential kind".to_string()),
+                                };
+                                Ok(crate::model::mcp_import::McpImportAuth {
+                                    kind,
+                                    credential_digest: auth.credential_digest.ok_or("missing MCP credential digest")?.try_into()?,
+                                })
+                            }).transpose()?,
+                            security_scheme: import.security_scheme.map(crate::model::security_scheme::SecuritySchemeName::try_from).transpose()?,
+                            prefix: import.prefix,
+                            include: import.has_include.then_some(import.include),
+                            exclude: import.has_exclude.then_some(import.exclude),
+                            version: import.version,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
             })
         }
     }
@@ -1904,6 +1952,7 @@ mod tests {
             deployment_revision: 2,
             registered_tools: vec![registered_tool.into()],
             agent_tool_bindings: Vec::new(),
+            mcp_imports: Vec::new(),
         };
 
         let decoded = ToolDeploymentState::try_from(proto);
@@ -1964,6 +2013,7 @@ mod tests {
                 agent_type_name,
                 BTreeMap::from([(tool_name, binding)]),
             )]),
+            mcp_imports: Vec::new(),
         };
         let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState = state.into();
 
@@ -2025,6 +2075,7 @@ mod tests {
                 agent_type_name,
                 BTreeMap::from([(tool_name, binding)]),
             )]),
+            mcp_imports: Vec::new(),
         };
 
         let mut mismatched_binding_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
@@ -2111,6 +2162,18 @@ mod tests {
                 },
             )]),
             agent_tool_bindings: BTreeMap::new(),
+            mcp_imports: vec![crate::model::mcp_import::McpImport {
+                url: "http://internal.example/mcp".to_string(),
+                auth: Some(crate::model::mcp_import::McpImportAuth {
+                    kind: crate::model::mcp_import::McpInlineCredentialKind::Bearer,
+                    credential_digest: crate::model::diff::Hash::new(blake3::hash(b"credential")),
+                }),
+                security_scheme: None,
+                prefix: Some("upstream".to_string()),
+                include: Some(Vec::new()),
+                exclude: None,
+                version: Some("2025-06-18".to_string()),
+            }],
         };
 
         let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
