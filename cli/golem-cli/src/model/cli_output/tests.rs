@@ -5562,6 +5562,7 @@ fn arb_environment_summary() -> BoxedStrategy<golem_common::model::environment::
                     name: golem_common::model::environment::EnvironmentName(name),
                     diff_model_version,
                     compatibility_check,
+                    tool_compatibility_mode: Default::default(),
                     version_check,
                     security_overrides,
                     current_deployment,

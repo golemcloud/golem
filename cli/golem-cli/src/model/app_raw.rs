@@ -393,10 +393,36 @@ pub struct ToolMiddlewareDeclaration {
     pub release: Option<ToolMiddlewareRegistrySubject>,
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
-    #[serde(flatten)]
-    pub properties: ToolLayerProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ToolPreset>,
+}
+
+impl ToolMiddlewareDeclaration {
+    pub fn tool_layer_properties(&self) -> ToolLayerProperties {
+        ToolLayerProperties {
+            config: self.config.clone(),
+            env_merge_mode: self.env_merge_mode,
+            env: self.env.clone(),
+            plugins_merge_mode: self.plugins_merge_mode,
+            plugins: self.plugins.clone(),
+            files_merge_mode: self.files_merge_mode,
+            files: self.files.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1288,6 +1314,7 @@ impl DeploymentOptions {
     pub fn to_diffable(&self) -> diff::Environment {
         diff::Environment {
             compatibility_check: self.compatibility_check(),
+            tool_compatibility_mode: self.compatibility_mode(),
             version_check: self.version_check(),
             security_overrides: self.security_overrides(),
         }
@@ -3299,6 +3326,56 @@ mod test {
     }
 
     #[test]
+    fn tool_middleware_declaration_rejects_misspelled_property() {
+        let error = serde_yaml::from_str::<ToolMiddlewareDeclaration>("envMergeModee: replace")
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown field `envMergeModee`"));
+    }
+
+    #[test]
+    fn tool_middleware_declaration_properties_parse() {
+        let source = indoc::indoc! { r#"
+            component: app:audit
+            config: { level: info }
+            envMergeMode: replace
+            env: { LOG: debug }
+            pluginsMergeMode: replace
+            plugins: []
+            filesMergeMode: replace
+            files: []
+        "# };
+        let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(source).unwrap();
+        let properties = declaration.tool_layer_properties();
+        assert_eq!(properties.env.unwrap()["LOG"], "debug");
+        assert!(properties.plugins.unwrap().is_empty());
+        assert!(properties.files.unwrap().is_empty());
+    }
+
+    #[test]
+    fn tool_middleware_declaration_properties_roundtrip() {
+        let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(indoc::indoc! { r#"
+            component: app:audit
+            config: { level: info }
+            envMergeMode: replace
+            env: { LOG: debug }
+            pluginsMergeMode: replace
+            plugins: []
+            filesMergeMode: replace
+            files: []
+        "# })
+        .unwrap();
+        assert_eq!(
+            serde_yaml::from_value::<ToolMiddlewareDeclaration>(
+                serde_yaml::to_value(&declaration).unwrap()
+            )
+            .unwrap()
+            .tool_layer_properties()
+            .config,
+            declaration.tool_layer_properties().config
+        );
+    }
+
+    #[test]
     fn compatibility_mode_schema_accepts_every_rust_value() {
         use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 
@@ -3307,7 +3384,15 @@ mod test {
             ToolCompatibilityMode::StructuralSubtype,
             ToolCompatibilityMode::Nominal,
         ] {
-            let mode = serde_json::to_value(mode).unwrap();
+            let options: DeploymentOptions = serde_json::from_value(serde_json::json!({
+                "compatibilityMode": mode,
+            }))
+            .unwrap();
+            assert_eq!(options.to_diffable().tool_compatibility_mode, mode);
+            assert_eq!(
+                serde_json::to_value(&options).unwrap()["compatibilityMode"],
+                serde_json::to_value(mode).unwrap()
+            );
             let manifest = serde_json::json!({
                 "environments": {
                     "local": { "deployment": { "compatibilityMode": mode } }
@@ -3315,7 +3400,7 @@ mod test {
             });
             assert!(
                 JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
-                "schema rejected Rust compatibility mode {mode}"
+                "schema rejected Rust compatibility mode {mode:?}"
             );
         }
     }

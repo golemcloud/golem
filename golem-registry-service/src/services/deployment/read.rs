@@ -190,10 +190,12 @@ impl DeploymentService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
-        let summary: DeploymentPlan = self
+        let mut staged_identity = self
             .deployment_repo
             .get_staged_identity(environment_id.0)
-            .await?
+            .await?;
+        staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
+        let summary: DeploymentPlan = staged_identity
             .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
 
         Ok(summary)
@@ -622,6 +624,7 @@ mod tests {
             name: EnvironmentName::try_from("dev").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),

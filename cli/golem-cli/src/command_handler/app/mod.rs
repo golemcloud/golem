@@ -105,7 +105,8 @@ use golem_common::model::environment_tool_middleware_grant::{
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::tool_middleware_release::{
-    ToolMiddlewarePublication, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
+    ToolMiddlewarePublication, ToolMiddlewarePublicationPlanEntry, ToolMiddlewareReleaseById,
+    ToolMiddlewareReleaseReference,
 };
 use golem_common::model::tool_release::{ToolPublication, ToolReleaseReference};
 use golem_common::schema::schema_type::SchemaType;
@@ -1372,10 +1373,7 @@ impl AppCommandHandler {
                 .publication_plan;
             log_action("Planning", "tool middleware publications");
             for entry in &publication_plan {
-                log_preformatted(format!(
-                    "{}@{}: {}",
-                    entry.name, entry.version, entry.action
-                ));
+                log_preformatted(render_tool_middleware_publication_plan_entry(entry));
             }
             if publication_plan.iter().any(|entry| matches!(entry.action, golem_common::model::tool_middleware_release::ToolMiddlewarePublicationPlanAction::Conflict)) {
                 bail!("Tool middleware publication plan contains conflicts");
@@ -2946,9 +2944,6 @@ impl AppCommandHandler {
                             .diffable_local_deployment
                             .universal_tool_middlewares
                             .clone(),
-                        tool_compatibility_mode: deploy_diff
-                            .diffable_local_deployment
-                            .tool_compatibility_mode,
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -3811,9 +3806,24 @@ fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+fn render_tool_middleware_publication_plan_entry(
+    entry: &ToolMiddlewarePublicationPlanEntry,
+) -> String {
+    match &entry.reason {
+        Some(reason) => format!(
+            "{}@{}: {} ({reason})",
+            entry.name, entry.version, entry.action
+        ),
+        None => format!("{}@{}: {}", entry.name, entry.version, entry.action),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_tool_grant_reconciliation_plan, duplicate_component_matches};
+    use super::{
+        build_tool_grant_reconciliation_plan, duplicate_component_matches,
+        render_tool_middleware_publication_plan_entry,
+    };
     use crate::fuzzy::Match;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
     use chrono::Utc;
@@ -3825,6 +3835,9 @@ mod tests {
         EnvironmentToolGrantWithDetails,
     };
     use golem_common::model::tool::ToolName;
+    use golem_common::model::tool_middleware_release::{
+        ToolMiddlewarePublicationPlanAction, ToolMiddlewarePublicationPlanEntry,
+    };
     use golem_common::model::tool_release::{
         ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseId, ToolReleaseMetadata,
         ToolReleaseReference,
@@ -3839,6 +3852,21 @@ mod tests {
             pattern: pattern.to_string(),
             exact_match: option == pattern,
         }
+    }
+
+    #[test]
+    fn middleware_publication_conflict_diagnostic_includes_reason() {
+        let entry = ToolMiddlewarePublicationPlanEntry {
+            action: ToolMiddlewarePublicationPlanAction::Conflict,
+            name: "audit".to_string(),
+            version: "1.0.0".to_string(),
+            reason: Some("choose a new version or disable versionCheck".to_string()),
+        };
+
+        assert_eq!(
+            render_tool_middleware_publication_plan_entry(&entry),
+            "audit@1.0.0: conflict (choose a new version or disable versionCheck)"
+        );
     }
 
     #[test]

@@ -396,6 +396,7 @@ pub struct ComponentAuthExtRevisionRecord {
     pub environment_name: String,
     pub environment_revision_id: i64,
     pub environment_compatibility_check: bool,
+    pub environment_tool_compatibility_mode: String,
     pub environment_version_check: bool,
     pub environment_security_overrides: bool,
 }

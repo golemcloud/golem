@@ -122,6 +122,7 @@ async fn create_app_and_environment(
             &EnvironmentCreation {
                 name: EnvironmentName(format!("{label}-env-{}", Uuid::new_v4())),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -262,7 +263,6 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
-                tool_compatibility_mode: Default::default(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -637,7 +637,6 @@ async fn remote_middleware_release_is_pinned_across_accounts(
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
-                tool_compatibility_mode: Default::default(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -816,7 +815,6 @@ environments:
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
-                tool_compatibility_mode: Default::default(),
                 replace_incompatible_agent_secrets: false,
             },
         )

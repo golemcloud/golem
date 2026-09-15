@@ -30,32 +30,6 @@ CREATE UNIQUE INDEX tool_middleware_releases_owner_name_version_uk
 CREATE INDEX tool_middleware_releases_component_revision_idx
     ON tool_middleware_releases (component_id, component_revision);
 
-CREATE TRIGGER tool_middleware_releases_component_owner_insert_check
-    BEFORE INSERT ON tool_middleware_releases
-    WHEN NOT EXISTS (
-        SELECT 1 FROM components c
-        JOIN environments e ON e.environment_id = c.environment_id
-        JOIN applications app ON app.application_id = e.application_id
-        WHERE c.component_id = NEW.component_id
-          AND app.account_id = NEW.owner_account_id
-    )
-BEGIN
-    SELECT RAISE(ABORT, 'component tool middleware release source must belong to the release owner account');
-END;
-
-CREATE TRIGGER tool_middleware_releases_component_owner_update_check
-    BEFORE UPDATE OF owner_account_id, component_id ON tool_middleware_releases
-    WHEN NOT EXISTS (
-        SELECT 1 FROM components c
-        JOIN environments e ON e.environment_id = c.environment_id
-        JOIN applications app ON app.application_id = e.application_id
-        WHERE c.component_id = NEW.component_id
-          AND app.account_id = NEW.owner_account_id
-    )
-BEGIN
-    SELECT RAISE(ABORT, 'component tool middleware release source must belong to the release owner account');
-END;
-
 CREATE TABLE environment_tool_middleware_grants
 (
     environment_tool_middleware_grant_id UUID NOT NULL,

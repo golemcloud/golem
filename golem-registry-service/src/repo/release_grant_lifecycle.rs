@@ -29,6 +29,151 @@ pub(crate) trait GrantKind: ReleaseKind {
     const GRANT_ID: &'static str;
 }
 
+pub(crate) fn source_owner_matches() -> &'static str {
+    r#"SELECT 1
+       FROM components c
+       JOIN environments e ON e.environment_id = c.environment_id
+       JOIN applications app ON app.application_id = e.application_id
+       WHERE c.component_id = $1 AND app.account_id = $2"#
+}
+
+pub(crate) fn grantable_release<K: ReleaseKind>(lock: &str) -> String {
+    format!(
+        "SELECT {} FROM {} WHERE {} = $1 AND (lifecycle = $2 OR ($3 AND lifecycle = $4)){lock}",
+        K::RELEASE_ID,
+        K::RELEASE_TABLE,
+        K::RELEASE_ID,
+    )
+}
+
+pub(crate) fn grant_environment_allows<K: ReleaseKind>() -> String {
+    format!(
+        r#"SELECT tr.{0}
+           FROM {1} tr
+           WHERE tr.{0} = $2
+             AND (
+                 NOT EXISTS (SELECT 1 FROM environments e WHERE e.environment_id = $1)
+                 OR EXISTS (
+                     SELECT 1
+                     FROM environments e
+                     JOIN environment_revisions er
+                       ON er.environment_id = e.environment_id
+                      AND er.revision_id = e.current_revision_id
+                     WHERE e.environment_id = $1
+                       AND (NOT er.version_check OR tr.immutable)
+                 )
+             )"#,
+        K::RELEASE_ID,
+        K::RELEASE_TABLE,
+    )
+}
+
+pub(crate) fn grant_has_available_release<K: GrantKind>(lock: &str) -> String {
+    format!(
+        r#"SELECT tr.{0}
+           FROM {1} tr
+           JOIN {2} etg ON etg.{0} = tr.{0}
+           WHERE etg.{3} = $1
+             AND etg.environment_id = $2
+             AND tr.{0} = $3
+             AND (tr.lifecycle = $4 OR (NOT COALESCE($5, etg.follow_coordinates) AND tr.lifecycle = $6)){lock}"#,
+        K::RELEASE_ID,
+        K::RELEASE_TABLE,
+        K::GRANT_TABLE,
+        K::GRANT_ID,
+    )
+}
+
+pub(crate) fn grant_environment_allows_existing<K: GrantKind>() -> String {
+    format!(
+        r#"SELECT tr.{0}
+           FROM {1} tr
+           JOIN {2} etg ON etg.{0} = tr.{0}
+           JOIN environments e ON e.environment_id = etg.environment_id
+           JOIN environment_revisions er
+             ON er.environment_id = e.environment_id
+            AND er.revision_id = e.current_revision_id
+           WHERE etg.{3} = $1
+             AND etg.environment_id = $2
+             AND tr.{0} = $3
+             AND (NOT er.version_check OR tr.immutable)"#,
+        K::RELEASE_ID,
+        K::RELEASE_TABLE,
+        K::GRANT_TABLE,
+        K::GRANT_ID,
+    )
+}
+
+macro_rules! grantability_helpers {
+    ($repo:ident, $pool:ty, $kind:ty, $release_lock:expr, $joined_lock:expr) => {
+        impl $repo<$pool> {
+            async fn grantable_release_exists(
+                tx: &mut golem_service_base::repo::PoolLabelledTransaction<$pool>,
+                environment_id: uuid::Uuid,
+                release_id: uuid::Uuid,
+                follow_coordinates: bool,
+            ) -> golem_service_base::repo::RepoResult<bool> {
+                let release_exists = tx
+                    .fetch_optional(
+                        sqlx::query(&$crate::repo::release_grant_lifecycle::grantable_release::<$kind>($release_lock))
+                            .bind(release_id)
+                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                            .bind(!follow_coordinates)
+                            .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                    )
+                    .await?
+                    .is_some();
+                if !release_exists {
+                    return Ok(false);
+                }
+                Ok(tx
+                    .fetch_optional(
+                        sqlx::query(&$crate::repo::release_grant_lifecycle::grant_environment_allows::<$kind>())
+                            .bind(environment_id)
+                            .bind(release_id),
+                    )
+                    .await?
+                    .is_some())
+            }
+
+            async fn grant_has_available_release(
+                tx: &mut golem_service_base::repo::PoolLabelledTransaction<$pool>,
+                grant_id: uuid::Uuid,
+                environment_id: uuid::Uuid,
+                release_id: uuid::Uuid,
+                follow_coordinates: Option<bool>,
+            ) -> golem_service_base::repo::RepoResult<bool> {
+                let release_exists = tx
+                    .fetch_optional(
+                        sqlx::query(&$crate::repo::release_grant_lifecycle::grant_has_available_release::<$kind>($joined_lock))
+                            .bind(grant_id)
+                            .bind(environment_id)
+                            .bind(release_id)
+                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                            .bind(follow_coordinates)
+                            .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                    )
+                    .await?
+                    .is_some();
+                if !release_exists {
+                    return Ok(false);
+                }
+                Ok(tx
+                    .fetch_optional(
+                        sqlx::query(&$crate::repo::release_grant_lifecycle::grant_environment_allows_existing::<$kind>())
+                            .bind(grant_id)
+                            .bind(environment_id)
+                            .bind(release_id),
+                    )
+                    .await?
+                    .is_some())
+            }
+        }
+    };
+}
+
+pub(crate) use grantability_helpers;
+
 pub(crate) fn release_by_id<K: ReleaseKind>() -> String {
     format!("{} WHERE tr.{} = $1", K::SELECT, K::RELEASE_ID)
 }

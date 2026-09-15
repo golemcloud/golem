@@ -118,9 +118,6 @@ declare_structs! {
         pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub tool_compatibility_mode: ToolCompatibilityMode,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
         pub replace_incompatible_agent_secrets: bool,
     }
 

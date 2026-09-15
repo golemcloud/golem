@@ -28,9 +28,7 @@ use golem_common::error_forwarding;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{
-    BindingsStack, PoolLabelledTransaction, RepoError, RepoResult, ResultExt, SqlDateTime,
-};
+use golem_service_base::repo::{BindingsStack, RepoError, ResultExt, SqlDateTime};
 use indoc::indoc;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -285,235 +283,20 @@ impl<DBP: Pool> DbEnvironmentToolGrantRepo<DBP> {
     }
 }
 
-impl DbEnvironmentToolGrantRepo<PostgresPool> {
-    async fn grantable_release_exists(
-        tx: &mut PoolLabelledTransaction<PostgresPool>,
-        environment_id: Uuid,
-        release_id: Uuid,
-        follow_coordinates: bool,
-    ) -> RepoResult<bool> {
-        let release_exists = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    SELECT tool_release_id
-                    FROM tool_releases
-                    WHERE tool_release_id = $1
-                        AND (lifecycle = $2 OR ($3 AND lifecycle = $4))
-                    FOR SHARE
-                "#})
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
-                .bind(!follow_coordinates)
-                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
-            )
-            .await?
-            .is_some();
-        if !release_exists {
-            return Ok(false);
-        }
-
-        Ok(tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                SELECT tr.tool_release_id
-                FROM tool_releases tr
-                WHERE tr.tool_release_id = $2
-                    AND (
-                        NOT EXISTS (
-                            SELECT 1 FROM environments e WHERE e.environment_id = $1
-                        )
-                        OR EXISTS (
-                            SELECT 1
-                            FROM environments e
-                            JOIN environment_revisions er
-                                ON er.environment_id = e.environment_id
-                                AND er.revision_id = e.current_revision_id
-                            WHERE e.environment_id = $1
-                                AND (NOT er.version_check OR tr.immutable)
-                        )
-                    )
-            "#})
-                .bind(environment_id)
-                .bind(release_id),
-            )
-            .await?
-            .is_some())
-    }
-
-    async fn grant_has_available_release(
-        tx: &mut PoolLabelledTransaction<PostgresPool>,
-        grant_id: Uuid,
-        environment_id: Uuid,
-        release_id: Uuid,
-        follow_coordinates: Option<bool>,
-    ) -> RepoResult<bool> {
-        let release_exists = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    SELECT tr.tool_release_id
-                    FROM tool_releases tr
-                    JOIN environment_tool_grants etg
-                        ON etg.tool_release_id = tr.tool_release_id
-                    WHERE etg.environment_tool_grant_id = $1
-                        AND etg.environment_id = $2
-                        AND tr.tool_release_id = $3
-                        AND (
-                            tr.lifecycle = $4
-                            OR (NOT COALESCE($5, etg.follow_coordinates) AND tr.lifecycle = $6)
-                        )
-                    FOR SHARE OF tr
-                "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
-                .bind(follow_coordinates)
-                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
-            )
-            .await?
-            .is_some();
-        if !release_exists {
-            return Ok(false);
-        }
-
-        Ok(tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                SELECT tr.tool_release_id
-                FROM tool_releases tr
-                JOIN environment_tool_grants etg
-                    ON etg.tool_release_id = tr.tool_release_id
-                JOIN environments e ON e.environment_id = etg.environment_id
-                JOIN environment_revisions er
-                    ON er.environment_id = e.environment_id
-                    AND er.revision_id = e.current_revision_id
-                WHERE etg.environment_tool_grant_id = $1
-                    AND etg.environment_id = $2
-                    AND tr.tool_release_id = $3
-                    AND (NOT er.version_check OR tr.immutable)
-            "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id),
-            )
-            .await?
-            .is_some())
-    }
-}
-
-impl DbEnvironmentToolGrantRepo<SqlitePool> {
-    async fn grantable_release_exists(
-        tx: &mut PoolLabelledTransaction<SqlitePool>,
-        environment_id: Uuid,
-        release_id: Uuid,
-        follow_coordinates: bool,
-    ) -> RepoResult<bool> {
-        let release_exists = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    SELECT tool_release_id
-                    FROM tool_releases
-                    WHERE tool_release_id = $1
-                        AND (lifecycle = $2 OR ($3 AND lifecycle = $4))
-                "#})
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
-                .bind(!follow_coordinates)
-                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
-            )
-            .await?
-            .is_some();
-        if !release_exists {
-            return Ok(false);
-        }
-
-        Ok(tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                SELECT tr.tool_release_id
-                FROM tool_releases tr
-                WHERE tr.tool_release_id = $2
-                    AND (
-                        NOT EXISTS (
-                            SELECT 1 FROM environments e WHERE e.environment_id = $1
-                        )
-                        OR EXISTS (
-                            SELECT 1
-                            FROM environments e
-                            JOIN environment_revisions er
-                                ON er.environment_id = e.environment_id
-                                AND er.revision_id = e.current_revision_id
-                            WHERE e.environment_id = $1
-                                AND (NOT er.version_check OR tr.immutable)
-                        )
-                    )
-            "#})
-                .bind(environment_id)
-                .bind(release_id),
-            )
-            .await?
-            .is_some())
-    }
-
-    async fn grant_has_available_release(
-        tx: &mut PoolLabelledTransaction<SqlitePool>,
-        grant_id: Uuid,
-        environment_id: Uuid,
-        release_id: Uuid,
-        follow_coordinates: Option<bool>,
-    ) -> RepoResult<bool> {
-        let release_exists = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    SELECT tr.tool_release_id
-                    FROM tool_releases tr
-                    JOIN environment_tool_grants etg
-                        ON etg.tool_release_id = tr.tool_release_id
-                    WHERE etg.environment_tool_grant_id = $1
-                        AND etg.environment_id = $2
-                        AND tr.tool_release_id = $3
-                        AND (
-                            tr.lifecycle = $4
-                            OR (NOT COALESCE($5, etg.follow_coordinates) AND tr.lifecycle = $6)
-                        )
-                "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
-                .bind(follow_coordinates)
-                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
-            )
-            .await?
-            .is_some();
-        if !release_exists {
-            return Ok(false);
-        }
-
-        Ok(tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                SELECT tr.tool_release_id
-                FROM tool_releases tr
-                JOIN environment_tool_grants etg
-                    ON etg.tool_release_id = tr.tool_release_id
-                JOIN environments e ON e.environment_id = etg.environment_id
-                JOIN environment_revisions er
-                    ON er.environment_id = e.environment_id
-                    AND er.revision_id = e.current_revision_id
-                WHERE etg.environment_tool_grant_id = $1
-                    AND etg.environment_id = $2
-                    AND tr.tool_release_id = $3
-                    AND (NOT er.version_check OR tr.immutable)
-            "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id),
-            )
-            .await?
-            .is_some())
-    }
-}
+lifecycle::grantability_helpers!(
+    DbEnvironmentToolGrantRepo,
+    PostgresPool,
+    ToolReleaseKind,
+    " FOR SHARE",
+    " FOR SHARE OF tr"
+);
+lifecycle::grantability_helpers!(
+    DbEnvironmentToolGrantRepo,
+    SqlitePool,
+    ToolReleaseKind,
+    "",
+    ""
+);
 
 const GRANT_DETAILS_SELECT: &str = r#"
     SELECT

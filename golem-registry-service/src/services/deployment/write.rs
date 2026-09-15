@@ -376,7 +376,7 @@ impl DeploymentWriteService {
             &data.universal_tool_middlewares,
             &environment_tool_bindings,
             &agent_tool_binding_inputs,
-            data.tool_compatibility_mode,
+            deployment_context.environment.tool_compatibility_mode,
         );
         for diagnostic in compiled_middleware.errors {
             let middleware_name = diagnostic
@@ -532,7 +532,7 @@ impl DeploymentWriteService {
                 &registered_tool_middlewares,
                 &data.publish_tool_middlewares,
                 &data.universal_tool_middlewares,
-                data.tool_compatibility_mode,
+                deployment_context.environment.tool_compatibility_mode,
                 &environment_tool_bindings,
                 &agent_tool_binding_inputs,
             )
@@ -582,7 +582,7 @@ impl DeploymentWriteService {
                 chains: compiled_middleware.chains,
                 releases: middleware_releases,
                 universal: data.universal_tool_middlewares,
-                compatibility_mode: data.tool_compatibility_mode,
+                compatibility_mode: deployment_context.environment.tool_compatibility_mode,
                 published: data.publish_tool_middlewares,
                 remote: data
                     .remote_tool_middlewares

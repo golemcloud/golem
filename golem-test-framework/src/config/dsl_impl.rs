@@ -987,6 +987,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -1029,6 +1030,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: environment_options.compatibility_check,
+                    tool_compatibility_mode: Default::default(),
                     version_check: environment_options.version_check,
                     security_overrides: environment_options.security_overrides,
                 },
@@ -1065,7 +1067,6 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             publish_tool_middlewares: Vec::new(),
             remote_tool_middlewares: Vec::new(),
             universal_tool_middlewares: Vec::new(),
-            tool_compatibility_mode: Default::default(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),

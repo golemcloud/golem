@@ -121,7 +121,6 @@ impl DeployDiff {
             || !self.diff.remote_tool_middleware_deployments.is_empty()
             || !self.diff.published_tool_middlewares.is_empty()
             || self.diff.universal_tool_middlewares_changed
-            || self.diff.tool_compatibility_mode_changed
             || !self.diff.environment_tool_middleware_bindings.is_empty()
             || !self.diff.agent_tool_middleware_bindings.is_empty()
     }

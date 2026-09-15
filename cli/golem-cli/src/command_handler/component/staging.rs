@@ -105,8 +105,7 @@ impl ComponentDiff {
         match self {
             ComponentDiff::All => true,
             ComponentDiff::Diff { diff } => {
-                diff.wasm_changed
-                    || !diff.agent_type_provision_config_changes.is_empty()
+                !diff.agent_type_provision_config_changes.is_empty()
                     || !diff.tool_deployment_config_changes.is_empty()
                     || !diff.tool_middleware_deployment_config_changes.is_empty()
             }
@@ -1579,6 +1578,41 @@ mod tests {
 
         assert!(!diff.wasm_changed());
         assert!(!diff.tools_changed());
+    }
+
+    #[test]
+    fn wasm_only_change_does_not_stage_provision_config() {
+        let diff = ComponentDiff::new(Some(&diff::DiffForHashOf::ValueDiff {
+            diff: diff::ComponentDiff {
+                wasm_changed: true,
+                agent_type_provision_config_changes: BTreeMap::new(),
+                tool_deployment_config_changes: BTreeMap::new(),
+                tool_middleware_deployment_config_changes: BTreeMap::new(),
+            },
+        }))
+        .unwrap();
+
+        assert!(diff.wasm_changed());
+        assert!(!diff.provision_config_changed());
+    }
+
+    #[test]
+    fn provision_only_change_stages_provision_config_without_wasm() {
+        let diff = ComponentDiff::new(Some(&diff::DiffForHashOf::ValueDiff {
+            diff: diff::ComponentDiff {
+                wasm_changed: false,
+                agent_type_provision_config_changes: BTreeMap::new(),
+                tool_deployment_config_changes: BTreeMap::from([(
+                    "grep".to_string(),
+                    diff::BTreeMapDiffValue::Create,
+                )]),
+                tool_middleware_deployment_config_changes: BTreeMap::new(),
+            },
+        }))
+        .unwrap();
+
+        assert!(!diff.wasm_changed());
+        assert!(diff.provision_config_changed());
     }
 
     #[test]

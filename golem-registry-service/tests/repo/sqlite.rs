@@ -178,6 +178,14 @@ async fn test_environment_create(deps: &Deps) {
 }
 
 #[test]
+async fn test_environment_service_persists_and_updates_tool_compatibility_mode(deps: &Deps) {
+    crate::repo::common::test_environment_service_persists_and_updates_tool_compatibility_mode(
+        deps,
+    )
+    .await;
+}
+
+#[test]
 async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
     crate::repo::common::test_environment_list_visible_to_account_uses_visibility_filter(deps)
         .await;

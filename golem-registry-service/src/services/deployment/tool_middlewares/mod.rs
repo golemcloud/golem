@@ -605,5 +605,4 @@ fn global_diagnostic(
 }
 
 #[cfg(test)]
-#[path = "tool_middlewares/tests.rs"]
 mod tests;

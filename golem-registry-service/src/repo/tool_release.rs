@@ -42,6 +42,8 @@ pub enum ToolReleaseRepoError {
     DePublishedConflict,
     #[error("Tool release was modified concurrently")]
     ConcurrentModification,
+    #[error("Component tool release source does not belong to the release owner account")]
+    SourceOwnerMismatch,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -248,10 +250,33 @@ impl ReleaseKind for ToolReleaseKind {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbToolReleaseRepo<PostgresPool> {
+    async fn validate_source_owner(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        record: &ToolReleaseRecord,
+    ) -> Result<(), ToolReleaseRepoError> {
+        let Some(component_id) = record.component_id else {
+            return Ok(());
+        };
+        let matches = tx
+            .fetch_optional(
+                sqlx::query(lifecycle::source_owner_matches())
+                    .bind(component_id)
+                    .bind(record.owner_account_id),
+            )
+            .await?
+            .is_some();
+        if matches {
+            Ok(())
+        } else {
+            Err(ToolReleaseRepoError::SourceOwnerMismatch)
+        }
+    }
+
     pub async fn create_or_restore_within_transaction(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         record: &ToolReleaseRecord,
     ) -> Result<ToolReleaseWithOwnerRecord, ToolReleaseRepoError> {
+        Self::validate_source_owner(tx, record).await?;
         let inserted = tx
             .execute(
                 sqlx::query(indoc! { r#"
@@ -425,6 +450,7 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
         let release_id = record.tool_release_id;
         self.with_tx_err("create", |tx| {
             async move {
+                Self::validate_source_owner(tx, &record).await?;
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO tool_releases (

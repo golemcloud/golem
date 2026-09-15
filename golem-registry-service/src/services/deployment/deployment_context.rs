@@ -1467,6 +1467,7 @@ mod tests {
         McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
     };
     use golem_common::model::tool::{RemoteToolDeployment, SecretKeyScope, ToolProvisionConfig};
+    use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
     use golem_common::model::tool_release::{
         ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
         ToolReleaseReference,
@@ -1494,6 +1495,7 @@ mod tests {
             name: EnvironmentName::try_from("dev").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),
@@ -2011,6 +2013,108 @@ mod tests {
                 (agent_b_name, grep),
             ])
         );
+    }
+
+    #[test]
+    fn compile_tools_rejects_explicit_prepend_on_local_environment_binding() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let (agent_name, agent_type) = test_registered_agent_type("AgentA");
+        let component = test_tool_component(
+            "tools",
+            BTreeMap::from([(
+                tool_name.clone(),
+                ToolDeploymentMetadata {
+                    definition: test_tool(tool_name.as_str()),
+                    provision: ToolProvisionConfig::default(),
+                    environment_binding: Some(ToolBindingInput {
+                        middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                        ..ToolBindingInput::default()
+                    }),
+                    agent_bindings: BTreeMap::from([(
+                        agent_name.clone(),
+                        ToolBindingInput {
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                            ..ToolBindingInput::default()
+                        },
+                    )]),
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::from([(component.component_name.clone(), component)]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::from([(agent_name.clone(), agent_type)]),
+        };
+        let mut errors = Vec::new();
+
+        let compiled = context.compile_tools(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &mut errors,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(
+            errors,
+            vec![
+                DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                    tool_name: tool_name.clone(),
+                }
+            ]
+        );
+        assert_eq!(compiled.registered_tools.len(), 1);
+        assert_eq!(compiled.agent_tool_bindings.len(), 1);
+        assert_eq!(compiled.agent_tool_bindings[0].agent_type_name, agent_name);
+        assert_eq!(compiled.agent_tool_bindings[0].tool_name, tool_name);
+    }
+
+    #[test]
+    fn compile_tools_rejects_explicit_prepend_on_remote_environment_binding() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let (agent_name, agent_type) = test_registered_agent_type("AgentA");
+        let remote = test_remote_tool(
+            tool_name.as_str(),
+            Some(ToolBindingInput {
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                ..ToolBindingInput::default()
+            }),
+            BTreeMap::from([(
+                agent_name.clone(),
+                ToolBindingInput {
+                    middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                    ..ToolBindingInput::default()
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::from([(agent_name.clone(), agent_type)]),
+        };
+        let mut errors = Vec::new();
+
+        let compiled = context.compile_tools_with_remote(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &[remote],
+            &mut errors,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(
+            errors,
+            vec![
+                DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                    tool_name: tool_name.clone(),
+                }
+            ]
+        );
+        assert_eq!(compiled.registered_tools.len(), 1);
+        assert_eq!(compiled.agent_tool_bindings.len(), 1);
+        assert_eq!(compiled.agent_tool_bindings[0].agent_type_name, agent_name);
+        assert_eq!(compiled.agent_tool_bindings[0].tool_name, tool_name);
     }
 
     #[test]

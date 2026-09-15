@@ -30,26 +30,6 @@ CREATE UNIQUE INDEX tool_middleware_releases_owner_name_version_uk
 CREATE INDEX tool_middleware_releases_component_revision_idx
     ON tool_middleware_releases (component_id, component_revision);
 
-CREATE FUNCTION validate_tool_middleware_release_component_owner() RETURNS TRIGGER AS $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM components c
-        JOIN environments e ON e.environment_id = c.environment_id
-        JOIN applications app ON app.application_id = e.application_id
-        WHERE c.component_id = NEW.component_id
-          AND app.account_id = NEW.owner_account_id
-    ) THEN
-        RAISE EXCEPTION 'component tool middleware release source must belong to the release owner account';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER tool_middleware_releases_component_owner_check
-    BEFORE INSERT OR UPDATE OF owner_account_id, component_id
-    ON tool_middleware_releases
-    FOR EACH ROW EXECUTE FUNCTION validate_tool_middleware_release_component_owner();
-
 CREATE TABLE environment_tool_middleware_grants
 (
     environment_tool_middleware_grant_id UUID NOT NULL,

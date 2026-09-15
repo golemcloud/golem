@@ -1123,19 +1123,20 @@ impl Application {
             .get(middleware_name)
             .with_context(|| format!("Tool middleware '{middleware_name}' is not declared"))?;
         let tool_name = ToolName::try_from(middleware_name.as_str()).map_err(anyhow::Error::msg)?;
+        let properties = declaration.value.tool_layer_properties();
         let tool_declaration = WithSource::new(
             declaration.source.clone(),
             app_raw::ToolDeclaration {
                 component: declaration.value.component.clone(),
                 release: None,
                 templates: declaration.value.templates.clone(),
-                config: declaration.value.properties.config.clone(),
-                env_merge_mode: declaration.value.properties.env_merge_mode,
-                env: declaration.value.properties.env.clone(),
-                plugins_merge_mode: declaration.value.properties.plugins_merge_mode,
-                plugins: declaration.value.properties.plugins.clone(),
-                files_merge_mode: declaration.value.properties.files_merge_mode,
-                files: declaration.value.properties.files.clone(),
+                config: properties.config,
+                env_merge_mode: properties.env_merge_mode,
+                env: properties.env,
+                plugins_merge_mode: properties.plugins_merge_mode,
+                plugins: properties.plugins,
+                files_merge_mode: properties.files_merge_mode,
+                files: properties.files,
                 presets: declaration.value.presets.clone(),
             },
         );

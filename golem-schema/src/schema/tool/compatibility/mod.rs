@@ -17,6 +17,9 @@ use crate::schema::validation::subtyping::{is_assignable, is_equivalent_cross_gr
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+const MAX_PROJECTION_NODES: usize = 4096;
+const MAX_PROJECTION_DEPTH: usize = 128;
+
 #[derive(
     Clone,
     Copy,
@@ -172,9 +175,11 @@ pub enum ProjectionNode {
         cases: Vec<CaseProjection>,
     },
     Enum {
+        /// Target case index for each source case index.
         cases: Vec<usize>,
     },
     Flags {
+        /// Target flag index for each source flag index.
         flags: Vec<usize>,
     },
     Union {
@@ -330,14 +335,14 @@ pub fn compile_tool_compatibility(
             ));
             continue;
         }
-        if eb.stdin != nb.stdin {
+        if !stream_specs_equal(&eb.stdin, &nb.stdin) {
             errors.push(err(
                 format!("{}.stdin", format_path(path)),
                 "standard-input stream contracts differ",
             ));
             continue;
         }
-        if eb.stdout != nb.stdout {
+        if !stream_specs_equal(&eb.stdout, &nb.stdout) {
             errors.push(err(
                 format!("{}.stdout", format_path(path)),
                 "standard-output stream contracts differ",
@@ -385,6 +390,14 @@ pub fn compile_tool_compatibility(
         })
     } else {
         Err(errors)
+    }
+}
+
+fn stream_specs_equal(a: &Option<super::StreamSpec>, b: &Option<super::StreamSpec>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.mime == b.mime && a.required == b.required,
+        _ => false,
     }
 }
 
@@ -467,7 +480,11 @@ fn compile_inputs(
         path: format_path(path),
         name: ef[index].name.clone(),
     }));
-    let root = compiler.push(ProjectionNode::Record { fields, discard });
+    let root = compiler.push(
+        ProjectionNode::Record { fields, discard },
+        &format!("{}.input", format_path(path)),
+        errors,
+    )?;
     Some(compiler.finish(egraph.clone(), ngraph.clone(), root))
 }
 
@@ -625,6 +642,7 @@ struct Compiler<'a> {
     mode: ToolCompatibilityMode,
     nodes: Vec<ProjectionNode>,
     active: HashMap<(TypeId, TypeId), usize>,
+    completed: HashMap<(TypeId, TypeId), usize>,
 }
 impl<'a> Compiler<'a> {
     fn new(sg: &'a SchemaGraph, tg: &'a SchemaGraph, mode: ToolCompatibilityMode) -> Self {
@@ -634,12 +652,22 @@ impl<'a> Compiler<'a> {
             mode,
             nodes: Vec::new(),
             active: HashMap::new(),
+            completed: HashMap::new(),
         }
     }
-    fn push(&mut self, n: ProjectionNode) -> usize {
+    fn push(
+        &mut self,
+        n: ProjectionNode,
+        path: &str,
+        errors: &mut Vec<ToolCompatibilityError>,
+    ) -> Option<usize> {
+        if self.nodes.len() >= MAX_PROJECTION_NODES {
+            errors.push(err(path, "projection plan exceeds node limit"));
+            return None;
+        }
         let i = self.nodes.len();
         self.nodes.push(n);
-        i
+        Some(i)
     }
     fn finish(
         self,
@@ -661,28 +689,47 @@ impl<'a> Compiler<'a> {
         path: &str,
         errors: &mut Vec<ToolCompatibilityError>,
     ) -> Option<usize> {
+        self.compile_at(source, target, path, errors, 0)
+    }
+    fn compile_at(
+        &mut self,
+        source: &SchemaType,
+        target: &SchemaType,
+        path: &str,
+        errors: &mut Vec<ToolCompatibilityError>,
+        depth: usize,
+    ) -> Option<usize> {
+        if depth >= MAX_PROJECTION_DEPTH {
+            errors.push(err(path, "projection plan exceeds depth limit"));
+            return None;
+        }
         if self.mode == ToolCompatibilityMode::Nominal {
-            return Some(self.push(ProjectionNode::DynamicChecked));
+            return self.push(ProjectionNode::DynamicChecked, path, errors);
         }
         if self.mode == ToolCompatibilityMode::StrictEquality
             && is_equivalent_cross_graph(self.sg, source, self.tg, target)
         {
-            return Some(self.push(ProjectionNode::Identity));
+            return self.push(ProjectionNode::Identity, path, errors);
         }
         let (s, sid) = resolve(self.sg, source);
         let (t, tid) = resolve(self.tg, target);
         if let (Some(a), Some(b)) = (sid, tid) {
-            if let Some(&node) = self.active.get(&(a.clone(), b.clone())) {
-                return Some(self.push(ProjectionNode::Recursive { node }));
+            let pair = (a.clone(), b.clone());
+            if let Some(&node) = self.completed.get(&pair) {
+                return Some(node);
             }
-            let placeholder = self.push(ProjectionNode::Identity);
-            self.active.insert((a.clone(), b.clone()), placeholder);
-            let body = self.compile_resolved(s, t, path, errors)?;
+            if let Some(&node) = self.active.get(&(a.clone(), b.clone())) {
+                return self.push(ProjectionNode::Recursive { node }, path, errors);
+            }
+            let placeholder = self.push(ProjectionNode::Identity, path, errors)?;
+            self.active.insert(pair.clone(), placeholder);
+            let body = self.compile_resolved(s, t, path, errors, depth + 1)?;
             self.nodes[placeholder] = ProjectionNode::Recursive { node: body };
-            self.active.remove(&(a, b));
+            self.active.remove(&pair);
+            self.completed.insert(pair, placeholder);
             return Some(placeholder);
         }
-        self.compile_resolved(s, t, path, errors)
+        self.compile_resolved(s, t, path, errors, depth + 1)
     }
     fn compile_resolved(
         &mut self,
@@ -690,6 +737,7 @@ impl<'a> Compiler<'a> {
         t: &SchemaType,
         path: &str,
         errors: &mut Vec<ToolCompatibilityError>,
+        depth: usize,
     ) -> Option<usize> {
         if self.mode == ToolCompatibilityMode::StrictEquality {
             errors.push(err(path, "types are not strictly equal"));
@@ -709,8 +757,13 @@ impl<'a> Compiler<'a> {
                         return None;
                     };
                     used.insert(i);
-                    let p =
-                        self.compile(&af.body, &bf.body, &format!("{path}.{}", bf.name), errors)?;
+                    let p = self.compile_at(
+                        &af.body,
+                        &bf.body,
+                        &format!("{path}.{}", bf.name),
+                        errors,
+                        depth,
+                    )?;
                     fields.push(RecordFieldProjection {
                         target_name: bf.name.clone(),
                         source_index: Some(i),
@@ -731,13 +784,15 @@ impl<'a> Compiler<'a> {
                         .iter()
                         .zip(b)
                         .enumerate()
-                        .map(|(i, (x, y))| self.compile(x, y, &format!("{path}[{i}]"), errors))
+                        .map(|(i, (x, y))| {
+                            self.compile_at(x, y, &format!("{path}[{i}]"), errors, depth)
+                        })
                         .collect::<Option<_>>()?,
                 }
             }
             (SchemaType::List { element: a, .. }, SchemaType::List { element: b, .. }) => {
                 ProjectionNode::List {
-                    item: self.compile(a, b, &format!("{path}[]"), errors)?,
+                    item: self.compile_at(a, b, &format!("{path}[]"), errors, depth)?,
                 }
             }
             (
@@ -752,7 +807,7 @@ impl<'a> Compiler<'a> {
                     ..
                 },
             ) if x == y => ProjectionNode::FixedList {
-                item: self.compile(a, b, &format!("{path}[]"), errors)?,
+                item: self.compile_at(a, b, &format!("{path}[]"), errors, depth)?,
                 length: *x,
             },
             (
@@ -767,7 +822,7 @@ impl<'a> Compiler<'a> {
                 // uniqueness. Numeric widening and other merely assignable
                 // scalar conversions are not safe in this position.
                 key: if is_equivalent_cross_graph(self.sg, ak, self.tg, bk) {
-                    self.push(ProjectionNode::Identity)
+                    self.push(ProjectionNode::Identity, &format!("{path}.key"), errors)?
                 } else {
                     errors.push(err(
                         format!("{path}.key"),
@@ -775,11 +830,11 @@ impl<'a> Compiler<'a> {
                     ));
                     return None;
                 },
-                value: self.compile(av, bv, &format!("{path}.value"), errors)?,
+                value: self.compile_at(av, bv, &format!("{path}.value"), errors, depth)?,
             },
             (SchemaType::Option { inner: a, .. }, SchemaType::Option { inner: b, .. }) => {
                 ProjectionNode::Option {
-                    some: self.compile(a, b, &format!("{path}.some"), errors)?,
+                    some: self.compile_at(a, b, &format!("{path}.some"), errors, depth)?,
                 }
             }
             (SchemaType::Result { spec: a, .. }, SchemaType::Result { spec: b, .. }) => {
@@ -790,6 +845,7 @@ impl<'a> Compiler<'a> {
                         b.ok.as_deref(),
                         &format!("{path}.ok"),
                         errors,
+                        depth,
                     )?,
                     err: pair(
                         self,
@@ -797,12 +853,13 @@ impl<'a> Compiler<'a> {
                         b.err.as_deref(),
                         &format!("{path}.err"),
                         errors,
+                        depth,
                     )?,
                 }
             }
             (SchemaType::Variant { cases: a, .. }, SchemaType::Variant { cases: b, .. }) => {
                 ProjectionNode::Variant {
-                    cases: cases(self, a, b, path, errors)?,
+                    cases: cases(self, a, b, path, errors, depth)?,
                 }
             }
             (SchemaType::Enum { cases: a, .. }, SchemaType::Enum { cases: b, .. })
@@ -819,9 +876,9 @@ impl<'a> Compiler<'a> {
                 if a.iter().all(|n| b.contains(n)) =>
             {
                 ProjectionNode::Flags {
-                    flags: b
+                    flags: a
                         .iter()
-                        .map(|n| a.iter().position(|x| x == n).unwrap_or(usize::MAX))
+                        .map(|n| b.iter().position(|x| x == n).unwrap())
                         .collect(),
                 }
             }
@@ -845,7 +902,7 @@ impl<'a> Compiler<'a> {
                     })
                     .collect();
                 ProjectionNode::Union {
-                    branches: cases(self, &ac, &bc, path, errors)?,
+                    branches: cases(self, &ac, &bc, path, errors, depth)?,
                 }
             }
             (SchemaType::Stream { inner: a, .. }, SchemaType::Stream { inner: b, .. }) => {
@@ -856,6 +913,7 @@ impl<'a> Compiler<'a> {
                         b.as_deref(),
                         &format!("{path}.item"),
                         errors,
+                        depth,
                     )?,
                 }
             }
@@ -887,7 +945,7 @@ impl<'a> Compiler<'a> {
                 return None;
             }
         };
-        Some(self.push(node))
+        self.push(node, path, errors)
     }
 }
 
@@ -897,10 +955,11 @@ fn pair(
     b: Option<&SchemaType>,
     path: &str,
     e: &mut Vec<ToolCompatibilityError>,
+    depth: usize,
 ) -> Option<Option<usize>> {
     match (a, b) {
         (None, None) => Some(None),
-        (Some(x), Some(y)) => c.compile(x, y, path, e).map(Some),
+        (Some(x), Some(y)) => c.compile_at(x, y, path, e, depth).map(Some),
         _ => {
             e.push(err(path, "payload presence differs"));
             None
@@ -913,6 +972,7 @@ fn cases(
     b: &[crate::schema::schema_type::VariantCaseType],
     path: &str,
     e: &mut Vec<ToolCompatibilityError>,
+    depth: usize,
 ) -> Option<Vec<CaseProjection>> {
     a.iter()
         .enumerate()
@@ -930,6 +990,7 @@ fn cases(
                 y.payload.as_ref(),
                 &format!("{path}.{}", x.name),
                 e,
+                depth,
             )?;
             Some(CaseProjection {
                 name: x.name.clone(),
@@ -999,9 +1060,10 @@ fn canonical_tool(tool: &Tool) -> Option<serde_json::Value> {
             );
             let mut bodies = Vec::new();
             for original in &local_order[order.len()..] {
-                let mut body = defs.get(original)?.body.clone();
-                rewrite_refs(&mut body, &local_ids);
-                bodies.push(body);
+                let mut def = defs.get(original)?.clone();
+                def.id = local_ids.get(original)?.clone();
+                rewrite_refs(&mut def.body, &local_ids);
+                bodies.push(def);
             }
             candidates.push((serde_json::to_string(&bodies).ok()?, local_ids, local_order));
         }

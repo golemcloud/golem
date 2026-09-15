@@ -1986,6 +1986,7 @@ mod initial_agent_file_tests {
             name: EnvironmentName::try_from(name).unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),

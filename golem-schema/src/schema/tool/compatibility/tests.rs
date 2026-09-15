@@ -2,8 +2,8 @@ use super::*;
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::NamedFieldType;
 use crate::schema::tool::{
-    BoolFlagShape, CommandAnnotations, CommandIndex, CommandNode, CommandTree, ErrorKind,
-    FlagShape, FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals,
+    BoolFlagShape, CommandAnnotations, CommandIndex, CommandNode, CommandTree, Doc, ErrorKind,
+    FlagShape, FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals, StreamSpec,
 };
 
 test_r::enable!();
@@ -162,6 +162,28 @@ fn strict_equality_canonicalizes_reordered_alpha_renamed_recursive_defs() {
     let expected = recursive_tool("left-a", "left-b", false);
     let inner = recursive_tool("right-a", "right-b", true);
     assert!(strictly_equal(&expected, &inner));
+}
+
+#[test]
+fn strict_equality_canonicalizes_reordered_identical_unused_defs() {
+    fn with_unused_defs(first: (&str, &str), second: (&str, &str)) -> Tool {
+        let mut result = tool(SchemaType::string());
+        result.schema.defs = vec![first, second]
+            .into_iter()
+            .map(|(id, name)| SchemaTypeDef {
+                id: TypeId::new(id),
+                name: Some(name.into()),
+                body: SchemaType::string(),
+            })
+            .collect();
+        result
+    }
+
+    for _ in 0..64 {
+        let expected = with_unused_defs(("left-a", "A"), ("left-b", "B"));
+        let inner = with_unused_defs(("right-b", "B"), ("right-a", "A"));
+        assert!(strictly_equal(&expected, &inner));
+    }
 }
 
 #[test]
@@ -632,4 +654,199 @@ fn structural_recursive_input_and_output_projection_are_directional() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn stream_documentation_is_ignored_in_all_compatibility_modes() {
+    let mut expected = tool(SchemaType::string());
+    let stream = StreamSpec {
+        doc: Doc::default(),
+        mime: vec!["application/json".into()],
+        required: true,
+    };
+    body(&mut expected, 0).stdin = Some(stream.clone());
+    body(&mut expected, 0).stdout = Some(stream);
+    let mut inner = expected.clone();
+    body(&mut inner, 0).stdin.as_mut().unwrap().doc.summary = "different input docs".into();
+    body(&mut inner, 0).stdout.as_mut().unwrap().doc.summary = "different output docs".into();
+
+    for mode in [
+        ToolCompatibilityMode::StrictEquality,
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        assert!(compile_tool_compatibility(&expected, &inner, mode).is_ok());
+    }
+}
+
+#[test]
+fn stream_mime_and_requiredness_remain_semantic() {
+    let mut expected = tool(SchemaType::string());
+    body(&mut expected, 0).stdin = Some(StreamSpec {
+        doc: Doc::default(),
+        mime: vec!["application/json".into()],
+        required: true,
+    });
+    let mut different_mime = expected.clone();
+    body(&mut different_mime, 0).stdin.as_mut().unwrap().mime = vec!["text/plain".into()];
+    let mut different_requiredness = expected.clone();
+    body(&mut different_requiredness, 0)
+        .stdin
+        .as_mut()
+        .unwrap()
+        .required = false;
+
+    for mode in [
+        ToolCompatibilityMode::StrictEquality,
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        assert!(compile_tool_compatibility(&expected, &different_mime, mode).is_err());
+        assert!(compile_tool_compatibility(&expected, &different_requiredness, mode).is_err());
+    }
+}
+
+fn diamond_tool() -> Tool {
+    let leaf = TypeId::new("leaf");
+    let root = TypeId::new("root");
+    let mut value = tool(SchemaType::ref_to(root.clone()));
+    value.schema.defs = vec![
+        SchemaTypeDef {
+            id: root,
+            name: Some("Root".into()),
+            body: SchemaType::record(vec![
+                NamedFieldType {
+                    name: "left".into(),
+                    body: SchemaType::ref_to(leaf.clone()),
+                    metadata: Default::default(),
+                },
+                NamedFieldType {
+                    name: "right".into(),
+                    body: SchemaType::ref_to(leaf.clone()),
+                    metadata: Default::default(),
+                },
+            ]),
+        },
+        SchemaTypeDef {
+            id: leaf,
+            name: Some("Leaf".into()),
+            body: record(&["value"]),
+        },
+    ];
+    value
+}
+
+#[test]
+fn completed_named_type_pairs_are_shared_in_diamond_plans() {
+    let expected = diamond_tool();
+    let inner = diamond_tool();
+    let compiled =
+        compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StructuralSubtype)
+            .unwrap();
+    let plan = compiled.commands[0].result.as_ref().unwrap();
+    let ProjectionNode::Recursive { node: root_body } = plan.nodes[plan.root] else {
+        panic!("named root expected")
+    };
+    let ProjectionNode::Record { fields, .. } = &plan.nodes[root_body] else {
+        panic!("root record expected")
+    };
+    assert_eq!(fields[0].plan, fields[1].plan);
+}
+
+fn nested_lists(depth: usize) -> SchemaType {
+    (0..depth).fold(SchemaType::string(), |inner, _| SchemaType::list(inner))
+}
+
+#[test]
+fn projection_depth_limit_accepts_boundary_and_rejects_next_level() {
+    let graph = SchemaGraph::empty();
+    let mut errors = Vec::new();
+    assert!(
+        compile_plan(
+            &graph,
+            &nested_lists(MAX_PROJECTION_DEPTH - 1),
+            &graph,
+            &nested_lists(MAX_PROJECTION_DEPTH - 1),
+            ToolCompatibilityMode::StructuralSubtype,
+            "depth",
+            &mut errors,
+        )
+        .is_some()
+    );
+    assert!(errors.is_empty());
+
+    assert!(
+        compile_plan(
+            &graph,
+            &nested_lists(MAX_PROJECTION_DEPTH),
+            &graph,
+            &nested_lists(MAX_PROJECTION_DEPTH),
+            ToolCompatibilityMode::StructuralSubtype,
+            "depth",
+            &mut errors,
+        )
+        .is_none()
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("depth limit"))
+    );
+}
+
+#[test]
+fn projection_node_limit_accepts_boundary_and_rejects_next_node() {
+    let graph = SchemaGraph::empty();
+    for (elements, succeeds) in [
+        (MAX_PROJECTION_NODES - 1, true),
+        (MAX_PROJECTION_NODES, false),
+    ] {
+        let tuple = SchemaType::tuple(vec![SchemaType::string(); elements]);
+        let mut errors = Vec::new();
+        let plan = compile_plan(
+            &graph,
+            &tuple,
+            &graph,
+            &tuple,
+            ToolCompatibilityMode::StructuralSubtype,
+            "nodes",
+            &mut errors,
+        );
+        assert_eq!(plan.is_some(), succeeds);
+        assert_eq!(errors.is_empty(), succeeds);
+    }
+}
+
+#[test]
+fn reordered_enum_and_flags_map_source_indices_to_target_indices() {
+    let graph = SchemaGraph::empty();
+    for (source, target, expected_flags) in [
+        (
+            SchemaType::r#enum(vec!["b".into(), "a".into()]),
+            SchemaType::r#enum(vec!["a".into(), "c".into(), "b".into()]),
+            false,
+        ),
+        (
+            SchemaType::flags(vec!["b".into(), "a".into()]),
+            SchemaType::flags(vec!["a".into(), "c".into(), "b".into()]),
+            true,
+        ),
+    ] {
+        let mut errors = Vec::new();
+        let plan = compile_plan(
+            &graph,
+            &source,
+            &graph,
+            &target,
+            ToolCompatibilityMode::StructuralSubtype,
+            "mapping",
+            &mut errors,
+        )
+        .unwrap();
+        match &plan.nodes[plan.root] {
+            ProjectionNode::Enum { cases } if !expected_flags => assert_eq!(cases, &[2, 0]),
+            ProjectionNode::Flags { flags } if expected_flags => assert_eq!(flags, &[2, 0]),
+            node => panic!("unexpected projection node: {node:?}"),
+        }
+    }
 }

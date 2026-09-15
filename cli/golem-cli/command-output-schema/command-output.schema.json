@@ -4356,6 +4356,7 @@
         "name",
         "diffModelVersion",
         "compatibilityCheck",
+        "toolCompatibilityMode",
         "versionCheck",
         "securityOverrides",
         "currentDeployment"
@@ -4366,6 +4367,10 @@
         "name": { "type": "string" },
         "diffModelVersion": { "type": "integer", "minimum": 0 },
         "compatibilityCheck": { "type": "boolean" },
+        "toolCompatibilityMode": {
+          "type": "string",
+          "enum": ["strict-equality", "structural-subtype", "nominal"]
+        },
         "versionCheck": { "type": "boolean" },
         "securityOverrides": { "type": "boolean" },
         "currentDeployment": {

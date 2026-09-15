@@ -13377,11 +13377,6 @@ components:
           default: []
           items:
             $ref: '#/components/schemas/ToolMiddlewareInstallation'
-        toolCompatibilityMode:
-          default: structural-subtype
-          allOf:
-          - $ref: '#/components/schemas/ToolCompatibilityMode'
-          - default: structural-subtype
         replaceIncompatibleAgentSecrets:
           type: boolean
           default: false
@@ -13804,6 +13799,7 @@ components:
       - name
       - diffModelVersion
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
       - ownerAccountId
@@ -13827,6 +13823,8 @@ components:
           format: uint32
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -13844,6 +13842,7 @@ components:
       required:
       - name
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
       properties:
@@ -13851,6 +13850,8 @@ components:
           type: string
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -13937,6 +13938,7 @@ components:
       - name
       - diffModelVersion
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
       properties:
@@ -13953,6 +13955,8 @@ components:
           format: uint32
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -14216,6 +14220,8 @@ components:
           type: string
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:

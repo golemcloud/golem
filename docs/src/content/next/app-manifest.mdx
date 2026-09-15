@@ -202,6 +202,8 @@ The effective chain is the environment universal list `U`, followed by the merge
 
 `deployment.compatibilityMode` controls middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Until middleware chain traversal is implemented, deployments can compile and expose these chains, but invoking a tool with a nonempty chain fails closed before leaf dispatch. Tools without middleware continue to dispatch normally.
 
+Like the other deployment options, `compatibilityMode` is an environment property synchronized by `golem environment sync-deployment-options` or before deploying content changes. Updating it does not redeploy or recompile the active revision: the next deployment uses the new mode, while existing deployment snapshots retain their recorded mode and compiled plans for replay and rollback.
+
 ### Secret policy
 
 `secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only across an agent's binding layers, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.

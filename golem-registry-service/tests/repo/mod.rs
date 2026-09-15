@@ -304,6 +304,7 @@ impl Deps {
             name: format!("env-{}", new_repo_uuid()),
             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             compatibility_check: true,
+            tool_compatibility_mode: "structural-subtype".to_string(),
             version_check: true,
             security_overrides: true,
             hash: blake3::hash("test".as_bytes()).into(),

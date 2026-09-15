@@ -193,6 +193,7 @@ async fn get_or_create_environment(
                     EnvironmentCreation {
                         name: env_name.clone(),
                         compatibility_check: false,
+                        tool_compatibility_mode: Default::default(),
                         version_check: false,
                         security_overrides: false,
                     },
@@ -320,7 +321,6 @@ async fn deploy_environment(
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
-                tool_compatibility_mode: Default::default(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
