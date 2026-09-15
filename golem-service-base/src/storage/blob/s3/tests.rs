@@ -213,6 +213,10 @@ const EMPTY_DELETE_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Dele
 
 const INVALID_RANGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRange</Code><Message>The requested range is not satisfiable</Message></Error>"#;
 
+const INTERNAL_ERROR: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error</Message></Error>"#;
+
+const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"#;
+
 fn delete_result_with_error(key: &str, code: &str, message: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Error><Key>{key}</Key><Code>{code}</Code><Message>{message}</Message></Error></DeleteResult>"#
@@ -444,7 +448,9 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 async fn get_raw_slice_checks_the_range_that_s3_returns() {
     let (storage, _) = scripted_storage("", |request, _| match request.range.as_deref() {
         Some("bytes=1-3") => Answer::partial(Some("bytes 1-3/6"), "bcd"),
+        Some("bytes=5-5") => Answer::partial(Some("bytes 5-5/6"), "f"),
         Some("bytes=4-9") => Answer::partial(Some("bytes 4-5/6"), "ef"),
+        Some("bytes=2-4") => Answer::partial(Some("bytes 0-3/6"), "abcd"),
         _ => Answer::partial(None, "abcdef"),
     });
     let read = |start, end| {
@@ -459,7 +465,11 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     };
 
     let inside = read(1, 3).await.unwrap();
+    let one_byte = read(5, 5).await.unwrap();
     let after_the_end = read(4, 9)
+        .await
+        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
+    let from_another_byte = read(2, 4)
         .await
         .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
     let without_content_range = read(0, 5)
@@ -467,12 +477,51 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
         .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
 
     assert_eq!(
-        (inside, after_the_end, without_content_range),
+        (
+            inside,
+            one_byte,
+            after_the_end,
+            from_another_byte,
+            without_content_range
+        ),
         (
             Some(b"bcd".to_vec()),
+            Some(b"f".to_vec()),
             Err(Some(BlobRangeError { start: 4, end: 9 })),
+            Err(None),
             Err(None)
         )
+    );
+}
+
+#[test]
+async fn get_raw_slice_retries_a_server_error_but_not_a_missing_object() {
+    let (storage, requests) = scripted_storage("", |request, earlier| {
+        if request.uri.contains("missing") {
+            Answer::new(404, NO_SUCH_KEY)
+        } else if earlier == 0 {
+            Answer::new(500, INTERNAL_ERROR)
+        } else {
+            Answer::partial(Some("bytes 0-2/6"), "abc")
+        }
+    });
+    let read = |path: &'static str, start: u64, end: u64| {
+        storage.get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new(path),
+            start,
+            end,
+        )
+    };
+
+    let after_a_server_error = read("blob", 0, 2).await.unwrap();
+    let missing = read("missing", 0, 2).await.unwrap();
+
+    assert_eq!(
+        (after_a_server_error, missing, sent(&requests).len()),
+        (Some(b"abc".to_vec()), None, 3)
     );
 }
 

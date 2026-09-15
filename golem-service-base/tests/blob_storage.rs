@@ -1151,6 +1151,31 @@ async fn fs_rejects_parent_traversal(
 
 #[test]
 #[tracing::instrument]
+async fn fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    // The blob makes the directory of the namespace. Below it, a name of 300 bytes is longer than
+    // the name limit of each filesystem, so the directory read fails with an error that is not
+    // "not found" and not "not a directory".
+    put_blobs(&storage, namespace, &[("blob", 1)]).await;
+    let too_long = "x".repeat(300);
+
+    let result = storage
+        .list_blobs_below(
+            "fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read",
+            "list",
+            namespace.clone(),
+            Path::new(&too_long),
+        )
+        .await;
+
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[test]
+#[tracing::instrument]
 async fn reject_parent_traversal_in_put_raw(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
