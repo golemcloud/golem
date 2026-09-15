@@ -50,6 +50,9 @@ const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
 /// The HTTP status that S3 gives for a range that has no byte in the object.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
+/// The name of the object that records a directory, because S3 has no directories.
+const DIR_MARKER: &str = "__dir_marker";
+
 #[derive(Debug)]
 pub struct S3BlobStorage {
     client: aws_sdk_s3::Client,
@@ -292,8 +295,8 @@ impl S3BlobStorage {
 
     /// Checks that a ranged read got the bytes from `start` to `end`.
     ///
-    /// S3 answers a range that ends after the object with the bytes that exist. That answer gives
-    /// a `BlobRangeError`. A missing `Content-Range`, or a range that starts at a different byte,
+    /// If a range ends after the object, S3 sends only the bytes that exist. That answer gives a
+    /// `BlobRangeError`. A missing `Content-Range`, or a range that starts at a different byte,
     /// gives a different error.
     fn check_content_range(content_range: Option<&str>, start: u64, end: u64) -> Result<(), Error> {
         let returned = content_range
@@ -363,7 +366,7 @@ impl S3BlobStorage {
                         .send()
                         .await
                         .map_err(SdkErrorOrCustomError::sdk_error)?;
-                    Self::key_errors(&output, bucket, delete.objects().len())
+                    Self::key_error(&output, bucket, delete.objects().len())
                         .map_or(Ok(()), |err| Err(SdkErrorOrCustomError::custom_error(err)))
                 })
             },
@@ -381,7 +384,7 @@ impl S3BlobStorage {
     /// Gives an error when a `DeleteObjects` response reports an error for a key.
     ///
     /// The message gives the number of keys that S3 did not delete, and the details of the first.
-    fn key_errors(output: &DeleteObjectsOutput, bucket: &str, requested: usize) -> Option<Error> {
+    fn key_error(output: &DeleteObjectsOutput, bucket: &str, requested: usize) -> Option<Error> {
         output.errors().first().map(|first| {
             anyhow!(
                 "S3 did not delete {} of {requested} keys in bucket {bucket}; first: {}: {}: {}",
@@ -717,7 +720,7 @@ impl BlobStorage for S3BlobStorage {
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
+                    let marker = key.join(DIR_MARKER);
                     let marker_str = blob_path_to_string(&marker)?;
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
@@ -952,7 +955,7 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let marker = key.join("__dir_marker");
+        let marker = key.join(DIR_MARKER);
         let marker_str = blob_path_to_string(&marker)?;
 
         with_retries_customized(
@@ -999,8 +1002,7 @@ impl BlobStorage for S3BlobStorage {
             .iter()
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
             .filter_map(|path| {
-                let is_dir_marker =
-                    path.file_name().and_then(|s| s.to_str()) == Some("__dir_marker");
+                let is_dir_marker = path.file_name().and_then(|s| s.to_str()) == Some(DIR_MARKER);
                 let is_nested = path.parent() != Some(&key);
                 if is_nested {
                     if is_dir_marker {
@@ -1038,16 +1040,17 @@ impl BlobStorage for S3BlobStorage {
             .await?
             .iter()
             .filter_map(|object| object.key().map(|key| (key, object.size())))
-            // Other S3 tools write a key that ends with `/` as a folder placeholder.
+            // S3 has no directories, so it records one as an object: a key that ends with `/`,
+            // which other S3 tools write, or the marker that `create_dir` writes.
             .filter(|(key, _)| {
                 !key.ends_with('/')
-                    && Path::new(key).file_name().and_then(|name| name.to_str())
-                        != Some("__dir_marker")
+                    && Path::new(key).file_name().and_then(|name| name.to_str()) != Some(DIR_MARKER)
             })
             .map(|(key, size)| {
+                let size = size.ok_or_else(|| anyhow!("S3 gave no size for the key {key}"))?;
                 Ok::<_, Error>(ListedBlob {
                     path: Path::new(key).strip_prefix(&namespace_root)?.into(),
-                    size: u64::try_from(size.unwrap_or_default())?,
+                    size: u64::try_from(size)?,
                 })
             })
             .collect()
@@ -1120,7 +1123,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(_) => Ok(ExistsResult::File),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
+                    let marker = key.join(DIR_MARKER);
                     let marker_str = blob_path_to_string(&marker)?;
                     let dir_marker_head_result = with_retries_customized(
                         target_label,

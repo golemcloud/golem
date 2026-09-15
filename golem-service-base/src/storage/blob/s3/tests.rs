@@ -223,6 +223,13 @@ fn delete_result_with_error(key: &str, code: &str, message: &str) -> String {
     )
 }
 
+/// Makes a listing page whose one `Contents` element has no `Size`.
+fn list_page_without_size(key: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><IsTruncated>false</IsTruncated><Contents><Key>{key}</Key></Contents></ListBucketResult>"#
+    )
+}
+
 fn list_page(objects: &[(String, u64)], next_token: Option<&str>) -> String {
     let contents = objects
         .iter()
@@ -568,5 +575,22 @@ async fn list_blobs_below_skips_directory_markers_and_keeps_sizes() {
             ],
             2
         )
+    );
+}
+
+#[test]
+async fn list_blobs_below_fails_when_a_key_has_no_size() {
+    let key = format!("{}/tree/a", namespace_prefix());
+    let page = list_page_without_size(&key);
+    let (storage, _) = scripted_storage("", move |_, _| Answer::new(200, page.clone()));
+
+    let error = storage
+        .list_blobs_below("test", "list", namespace(), Path::new("tree"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        format!("S3 gave no size for the key {key}")
     );
 }

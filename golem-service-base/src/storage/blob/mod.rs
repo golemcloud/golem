@@ -149,9 +149,10 @@ pub trait BlobStorage: Debug + Send + Sync {
     /// Lists each blob below a path, at all depths, with its size.
     ///
     /// Each path in the result is relative to the root of the namespace, as in `list_dir`. The
-    /// result has no directories and no directory markers. A path that does not exist, or the
-    /// path of a blob, gives an empty result. Paths that differ only in case are different paths,
-    /// unless the backend stores them as one blob. The order of the result is not specified.
+    /// result has no directories. An object that a backend writes to record a directory is not in
+    /// the result. A path that does not exist, or the path of a blob, gives an empty result. Paths
+    /// that differ only in case are different paths, unless the backend stores them as one blob.
+    /// The order of the result is not specified.
     async fn list_blobs_below(
         &self,
         target_label: &'static str,

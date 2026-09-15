@@ -1156,9 +1156,9 @@ async fn fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read(
     #[tagged_as("cs")] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
-    // The blob makes the directory of the namespace. Below it, a name of 300 bytes is longer than
-    // the name limit of each filesystem, so the directory read fails with an error that is not
-    // "not found" and not "not a directory".
+    // Writing a blob creates the directory of the namespace. Below it, a name of 300 bytes is
+    // longer than the name limit of each filesystem, so the directory read fails with an error
+    // that is not "not found" and not "not a directory".
     put_blobs(&storage, namespace, &[("blob", 1)]).await;
     let too_long = "x".repeat(300);
 
