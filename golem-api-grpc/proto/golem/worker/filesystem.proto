@@ -22,3 +22,17 @@ message FileSystemNode {
     FileFileSystemNode file = 2;
   }
 }
+
+// Filesystem text, never URI syntax. Each suffix element is one checked segment.
+message RootBoundedFileReadTarget {
+  string root = 1;
+  repeated string suffix = 2;
+  bool directory_request = 3;
+}
+
+message FileReadTarget {
+  oneof target {
+    string exact = 1;
+    RootBoundedFileReadTarget within_root = 2;
+  }
+}

@@ -30,6 +30,7 @@ pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
 pub mod error;
+pub mod filesystem;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod invocation_session_public;
