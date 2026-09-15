@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
 use crate::durable_host::concurrent::{
-    BegunCallReplayOutcome, CallReplayOutcome, DurableCallSession, NotCancellable,
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
@@ -151,49 +151,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |ctx| ctx.build_filtered_environment(),
         )
         .await?;
-        let (mut call, live_environment) = if begun.is_live() {
-            let (environment, decisions) = captured.ok_or_else(|| {
-                wasmtime::Error::msg("live environment call has no authority view")
-            })??;
-            for (target, allowed) in decisions {
-                crate::durable_host::record_permission_decisions(
-                    std::slice::from_ref(&target),
-                    allowed,
-                );
-            }
-            // The request carries the admitted view so an incomplete call can finish after
-            // recovery without rebuilding the environment or consulting current authority.
-            let call = begun
-                .start_live(
-                    self,
-                    HostRequestCliEnvironmentGetEnvironment {
-                        environment: environment.clone(),
-                    },
-                )
-                .await?;
-            (call, Some(environment))
-        } else {
-            match begun.start_replay_or_continue_live(self).await? {
-                BegunCallReplayOutcome::Claimed(call) => (call, None),
-                BegunCallReplayOutcome::ContinueLive(begun) => {
-                    let (environment, decisions) = self.build_filtered_environment()?;
-                    for (target, allowed) in decisions {
-                        crate::durable_host::record_permission_decisions(
-                            std::slice::from_ref(&target),
-                            allowed,
-                        );
-                    }
-                    let call = begun
-                        .start_live(
-                            self,
-                            HostRequestCliEnvironmentGetEnvironment {
-                                environment: environment.clone(),
-                            },
-                        )
-                        .await?;
-                    (call, Some(environment))
+        let (mut call, live_environment) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let (environment, decisions) = match captured {
+                    Some(captured) => captured?,
+                    None => self.build_filtered_environment()?,
+                };
+                for (target, allowed) in decisions {
+                    crate::durable_host::record_permission_decisions(
+                        std::slice::from_ref(&target),
+                        allowed,
+                    );
                 }
+                // The request carries the admitted view so an incomplete call can finish after
+                // recovery without rebuilding the environment or consulting current authority.
+                let call = begun
+                    .start_live(
+                        self,
+                        HostRequestCliEnvironmentGetEnvironment {
+                            environment: environment.clone(),
+                        },
+                    )
+                    .await?;
+                (call, Some(environment))
             }
+            ResolvedCall::Replay(call) => (call, None),
         };
         if !call.is_live() {
             match call.replay(self).await? {
