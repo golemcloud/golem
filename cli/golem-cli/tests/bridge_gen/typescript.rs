@@ -1173,7 +1173,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
         "return { tag: \"Io\" }",
         "name === \"unavailable\"",
         "return { tag: \"Unavailable\" }",
-        "if (declared === undefined) throw { tag: 'rpc', error }",
+        "if (declared === undefined) throw { tag: 'rpc', error: error }",
         "return undefined",
     ] {
         assert!(source.contains(shape), "missing {shape}:\n{source}");

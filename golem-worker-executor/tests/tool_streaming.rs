@@ -54,7 +54,8 @@ use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, native_test_tool_metadata, start_with_overrides,
+    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
+    start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -918,21 +919,12 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let mut streaming = metadata
-        .tools
-        .into_iter()
-        .find(|tool| tool.commands.nodes[0].name == "streaming")
-        .expect("streaming tool definition");
+    let mut streaming = native_streaming_tool_metadata();
     streaming.commands.nodes[0].name = "native-streaming".to_string();
     let executor = start_with_overrides(
         deps,
