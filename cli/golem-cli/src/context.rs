@@ -58,6 +58,13 @@ use std::time::Duration;
 use tracing::{Level, debug, enabled};
 use url::Url;
 
+#[derive(Debug, Clone)]
+pub(crate) enum GlobalEnvironmentSelector {
+    Environment(EnvironmentReference),
+    Local,
+    Cloud,
+}
+
 // Context is responsible for storing the CLI state,
 // but NOT responsible for producing CLI output (except for context selection logging), those should be part of the CommandHandler(s)
 pub struct Context {
@@ -68,6 +75,7 @@ pub struct Context {
     post_deploy_args: PostDeployArgs,
     profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
+    global_environment_selector: Option<GlobalEnvironmentSelector>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
     manifest_version_source: Option<AppVersionSource>,
@@ -108,27 +116,36 @@ impl Context {
             bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
         }
 
-        let (environment_reference, env_ref_can_be_builtin_profile) = {
+        let global_environment_selector = {
             if let Some(environment) = &global_flags.environment {
-                (Some(environment.clone()), false)
+                Some(GlobalEnvironmentSelector::Environment(environment.clone()))
             } else if global_flags.local {
-                (
+                Some(GlobalEnvironmentSelector::Local)
+            } else if global_flags.cloud {
+                Some(GlobalEnvironmentSelector::Cloud)
+            } else {
+                None
+            }
+        };
+        let (environment_reference, env_ref_can_be_builtin_profile) =
+            match &global_environment_selector {
+                Some(GlobalEnvironmentSelector::Environment(environment)) => {
+                    (Some(environment.clone()), false)
+                }
+                Some(GlobalEnvironmentSelector::Local) => (
                     Some(EnvironmentReference::Environment {
                         environment_name: EnvironmentName("local".to_string()),
                     }),
                     true,
-                )
-            } else if global_flags.cloud {
-                (
+                ),
+                Some(GlobalEnvironmentSelector::Cloud) => (
                     Some(EnvironmentReference::Environment {
                         environment_name: EnvironmentName("cloud".to_string()),
                     }),
                     true,
-                )
-            } else {
-                (None, false)
-            }
-        };
+                ),
+                None => (None, false),
+            };
 
         let app_source_mode =
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags);
@@ -342,6 +359,7 @@ impl Context {
             agent_stream_ping_interval: global_flags.agent_stream_ping_interval(),
             auth_token_override: global_flags.auth_token,
             environment_reference,
+            global_environment_selector,
             manifest_environment,
             manifest_environment_deployment_options,
             manifest_version_source,
@@ -422,6 +440,14 @@ impl Context {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
         self.log_context_selection_once();
         self.environment_reference.as_ref()
+    }
+
+    pub(crate) fn global_environment_selector(&self) -> Option<&GlobalEnvironmentSelector> {
+        self.global_environment_selector.as_ref()
+    }
+
+    pub fn profile_name(&self) -> &ProfileName {
+        &self.profile.name
     }
 
     pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
