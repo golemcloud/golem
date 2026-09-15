@@ -1,8 +1,10 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
-Status: implementation in progress. Steps 1–2 completed after tests, Oracle review,
-and the bug-finder loop; step 3 is in progress. Middleware remains an implementation
-dependency. The finalized planning snapshot is attached to GOL-36 in Linear.
+Status: implementation in progress. Steps 1–3 completed after tests, Oracle review,
+and the bug-finder loop; step 4 is in progress. The resource-budget boundary has
+provisional user approval and must be revisited in the final review.
+Middleware remains an implementation dependency. The finalized planning snapshot
+is attached to GOL-36 in Linear.
 
 This is the living record of the requirements, decisions, implementation plan, and
 open details discussed in the planning thread. Update this file in place as the
@@ -524,7 +526,7 @@ Generated artifacts accompany each contract change.
   manifest validation, deployment persistence, source/activation identity, diff
   and hashing, APIs, and generated artifacts. Keep configuration separate from
   mutable cached projections; keep the fixed native catalog unchanged.
-- [ ] **3. Implement shared projection/conversion.** Cover names, filters,
+- [x] **3. Implement shared projection/conversion.** Cover names, filters,
   precedence, exact JSON field mappings, schemas, documentation, annotations,
   errors, typed upstream results, mixed-content variants, and simple text/binary
   stdout. Specify unsupported cases and bounds explicitly; test projection
@@ -723,6 +725,90 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
 - The later live credential resolver must resolve the descriptor first: an absent
   optional inline credential is valid for anonymous/security-scheme imports, but
   is not a substitute for a missing import or a missing required inline secret.
+
+### Step 3 — completed; budget boundary remains provisional for final review
+
+- Projection lives in the host-only `golem-mcp-import` crate, shared by the later
+  registry and executor paths without introducing a JSON Schema validator into
+  guest SDK dependencies. Serializable projections retain their original schemas
+  and admission-time limits; compiled validators are lazily cached, not persisted.
+- Original JSON Schema 2020-12 validation remains authoritative in both conversion
+  directions. Golem metadata represents structure and documentation; validation-only
+  constraints remain enforced even when Golem cannot describe them directly.
+  Local JSON Pointer references, recursive containers, tagged record unions,
+  nullable choices, fixed tuples, and structural conjunctions are supported.
+- Default integers use signed 64-bit values, or unsigned 64-bit values for
+  nonnegative domains. Explicit bounds can select smaller widths. Out-of-domain
+  bounds do not prevent admitting representable values. Conversion rejects
+  overflow and lossy integer-to-f64 conversion rather than saturating or rounding.
+  This is an explicit numeric representation limit, not arbitrary-precision JSON.
+- Optional nullable members use `option<record { value: option<T> }>` to preserve
+  absent versus explicit null without illegal nested nullable types. Unspecified
+  additional values use Golem's existing JSON-string convention in an
+  `additional-properties` map. Pattern-matched keys are preserved in that map and
+  checked against every applicable original constraint. A root object union uses
+  one required, typed `arguments` option rather than flattening away its branch.
+- Unsupported dialects, external/anchor/dynamic references, nested reference-scope
+  changes, ambiguous non-null type unions, untagged record unions, non-fixed tuple
+  shapes, and conflicting synthetic/member names exclude the affected tool with
+  diagnostics. They do not invalidate other definitions in a successful listing.
+- Default limits: 1 MiB / 16,384 nodes / depth 128 for a definition or schema,
+  4 MiB / depth 256 for an instance, 1,024 tools / 8 MiB for a listing, and
+  256 blocks / 8 MiB encoded / 4 MiB decoded / depth 32 for content. Expanded
+  conjunctions and typed values are checked before recursive conversion.
+  Schema/reference depth 128 and instance depth 256 are supported hard ceilings;
+  callers may lower them. Validation-only reference paths are checked before
+  compiling the validator. Conversion collapses aliases and uses a temporary
+  64 MiB native stack when the caller's stack is smaller.
+- Oracle review prompted nullable multi-branch union and conjunction/reference
+  coverage, cached validators, stable digests across limit changes, and the
+  existing unit-tuple convention. Bug-finder run 1 identified digest churn from
+  ignored upstream extension fields; the digest now covers the upstream name,
+  original input/output schemas, and projected tool definition only.
+- Bug-finder run 2 confirmed the digest fix and identified omitted rejected
+  definitions in listing-byte accounting. The full listing is now counted
+  iteratively, including over-deep/invalid definitions, before per-tool exclusion.
+- The follow-up Oracle stack-overflow reproducer failed on a 2 MiB thread before
+  the fix. Ceiling regressions with 124 annotated aliases or 62 conjunction hops,
+  each across 255 nested objects, now pass, including Golem schema-value validation
+  and both conversion directions. They also passed with the conversion stack
+  temporarily reduced to 32 MiB; the implementation retains 64 MiB. Over-deep
+  validation-only reference chains are rejected. Oracle confirmed resolution and
+  no recursive-container regression. Reference sites inherit nearest available
+  documentation, including terminal-definition documentation, intentionally.
+- Bug-finder run 3 confirmed the listing fix but found the whole response charged
+  against the content-only budget. Its third successive new finding triggered the
+  mandatory design checkpoint; work paused until the user's explicit approval.
+- Provisionally approved boundary (must be raised again in the final review):
+  transport owns the total wire-response budget;
+  projection checks structured content against the instance budget and content
+  blocks against their encoded/decoded/count/depth budgets independently. Response
+  wrapper fields must not consume a content-only budget. Apply this consistently
+  to declared and undeclared structured content and bounded error rendering, while
+  preserving `isError` bypass of successful-output schema validation. The shared
+  issue is conflating complete upstream envelopes with admitted metadata and
+  separately projected payloads, rather than an incorrect limit constant.
+- Checkpoint verification: `CARGO_INCREMENTAL=0 cargo test -p golem-mcp-import
+  --lib -- --report-time` reported **34 passed, 1 failed**. The retained regression
+  test is `response_does_not_charge_wrapper_and_structured_content_to_content_limit`.
+  Strict all-target Clippy passed before that reproducer was added. The user then
+  approved the proposed boundary for continued implementation, explicitly asking
+  that it be mentioned at the end for final review. This authorization permits
+  resuming the loop with the material boundary revision recorded in the override.
+- Projection now checks declared and undeclared structured instances independently
+  from content, and error rendering enforces content count/depth/encoded bounds
+  plus the rendered string's decoded-byte budget. It does not validate ignored
+  successful-output fields on `isError`. The later transport must bound the full
+  response before parsing or invoking projection, including wrapper/extension data.
+- Final verification: **37 tests passed**, all-target check and strict Clippy
+  passed, scoped formatting and diff checks passed. Oracle found no blockers in
+  the revised boundary. Bug-finder run 4, authorized by the user after the design
+  checkpoint, confirmed the remaining finding resolved and found no new issues.
+  All findings are adjudicated; the converged loop is stopped.
+- Carry to steps 9–10: exercise actual generators with both omitted and present
+  optional arguments and extras. Oracle identified differing pre-existing SDK
+  optional-carrier conventions; strict canonical-value tests alone do not close
+  that integration gate.
 
 ## Review and decision history
 

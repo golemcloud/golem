@@ -1,0 +1,25 @@
+[package]
+name = "golem-mcp-import"
+version = "0.0.0"
+edition = "2024"
+license-file = "../LICENSE"
+description = "MCP tool projection and value conversion for Golem hosts"
+
+[lib]
+harness = false
+
+[dependencies]
+golem-schema = { workspace = true }
+
+base64 = { workspace = true }
+blake3 = { workspace = true }
+glob-match = { workspace = true }
+jsonschema = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+stacker = { workspace = true }
+thiserror = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

@@ -4004,6 +4004,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-mcp-import"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "glob-match",
+ "golem-schema",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "stacker",
+ "test-r",
+ "thiserror 2.0.20",
+ "urlencoding",
+]
+
+[[package]]
 name = "golem-native-tool"
 version = "0.0.0"
 dependencies = [
