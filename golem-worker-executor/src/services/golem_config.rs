@@ -70,6 +70,7 @@ pub struct GolemConfig {
     pub limits: Limits,
     #[serde(default)]
     pub durable_stream: DurableStreamConfig,
+    pub file_read: FileReadConfig,
     pub retry: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub max_in_function_retry_delay: Duration,
@@ -204,6 +205,8 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.durable_stream.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "file read:");
+        let _ = writeln!(&mut result, "{}", self.file_read.to_safe_string_indented());
         let _ = writeln!(&mut result, "retry:");
         let _ = writeln!(&mut result, "{}", self.retry.to_safe_string_indented());
         let _ = writeln!(
@@ -374,6 +377,7 @@ impl Default for GolemConfig {
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
             durable_stream: DurableStreamConfig::default(),
+            file_read: FileReadConfig::default(),
             retry: RetryConfig::max_attempts_3(),
             max_in_function_retry_delay: Duration::from_secs(20),
             compiled_component_service: CompiledComponentServiceConfig::default(),
@@ -416,6 +420,57 @@ impl Default for GolemConfig {
             http_port: 8082,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
+    }
+}
+
+/// Resource bounds for generic filesystem inspection, independent of file size or HTTP syntax.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileReadConfig {
+    /// Waiting reads beyond the single active read per agent. Zero disables queueing.
+    pub max_queued_per_agent: usize,
+    /// Total active and queued reads across this executor.
+    pub max_outstanding: usize,
+    /// Covers validation, activation, initialization, queueing and streaming from executor arrival.
+    #[serde(with = "humantime_serde")]
+    pub timeout: Duration,
+}
+
+impl Default for FileReadConfig {
+    fn default() -> Self {
+        Self {
+            max_queued_per_agent: 16,
+            max_outstanding: 128,
+            timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl FileReadConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.max_outstanding > 0,
+            "file read max_outstanding must be positive"
+        );
+        anyhow::ensure!(
+            !self.timeout.is_zero(),
+            "file read timeout must be positive"
+        );
+        anyhow::ensure!(
+            std::time::Instant::now()
+                .checked_add(self.timeout)
+                .is_some(),
+            "file read timeout exceeds supported deadline range"
+        );
+        Ok(())
+    }
+}
+
+impl SafeDisplay for FileReadConfig {
+    fn to_safe_string(&self) -> String {
+        format!(
+            "max queued per agent: {}\nmax outstanding: {}\ntimeout: {:?}\n",
+            self.max_queued_per_agent, self.max_outstanding, self.timeout
+        )
     }
 }
 
@@ -2554,10 +2609,42 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
+    use super::{DurableStreamConfig, FileReadConfig, InvocationResultsConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn file_read_config_defaults_and_validation() {
+        let mut config = FileReadConfig::default();
+        assert_eq!(config.max_queued_per_agent, 16);
+        assert_eq!(config.max_outstanding, 128);
+        assert_eq!(config.timeout, std::time::Duration::from_secs(60));
+        assert!(config.validate().is_ok());
+        config.max_queued_per_agent = 0;
+        assert!(config.validate().is_ok());
+        config.max_outstanding = 0;
+        assert!(config.validate().is_err());
+        config.max_outstanding = 1;
+        config.timeout = std::time::Duration::ZERO;
+        assert!(config.validate().is_err());
+        config.timeout = std::time::Duration::MAX;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn file_read_config_serialization_and_safe_display() {
+        let config: FileReadConfig = serde_json::from_value(serde_json::json!({
+            "max_queued_per_agent": 3, "max_outstanding": 7, "timeout": "250ms"
+        }))
+        .unwrap();
+        assert_eq!(config.timeout, std::time::Duration::from_millis(250));
+        assert_eq!(serde_json::to_value(&config).unwrap()["timeout"], "250ms");
+        assert_eq!(
+            config.to_safe_string(),
+            "max queued per agent: 3\nmax outstanding: 7\ntimeout: 250ms\n"
+        );
+    }
 
     #[test]
     fn durable_stream_config_enforces_renewal_before_lease_expiry() {

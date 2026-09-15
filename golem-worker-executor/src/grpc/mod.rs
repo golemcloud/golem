@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
-            file_reads: Arc::new(FileReadAdmission::default()),
+            file_reads: Arc::new(FileReadAdmission::from(&services.config().file_read)),
             _worker_activator: worker_activator,
             _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,

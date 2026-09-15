@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::FileReadConfig;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::filesystem::FileReadError;
 use std::collections::HashMap;
@@ -59,7 +60,17 @@ pub(crate) struct FileReadPermit {
 
 impl Default for FileReadAdmission {
     fn default() -> Self {
-        Self::new(16, 128, Duration::from_secs(60))
+        Self::from(&FileReadConfig::default())
+    }
+}
+
+impl From<&FileReadConfig> for FileReadAdmission {
+    fn from(config: &FileReadConfig) -> Self {
+        Self::new(
+            config.max_queued_per_agent,
+            config.max_outstanding,
+            config.timeout,
+        )
     }
 }
 
@@ -184,6 +195,30 @@ mod tests {
         let state = admission.state.lock().unwrap();
         assert_eq!(state.outstanding, 0);
         assert!(state.agents.is_empty());
+    }
+
+    #[test]
+    fn configured_limits_override_defaults() {
+        let admission = Arc::new(FileReadAdmission::from(&FileReadConfig {
+            max_queued_per_agent: 0,
+            max_outstanding: 2,
+            timeout: Duration::from_secs(250),
+        }));
+        let first_agent = agent();
+        let arrival = Instant::now();
+        let first = admission.reserve(first_agent.clone(), arrival).unwrap();
+        assert_eq!(first.deadline(), arrival + Duration::from_secs(250));
+        assert!(matches!(
+            admission.reserve(first_agent, arrival),
+            Err(FileReadError::ResourceExhausted)
+        ));
+        let second = admission.reserve(agent(), arrival).unwrap();
+        assert!(matches!(
+            admission.reserve(agent(), arrival),
+            Err(FileReadError::ResourceExhausted)
+        ));
+        drop((first, second));
+        assert_empty(&admission);
     }
 
     #[test]

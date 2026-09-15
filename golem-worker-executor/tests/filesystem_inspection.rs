@@ -724,3 +724,121 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     assert_eq!(count_agent_invocation_pair_since(&oplog, before), (1, 1));
     Ok(())
 }
+
+#[test]
+#[timeout("2m")]
+async fn configured_read_deadline_reaches_grpc_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetFileContentsRequest, get_file_contents_response,
+    };
+    use golem_common::model::filesystem::FileReadError;
+    use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.file_read.timeout = Duration::from_secs(1)
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed = agent_id!(
+        "Inspection",
+        "configured-deadline",
+        "/a.txt",
+        b"before".to_vec(),
+        false
+    );
+    let agent = executor.start_agent(&component.id, parsed.clone()).await?;
+    // Warm initialization independently of the short inspection deadline.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &parsed,
+            "replace",
+            data_value!("/a.txt", b"before".to_vec(), 0u64),
+        )
+        .await?;
+    let before = executor.oplog_max_index(&agent).await?;
+    let write = {
+        let executor = executor.clone();
+        let component = component.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &parsed,
+                    "replace",
+                    data_value!("/a.txt", b"after".to_vec(), 5000u64),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&agent, before.next()).await.unwrap();
+            if oplog.iter().any(|entry| {
+                matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(parameters)
+                if matches!(parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(_)))
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let mut stream = executor
+        .client
+        .clone()
+        .get_file_contents(GetFileContentsRequest {
+            agent_id: Some(agent.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(context.default_environment_id.into()),
+            target: Some(
+                FileReadTarget::Exact {
+                    file_path: "/a.txt".into(),
+                }
+                .into(),
+            ),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+            selection: Some(FileByteSelection::Full.into()),
+        })
+        .await?
+        .into_inner();
+    let first = tokio::time::timeout(Duration::from_secs(3), stream.message())
+        .await??
+        .unwrap();
+    let Some(get_file_contents_response::Result::ReadFailure(error)) = first.result else {
+        panic!("expected typed deadline error before a metadata head: {first:?}");
+    };
+    assert_eq!(
+        FileReadError::try_from(error)?,
+        FileReadError::DeadlineExceeded
+    );
+    assert!(stream.message().await?.is_none());
+    assert!(
+        !write.is_finished(),
+        "inspection must time out while the write is still pending"
+    );
+    write.await??;
+    assert_eq!(
+        executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
+        b"after"
+    );
+    Ok(())
+}
