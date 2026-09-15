@@ -355,6 +355,127 @@ async fn test_oplog_read_exact_accepts_single_entry_at_max_index() {
 }
 
 #[test]
+#[timeout("30s")]
+async fn mutation_queue_serializes_abandoned_requests_on_one_task() {
+    let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let (entered, ready) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let first_finished = Arc::new(AtomicBool::new(false));
+    let first = tokio::spawn({
+        let live = live.clone();
+        let first_finished = first_finished.clone();
+        async move {
+            live.run_owned(0, move |owner| async move {
+                let task = tokio::task::id();
+                entered.send(task).unwrap();
+                released.await.unwrap();
+                // Nested mutations execute inline rather than enqueueing behind themselves.
+                owner
+                    .run_lifecycle(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                    .await?;
+                first_finished.store(true, Ordering::Release);
+                Ok::<_, DurableStreamProducerError>(task)
+            })
+            .await
+        }
+    });
+    let task = ready.await.unwrap();
+    let (completed, completion) = oneshot::channel();
+    let mut second = Box::pin(live.run_owned(0, move |_| async move {
+        assert!(first_finished.load(Ordering::Acquire));
+        assert_eq!(tokio::task::id(), task);
+        completed.send(()).unwrap();
+        Ok::<(), DurableStreamProducerError>(())
+    }));
+    assert!(futures::poll!(second.as_mut()).is_pending());
+    drop(second);
+    release.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), task);
+    completion.await.unwrap();
+    live.wait_durable_drained().await;
+    live.ensure_healthy().unwrap();
+}
+
+#[test]
+#[timeout("30s")]
+async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirement() {
+    let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let (entered, ready) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let first = tokio::spawn({
+        let live = live.clone();
+        async move {
+            live.run_owned(0, move |owner| async move {
+                owner.begin_durable_effect();
+                entered.send(()).unwrap();
+                released.await.unwrap();
+                owner.finish_durable_effect();
+                Ok::<(), DurableStreamProducerError>(())
+            })
+            .await
+        }
+    });
+    ready.await.unwrap();
+    let executed = Arc::new(AtomicBool::new(false));
+    let queued_executed = executed.clone();
+    let mut queued = Box::pin(live.run_owned(0, move |_| async move {
+        queued_executed.store(true, Ordering::Release);
+        Ok::<(), DurableStreamProducerError>(())
+    }));
+    assert!(futures::poll!(queued.as_mut()).is_pending());
+    live.poison();
+    let mut drained = Box::pin(live.wait_durable_drained());
+    assert!(futures::poll!(drained.as_mut()).is_pending());
+    release.send(()).unwrap();
+    first.await.unwrap().unwrap();
+    assert_eq!(
+        queued.await,
+        Err(DurableStreamProducerError::RecoveryRequired)
+    );
+    drained.await;
+    assert!(!executed.load(Ordering::Acquire));
+    assert_eq!(
+        live.run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+            .await,
+        Err(DurableStreamProducerError::RecoveryRequired)
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn mutation_queue_completion_can_route_back_to_the_same_producer() {
+    let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+    let (entered, ready) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let (completed, completion) = oneshot::channel();
+    let mut caller = Box::pin(live.run_lifecycle(0, move |owner| async move {
+        let routed_owner = owner.clone();
+        owner.defer_remote_cancellation(async move {
+            assert!(super::mutation::MUTATION_SCOPE.try_with(|_| ()).is_err());
+            entered.send(()).unwrap();
+            released.await.unwrap();
+            routed_owner
+                .run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                .await?;
+            completed.send(()).unwrap();
+            Ok(())
+        });
+        Ok::<(), DurableStreamProducerError>(())
+    }));
+    assert!(futures::poll!(caller.as_mut()).is_pending());
+    ready.await.unwrap();
+    drop(caller);
+    // A stalled completion does not hold the serial mutation lane.
+    live.run_lifecycle(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    completion.await.unwrap();
+    live.wait_durable_drained().await;
+    live.ensure_healthy().unwrap();
+}
+
+#[test]
 async fn nested_mutation_preserves_unfinished_parent_effects() {
     for parent_pending in [false, true] {
         for child_succeeds in [false, true] {
@@ -6032,7 +6153,7 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
 
 #[test]
 #[timeout("30s")]
-async fn session_finish_memory_does_not_scale_with_stream_count() {
+async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog.clone(), &identity, None).await;
@@ -6056,18 +6177,20 @@ async fn session_finish_memory_does_not_scale_with_stream_count() {
         .acquire_many_owned(256 * 1024 * 1024 - 1024)
         .await
         .unwrap();
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        live.finish_session(
-            identity.invocation.clone(),
-            None,
-            Err(vec![83; 128]),
-            StreamCancelReason::InvocationFailed,
-        ),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let mut finishing = Box::pin(live.finish_session(
+        identity.invocation.clone(),
+        None,
+        Err(vec![83; 128]),
+        StreamCancelReason::InvocationFailed,
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut finishing)
+            .await
+            .is_err()
+    );
+    assert_eq!(oplog.current_oplog_index().await, before);
+    drop(occupied);
+    finishing.await.unwrap();
     assert_eq!(
         oplog.current_oplog_index().await.as_u64(),
         before.as_u64() + MAX_DURABLE_STREAMS_PER_SESSION as u64 + 1
@@ -6080,7 +6203,6 @@ async fn session_finish_memory_does_not_scale_with_stream_count() {
             .values()
             .all(|stream| stream.terminal && stream.terminal_event.is_none())
     );
-    drop(occupied);
 
     live.run_lifecycle(256 * 1024 * 1024 + 1, |owner| async move {
         assert_eq!(owner.lifecycle_operation_bytes.available_permits(), 0);
@@ -6090,6 +6212,13 @@ async fn session_finish_memory_does_not_scale_with_stream_count() {
     })
     .await
     .unwrap();
+    let released = live
+        .lifecycle_operation_bytes
+        .clone()
+        .acquire_many_owned(256 * 1024 * 1024)
+        .await
+        .unwrap();
+    drop(released);
     assert_eq!(
         live.lifecycle_operation_bytes.available_permits(),
         256 * 1024 * 1024

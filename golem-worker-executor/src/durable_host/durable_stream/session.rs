@@ -523,14 +523,16 @@ impl DurableStreamProducer {
         {
             return Ok(());
         }
-        // The lazy batch retains one error, one record, and its encoding at a time,
-        // independently of the number of output streams.
+        // Finalization can duplicate the error in every output terminal and Finished,
+        // with additional copies held while the ordinary batch is serialized.
         let terminal_bytes = result
             .as_ref()
             .err()
             .map_or(0, |bytes| bytes.len())
             .max(b"output stream ended without a terminal".len());
-        let memory = terminal_bytes.saturating_mul(4);
+        let memory = terminal_bytes
+            .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
+            .saturating_mul(4);
         self.run_lifecycle(memory, move |owner| async move {
             owner
                 .finish_session_owned(
@@ -594,15 +596,13 @@ impl DurableStreamProducer {
         }
 
         let producer_fingerprint = self.producer_fingerprint;
-        let result_for_batch = Arc::new(result);
         let session_key_for_batch = session_key.clone();
         self.begin_durable_effect();
         let entries = self
             .oplog
-            .add_durable_stream_batch_iter(Box::new(move |first_index| {
-                let finished_result = result_for_batch.clone();
+            .add_durable_stream_batch(Box::new(move |first_index| {
                 let terminals = open_streams.into_iter().enumerate().map(
-                    move |(position, (stream_id, role, sequence, stream_attribution))| {
+                    |(position, (stream_id, role, sequence, stream_attribution))| {
                         let oplog_index =
                             OplogIndex::from_u64(first_index.as_u64() + position as u64);
                         match role {
@@ -624,7 +624,7 @@ impl DurableStreamProducer {
                                 },
                             ),
                             SessionStreamRole::Output => {
-                                let details = match result_for_batch.as_ref() {
+                                let details = match &result {
                                     Ok(()) => b"output stream ended without a terminal".to_vec(),
                                     Err(details) => details.clone(),
                                 };
@@ -644,17 +644,16 @@ impl DurableStreamProducer {
                         }
                     },
                 );
-                let finished = std::iter::once_with(move || {
-                    DurableStreamOplogRecord::Session(
-                        entity_parent_start_index,
-                        Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: session_key_for_batch,
-                            result: Arc::unwrap_or_clone(finished_result),
-                        })),
-                    )
-                });
-                Box::new(terminals.chain(finished))
+                let mut records = terminals.collect::<Vec<_>>();
+                records.push(DurableStreamOplogRecord::Session(
+                    entity_parent_start_index,
+                    Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: session_key_for_batch,
+                        result,
+                    })),
+                ));
+                records
             }))
             .await
             .map_err(DurableStreamProducerError::Oplog)?;

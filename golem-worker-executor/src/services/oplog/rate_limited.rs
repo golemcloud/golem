@@ -15,9 +15,8 @@
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -195,15 +194,6 @@ impl Oplog for RateLimitedOplog {
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let result = self.inner.add_durable_stream_batch(make_batch).await;
-        self.apply_rate_limit().await;
-        result
-    }
-
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let result = self.inner.add_durable_stream_batch_iter(make_batch).await;
         self.apply_rate_limit().await;
         result
     }
@@ -533,17 +523,6 @@ impl OplogService for RateLimitedOplogService {
     ) -> Result<RawOplogPayload, String> {
         self.inner
             .upload_raw_payload(owned_agent_id, agent_mode, data)
-            .await
-    }
-
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.inner
-            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
             .await
     }
 

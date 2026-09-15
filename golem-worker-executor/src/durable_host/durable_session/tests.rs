@@ -265,6 +265,7 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         .clone();
 
     // The live drain must leave all sixteen normal operation slots available.
+    // Hold them in completions, since durable mutation bodies execute serially.
     let admitted = Arc::new(tokio::sync::Barrier::new(17));
     let mut operations = tokio::task::JoinSet::new();
     for _ in 0..16 {
@@ -272,8 +273,11 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         let admitted = admitted.clone();
         operations.spawn(async move {
             producer
-                .run_owned(0, move |_| async move {
-                    admitted.wait().await;
+                .run_owned(0, move |owner| async move {
+                    owner.defer_remote_cancellation(async move {
+                        admitted.wait().await;
+                        Ok(())
+                    });
                     Ok::<_, String>(())
                 })
                 .await

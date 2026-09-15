@@ -17,9 +17,8 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::activity::{ActivityGate, ActivityGuard};
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -826,17 +825,6 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.inner
-            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
-            .await
-    }
-
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -883,10 +871,6 @@ enum ForwardingJob {
     },
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
-    },
-    AddDurableStreamBatchIter {
-        make_batch: DurableStreamBatchIterBuilder,
         done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
     },
     AddPair {
@@ -1019,18 +1003,6 @@ impl ForwardingOplog {
                     ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
                         let cache_entries = state.cache_is_required();
                         let result = state.inner.add_durable_stream_batch(make_batch).await;
-                        if let Ok(entries) = &result {
-                            if cache_entries {
-                                state.record_cached(entries.iter().cloned());
-                            } else {
-                                state.record_uncached(entries.iter().map(|(idx, _)| *idx));
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddDurableStreamBatchIter { make_batch, done } => {
-                        let cache_entries = state.cache_is_required();
-                        let result = state.inner.add_durable_stream_batch_iter(make_batch).await;
                         if let Ok(entries) = &result {
                             if cache_entries {
                                 state.record_cached(entries.iter().cloned());
@@ -1312,14 +1284,6 @@ impl Oplog for ForwardingOplog {
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         self.run_job(|done| ForwardingJob::AddDurableStreamBatch { make_batch, done })
-            .await
-    }
-
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        self.run_job(|done| ForwardingJob::AddDurableStreamBatchIter { make_batch, done })
             .await
     }
 

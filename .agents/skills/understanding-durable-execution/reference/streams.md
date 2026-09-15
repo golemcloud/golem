@@ -91,6 +91,13 @@ context, then appends `Finished`; a protocol terminal fences any later guest ter
 failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
 
+Finalization uses the ordinary atomic vector batch: all terminal records precede `Finished`,
+and commit precedes publication. Durable oplogs externalize records only above their configured
+payload threshold; ephemeral oplogs keep the records inline in archive entries. The batch can
+temporarily retain one error copy per open output stream plus serialized copies. Lifecycle
+admission reserves for the maximum stream count, capped at the existing lane capacity; this
+serializes oversized finalizations but does not impose a hard bound on their allocation.
+
 ### External HTTP input appends
 
 `AppendToStreamSlot` resolves the route-authorized method and canonical input slot using the
@@ -114,6 +121,21 @@ An open-stream duplicate returns its original offset and the producer's highest 
 not the current stream tail. After closure, only the original closing tuple is a producer duplicate:
 the persisted producer head must match the terminal offset. Other tuples return Closed; an ordinary
 producer-less empty close remains idempotent. No resident dedupe state or new replay path is used.
+
+### Mutation ownership
+
+Each resident producer has one mutation task and a request channel. It runs durable mutation
+bodies serially; nested same-producer calls run inline. Dropping a caller's reply receiver does
+not cancel an accepted mutation. Retirement closes the channel, lets an already-running body
+settle, and rejects queued bodies before they start.
+
+The same task polls completion work separately from mutation bodies: commit callback tails,
+remote cancellations, and live publication waits cannot prevent the next mutation from running.
+These completions carry no mutation task-local scope, so a routed cancellation back to the same
+producer enters the queue normally. Durable activity lasts through callback/status-fold completion,
+but excludes remote RPC and live fanout. Count/byte admission still bounds outstanding work;
+the separate lifecycle lane prevents blocked data delivery from starving cancellation. Metadata
+reads and spawned storage work retain activity tracking independently of the mutation queue.
 
 ### External cancellation and deleted URLs
 

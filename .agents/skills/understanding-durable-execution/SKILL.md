@@ -170,6 +170,12 @@ If normal archival already fenced the owner, lookup joins archival through cache
 resolves an observation-only owner from storage. Archive failure or cancellation rejects the lookup;
 it never grants access to the old poisoned producer or restarts the ephemeral invocation.
 
+Normal archival and explicit interruption share `Worker::quiesce_for_owner_retirement` under
+the owner-cleanup lock: stop execution, drain stream retirement and lifecycle/forwarding work,
+commit, then stop status writers. Only explicit interruption records a pending terminal interrupt.
+Archival moves the oplog before forgetting the forwarding wrapper and removing the cached owner;
+storage deletion keeps its separate maintenance and removal sequence.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in

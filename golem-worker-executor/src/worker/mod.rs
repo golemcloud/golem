@@ -885,67 +885,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if !worker.is_current_cached_owner().await {
                             return Ok(());
                         }
-                        let retirement = worker.retire_durable_stream_producer();
-                        worker.set_interrupting(interrupt).await;
                         worker
-                            .stop_internal(
-                                false,
-                                None,
-                                UnloadRequest::ordinary(UnloadReason::from_interrupt(interrupt)),
-                                FinalWorkerState::Unloaded {
-                                    startup_failure: None,
-                                },
-                                PendingLiveInvocationDisposition::Fail,
-                            )
-                            .await;
-                        if let WorkerInstance::CleanupFailed(error) = &*worker.instance.lock().await
-                        {
-                            return Err(error.clone());
-                        }
-                        // An unloaded worker has no Store left to record a queued interrupt,
-                        // and retirement prevents a replacement generation from doing so.
-                        let pending = worker
-                            .interrupt_signal
-                            .lock()
-                            .await
-                            .claim_pending_terminal();
-                        if let Some(pending) = pending {
-                            let status = worker.get_attached_last_known_status().await;
-                            if matches!(
-                                status.status,
-                                AgentStatus::Running
-                                    | AgentStatus::Retrying
-                                    | AgentStatus::Suspended
-                            ) {
-                                let entry = match pending.kind {
-                                    InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
-                                    InterruptKind::Suspend(_) => OplogEntry::suspend(),
-                                    InterruptKind::Restart | InterruptKind::Jump => {
-                                        unreachable!("only terminal interrupts can be claimed")
-                                    }
-                                };
-                                worker.add_and_commit_oplog(entry).await;
-                                if matches!(pending.kind, InterruptKind::Interrupt(_))
-                                    && let Some(key) = &status.current_idempotency_key
-                                {
-                                    worker
-                                        .store_invocation_failure(
-                                            key,
-                                            &TrapType::Interrupt(pending.kind),
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
-                        worker.durable_stream_attachment_reconciler.stop().await;
-                        retirement.await?;
-                        worker.state_actor.drain_lifecycle().await?;
-                        if let Some(forwarding) = &forwarding {
-                            forwarding.drain_forwarding().await;
-                        }
-                        worker.durable_stream_commit()(None).await;
-                        worker.status_flusher.begin_delete().await;
-                        worker.status_checkpointer.begin_delete().await;
+                            .quiesce_for_owner_retirement(Some(interrupt), forwarding.as_deref())
+                            .await?;
                         if let Some(forwarding) = &forwarding {
                             forwarding.forget_retired_wrapper();
                         }
@@ -967,6 +909,71 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .clone()
             .await
+    }
+
+    /// Stops and drains a fenced owner before archival or cache removal. The caller
+    /// holds owner_cleanup and has fenced both stream admission and oplog forwarding.
+    async fn quiesce_for_owner_retirement(
+        &self,
+        interrupt: Option<InterruptKind>,
+        forwarding: Option<&ForwardingOplog>,
+    ) -> Result<(), WorkerExecutorError> {
+        let retirement = self.retire_durable_stream_producer();
+        if let Some(interrupt) = interrupt {
+            self.set_interrupting(interrupt).await;
+        }
+        self.stop_internal(
+            false,
+            None,
+            UnloadRequest::ordinary(
+                interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt),
+            ),
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            PendingLiveInvocationDisposition::Fail,
+        )
+        .await;
+        if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
+            return Err(error.clone());
+        }
+        if interrupt.is_some() {
+            // An unloaded worker has no Store left to record a queued interrupt,
+            // and retirement prevents a replacement generation from doing so.
+            let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
+            if let Some(pending) = pending {
+                let status = self.get_attached_last_known_status().await;
+                if matches!(
+                    status.status,
+                    AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
+                ) {
+                    let entry = match pending.kind {
+                        InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
+                        InterruptKind::Suspend(_) => OplogEntry::suspend(),
+                        InterruptKind::Restart | InterruptKind::Jump => {
+                            unreachable!("only terminal interrupts can be claimed")
+                        }
+                    };
+                    self.add_and_commit_oplog(entry).await;
+                    if matches!(pending.kind, InterruptKind::Interrupt(_))
+                        && let Some(key) = &status.current_idempotency_key
+                    {
+                        self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
+                            .await;
+                    }
+                }
+            }
+        }
+        self.durable_stream_attachment_reconciler.stop().await;
+        retirement.await?;
+        self.state_actor.drain_lifecycle().await?;
+        if let Some(forwarding) = forwarding {
+            forwarding.drain_forwarding().await;
+        }
+        self.durable_stream_commit()(None).await;
+        self.status_flusher.begin_delete().await;
+        self.status_checkpointer.begin_delete().await;
+        Ok(())
     }
 
     /// Gets or creates a worker, but does not start it

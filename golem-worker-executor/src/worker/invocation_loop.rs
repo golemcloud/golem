@@ -894,31 +894,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 return;
             }
             let result: Result<(), WorkerExecutorError> = async {
-                let retirement = worker.retire_durable_stream_producer();
                 worker
-                    .stop_internal(
-                        false,
-                        None,
-                        UnloadRequest::ordinary(UnloadReason::Idle),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: None,
-                        },
-                        PendingLiveInvocationDisposition::Fail,
-                    )
-                    .await;
-                if let super::WorkerInstance::CleanupFailed(error) = &*worker.instance.lock().await
-                {
-                    return Err(error.clone());
-                }
-                worker.durable_stream_attachment_reconciler.stop().await;
-                retirement.await?;
-                worker.state_actor.drain_lifecycle().await?;
-                if let Some(forwarding) = &forwarding {
-                    forwarding.drain_forwarding().await;
-                }
-                worker.durable_stream_commit()(None).await;
-                worker.status_flusher.begin_delete().await;
-                worker.status_checkpointer.begin_delete().await;
+                    .quiesce_for_owner_retirement(None, forwarding.as_deref())
+                    .await?;
                 while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
                 if let Some(forwarding) = &forwarding {
                     forwarding.forget_retired_wrapper();

@@ -13,6 +13,60 @@
 // limitations under the License.
 
 use super::*;
+use futures::StreamExt;
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
+use tokio::sync::mpsc;
+
+type Mutation = BoxFuture<'static, MutationCompletion>;
+
+struct MutationCompletion {
+    finish: BoxFuture<'static, ()>,
+}
+
+pub(super) struct MutationQueue(std::sync::Mutex<Option<mpsc::UnboundedSender<Mutation>>>);
+
+impl MutationQueue {
+    pub(super) fn new() -> Self {
+        // Admission bounds both queued mutations and their outstanding delivery work.
+        let (sender, mut receiver) = mpsc::unbounded_channel::<Mutation>();
+        tokio::spawn(async move {
+            let mut current: Option<Mutation> = None;
+            let mut completions = FuturesUnordered::new();
+            let mut closed = false;
+            loop {
+                tokio::select! {
+                    job = receiver.recv(), if !closed && current.is_none() => {
+                        match job {
+                            Some(job) => current = Some(job),
+                            None => closed = true,
+                        }
+                    }
+                    completion = async { current.as_mut().unwrap().await }, if current.is_some() => {
+                        current = None;
+                        completions.push(completion.finish);
+                    }
+                    Some(()) = completions.next(), if !completions.is_empty() => {}
+                    else => break,
+                }
+            }
+        });
+        Self(std::sync::Mutex::new(Some(sender)))
+    }
+
+    fn send(&self, mutation: Mutation) -> Result<(), DurableStreamProducerError> {
+        let sender = self.0.lock().unwrap();
+        sender
+            .as_ref()
+            .ok_or(DurableStreamProducerError::RecoveryRequired)?
+            .send(mutation)
+            .map_err(|_| DurableStreamProducerError::RecoveryRequired)
+    }
+
+    fn close(&self) {
+        self.0.lock().unwrap().take();
+    }
+}
 
 tokio::task_local! {
     pub(super) static MUTATION_SCOPE: Arc<ProducerMutationScope>;
@@ -95,6 +149,7 @@ impl DurableStreamProducer {
         self.poisoned.store(true, Ordering::Release);
         self.retirement.cancel();
         self.durable_activity.close();
+        self.mutations.close();
         self.owned_operations.close();
         self.owned_operation_bytes.close();
         self.lifecycle_operations.close();
@@ -253,10 +308,11 @@ impl DurableStreamProducer {
             _operation: permit,
             _memory: memory,
         });
-        tokio::spawn(async move {
+        self.mutations.send(Box::pin(async move {
             MUTATION_SCOPE
                 .scope(scope.clone(), async move {
                     let mut outcome = match std::panic::AssertUnwindSafe(async {
+                        producer.ensure_healthy()?;
                         activity
                             .clone()
                             .scope(producer.track_durable_effects(operation(producer.clone())))
@@ -274,72 +330,81 @@ impl DurableStreamProducer {
                             .into())
                         }
                     };
-                    let mut publications = std::mem::take(
-                        &mut *scope
-                            .publications
-                            .lock()
-                            .expect("publication receipt list lock poisoned"),
-                    );
-                    let tails = std::mem::take(
-                        &mut *scope
-                            .commit_tails
-                            .lock()
-                            .expect("commit tail list lock poisoned"),
-                    );
-                    for tail in tails {
-                        if let Err(error) = tail.await {
-                            producer.poison();
-                            outcome = Err(DurableStreamProducerError::Oplog(format!(
-                                "durable stream commit callback failed: {error}"
-                            ))
-                            .into());
-                        }
-                    }
-                    // Slot readers use published worker status, which is folded after the
-                    // durability receipt but before the commit callback completes.
-                    if scope.session_records_changed.load(Ordering::Acquire) {
-                        producer.session_records_changed.notify_waiters();
-                    }
-                    // Storage quiescence excludes live fanout. The separate count/byte
-                    // reservations still bound normal publications until delivery completes.
-                    drop(activity);
-                    let cancellations = std::mem::take(
-                        &mut *scope
-                            .remote_cancellations
-                            .lock()
-                            .expect("remote cancellation list lock poisoned"),
-                    );
-                    if outcome.is_ok() {
-                        for cancellation in cancellations {
-                            // A routed call must not inherit local mutation admission or
-                            // durable activity, even when it routes back to this executor.
-                            match tokio::spawn(cancellation).await {
-                                Ok(Ok(())) => {}
-                                Ok(Err(error)) => outcome = Err(error.into()),
-                                Err(error) => {
+                    // Callback tails, remote calls and live fanout must not block the
+                    // next mutation or inherit its task-local scope. The queue drives
+                    // these completions alongside the next durable mutation.
+                    MutationCompletion {
+                        finish: async move {
+                            let mut publications = std::mem::take(
+                                &mut *scope
+                                    .publications
+                                    .lock()
+                                    .expect("publication receipt list lock poisoned"),
+                            );
+                            let tails = std::mem::take(
+                                &mut *scope
+                                    .commit_tails
+                                    .lock()
+                                    .expect("commit tail list lock poisoned"),
+                            );
+                            for tail in tails {
+                                if let Err(error) = tail.await {
+                                    producer.poison();
                                     outcome = Err(DurableStreamProducerError::Oplog(format!(
-                                        "remote stream cancellation failed: {error}"
+                                        "durable stream commit callback failed: {error}"
                                     ))
                                     .into());
                                 }
                             }
-                        }
-                    }
-                    if !lifecycle {
-                        for publication in publications.drain(..) {
-                            if let Err(error) = publication
-                                .await
-                                .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
-                            {
-                                producer.poison();
-                                outcome = Err(DurableStreamProducerError::from(error).into());
+                            // Slot readers use published worker status, which is folded after the
+                            // durability receipt but before the commit callback completes.
+                            if scope.session_records_changed.load(Ordering::Acquire) {
+                                producer.session_records_changed.notify_waiters();
                             }
+                            // Storage quiescence excludes live fanout. The separate count/byte
+                            // reservations still bound normal publications until delivery completes.
+                            drop(activity);
+                            let cancellations = std::mem::take(
+                                &mut *scope
+                                    .remote_cancellations
+                                    .lock()
+                                    .expect("remote cancellation list lock poisoned"),
+                            );
+                            if outcome.is_ok() {
+                                for cancellation in cancellations {
+                                    match std::panic::AssertUnwindSafe(cancellation)
+                                        .catch_unwind()
+                                        .await
+                                    {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(error)) => outcome = Err(error.into()),
+                                        Err(_) => {
+                                            outcome = Err(DurableStreamProducerError::Oplog(
+                                                "remote stream cancellation panicked".into(),
+                                            )
+                                            .into());
+                                        }
+                                    }
+                                }
+                            }
+                            if !lifecycle {
+                                for publication in publications.drain(..) {
+                                    if let Err(error) = publication.await.unwrap_or(Err(
+                                        DurableLiveStreamBusError::PublicationAborted,
+                                    )) {
+                                        producer.poison();
+                                        outcome =
+                                            Err(DurableStreamProducerError::from(error).into());
+                                    }
+                                }
+                            }
+                            let _ = reply.send((outcome, publications));
                         }
+                        .boxed(),
                     }
-                    let _ = reply.send((outcome, publications));
                 })
-                .await;
-        });
+                .await
+        }))?;
         let (mut outcome, publications) = result
             .await
             .expect("durable stream producer-owned operation terminated");

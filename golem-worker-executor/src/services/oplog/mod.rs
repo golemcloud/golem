@@ -198,17 +198,6 @@ pub trait OplogService: Debug + Send + Sync {
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String>;
 
-    /// Uploads an oplog payload regardless of the configured inline threshold.
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.upload_raw_payload(owned_agent_id, agent_mode, data)
-            .await
-    }
-
     /// Downloads a big oplog payload by its reference
     async fn download_raw_payload(
         &self,
@@ -462,29 +451,6 @@ impl DurableStreamOplogRecord {
         }
     }
 
-    fn into_external_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
-        match self {
-            Self::Registered(attribution, _) => Ok(OplogEntry::stream_registered(
-                attribution,
-                raw.into_payload()?,
-            )),
-            Self::Items(attribution, _) => {
-                Ok(OplogEntry::stream_items(attribution, raw.into_payload()?))
-            }
-            Self::End(attribution, _) => {
-                Ok(OplogEntry::stream_end(attribution, raw.into_payload()?))
-            }
-            Self::Cancel(attribution, _) => {
-                Ok(OplogEntry::stream_cancel(attribution, raw.into_payload()?))
-            }
-            Self::Session(attribution, record) => Ok(OplogEntry::stream_session(
-                attribution,
-                raw.into_payload_with_cache(Arc::from(record))?,
-            )),
-            Self::InlineEntry(entry) => Ok(entry),
-        }
-    }
-
     pub fn into_inline_entry(self) -> OplogEntry {
         match self {
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
@@ -513,8 +479,6 @@ impl DurableStreamOplogRecord {
 
 pub type DurableStreamBatchBuilder =
     Box<dyn FnOnce(OplogIndex) -> Vec<DurableStreamOplogRecord> + Send>;
-pub type DurableStreamBatchIterBuilder =
-    Box<dyn FnOnce(OplogIndex) -> Box<dyn Iterator<Item = DurableStreamOplogRecord> + Send> + Send>;
 
 pub type ReservedRawStartBuilder =
     Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>;
@@ -573,27 +537,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
                 index, expected_index,
                 "oplog add_durable_stream_batch default observed a concurrent writer"
             );
-            result.push((index, entry));
-        }
-        Ok(result)
-    }
-
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let first_index = self.current_oplog_index().await.next();
-        let records = make_batch(first_index);
-        let mut result = Vec::new();
-        for record in records {
-            let expected_index = result
-                .last()
-                .map_or(first_index, |(index, _): &(OplogIndex, OplogEntry)| {
-                    index.next()
-                });
-            let entry = record.into_inline_entry();
-            let index = self.add(entry.clone()).await;
-            assert_eq!(index, expected_index);
             result.push((index, entry));
         }
         Ok(result)
