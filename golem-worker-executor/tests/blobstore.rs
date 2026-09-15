@@ -266,3 +266,96 @@ async fn blobstore_delete_increments_storage_objects_deleted_metric(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+async fn blobstore_get_data_outside_the_object_gives_the_guest_an_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-store-range-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let container_name = format!("{}-blob-store-range-1-container", component.id);
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_data",
+            data_value!(
+                container_name.clone(),
+                "range-object",
+                vec![10u8, 20u8, 30u8]
+            ),
+        )
+        .await?;
+
+    let end_after_the_object = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_data_range_result",
+            data_value!(container_name.clone(), "range-object", 1u64, 3u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u8>, String>>()?;
+    assert!(
+        end_after_the_object.as_ref().is_err_and(
+            |error| error.contains("Invalid input: the byte range 1-3 is not in the blob")
+        ),
+        "{end_after_the_object:?}"
+    );
+
+    let start_after_the_object = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_data_range_result",
+            data_value!(container_name.clone(), "range-object", 3u64, 5u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u8>, String>>()?;
+    let whole_object = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_data_range_result",
+            data_value!(container_name, "range-object", 0u64, 2u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u8>, String>>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert!(
+        start_after_the_object.as_ref().is_err_and(
+            |error| error.contains("Invalid input: the byte range 3-5 is not in the blob")
+        ),
+        "{start_after_the_object:?}"
+    );
+    assert_eq!(whole_object, Ok(vec![10u8, 20u8, 30u8]));
+
+    Ok(())
+}
