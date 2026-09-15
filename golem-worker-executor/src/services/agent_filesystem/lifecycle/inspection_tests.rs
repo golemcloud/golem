@@ -4,7 +4,7 @@ use golem_common::model::filesystem::{
 };
 use test_r::{test, timeout};
 
-async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
+pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
     let id = agent_id();
     let root = parent
         .join(id.environment_id.to_string())
