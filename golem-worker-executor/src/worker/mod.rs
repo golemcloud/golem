@@ -4710,11 +4710,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let (current_epoch, current_attempt_id, attached) =
-            make_streams(attempt.expected_epoch, attempt.attempt_id)?
-                .authoritative_attachment_state()
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+        let crate::durable_host::durable_session::AuthoritativeAttachmentState {
+            epoch: current_epoch,
+            attempt_id: current_attempt_id,
+            attached,
+        } = make_streams(attempt.expected_epoch, attempt.attempt_id)?
+            .authoritative_attachment_state()
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
         if attempt.expected_epoch < current_epoch {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "StaleEpoch: current attachment epoch is {current_epoch}"
@@ -5372,7 +5375,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
         for (session_key, covered_through, topologies, cancellations_done) in recoverable {
             let mut succeeded = cancellations_done;
-            for (attachment, mapping) in topologies {
+            for topology in topologies {
+                let attachment = topology.attachment_key;
+                let mapping = topology.mapping;
                 let control = RoutedStreamAttachmentControl::new(
                     self.rpc(),
                     mapping.clone(),

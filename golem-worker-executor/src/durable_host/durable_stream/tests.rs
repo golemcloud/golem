@@ -20,8 +20,9 @@ use super::{
     DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
     DurableStreamStore, ExternalAppendOutcome, ExternalProducer, IndexedConsumerJournal,
     ProducerMetadataKey, ProducerOutputRegistration, ProducerOutputSource,
-    ProducerRegistrationRequest, ProducerStreamIndex, StreamAttachmentConsumerProbe,
-    StreamAttachmentControl, StreamAttachmentState, StreamSegmentSource, StreamStoreError,
+    ProducerRegistrationRequest, ProducerStreamIndex, ResultStreamRegistration,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentState,
+    StreamSegmentSource, StreamStoreError,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
@@ -3174,8 +3175,8 @@ async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit()
     });
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            let (_, closed, _) = live.stream_head(&handle).await.unwrap();
-            if closed {
+            let head = live.stream_head(&handle).await.unwrap();
+            if head.closed {
                 break;
             }
             tokio::task::yield_now().await;
@@ -3422,7 +3423,7 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
                 .await
         }
     });
-    while live.stream_head(&handle).await.unwrap().0.is_none() {
+    while live.stream_head(&handle).await.unwrap().offset.is_none() {
         tokio::task::yield_now().await;
     }
     first.abort();
@@ -5027,7 +5028,7 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
             },
         ]
     };
-    let (owned, record) = producer
+    let registered = producer
         .register_result_streams(
             None,
             identity.invocation.clone(),
@@ -5037,6 +5038,8 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
         )
         .await
         .unwrap();
+    let owned = registered.handles;
+    let record = registered.session_record;
     assert_eq!(owned.len(), 1);
     let StreamSessionRecord::InvocationResult(result) = &record else {
         unreachable!();
@@ -5066,7 +5069,13 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
         )
         .await
         .unwrap();
-    assert_eq!(replay, (owned, record));
+    assert_eq!(
+        replay,
+        ResultStreamRegistration {
+            handles: owned,
+            session_record: record,
+        }
+    );
     assert_eq!(oplog.committed_length(), committed);
 }
 
@@ -5128,7 +5137,7 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             .register_result_streams(None, identity.invocation.clone(), vec![3], outputs(), None)
             .await
             .unwrap();
-        let StreamSessionRecord::InvocationResult(result) = &registered.1 else {
+        let StreamSessionRecord::InvocationResult(result) = &registered.session_record else {
             unreachable!()
         };
         let result_index = oplog.current_oplog_index().await;

@@ -15,6 +15,12 @@
 use super::index::registration_coordinate_depth;
 use super::*;
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ResultStreamRegistration {
+    pub(crate) handles: Vec<DurableStreamHandle>,
+    pub(crate) session_record: StreamSessionRecord,
+}
+
 impl DurableStreamStore {
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
     /// Durably registers a stream before its handle can be exposed to a consumer.
@@ -172,7 +178,7 @@ impl DurableStreamStore {
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
-    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), StreamStoreError> {
+    ) -> Result<ResultStreamRegistration, StreamStoreError> {
         self.run_owned(
             context,
             result.len() * 2,
@@ -198,7 +204,7 @@ impl DurableStreamStore {
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
-    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), StreamStoreError> {
+    ) -> Result<ResultStreamRegistration, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Session(session_key.clone())];
         for output in &outputs {
             match &output.source {
@@ -313,7 +319,10 @@ impl DurableStreamStore {
             drop(index);
             let record = self.read_result_record(result_offset).await?;
             return if record == expected {
-                Ok((Vec::new(), record))
+                Ok(ResultStreamRegistration {
+                    handles: Vec::new(),
+                    session_record: record,
+                })
             } else {
                 Err(StreamStoreError::RegistrationDivergence)
             };
@@ -346,7 +355,10 @@ impl DurableStreamStore {
                         "register_result",
                         true,
                     );
-                    return Ok((handles, record));
+                    return Ok(ResultStreamRegistration {
+                        handles,
+                        session_record: record,
+                    });
                 }
             }
             return Err(StreamStoreError::RegistrationDivergence);
@@ -570,14 +582,14 @@ impl DurableStreamStore {
         self.record_registered_streams(handles.len());
         self.record_terminal_streams(cancelled_count);
         crate::metrics::durable_stream::record_producer_operation("register_result", false);
-        Ok((
+        Ok(ResultStreamRegistration {
             handles,
-            session_record.ok_or_else(|| {
+            session_record: session_record.ok_or_else(|| {
                 StreamStoreError::CorruptHistory(
                     "result registration batch contains no session record".to_string(),
                 )
             })?,
-        ))
+        })
     }
 
     /// Rejects registration reuse whose durable identity or schema differs.

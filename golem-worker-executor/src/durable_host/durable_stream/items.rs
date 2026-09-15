@@ -21,6 +21,17 @@ use super::registration::{registration_matches, registration_record};
 use super::terminals::fenced_by_terminal;
 use super::*;
 
+pub(crate) struct StreamHead {
+    pub(crate) offset: Option<StreamOffset>,
+    pub(crate) closed: bool,
+    pub(crate) cancelled: bool,
+}
+
+pub(super) struct AppliedWriteBatch {
+    pub(super) events: Vec<CommittedProducerStreamEvent>,
+    pub(super) newly_registered_stream_count: usize,
+}
+
 impl DurableStreamStore {
     #[cfg(test)]
     /// Appends values in producer order and returns only after their durable receipt.
@@ -54,7 +65,7 @@ impl DurableStreamStore {
     pub(crate) async fn stream_head(
         &self,
         handle: &DurableStreamHandle,
-    ) -> Result<(Option<StreamOffset>, bool, bool), StreamStoreError> {
+    ) -> Result<StreamHead, StreamStoreError> {
         let index = self.index_for_terminal([], handle.stream_id).await?;
         if index
             .registrations
@@ -70,7 +81,11 @@ impl DurableStreamStore {
                 CommittedProducerStreamEventPayload::Cancel { .. }
             )
         });
-        Ok((stream.last_offset, stream.terminal, cancelled))
+        Ok(StreamHead {
+            offset: stream.last_offset,
+            closed: stream.terminal,
+            cancelled,
+        })
     }
 
     /// Reads committed events by offset; resident publication state is not authoritative.
@@ -82,7 +97,11 @@ impl DurableStreamStore {
             StreamOffset::from_bytes(offset.0)
                 .map_err(|error| StreamStoreError::InvalidOffset(error.to_string()))?;
         }
-        let (mut head, mut closed, mut cancelled) = self.stream_head(&request.handle).await?;
+        let StreamHead {
+            offset: mut head,
+            mut closed,
+            mut cancelled,
+        } = self.stream_head(&request.handle).await?;
         if request.max_items == 0 {
             return Ok(StreamHandleReadResult {
                 events: Vec::new(),
@@ -108,7 +127,10 @@ impl DurableStreamStore {
             loop {
                 let changed = bus.high_water_changed();
                 bus.ensure_available()?;
-                (head, closed, cancelled) = self.stream_head(&request.handle).await?;
+                let stream_head = self.stream_head(&request.handle).await?;
+                head = stream_head.offset;
+                closed = stream_head.closed;
+                cancelled = stream_head.cancelled;
                 events = if head.is_some() && request.after <= head {
                     self.read_segment(&request.handle, request.after, head)
                         .await?
@@ -1031,7 +1053,10 @@ impl DurableStreamStore {
             .map_err(StreamStoreError::Oplog)?;
         self.commit(context).await;
 
-        let (item_events, newly_registered_stream_count) = self
+        let AppliedWriteBatch {
+            events: item_events,
+            newly_registered_stream_count,
+        } = self
             .apply_committed_write_batch(&mut index, entries)
             .await?;
         let item_offsets = item_events.iter().map(|event| event.offset).collect();
@@ -1059,7 +1084,7 @@ impl DurableStreamStore {
         &self,
         index: &mut ProducerStreamIndex,
         entries: Vec<(OplogIndex, OplogEntry)>,
-    ) -> Result<(Vec<CommittedProducerStreamEvent>, usize), StreamStoreError> {
+    ) -> Result<AppliedWriteBatch, StreamStoreError> {
         let mut registrations = Vec::new();
         let mut registered_ids = Vec::new();
         let mut events = Vec::new();
@@ -1152,6 +1177,9 @@ impl DurableStreamStore {
                 Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
             );
         }
-        Ok((events, count))
+        Ok(AppliedWriteBatch {
+            events,
+            newly_registered_stream_count: count,
+        })
     }
 }

@@ -18,9 +18,9 @@ use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
     ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamStore, NestedStreamWrite,
     ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
-    RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl, SessionControlMetadata,
-    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource, StreamStoreError,
-    StreamWriteAdmission, StreamWriteContext,
+    ResultStreamRegistration, RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl,
+    SessionControlMetadata, StreamAttachmentConsumerProbe, StreamAttachmentControl,
+    StreamSegmentSource, StreamStoreError, StreamWriteAdmission, StreamWriteContext,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -77,6 +77,22 @@ use wasmtime::StoreContextMut;
 use wasmtime::component::{Destination, StreamProducer, StreamResult};
 
 const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
+
+pub(crate) struct AuthoritativeAttachmentState {
+    pub(crate) epoch: u64,
+    pub(crate) attempt_id: AttemptId,
+    pub(crate) attached: bool,
+}
+
+struct MaterializedResult {
+    value: SchemaValue,
+    drains: Vec<PendingOwnedStreamDrain>,
+}
+
+struct OutputReplay {
+    mappings: Vec<StreamSessionMappingRecord>,
+    terminal_cursor: bool,
+}
 
 #[async_trait::async_trait]
 /// Commits consumer journal entries and queries their durable completion boundary.
@@ -516,8 +532,11 @@ impl StreamSession {
         epoch: u64,
         expected_role: SessionStreamRole,
     ) -> Result<DurableStreamHandle, String> {
-        let (current_epoch, current_attempt_id, attached) =
-            self.authoritative_attachment_state().await?;
+        let AuthoritativeAttachmentState {
+            epoch: current_epoch,
+            attempt_id: current_attempt_id,
+            attached,
+        } = self.authoritative_attachment_state().await?;
         if epoch != current_epoch || self.attachment_epoch != current_epoch {
             return Err(
                 if epoch < current_epoch || self.attachment_epoch < current_epoch {
@@ -556,7 +575,11 @@ impl StreamSession {
 
     /// Rejects this runtime if durable authority has detached or advanced its epoch.
     pub(crate) async fn ensure_current_attachment(&self) -> Result<(), String> {
-        let (epoch, attempt_id, attached) = self.authoritative_attachment_state().await?;
+        let AuthoritativeAttachmentState {
+            epoch,
+            attempt_id,
+            attached,
+        } = self.authoritative_attachment_state().await?;
         if epoch != self.attachment_epoch
             || self.attachment_attempt_id != Some(attempt_id)
             || !attached
@@ -583,7 +606,7 @@ impl StreamSession {
     /// Reads attachment epoch, attempt, and attached state from durable oplog metadata.
     pub(crate) async fn authoritative_attachment_state(
         &self,
-    ) -> Result<(u64, AttemptId, bool), String> {
+    ) -> Result<AuthoritativeAttachmentState, String> {
         let raw = self
             .oplog
             .raw_durable_stream_session_status(&self.session_key)
@@ -599,7 +622,11 @@ impl StreamSession {
             status.attachment_attempt_id,
             status.attachment_attached,
         ) {
-            (Some(epoch), Some(attempt), Some(attached)) => Ok((epoch, attempt, attached)),
+            (Some(epoch), Some(attempt_id), Some(attached)) => Ok(AuthoritativeAttachmentState {
+                epoch,
+                attempt_id,
+                attached,
+            }),
             _ => Err("durable session has no attachment authority".to_string()),
         }
     }
@@ -621,7 +648,11 @@ impl StreamSession {
     }
 
     async fn detach_current_owned(&self, context: &StreamWriteContext) -> Result<bool, String> {
-        let (epoch, attempt_id, attached) = self.authoritative_attachment_state().await?;
+        let AuthoritativeAttachmentState {
+            epoch,
+            attempt_id,
+            attached,
+        } = self.authoritative_attachment_state().await?;
         if !attached
             || epoch != self.attachment_epoch
             || self.attachment_attempt_id != Some(attempt_id)
@@ -686,7 +717,11 @@ impl StreamSession {
         context: &StreamWriteContext,
         record: StreamSessionResumeAttemptRecord,
     ) -> Result<(), String> {
-        let (current_epoch, _, attached) = self.authoritative_attachment_state().await?;
+        let AuthoritativeAttachmentState {
+            epoch: current_epoch,
+            attached,
+            ..
+        } = self.authoritative_attachment_state().await?;
         if record.attempt.expected_epoch < current_epoch {
             return Err(format!(
                 "StaleEpoch: current attachment epoch is {current_epoch}"
@@ -1933,7 +1968,7 @@ impl StreamSession {
                 if metadata.malformed_record || metadata.topology_error.is_some() {
                     return Err("cannot cancel a malformed durable stream session".into());
                 }
-                let (epoch, _, _) = session.authoritative_attachment_state().await?;
+                let epoch = session.authoritative_attachment_state().await?.epoch;
                 let mut records = Vec::new();
                 if !metadata.cancellation_requested {
                     records.push(StreamSessionRecord::CancelRequested(
@@ -2024,7 +2059,7 @@ impl StreamSession {
                 return Err("deleted slot has no persisted stream mapping".into());
             }
             if !metadata.cancel_intents.contains_key(&handle.stream_id) {
-                let (epoch, _, _) = self.authoritative_attachment_state().await?;
+                let epoch = self.authoritative_attachment_state().await?.epoch;
                 records.push(StreamSessionRecord::ConsumerCancelIntent(
                     StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -2132,10 +2167,7 @@ impl StreamSession {
                 // Streams handed to the callee guest are not bound to any transport attempt:
                 // the guest owns the consumer side for the whole invocation, so its cancellation
                 // targets whatever attachment epoch is currently authoritative.
-                None => {
-                    let (epoch, _, _) = self.authoritative_attachment_state().await?;
-                    epoch
-                }
+                None => self.authoritative_attachment_state().await?.epoch,
             }
         } else {
             self.validate_recovered_mapping(&mapping).await?;
@@ -2707,7 +2739,10 @@ impl StreamSession {
                 retained_bytes,
                 false,
                 move |_, admission| async move {
-                    let (result, drains) = session
+                    let MaterializedResult {
+                        value: result,
+                        drains,
+                    } = session
                         .materialize_result_owned(
                             &admission,
                             value,
@@ -2741,7 +2776,7 @@ impl StreamSession {
         graph: SchemaGraph,
         root: SchemaType,
         component_revision: golem_common::model::component::ComponentRevision,
-    ) -> Result<(SchemaValue, Vec<PendingOwnedStreamDrain>), String> {
+    ) -> Result<MaterializedResult, String> {
         let session_guard = self.session_lock.lock().await;
         let metadata = self.current_control_metadata().await?;
         let first_result = metadata.invocation_result.is_none();
@@ -2760,7 +2795,7 @@ impl StreamSession {
         drop(metadata);
         let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
         {
-            Some(self.authoritative_attachment_state().await?.0)
+            Some(self.authoritative_attachment_state().await?.epoch)
         } else {
             None
         };
@@ -2936,7 +2971,10 @@ impl StreamSession {
             .collect::<Vec<_>>();
         let session_key = self.session_key.clone();
         let attribution = self.entity_parent_start_index;
-        let (owned_handles, _) = admission
+        let ResultStreamRegistration {
+            handles: owned_handles,
+            ..
+        } = admission
             .submit(move |owner, context| async move {
                 let result = owner
                     .register_result_streams(
@@ -2979,7 +3017,10 @@ impl StreamSession {
         }
         drop(session_guard);
 
-        Ok((strip_streams(value), drains))
+        Ok(MaterializedResult {
+            value: strip_streams(value),
+            drains,
+        })
     }
 
     async fn drain_materialized_result(
@@ -3861,19 +3902,24 @@ impl StreamSession {
                 let mapping = self.mapping(transport_stream_id).ok_or_else(|| {
                     format!("unknown durable output stream {transport_stream_id}")
                 })?;
-                Ok((transport_stream_id, mapping.handle))
+                Ok(mapping)
             })
             .collect::<Result<Vec<_>, String>>()?;
         while !pending.is_empty() {
-            let nested = try_join_all(pending.into_iter().map(|(transport_stream_id, handle)| {
-                let after = cursors.get(&handle.stream_id).copied().flatten();
-                self.pump_output_stream_from(transport_stream_id, handle, after, responses)
+            let nested = try_join_all(pending.into_iter().map(|mapping| {
+                let after = cursors.get(&mapping.handle.stream_id).copied().flatten();
+                self.pump_output_stream_from(
+                    mapping.transport_stream_id,
+                    mapping.handle,
+                    after,
+                    responses,
+                )
             }))
             .await?;
             pending = nested
                 .into_iter()
                 .flatten()
-                .filter(|(transport_stream_id, _)| seen.insert(*transport_stream_id))
+                .filter(|mapping| seen.insert(mapping.transport_stream_id))
                 .collect();
         }
         Ok(())
@@ -3955,14 +4001,20 @@ impl StreamSession {
         handle: DurableStreamHandle,
         after: Option<golem_common::model::durable_stream::StreamOffset>,
         responses: &mpsc::Sender<InvocationResponse>,
-    ) -> Result<Vec<(u64, DurableStreamHandle)>, String> {
+    ) -> Result<Vec<StreamSessionMappingRecord>, String> {
         let durable_stream_id = handle.stream_id;
-        let (mut nested_streams, terminal_cursor) = if let Some(through) = after {
+        let OutputReplay {
+            mappings: mut nested_streams,
+            terminal_cursor,
+        } = if let Some(through) = after {
             self.recover_session_mappings().await?;
             self.output_mappings_introduced_through(&handle, through)
                 .await?
         } else {
-            (Vec::new(), false)
+            OutputReplay {
+                mappings: Vec::new(),
+                terminal_cursor: false,
+            }
         };
         if terminal_cursor {
             return Ok(nested_streams);
@@ -4035,8 +4087,7 @@ impl StreamSession {
                                         mapping
                                     }
                                 };
-                                nested_streams
-                                    .push((mapping.transport_stream_id, mapping.handle.clone()));
+                                nested_streams.push(mapping.clone());
                                 mappings.push(mapping);
                             }
                             if !mappings.is_empty() {
@@ -4186,7 +4237,7 @@ impl StreamSession {
         &self,
         handle: &DurableStreamHandle,
         through: golem_common::model::durable_stream::StreamOffset,
-    ) -> Result<(Vec<(u64, DurableStreamHandle)>, bool), String> {
+    ) -> Result<OutputReplay, String> {
         let mut after = None;
         let mut nested_streams = Vec::new();
         let mut seen = HashSet::new();
@@ -4251,12 +4302,15 @@ impl StreamSession {
                                 nested_handle.stream_id
                             )
                         })?;
-                    Ok((mapping.transport_stream_id, nested_handle))
+                    Ok(mapping)
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             nested_streams.extend(page);
             if after == Some(through) {
-                return Ok((nested_streams, terminal_cursor));
+                return Ok(OutputReplay {
+                    mappings: nested_streams,
+                    terminal_cursor,
+                });
             }
         }
     }
@@ -4288,7 +4342,9 @@ impl StreamSession {
             .collect::<Vec<_>>();
         let mut terminal = HashSet::new();
         for (handle, cursor) in candidates {
-            let (_, terminal_cursor) = self
+            let OutputReplay {
+                terminal_cursor, ..
+            } = self
                 .output_mappings_introduced_through(&handle, cursor)
                 .await?;
             if terminal_cursor {

@@ -1980,7 +1980,7 @@ async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {
             };
             let session = streams.clone();
             let root = root.clone();
-            let (_, drains) = producer
+            let MaterializedResult { drains, .. } = producer
                 .run_admitted(None, 0, false, move |_, admission| async move {
                     session
                         .materialize_result_owned(
@@ -5350,10 +5350,10 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .pump_output_stream_from(7, root.clone(), None, &responses)
         .await
         .unwrap();
-    let [(nested_transport_stream_id, discovered_nested)] = discovered.as_slice() else {
+    let [discovered_mapping] = discovered.as_slice() else {
         panic!("catch-up must discover exactly one nested output stream")
     };
-    assert_eq!(discovered_nested, &nested);
+    assert_eq!(discovered_mapping.handle, nested);
     let item = receiver.recv().await.unwrap();
     let Some(invocation_response::Response::OutputItem(item)) = item.response else {
         panic!("catch-up must emit the enclosing output item first")
@@ -5361,13 +5361,14 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     assert_eq!(item.new_stream_mappings.len(), 1);
     assert_eq!(
         item.new_stream_mappings[0].transport_stream_id,
-        *nested_transport_stream_id
+        discovered_mapping.transport_stream_id
     );
+    let nested_transport_stream_id = discovered_mapping.transport_stream_id;
 
     let (packed_responses, mut packed_receiver) = mpsc::channel(2);
     streams
         .pump_output_stream_from(
-            *nested_transport_stream_id,
+            nested_transport_stream_id,
             nested.clone(),
             None,
             &packed_responses,
@@ -5484,9 +5485,8 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
             .mapping_for_handle(&nested, SessionStreamRole::Output)
             .unwrap()
             .transport_stream_id,
-        *nested_transport_stream_id
+        nested_transport_stream_id
     );
-    let nested_transport_stream_id = *nested_transport_stream_id;
     let cursors = HashMap::from([
         (root.stream_id, Some(root_written.value[0])),
         (nested.stream_id, Some(nested_written.value[0])),

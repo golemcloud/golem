@@ -20,6 +20,16 @@ use golem_common::serialization::serialize;
 
 const ATTACHMENT_PAGE_SIZE: u64 = 128;
 
+pub(super) struct IndexedAttachmentCandidate {
+    pub(super) attachment: IndexedStreamAttachment,
+    pub(super) journal_summary: ProducerJournalSummary,
+}
+
+pub(super) struct IndexedAttachmentCandidateBatch {
+    pub(super) deleting: bool,
+    pub(super) candidates: Vec<IndexedAttachmentCandidate>,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
 /// Stable metadata projection key derived from producer oplog records.
 pub enum ProducerMetadataKey {
@@ -1288,10 +1298,7 @@ impl DurableStreamStore {
     pub(super) async fn indexed_attachment_candidates(
         &self,
         batch_size: usize,
-    ) -> Result<
-        Option<(bool, Vec<(IndexedStreamAttachment, ProducerJournalSummary)>)>,
-        StreamStoreError,
-    > {
+    ) -> Result<Option<IndexedAttachmentCandidateBatch>, StreamStoreError> {
         let producer = self
             .self_weak
             .upgrade()
@@ -1312,10 +1319,7 @@ impl DurableStreamStore {
     async fn indexed_attachment_candidates_inner(
         &self,
         batch_size: usize,
-    ) -> Result<
-        Option<(bool, Vec<(IndexedStreamAttachment, ProducerJournalSummary)>)>,
-        StreamStoreError,
-    > {
+    ) -> Result<Option<IndexedAttachmentCandidateBatch>, StreamStoreError> {
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
@@ -1335,10 +1339,16 @@ impl DurableStreamStore {
             ..
         }) = rows.pop().flatten()
         else {
-            return Ok(Some((false, Vec::new())));
+            return Ok(Some(IndexedAttachmentCandidateBatch {
+                deleting: false,
+                candidates: Vec::new(),
+            }));
         };
         if count == 0 || batch_size == 0 {
-            return Ok(Some((deleting, Vec::new())));
+            return Ok(Some(IndexedAttachmentCandidateBatch {
+                deleting,
+                candidates: Vec::new(),
+            }));
         }
         let start = self
             .reconciliation_cursor
@@ -1404,16 +1414,19 @@ impl DurableStreamStore {
                     "active attachment catalogue refers to missing metadata".into(),
                 ));
             };
-            candidates.push((
-                attachment.clone(),
-                ProducerJournalSummary {
+            candidates.push(IndexedAttachmentCandidate {
+                attachment: attachment.clone(),
+                journal_summary: ProducerJournalSummary {
                     event_count: stream.next_sequence + u64::from(stream.terminal),
                     last_offset: stream.last_offset,
                     terminal: stream.terminal,
                 },
-            ));
+            });
         }
-        Ok(Some((deleting, candidates)))
+        Ok(Some(IndexedAttachmentCandidateBatch {
+            deleting,
+            candidates,
+        }))
     }
 
     /// Counts committed source events beyond the consumer's last journaled offset.
@@ -2775,13 +2788,15 @@ mod tests {
         let cold = fixture.producer().await;
         let mut found = HashSet::new();
         for _ in 0..5 {
-            let (_, page) = cold
+            let page = cold
                 .indexed_attachment_candidates(32)
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(page.len(), 32);
-            for (attachment, summary) in page {
+            assert_eq!(page.candidates.len(), 32);
+            for candidate in page.candidates {
+                let attachment = candidate.attachment;
+                let summary = candidate.journal_summary;
                 assert_eq!(
                     summary,
                     ProducerJournalSummary {

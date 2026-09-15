@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::index::attachment_sort_key;
+use super::metadata::{IndexedAttachmentCandidate, IndexedAttachmentCandidateBatch};
 use super::*;
 
 impl DurableStreamStore {
@@ -796,56 +797,63 @@ impl DurableStreamStore {
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
     ) -> Result<usize, StreamStoreError> {
         self.ensure_healthy()?;
-        let (deleting, candidates) =
-            if let Some(candidates) = self.indexed_attachment_candidates(batch_size).await? {
-                candidates
-            } else {
-                let index = self.index.lock().await;
-                let deleting = index.deleting;
-                let mut candidates = index
-                    .attachments
-                    .values()
-                    .filter(|attachment| {
-                        !matches!(
-                            attachment.state,
-                            IndexedStreamAttachmentState::Finalized { .. }
-                        )
-                    })
-                    .map(|attachment| {
-                        let stream = index
-                            .streams
-                            .get(&attachment.key.stream_id)
-                            .expect("durable attachment index points at a missing producer stream");
-                        (
-                            attachment.clone(),
-                            ProducerJournalSummary {
-                                event_count: stream.next_sequence + u64::from(stream.terminal),
-                                last_offset: stream.last_offset,
-                                terminal: stream.terminal,
-                            },
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                candidates.sort_by_key(|(attachment, _)| {
-                    (
-                        attachment.key.stream_id,
-                        attachment.key.attachment_id,
-                        attachment.key.epoch,
+        let IndexedAttachmentCandidateBatch {
+            deleting,
+            candidates,
+        } = if let Some(candidates) = self.indexed_attachment_candidates(batch_size).await? {
+            candidates
+        } else {
+            let index = self.index.lock().await;
+            let deleting = index.deleting;
+            let mut candidates = index
+                .attachments
+                .values()
+                .filter(|attachment| {
+                    !matches!(
+                        attachment.state,
+                        IndexedStreamAttachmentState::Finalized { .. }
                     )
-                });
-                if !candidates.is_empty() {
-                    let start = self
-                        .reconciliation_cursor
-                        .fetch_add(batch_size, Ordering::Relaxed)
-                        % candidates.len();
-                    candidates.rotate_left(start);
-                }
-                candidates.truncate(batch_size);
-                (deleting, candidates)
-            };
+                })
+                .map(|attachment| {
+                    let stream = index
+                        .streams
+                        .get(&attachment.key.stream_id)
+                        .expect("durable attachment index points at a missing producer stream");
+                    IndexedAttachmentCandidate {
+                        attachment: attachment.clone(),
+                        journal_summary: ProducerJournalSummary {
+                            event_count: stream.next_sequence + u64::from(stream.terminal),
+                            last_offset: stream.last_offset,
+                            terminal: stream.terminal,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|candidate| {
+                (
+                    candidate.attachment.key.stream_id,
+                    candidate.attachment.key.attachment_id,
+                    candidate.attachment.key.epoch,
+                )
+            });
+            if !candidates.is_empty() {
+                let start = self
+                    .reconciliation_cursor
+                    .fetch_add(batch_size, Ordering::Relaxed)
+                    % candidates.len();
+                candidates.rotate_left(start);
+            }
+            candidates.truncate(batch_size);
+            IndexedAttachmentCandidateBatch {
+                deleting,
+                candidates,
+            }
+        };
         let mut changed = 0;
         let mut first_error = None;
-        for (attachment, producer_summary) in candidates {
+        for candidate in candidates {
+            let attachment = candidate.attachment;
+            let producer_summary = candidate.journal_summary;
             match &attachment.state {
                 IndexedStreamAttachmentState::Prepared {
                     lease_expires_at_millis,

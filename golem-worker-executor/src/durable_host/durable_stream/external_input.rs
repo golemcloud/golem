@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::index::validate_items_payload;
+use super::items::AppliedWriteBatch;
 use super::*;
 
 impl DurableStreamStore {
@@ -337,7 +338,7 @@ impl DurableStreamStore {
             .map_err(StreamStoreError::Oplog)?;
         self.commit(context).await;
 
-        let (events, _) = self
+        let AppliedWriteBatch { events, .. } = self
             .apply_committed_write_batch(&mut index, entries)
             .await?;
         let offset = events

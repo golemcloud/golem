@@ -26,6 +26,12 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::oplog::OplogIndex;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecoveryTopology {
+    pub(crate) attachment_key: StreamAttachmentKey,
+    pub(crate) mapping: StreamSessionMappingRecord,
+}
+
 #[derive(Clone, Default, desert_rust::BinaryCodec)]
 /// Projection of one session's journal records through `covered_through`.
 /// Local refreshes include the append buffer; persisted projections cover committed history.
@@ -183,7 +189,7 @@ impl SessionControlMetadata {
         &self,
         owner: &golem_common::model::OwnedAgentId,
         key: &StreamSessionKey,
-    ) -> Result<Vec<(StreamAttachmentKey, StreamSessionMappingRecord)>, String> {
+    ) -> Result<Vec<RecoveryTopology>, String> {
         if self.malformed_record {
             return Err("unsupported or malformed durable Stream Session record version".into());
         }
@@ -213,7 +219,10 @@ impl SessionControlMetadata {
                         topology.attachment.stream_id,
                     )) != Some(&topology.attachment)
             })
-            .map(|topology| (topology.attachment.clone(), topology.mapping.clone()))
+            .map(|topology| RecoveryTopology {
+                attachment_key: topology.attachment.clone(),
+                mapping: topology.mapping.clone(),
+            })
             .collect())
     }
 

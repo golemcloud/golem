@@ -35,6 +35,7 @@ pub(crate) use probe::{
     ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe, StreamAttachmentConsumerProbe,
 };
 use publication::CommittedEventRetention;
+pub(crate) use registration::ResultStreamRegistration;
 pub(crate) use routing::{RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl};
 pub(crate) use session_state::SessionControlMetadata;
 

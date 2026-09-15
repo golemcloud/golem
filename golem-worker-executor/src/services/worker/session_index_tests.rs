@@ -1118,7 +1118,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         1,
         "closing one stream must retain the other stream"
     );
-    assert_eq!(pending[0].0.stream_id, attachments[1].stream_id);
+    assert_eq!(
+        pending[0].attachment_key.stream_id,
+        attachments[1].stream_id
+    );
     append_session(
         oplog.as_ref(),
         StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
