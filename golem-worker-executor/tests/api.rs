@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
@@ -3604,6 +3604,7 @@ async fn cold_existing_only_acquisition_preserves_persisted_identity_without_sta
         )
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let (mut rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(
@@ -3613,6 +3614,21 @@ async fn cold_existing_only_acquisition_preserves_persisted_identity_without_sta
             data_value!(30_000u64),
         )
         .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if matches!(
+                event.event,
+                Some(log_event::Event::InvocationStarted(ref started))
+                    if started.function == "delayed_increment"
+            ) {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before delayed_increment started"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for delayed_increment to start"))??;
+    let _ = abort_capture.send(());
     executor
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
