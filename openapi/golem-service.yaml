@@ -20175,6 +20175,11 @@ components:
           type: array
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -20277,6 +20282,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -20308,6 +20315,7 @@ components:
             $ref: '#/components/schemas/AgentConfigDeclarationSchema'
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -21667,6 +21675,19 @@ components:
       enum:
       - usage-error
       - runtime-error
+    ExactFileMapping:
+      title: ExactFileMapping
+      type: object
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
+      required:
+      - publicPath
+      - filePath
     Example:
       type: object
       properties:
@@ -21699,6 +21720,40 @@ components:
         required:
         - tag
         - value
+    FileMapping:
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Exact
+            type: string
+            enum:
+            - Exact
+        required:
+        - type
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Subtree
+            type: string
+            enum:
+            - Subtree
+        required:
+        - type
+      - $ref: '#/components/schemas/SubtreeFileMapping'
     FlagShape:
       type: object
       oneOf:
@@ -22006,6 +22061,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
       type: object
       oneOf:
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -22018,6 +22074,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -22035,10 +22092,10 @@ components:
       - type: object
         properties:
           type:
-            example: Patch
+            example: Any
             type: string
             enum:
-            - Patch
+            - Any
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -22060,11 +22117,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        openapiProvider:
+          type: string
       required:
       - pathPrefix
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
     ImpliesC:
       type: object
       properties:
@@ -23991,6 +24060,19 @@ components:
       - doc
       - mime
       - required
+    SubtreeFileMapping:
+      title: SubtreeFileMapping
+      type: object
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
+      required:
+      - publicPrefix
+      - filesystemRoot
     SystemToolAvailability:
       type: string
       enum:

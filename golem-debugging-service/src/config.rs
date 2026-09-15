@@ -79,6 +79,7 @@ impl DebugConfig {
             blob_storage: self.blob_storage,
             limits: self.limits,
             durable_stream: Default::default(),
+            file_read: Default::default(),
             retry: self.retry,
             compiled_component_service: self.compiled_component_service,
             oplog: self.oplog,

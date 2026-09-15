@@ -192,12 +192,26 @@ message CompiledRoutes {
 
 message CompiledRoute {
   int32 route_id = 1;
-  golem.component.HttpMethod method = 2;
+  RouteMatch route_match = 2;
   repeated PathSegment path = 3;
   RequestBodySchema body = 4;
   RouteBehaviour behavior = 5;
   RouteSecurity security = 6;
   CorsOptions cors = 7;
+}
+
+message RouteMatch {
+  oneof kind {
+    Method method = 1;
+    MountPrefix mount_prefix = 2;
+  }
+
+  message Method {
+    golem.component.HttpMethod method = 1;
+    bool trailing_slash = 2;
+  }
+
+  message MountPrefix {}
 }
 
 message RouteBehaviour {
@@ -206,6 +220,8 @@ message RouteBehaviour {
     CorsPreflight cors_preflight = 2;
     WebhookCallback webhook_callback = 3;
     OpenApiSpec open_api_spec = 4;
+    HttpRouter http_router = 5;
+    AgentFilesystem agent_filesystem = 6;
   }
 
   message CallAgent {
@@ -247,6 +263,39 @@ message RouteBehaviour {
 
     Format format = 1;
   }
+
+  message HttpRouter {
+    golem.component.ComponentId component_id = 1;
+    uint64 component_revision = 2;
+    string agent_type = 3;
+    CompiledInputSchema constructor_input = 4;
+    optional RouterMethod handler = 5;
+    optional RouterMethod openapi_provider = 6;
+    repeated golem.component.FileMapping static_bindings = 7;
+    repeated RouterFileIndexEntry file_index = 8;
+  }
+
+  message RouterMethod {
+    string method_name = 1;
+    CompiledInputSchema input = 2;
+    CompiledOutputSchema output = 3;
+  }
+
+  message RouterFileIndexEntry {
+    string path = 1;
+    bytes blob_key = 2;
+    uint64 size = 3;
+    bytes sha256 = 4;
+  }
+
+  message AgentFilesystem {
+    golem.component.ComponentId component_id = 1;
+    uint64 component_revision = 2;
+    string agent_type = 3;
+    CompiledInputSchema constructor_input = 4;
+    repeated ConstructorParameter constructor_parameters = 5;
+    repeated golem.component.FileMapping filesystem_bindings = 6;
+  }
 }
 
 message RouteSecurity {
@@ -254,9 +303,11 @@ message RouteSecurity {
     None none = 1;
     SessionFromHeader session_from_header = 2;
     SecurityScheme security_scheme = 3;
+    Unavailable unavailable = 4;
   }
 
   message None {}
+  message Unavailable {}
 
   message SessionFromHeader {
     string header_name = 1;

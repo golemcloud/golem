@@ -23,8 +23,9 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, LookupResult, ReadFileResult};
+use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
+use crate::services::file_read_admission::FileReadAdmission;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
@@ -73,6 +74,7 @@ use golem_common::model::agent::{
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
@@ -91,6 +93,7 @@ use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
 };
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
@@ -113,6 +116,7 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
+    file_reads: Arc<FileReadAdmission>,
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
@@ -128,6 +132,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
+            file_reads: self.file_reads.clone(),
             _worker_activator: self._worker_activator.clone(),
             _assignment_changed_hook: self._assignment_changed_hook.clone(),
             ctx: PhantomData,
@@ -175,6 +180,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
+            file_reads: Arc::new(FileReadAdmission::from(&services.config().file_read)),
             _worker_activator: worker_activator,
             _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,
@@ -1628,80 +1634,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_file_contents_internal(
         &self,
         request: GetFileContentsRequest,
-    ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, WorkerExecutorError> {
+        arrival: tokio::time::Instant,
+    ) -> Result<Result<FileReadResponse, FileReadError>, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
-
-        let path = CanonicalFilePath::from_abs_str(&request.file_path)
-            .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
-
-        let worker = self.get_or_create(&request).await?;
-
-        let result = worker.read_file(path).await?;
-
-        let response: <Self as WorkerExecutor>::GetFileContentsStream = match result {
-            ReadFileResult::NotFound => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotFound(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::NotAFile => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::Ok(stream) => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::Success(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                let header_stream = tokio_stream::iter(vec![Ok(header_chunk)]);
-
-                let content_stream = stream
-                    .map(|item| {
-                        let transformed = match item {
-                            Ok(data) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Success(data.into())
-                                    )
-                                }
-                            }
-                            Err(e) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Failure(e.into())
-                                    )
-                                }
-                            }
-                        };
-                        Ok(transformed)
-                    });
-                Box::pin(header_stream.chain(content_stream))
-            }
-        };
-        Ok(response)
+        let target = request
+            .target
+            .clone()
+            .ok_or(FileReadError::InvalidTarget)
+            .and_then(|value| {
+                FileReadTarget::try_from(value).map_err(|_| FileReadError::InvalidTarget)
+            });
+        let selection = request
+            .selection
+            .ok_or(FileReadError::InvalidSelection)
+            .and_then(FileByteSelection::try_from);
+        let (target, selection, deadline) =
+            match (target, selection, self.file_reads.deadline(arrival)) {
+                (Ok(target), Ok(selection), Ok(deadline)) => (target, selection, deadline),
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    return Ok(Err(error));
+                }
+            };
+        tokio::time::timeout_at(deadline, async {
+            let owned_agent_id =
+                extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+            let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+            self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+            let reservation = match self.file_reads.reserve(owned_agent_id, arrival) {
+                Ok(reservation) => reservation,
+                Err(error) => return Ok(Err(error)),
+            };
+            let worker = self.get_or_create(&request).await?;
+            Ok(worker.read_file(target, selection, reservation).await)
+        })
+        .await
+        .unwrap_or(Ok(Err(FileReadError::DeadlineExceeded)))
     }
 
     async fn activate_plugin_internal(
@@ -2760,20 +2727,45 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: Request<GetFileContentsRequest>,
     ) -> ResponseResult<Self::GetFileContentsStream> {
+        let arrival = tokio::time::Instant::now();
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
             agent_id = proto_agent_id_string(&request.agent_id),
-            path = request.file_path,
         );
 
         let result = self
-            .get_file_contents_internal(request)
+            .get_file_contents_internal(request, arrival)
             .instrument(record.span.clone())
             .await;
 
+        use golem::workerexecutor::v1::get_file_contents_response::Result as Frame;
         let stream: Self::GetFileContentsStream = match result {
-            Ok(stream) => record.succeed(stream),
+            Ok(Ok(response)) => {
+                let head = futures::stream::iter([Ok(GetFileContentsResponse {
+                    result: Some(Frame::Header(response.head.into())),
+                })]);
+                let body = response.body.map(|item| {
+                    Ok(GetFileContentsResponse {
+                        result: Some(match item {
+                            Ok(bytes) => Frame::Success(bytes.into()),
+                            Err(error) => {
+                                Frame::ReadFailure(golem::worker::FileReadError::from(error) as i32)
+                            }
+                        }),
+                    })
+                });
+                record.succeed(Box::pin(head.chain(body)))
+            }
+            Ok(Err(mut error)) => {
+                let stream: Self::GetFileContentsStream =
+                    Box::pin(futures::stream::iter([Ok(GetFileContentsResponse {
+                        result: Some(Frame::ReadFailure(
+                            golem::worker::FileReadError::from(error) as i32,
+                        )),
+                    })]));
+                record.fail(stream, &mut error)
+            }
             Err(mut err) => {
                 let res = GetFileContentsResponse {
                     result: Some(

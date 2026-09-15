@@ -32,15 +32,16 @@ use crate::base_model::Empty;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
     AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy,
-    CachePolicyTtl, CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment,
-    PathVariable, Principal, QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
-    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
+    CachePolicyTtl, CorsOptions, CustomHttpMethod, ExactFileMapping, FileMapping,
+    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    LiteralSegment, OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable,
+    ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic, SubtreeFileMapping, SystemVariable, SystemVariableSegment,
 };
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField,
+    OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use golem_schema::schema::wit::{
@@ -200,6 +201,10 @@ pub fn encode_agent_type(ty: &AgentTypeSchema) -> Result<wire::AgentType, AgentW
     let schema = enc.finish();
     Ok(wire::AgentType {
         type_name: ty.type_name.0.clone(),
+        kind: match ty.kind {
+            AgentTypeKind::Regular => wire::AgentTypeKind::Regular,
+            AgentTypeKind::HttpRouter => wire::AgentTypeKind::HttpRouter,
+        },
         description: ty.description.clone(),
         source_language: ty.source_language.clone(),
         schema,
@@ -237,6 +242,10 @@ pub fn decode_agent_type(w: &wire::AgentType) -> Result<AgentTypeSchema, AgentWi
         .collect::<Result<Vec<_>, _>>()?;
     Ok(AgentTypeSchema {
         type_name: AgentTypeName(w.type_name.clone()),
+        kind: match w.kind {
+            wire::AgentTypeKind::Regular => AgentTypeKind::Regular,
+            wire::AgentTypeKind::HttpRouter => AgentTypeKind::HttpRouter,
+        },
         description: w.description.clone(),
         source_language: w.source_language.clone(),
         schema,
@@ -622,6 +631,13 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
             phantom_agent: value.phantom_agent,
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+            static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            openapi_provider: value.openapi_provider,
         }
     }
 }
@@ -634,6 +650,43 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
             phantom_agent: value.phantom_agent,
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+            static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            openapi_provider: value.openapi_provider,
+        }
+    }
+}
+
+impl From<FileMapping> for wire::FileMapping {
+    fn from(value: FileMapping) -> Self {
+        match value {
+            FileMapping::Exact(mapping) => Self::Exact(wire::ExactFileMapping {
+                public_path: mapping.public_path,
+                file_path: mapping.file_path,
+            }),
+            FileMapping::Subtree(mapping) => Self::Subtree(wire::SubtreeFileMapping {
+                public_prefix: mapping.public_prefix,
+                filesystem_root: mapping.filesystem_root,
+            }),
+        }
+    }
+}
+
+impl From<wire::FileMapping> for FileMapping {
+    fn from(value: wire::FileMapping) -> Self {
+        match value {
+            wire::FileMapping::Exact(mapping) => Self::Exact(ExactFileMapping {
+                public_path: mapping.public_path,
+                file_path: mapping.file_path,
+            }),
+            wire::FileMapping::Subtree(mapping) => Self::Subtree(SubtreeFileMapping {
+                public_prefix: mapping.public_prefix,
+                filesystem_root: mapping.filesystem_root,
+            }),
         }
     }
 }
@@ -677,6 +730,7 @@ impl From<HttpMethod> for wire::HttpMethod {
             HttpMethod::Trace(_) => Self::Trace,
             HttpMethod::Patch(_) => Self::Patch,
             HttpMethod::Custom(c) => Self::Custom(c.value),
+            HttpMethod::Any(_) => Self::Any,
         }
     }
 }
@@ -694,6 +748,7 @@ impl From<wire::HttpMethod> for HttpMethod {
             wire::HttpMethod::Trace => Self::Trace(Empty {}),
             wire::HttpMethod::Patch => Self::Patch(Empty {}),
             wire::HttpMethod::Custom(value) => Self::Custom(CustomHttpMethod { value }),
+            wire::HttpMethod::Any => Self::Any(Empty {}),
         }
     }
 }
@@ -1083,6 +1138,7 @@ mod tests {
 
         AgentTypeSchema {
             type_name: AgentTypeName("my-agent".to_string()),
+            kind: AgentTypeKind::Regular,
             description: "an agent".to_string(),
             source_language: "rust".to_string(),
             schema,
@@ -1102,6 +1158,116 @@ mod tests {
         let wire = encode_agent_type(&original).expect("encode");
         let decoded = decode_agent_type(&wire).expect("decode");
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn http_metadata_round_trips_without_reordering_or_decoding() {
+        for kind in [AgentTypeKind::Regular, AgentTypeKind::HttpRouter] {
+            let mut original = sample_agent_type();
+            original.kind = kind;
+            original.http_mount = Some(HttpMountDetails {
+                path_prefix: vec![PathSegment::Literal(LiteralSegment {
+                    value: "site".into(),
+                })],
+                auth_details: Some(AgentHttpAuthDetails { required: true }),
+                phantom_agent: false,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec!["https://example.com".into()],
+                },
+                webhook_suffix: vec![],
+                static_bindings: vec![
+                    FileMapping::Subtree(SubtreeFileMapping {
+                        public_prefix: vec![],
+                        filesystem_root: "/public".into(),
+                    }),
+                    FileMapping::Exact(ExactFileMapping {
+                        public_path: vec!["%2f".into()],
+                        file_path: "/literal%20name".into(),
+                    }),
+                ],
+                filesystem_bindings: vec![FileMapping::Exact(ExactFileMapping {
+                    public_path: vec!["report".into()],
+                    file_path: "/data/report.txt".into(),
+                })],
+                openapi_provider: Some("describe-site".into()),
+            });
+            // Transport round trips preserve metadata independently of role validation.
+            let wire = encode_agent_type(&original).unwrap();
+            assert_eq!(decode_agent_type(&wire).unwrap(), original);
+            let proto: golem_api_grpc::proto::golem::schema::AgentTypeSchema =
+                original.clone().into();
+            assert_eq!(AgentTypeSchema::try_from(proto).unwrap(), original);
+            let json = serde_json::to_value(&original).unwrap();
+            assert_eq!(
+                serde_json::from_value::<AgentTypeSchema>(json).unwrap(),
+                original
+            );
+            let bytes = desert_rust::serialize_to_byte_vec(&original).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<AgentTypeSchema>(&bytes).unwrap(),
+                original
+            );
+            assert_eq!(
+                original.clone().normalized().http_mount,
+                original.http_mount
+            );
+        }
+    }
+
+    #[test]
+    fn agent_kind_is_required_and_closed() {
+        let original = sample_agent_type();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json.as_object_mut().unwrap().remove("kind");
+        assert!(serde_json::from_value::<AgentTypeSchema>(json.clone()).is_err());
+        json["kind"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<AgentTypeSchema>(json).is_err());
+        for kind in [0, -1, 3, i32::MAX] {
+            let mut proto: golem_api_grpc::proto::golem::schema::AgentTypeSchema =
+                original.clone().into();
+            proto.kind = kind;
+            assert!(AgentTypeSchema::try_from(proto).is_err());
+        }
+        assert_eq!(
+            serde_json::to_value(AgentTypeKind::HttpRouter).unwrap(),
+            "http-router"
+        );
+        assert_eq!(
+            serde_json::to_value(AgentTypeKind::Regular).unwrap(),
+            "regular"
+        );
+    }
+
+    #[test]
+    fn any_matcher_is_not_a_concrete_extension_method() {
+        let any = HttpMethod::Any(Empty {});
+        let custom = HttpMethod::Custom(CustomHttpMethod {
+            value: "ANY".into(),
+        });
+        assert!(http::Method::try_from(any.clone()).is_err());
+        assert_eq!(
+            http::Method::try_from(custom.clone()).unwrap().as_str(),
+            "ANY"
+        );
+        for method in [any, custom] {
+            let wire: wire::HttpMethod = method.clone().into();
+            assert_eq!(HttpMethod::from(wire), method);
+            let proto: golem_api_grpc::proto::golem::component::HttpMethod = method.clone().into();
+            assert_eq!(HttpMethod::try_from(proto).unwrap(), method);
+            let json = serde_json::to_value(&method).unwrap();
+            assert_eq!(serde_json::from_value::<HttpMethod>(json).unwrap(), method);
+            let bytes = desert_rust::serialize_to_byte_vec(&method).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<HttpMethod>(&bytes).unwrap(),
+                method
+            );
+        }
+        assert!(
+            FileMapping::try_from(golem_api_grpc::proto::golem::component::FileMapping {
+                value: None
+            })
+            .is_err()
+        );
     }
 
     #[test]

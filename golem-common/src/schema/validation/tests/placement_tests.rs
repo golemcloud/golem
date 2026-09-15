@@ -254,6 +254,7 @@ mod agent {
     fn empty_agent(name: &str) -> AgentTypeSchema {
         AgentTypeSchema {
             type_name: AgentTypeName(name.into()),
+            kind: crate::schema::agent::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),

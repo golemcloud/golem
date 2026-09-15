@@ -245,6 +245,11 @@ async fn test_component_stage(deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
     crate::repo::common::test_initial_permission_card_ids_by_account_are_unique(deps).await;
 }
@@ -351,6 +356,11 @@ async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
 #[test]
 async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn missing_security_retains_active_route_barrier(deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
 }
 
 #[test]

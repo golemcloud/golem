@@ -33,7 +33,6 @@ use golem_worker_service::custom_api::{
     RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
     RichSecuritySchemeRouteSecurity,
 };
-use http::Method;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, AuthorizationCode, EmptyAdditionalClaims, IssuerUrl, StandardClaims,
@@ -143,8 +142,10 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         account_id: Default::default(),
         account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         environment_id: Default::default(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 1,
-        method: Method::GET,
+        route_match: golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {})
+            .into(),
         path: vec![PathSegment::Literal {
             value: "redirect".to_string(),
         }],
@@ -164,6 +165,10 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         domain: Domain("example.com".to_string()),
         route: Arc::new(compiled_route),
         captured_path_parameters: vec![],
+        request_target: golem_common::model::agent::http_files::HttpRequestTarget::parse(
+            "/redirect",
+        )
+        .unwrap(),
         openapi_spec: None,
     }
 }

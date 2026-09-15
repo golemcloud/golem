@@ -312,6 +312,7 @@ describe("agent-guest exports", () => {
 
       expect(counter).toMatchObject({
         typeName: "Counter",
+        kind: "regular",
         sourceLanguage: "typescript",
         mode: "durable",
         dependencies: [],

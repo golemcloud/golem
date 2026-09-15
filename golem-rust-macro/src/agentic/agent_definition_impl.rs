@@ -631,6 +631,7 @@ fn get_agent_type_with_remote_client(
         agent_type: quote! {
             golem_rust::agentic::ExtendedAgentType {
                 type_name: #agent_trait_name.to_string(),
+                kind: golem_rust::golem_agentic::golem::agent::common::AgentTypeKind::Regular,
                 description: #high_level_description_ident.to_string(),
                 source_language: "rust".to_string(),
                 methods: vec![#(#methods),*],

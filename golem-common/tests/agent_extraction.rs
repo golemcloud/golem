@@ -16,6 +16,7 @@ use assert2::assert;
 use golem_common::model::agent::extraction::{
     extract_agent_type_schemas, extract_component_metadata_from_bytes,
 };
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema};
 use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -23,27 +24,69 @@ use test_r::test;
 
 test_r::enable!();
 
+fn assert_valid_regular_agent_types(agent_types: &[AgentTypeSchema]) {
+    assert!(!agent_types.is_empty());
+    for agent_type in agent_types {
+        assert!(agent_type.kind == AgentTypeKind::Regular);
+        agent_type.validate().unwrap();
+        if let Some(mount) = &agent_type.http_mount {
+            assert!(mount.static_bindings.is_empty());
+            assert!(mount.filesystem_bindings.is_empty());
+            assert!(mount.openapi_provider.is_none());
+        }
+    }
+}
+
 #[test]
 async fn can_extract_agent_type_schemas_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
-    let result = extract_agent_type_schemas(
+    let agent_types = extract_agent_type_schemas(
         &PathBuf::from_str("../test-components/golem_it_agent_rpc_rust_release.wasm")?,
         false,
         false,
     )
-    .await;
-    assert!(let Ok(_) = result);
+    .await?;
+    assert_valid_regular_agent_types(&agent_types);
     Ok(())
 }
 
 #[test]
 async fn can_extract_agent_type_schemas_2() -> anyhow::Result<()> {
-    let result = extract_agent_type_schemas(
+    let agent_types = extract_agent_type_schemas(
         &PathBuf::from_str("../test-components/golem_it_agent_rpc.wasm")?,
         false,
         false,
     )
-    .await;
-    assert!(let Ok(_) = result);
+    .await?;
+    assert_valid_regular_agent_types(&agent_types);
+    Ok(())
+}
+
+#[test]
+async fn can_extract_http_mounts_from_rust_and_typescript_components() -> anyhow::Result<()> {
+    for artifact in [
+        "golem_it_agent_sdk_rust_release.wasm",
+        "golem_it_agent_sdk_ts.wasm",
+    ] {
+        let agent_types = extract_agent_type_schemas(
+            &PathBuf::from("../test-components").join(artifact),
+            false,
+            false,
+        )
+        .await?;
+        assert_valid_regular_agent_types(&agent_types);
+        let agent = agent_types
+            .iter()
+            .find(|agent| agent.type_name.0 == "HttpAgent")
+            .expect("fixture must export HttpAgent");
+        let mount = agent
+            .http_mount
+            .as_ref()
+            .expect("HttpAgent must be mounted");
+        assert!(mount.path_prefix.len() == 2);
+        assert!(mount.static_bindings.is_empty());
+        assert!(mount.filesystem_bindings.is_empty());
+        assert!(mount.openapi_provider.is_none());
+    }
     Ok(())
 }
 
@@ -63,9 +106,8 @@ async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> an
         .any(|(name, _)| name.starts_with("wasi:http/") && name.contains("@0.3."));
     assert!(imports_p3_http);
 
-    let result = extract_agent_type_schemas(&wasm_path, false, false).await;
-    assert!(let Ok(_) = &result);
-    assert!(!result?.is_empty());
+    let agent_types = extract_agent_type_schemas(&wasm_path, false, false).await?;
+    assert_valid_regular_agent_types(&agent_types);
     Ok(())
 }
 

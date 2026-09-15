@@ -80,6 +80,13 @@ message AgentTypeSchema {
   optional golem.component.HttpMountDetails http_mount = 9;
   golem.component.Snapshotting snapshotting = 10;
   repeated AgentConfigDeclarationSchema config = 11;
+  AgentTypeKind kind = 12;
+}
+
+enum AgentTypeKind {
+  AGENT_TYPE_KIND_UNSPECIFIED = 0;
+  AGENT_TYPE_KIND_REGULAR = 1;
+  AGENT_TYPE_KIND_HTTP_ROUTER = 2;
 }
 
 message AgentConfigDeclarationSchema {

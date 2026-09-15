@@ -431,6 +431,7 @@ function assembleAgentType(
 
   return {
     typeName: name,
+    kind: 'regular',
     description: metadata.description ?? ctorDescription,
     sourceLanguage: 'typescript',
     schema: encoder.finish(),

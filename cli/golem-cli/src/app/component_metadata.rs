@@ -353,6 +353,7 @@ mod tests {
     fn metadata_with_agent_type(type_name: &str) -> ExtractedComponentMetadata {
         ExtractedComponentMetadata {
             agent_types: vec![AgentTypeSchema {
+                kind: golem_common::schema::agent::AgentTypeKind::Regular,
                 type_name: AgentTypeName(type_name.to_string()),
                 description: String::new(),
                 source_language: String::new(),

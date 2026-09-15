@@ -1669,6 +1669,7 @@ mod tests {
 
     fn metadata_with_method(method: AgentMethodSchema) -> ComponentMetadata {
         let at = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName(AGENT_TYPE.to_string()),
             description: String::new(),
             source_language: String::new(),

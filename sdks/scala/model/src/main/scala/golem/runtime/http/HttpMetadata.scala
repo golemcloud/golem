@@ -43,6 +43,7 @@ object HttpMethod {
   case object Options                     extends HttpMethod
   case object Connect                     extends HttpMethod
   case object Trace                       extends HttpMethod
+  case object Any                         extends HttpMethod
   final case class Custom(method: String) extends HttpMethod
 
   def fromString(method: String): Either[String, HttpMethod] =
@@ -60,12 +61,21 @@ object HttpMethod {
     }
 }
 
+sealed trait FileMapping extends Product with Serializable
+object FileMapping {
+  final case class Exact(publicPath: List[String], filePath: String)           extends FileMapping
+  final case class Subtree(publicPrefix: List[String], filesystemRoot: String) extends FileMapping
+}
+
 final case class HttpMountDetails(
   pathPrefix: List[PathSegment],
   authRequired: Boolean,
   phantomAgent: Boolean,
   corsAllowedPatterns: List[String],
-  webhookSuffix: List[PathSegment]
+  webhookSuffix: List[PathSegment],
+  staticBindings: List[FileMapping],
+  filesystemBindings: List[FileMapping],
+  openapiProvider: Option[String]
 )
 
 final case class HttpEndpointDetails(

@@ -166,6 +166,7 @@ fn emit_agent_type_def(
 ) -> Unit {
   buf.write_string("    let \{var_name} : @agents.AgentTypeDef = {\n")
   buf.write_string("      type_name: \"\{escape_string_lit(agent.name)}\",\n")
+  buf.write_string("      kind: @common.AgentTypeKind::REGULAR,\n")
   buf.write_string(
     "      description: \"\{escape_string_lit(agent.description)}\",\n",
   )

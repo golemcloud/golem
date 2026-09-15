@@ -271,8 +271,9 @@ fn call_agent_route(
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
@@ -926,8 +927,9 @@ fn raw_route(
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
         body,
         behavior,
@@ -935,6 +937,24 @@ fn raw_route(
         cors: CorsOptions {
             allowed_patterns: vec![],
         },
+    }
+}
+
+fn test_route_match(method: Method) -> golem_service_base::custom_api::RouteMatch {
+    use golem_common::model::Empty;
+    use golem_common::model::agent::HttpMethod;
+    match method {
+        Method::GET => HttpMethod::Get(Empty {}).into(),
+        Method::POST => HttpMethod::Post(Empty {}).into(),
+        Method::PUT => HttpMethod::Put(Empty {}).into(),
+        Method::DELETE => HttpMethod::Delete(Empty {}).into(),
+        Method::PATCH => HttpMethod::Patch(Empty {}).into(),
+        Method::HEAD => HttpMethod::Head(Empty {}).into(),
+        Method::OPTIONS => HttpMethod::Options(Empty {}).into(),
+        other => HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+            value: other.to_string(),
+        })
+        .into(),
     }
 }
 

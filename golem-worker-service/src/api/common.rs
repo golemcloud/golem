@@ -220,6 +220,13 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::BadFileType(_) => {
                 Self::bad_request(api::error_code::BAD_FILE_TYPE, error)
             }
+            WorkerServiceError::FileRead(
+                golem_common::model::filesystem::FileReadError::InvalidTarget
+                | golem_common::model::filesystem::FileReadError::InvalidSelection,
+            ) => Self::bad_request(api::error_code::VALIDATION_ERROR, error),
+            WorkerServiceError::FileRead(_) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
+            }
             WorkerServiceError::ComponentNotFound(_) => {
                 Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
             }
@@ -450,9 +457,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
                 Self::conflict(api::error_code::OIDC_SCHEME_MISMATCH, value)
             }
 
-            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
-                Self::not_found(api::error_code::ROUTE_NOT_FOUND, value)
-            }
+            RequestHandlerError::ResolvingRouteFailed(
+                RouteResolverError::NoMatchingRoute | RouteResolverError::UnknownSite,
+            ) => Self::not_found(api::error_code::ROUTE_NOT_FOUND, value),
 
             RequestHandlerError::OidcTokenExchangeFailed => {
                 Self::forbidden(api::error_code::OIDC_TOKEN_EXCHANGE_FAILED, value)

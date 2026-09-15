@@ -991,6 +991,7 @@ impl From<DeploymentWriteError> for ApiError {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
             DeploymentWriteError::AmbientToolConflict(_)
+            | DeploymentWriteError::DuplicateRouterFileTarget
             | DeploymentWriteError::DuplicateRemoteToolName(_) => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
@@ -1018,6 +1019,12 @@ impl From<DeploymentWriteError> for ApiError {
 
             DeploymentWriteError::ConcurrentDeployment => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            DeploymentWriteError::RouterFileIndexBusy => {
+                Self::conflict(api::error_code::LIMIT_EXCEEDED, error)
+            }
+            DeploymentWriteError::RouterFileIndexTimeout => {
+                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
             }
             DeploymentWriteError::NoOpDeployment => {
                 Self::conflict(api::error_code::DEPLOYMENT_NOOP, error)
@@ -1348,6 +1355,28 @@ mod tests {
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
     use test_r::test;
+
+    #[test]
+    fn router_index_errors_preserve_failure_categories() {
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::RouterFileIndexBusy),
+            ApiError::Conflict(_)
+        ));
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::RouterFileIndexTimeout),
+            ApiError::LimitExceeded(_)
+        ));
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::DuplicateRouterFileTarget),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::from(anyhow::anyhow!(
+                "storage failure"
+            ))),
+            ApiError::InternalError(_)
+        ));
+    }
 
     #[test]
     fn resource_override_errors_use_distinct_http_statuses() {

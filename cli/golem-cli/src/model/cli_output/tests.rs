@@ -950,6 +950,7 @@ fn sample_agent_type_schema(
     agent_type_name: golem_common::model::agent::AgentTypeName,
 ) -> golem_common::schema::agent::AgentTypeSchema {
     golem_common::schema::agent::AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: agent_type_name,
         description: String::new(),
         source_language: String::new(),
@@ -2373,6 +2374,10 @@ fn arb_deployed_registered_agent_type()
 fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchema> {
     (
         arb_agent_type_name(),
+        prop_oneof![
+            Just(golem_common::schema::agent::AgentTypeKind::Regular),
+            Just(golem_common::schema::agent::AgentTypeKind::HttpRouter),
+        ],
         arb_small_string(),
         arb_small_string(),
         arb_agent_constructor(),
@@ -2386,6 +2391,7 @@ fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchem
         .prop_map(
             |(
                 type_name,
+                kind,
                 description,
                 source_language,
                 constructor,
@@ -2409,6 +2415,7 @@ fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchem
                 };
 
                 golem_common::schema::agent::AgentTypeSchema {
+                    kind,
                     type_name,
                     description,
                     source_language,
@@ -2668,19 +2675,64 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
         any::<bool>(),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
+        proptest::collection::vec(arb_file_mapping(), 1..3),
+        proptest::collection::vec(arb_file_mapping(), 1..3),
+        proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(path_prefix, auth_details, phantom_agent, allowed_patterns, webhook_suffix)| {
+            |(
+                path_prefix,
+                auth_details,
+                phantom_agent,
+                allowed_patterns,
+                webhook_suffix,
+                static_bindings,
+                filesystem_bindings,
+                openapi_provider,
+            )| {
                 golem_common::model::agent::HttpMountDetails {
                     path_prefix,
                     auth_details,
                     phantom_agent,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
+                    static_bindings,
+                    filesystem_bindings,
+                    openapi_provider,
                 }
             },
         )
         .boxed()
+}
+
+fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> {
+    prop_oneof![
+        (
+            proptest::collection::vec(arb_small_string(), 1..3),
+            arb_small_string(),
+        )
+            .prop_map(|(public_path, file_path)| {
+                golem_common::model::agent::FileMapping::Exact(
+                    golem_common::model::agent::ExactFileMapping {
+                        public_path,
+                        file_path,
+                    },
+                )
+            }),
+        (
+            proptest::collection::vec(arb_small_string(), 1..3),
+            arb_small_string(),
+        )
+            .prop_map(|(public_prefix, filesystem_root)| {
+                golem_common::model::agent::FileMapping::Subtree(
+                    golem_common::model::agent::SubtreeFileMapping {
+                        public_prefix,
+                        filesystem_root,
+                    },
+                )
+            }),
+    ]
+    .boxed()
 }
 
 fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails> {
@@ -2767,6 +2819,9 @@ fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
                 golem_common::model::agent::CustomHttpMethod { value },
             )
         }),
+        Just(golem_common::model::agent::HttpMethod::Any(
+            golem_common::model::Empty {}
+        )),
     ]
     .boxed()
 }

@@ -10803,6 +10803,11 @@ components:
           default: []
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       type: object
       title: AgentTypeProvisionConfig
@@ -10905,6 +10910,7 @@ components:
       type: object
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -10914,6 +10920,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -13276,6 +13284,19 @@ components:
           type: array
           items:
             type: string
+    ExactFileMapping:
+      type: object
+      title: ExactFileMapping
+      required:
+      - publicPath
+      - filePath
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
     Example:
       type: object
       required:
@@ -13798,6 +13819,40 @@ components:
             - auto-injected
           value:
             $ref: '#/components/schemas/AutoInjectedKind'
+    FileMapping:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Exact
+            example: Exact
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Subtree
+            example: Subtree
+      - $ref: '#/components/schemas/SubtreeFileMapping'
     FlagShape:
       type: object
       oneOf:
@@ -14104,6 +14159,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       discriminator:
         propertyName: type
         mapping:
@@ -14117,6 +14173,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -14138,8 +14195,8 @@ components:
           type:
             type: string
             enum:
-            - Patch
-            example: Patch
+            - Any
+            example: Any
       - $ref: '#/components/schemas/Empty'
     HttpMountDetails:
       type: object
@@ -14149,6 +14206,8 @@ components:
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
       properties:
         pathPrefix:
           type: array
@@ -14164,6 +14223,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        openapiProvider:
+          type: string
     ImpliesC:
       type: object
       required:
@@ -17663,6 +17732,19 @@ components:
             type: string
         required:
           type: boolean
+    SubtreeFileMapping:
+      type: object
+      title: SubtreeFileMapping
+      required:
+      - publicPrefix
+      - filesystemRoot
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
     SystemToolAvailability:
       type: string
       enum:

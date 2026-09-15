@@ -20,9 +20,7 @@ use crate::service::worker::{
     WorkerClient, WorkerResult, WorkerService, WorkerServiceError, WorkerStream,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::Utc;
-use futures::Stream;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
@@ -439,11 +437,12 @@ impl WorkerClient for RecordingWorkerClient {
     async fn get_file_contents(
         &self,
         _: &AgentId,
-        _: CanonicalFilePath,
+        _: golem_common::model::filesystem::FileReadTarget,
+        _: golem_common::model::filesystem::FileByteSelection,
         _: EnvironmentId,
         _: AccountId,
         _: AuthCtx,
-    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
+    ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
         unimplemented!()
     }
 
@@ -609,6 +608,7 @@ impl InvocationHarness {
                 None,
                 None,
                 vec![AgentTypeSchema {
+                    kind: golem_common::schema::agent::AgentTypeKind::Regular,
                     type_name: AgentTypeName("mcp-agent".to_string()),
                     description: String::new(),
                     source_language: String::new(),

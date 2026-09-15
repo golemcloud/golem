@@ -439,6 +439,9 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     phantomAgent: spec.phantomAgent ?? false,
     corsOptions: { allowedPatterns: spec.cors ? [...spec.cors] : [] },
     webhookSuffix: spec.webhookSuffix ? resolvePath(spec.webhookSuffix, 'webhook suffix') : [],
+    staticBindings: [],
+    filesystemBindings: [],
+    openapiProvider: undefined,
   };
 }
 

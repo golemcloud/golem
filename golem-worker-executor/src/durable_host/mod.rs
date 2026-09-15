@@ -68,8 +68,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
-    TrapType,
+    AgentConfig, ExecutionStatus, InvocationContext, LastError, SnapshotSource, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
@@ -9058,64 +9057,6 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        use crate::services::agent_filesystem as agent_fs;
-
-        let generation_handle = self.filesystem_generation_handle();
-        let relative = PathBuf::from(path.to_rel_string());
-        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
-            .map_err(|error| filesystem_read_error(path, error))?;
-        let attributes = match agent_fs::attributes(
-            &generation_handle,
-            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        {
-            Ok(attributes) => attributes,
-            Err(error) if filesystem_error_is_not_found(&error) => {
-                return Ok(ReadFileResult::NotFound);
-            }
-            Err(error) => return Err(filesystem_read_error(path, error)),
-        };
-        if attributes.kind != agent_fs::ObjectKind::File {
-            return Ok(ReadFileResult::NotAFile);
-        }
-        let opened = agent_fs::open(
-            &generation_handle,
-            target,
-            agent_fs::OpenOptions::Existing {
-                expected: agent_fs::ObjectKind::File,
-                access: agent_fs::AccessMode::Read,
-                follow: agent_fs::Follow::Yes,
-            },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let agent_fs::OpenNode::File(file) = opened.node else {
-            unreachable!("file open returned a non-file node")
-        };
-        let length =
-            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: "File is too large to read on this executor".to_string(),
-            })?;
-        let bytes = agent_fs::read_file(
-            &generation_handle,
-            &file,
-            agent_fs::ReadRange { offset: 0, length },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
-        Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
 }
 

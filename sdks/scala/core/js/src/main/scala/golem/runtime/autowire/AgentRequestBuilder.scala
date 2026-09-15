@@ -22,6 +22,7 @@ import golem.runtime._
 import golem.runtime.http._
 
 import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
 
 /**
  * Builds the schema-native [[AgentTypeEncoderV2.AgentRequest]] surface from an
@@ -71,6 +72,10 @@ private[autowire] object AgentRequestBuilder {
 
     AgentTypeEncoderV2.AgentRequest(
       typeName = typeName,
+      kind = metadata.kind match {
+        case AgentTypeKind.Regular    => "regular"
+        case AgentTypeKind.HttpRouter => "http-router"
+      },
       description = metadata.description.getOrElse(typeName),
       mode = mode,
       constructor = constructor,
@@ -106,8 +111,18 @@ private[autowire] object AgentRequestBuilder {
       phantomAgent = mount.phantomAgent,
       corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
       webhookSuffix = encodePathSegments(mount.webhookSuffix),
+      staticBindings = encodeFileMappings(mount.staticBindings),
+      filesystemBindings = encodeFileMappings(mount.filesystemBindings),
+      openapiProvider = mount.openapiProvider.orUndefined,
       authDetails = if (mount.authRequired) JsAuthDetails(required = true) else js.undefined
     )
+
+  private def encodeFileMappings(mappings: List[FileMapping]): js.Array[JsFileMapping] =
+    mappings.map {
+      case FileMapping.Exact(publicPath, filePath)           => JsFileMapping.exact(publicPath.toJSArray, filePath)
+      case FileMapping.Subtree(publicPrefix, filesystemRoot) =>
+        JsFileMapping.subtree(publicPrefix.toJSArray, filesystemRoot)
+    }.toJSArray
 
   private def encodeHttpEndpoints(endpoints: List[HttpEndpointDetails]): js.Array[JsHttpEndpointDetails] = {
     val arr = new js.Array[JsHttpEndpointDetails]()
@@ -185,6 +200,7 @@ private[autowire] object AgentRequestBuilder {
     case HttpMethod.Options        => JsHttpMethod.options
     case HttpMethod.Connect        => JsHttpMethod.connect
     case HttpMethod.Trace          => JsHttpMethod.trace
+    case HttpMethod.Any            => JsHttpMethod.any
     case HttpMethod.Custom(method) => JsHttpMethod.custom(method)
   }
 }

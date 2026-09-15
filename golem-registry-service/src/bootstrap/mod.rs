@@ -423,6 +423,8 @@ impl Services {
             environment_tool_grant_service.clone(),
             tool_release_service.clone(),
             native_tool_catalog.clone(),
+            initial_agent_files.clone(),
+            config.router_file_index.clone(),
         ));
 
         let deployed_routes_service =

@@ -15,6 +15,7 @@
 use super::DeployValidationError;
 use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
+use super::router_file_index::RouterFileIndexBuilder;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
@@ -63,6 +64,12 @@ pub enum DeploymentWriteError {
     EnvironmentNotYetDeployed,
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
+    #[error("Router file index preparation is busy")]
+    RouterFileIndexBusy,
+    #[error("Router file index preparation exceeded its deadline")]
+    RouterFileIndexTimeout,
+    #[error("Duplicate router initial-file target path")]
+    DuplicateRouterFileTarget,
     #[error("Requested deployment would not have any changes compared to current deployment")]
     NoOpDeployment,
     #[error("Provided deployment version {version} already exists in this environment")]
@@ -99,6 +106,9 @@ impl SafeDisplay for DeploymentWriteError {
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
+            Self::RouterFileIndexBusy
+            | Self::RouterFileIndexTimeout
+            | Self::DuplicateRouterFileTarget => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
@@ -140,6 +150,7 @@ pub struct DeploymentWriteService {
     environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
     tool_release_service: Arc<ToolReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
+    router_file_index: RouterFileIndexBuilder,
 }
 
 impl DeploymentWriteService {
@@ -157,6 +168,10 @@ impl DeploymentWriteService {
         environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
         tool_release_service: Arc<ToolReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
+        initial_agent_files: Arc<
+            golem_service_base::service::initial_agent_files::InitialAgentFilesService,
+        >,
+        router_file_index_config: crate::config::RouterFileIndexConfig,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -172,6 +187,10 @@ impl DeploymentWriteService {
             environment_tool_grant_service,
             tool_release_service,
             native_tool_catalog,
+            router_file_index: RouterFileIndexBuilder::new(
+                initial_agent_files,
+                router_file_index_config,
+            ),
         }
     }
 
@@ -346,14 +365,11 @@ impl DeploymentWriteService {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes =
-            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
-
         let security_schemes_list = self
             .security_scheme_service
             .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
-            .unwrap_or_default();
+            .map_err(anyhow::Error::new)?;
 
         let security_schemes_map: HashMap<
             SecuritySchemeName,
@@ -373,6 +389,12 @@ impl DeploymentWriteService {
                 (s.name, details)
             })
             .collect();
+
+        let mut compiled_routes = deployment_context.compile_http_api_routes(
+            &security_schemes_map,
+            &mut errors,
+            &mut warnings,
+        );
 
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
@@ -477,6 +499,10 @@ impl DeploymentWriteService {
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
+
+        self.router_file_index
+            .prepare(&deployment_context, &mut compiled_routes)
+            .await?;
 
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,

@@ -16,15 +16,15 @@ use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
-    OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    AgentFilesystemBehaviour, CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour,
+    HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat, RouteMatch,
+    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::Method;
 use http::{HeaderName, StatusCode};
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
@@ -65,8 +65,9 @@ pub struct RichCompiledRoute {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
     pub route_id: RouteId,
-    pub method: Method,
+    pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
     pub body: RequestBodySchema,
     pub behavior: RichRouteBehaviour,
@@ -82,6 +83,8 @@ pub enum RichRouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
     OidcCallback(OidcCallbackBehaviour),
+    HttpRouter(HttpRouterBehaviour),
+    AgentFilesystem(AgentFilesystemBehaviour),
 }
 
 impl From<RouteBehaviour> for RichRouteBehaviour {
@@ -91,6 +94,8 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
             RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
             RouteBehaviour::OpenApiSpec(inner) => Self::OpenApiSpec(inner),
+            RouteBehaviour::HttpRouter(inner) => Self::HttpRouter(inner),
+            RouteBehaviour::AgentFilesystem(inner) => Self::AgentFilesystem(inner),
         }
     }
 }
@@ -105,6 +110,7 @@ pub enum RichRouteSecurity {
     None,
     SessionFromHeader(SessionFromHeaderRouteSecurity),
     SecurityScheme(RichSecuritySchemeRouteSecurity),
+    Unavailable,
 }
 
 #[derive(Debug, Clone)]
