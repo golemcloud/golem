@@ -3067,6 +3067,7 @@ pub(super) fn scope_entry_owner(
             ..
         }
         | OplogEntry::Restart { .. }
+        | OplogEntry::Resumed { .. }
         | OplogEntry::ActivatePlugin { .. }
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }
@@ -3153,6 +3154,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }
         | OplogEntry::Restart { .. }
+        | OplogEntry::Resumed { .. }
         | OplogEntry::ActivatePlugin { .. }
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }

@@ -24,8 +24,8 @@ use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    lower_invocation,
+    GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, lower_invocation, run_guest_call_settled,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -71,8 +71,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
-use wasmtime::Store;
 use wasmtime::component::Instance;
+use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -252,7 +252,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         'outer: loop {
             self.release_terminal_interrupt().await;
-            if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
+            // ADMISSION: gates the start of a generation, so
+            // fencing refuses new generations and never interrupts a running one.
+            if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
@@ -2176,6 +2178,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                     .await;
                             }
                         }
+                        if let Err(error) = run_guest_call_settled(
+                            &mut self.store.as_context_mut(),
+                            async |_accessor| (),
+                        )
+                        .await
+                        {
+                            let error = match error {
+                                GuestCallSettlementError::Infrastructure(error) => error,
+                                GuestCallSettlementError::Trap(error)
+                                | GuestCallSettlementError::Interrupted(error) => {
+                                    WorkerExecutorError::runtime(error.to_string())
+                                }
+                            };
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(error),
+                                )
+                                .await;
+                        }
                     }
                     self.agent_invocation_finished(
                         display_name,
@@ -2315,17 +2338,29 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await
         {
             Ok(()) => {
-                if self.uses_streams
-                    && let Err(error) = self
-                        .parent
-                        .complete_durable_streaming_session(idempotency_key)
-                        .await
-                {
-                    tracing::error!(%error, "Failed to complete durable streaming session");
-                    return failed_agent_invocation_outcome(
-                        self.parent.agent_mode(),
-                        RetryDecision::Immediate,
-                    );
+                if self.uses_streams {
+                    let parent = self.parent.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    // Host stream operations can retain session locks across a pending poll.
+                    // Keep driving the Store while protocol-only completion acquires them.
+                    let result = self
+                        .store
+                        .run_concurrent(async move |_accessor| {
+                            parent
+                                .complete_durable_streaming_session(&idempotency_key)
+                                .await
+                        })
+                        .await;
+                    if let Err(error) = result
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                        .and_then(|result| result)
+                    {
+                        tracing::error!(%error, "Failed to complete durable streaming session");
+                        return failed_agent_invocation_outcome(
+                            self.parent.agent_mode(),
+                            RetryDecision::Immediate,
+                        );
+                    }
                 }
                 successful_agent_invocation_outcome(
                     self.parent.agent_mode(),

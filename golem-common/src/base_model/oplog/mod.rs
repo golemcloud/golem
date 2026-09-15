@@ -458,6 +458,14 @@ oplog_entry! {
         raw {}
         public {}
     },
+    /// Marks that an unfinished durable invocation was admitted to resume
+    Resumed {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
+    },
     /// Activates a plugin for the worker
     ActivatePlugin {
         hint: true

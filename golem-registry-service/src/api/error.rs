@@ -820,7 +820,9 @@ impl From<PluginRegistrationError> for ApiError {
             PluginRegistrationError::ParentAccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
-            PluginRegistrationError::PluginRegistrationNotFound(_) => {
+            PluginRegistrationError::PluginRegistrationNotFound(_)
+            | PluginRegistrationError::PluginRegistrationByNameNotFound { .. }
+            | PluginRegistrationError::PluginRegistrationByEmailNotFound { .. } => {
                 Self::not_found(api::error_code::PLUGIN_REGISTRATION_NOT_FOUND, error)
             }
 
@@ -987,6 +989,14 @@ impl From<DeploymentWriteError> for ApiError {
             }
             DeploymentWriteError::DeploymentNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
+            }
+            DeploymentWriteError::AmbientToolConflict(_)
+            | DeploymentWriteError::DuplicateRemoteToolName(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::deployment_validation::FAILED.to_string(),
+                    cause: None,
+                }))
             }
 
             DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
@@ -1248,7 +1258,8 @@ impl From<AgentSecretError> for ApiError {
             AgentSecretError::AgentSecretValueDoesNotMatchType { .. } => {
                 Self::bad_request(api::error_code::AGENT_SECRET_VALUE_TYPE_MISMATCH, error)
             }
-            AgentSecretError::AgentSecretNotFound(_) => {
+            AgentSecretError::AgentSecretNotFound(_)
+            | AgentSecretError::AgentSecretByPathNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_SECRET_NOT_FOUND, error)
             }
             AgentSecretError::ParentEnvironmentNotFound(_) => {
@@ -1280,7 +1291,8 @@ impl From<RetryPolicyError> for ApiError {
             RetryPolicyError::RetryPolicyForNameAlreadyExists { .. } => {
                 Self::conflict(api::error_code::RETRY_POLICY_ALREADY_EXISTS, error)
             }
-            RetryPolicyError::RetryPolicyNotFound(_) => {
+            RetryPolicyError::RetryPolicyNotFound(_)
+            | RetryPolicyError::RetryPolicyByNameNotFound { .. } => {
                 Self::not_found(api::error_code::RETRY_POLICY_NOT_FOUND, error)
             }
             RetryPolicyError::ParentEnvironmentNotFound(_) => {

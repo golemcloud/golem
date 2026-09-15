@@ -7787,6 +7787,7 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
     for (app_name, language) in [
         ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-effect", "effect"),
         ("test-app-embedded-skills-rust", "rust"),
         ("test-app-embedded-skills-scala", "scala"),
     ] {
@@ -7803,6 +7804,30 @@ async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
                 .exists(),
             "missing embedded bootstrap skill for {language}",
         );
+
+        if language == "ts" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "missing TypeScript npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "Effect npm-package skill leaked into TypeScript template",
+            );
+        } else if language == "effect" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "missing Effect npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "TypeScript npm-package skill leaked into Effect template",
+            );
+        }
 
         let claude_link = ctx.cwd_path_join(".claude");
         assert!(

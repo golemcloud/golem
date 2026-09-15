@@ -97,8 +97,9 @@ use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::model::tool_release::{
-    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
-    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
+    SYSTEM_TOOL_AVAILABILITY_GRANTABLE, TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
 };
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -1749,6 +1750,133 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     check!(get_agent_secret_initial_revision(deps, &secret, true).await);
 }
 
+pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
+    use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_registry_service::repo::model::retry_policy::{
+        RetryPolicyCreationRecord, RetryPolicyRepoError,
+    };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let environment_id = EnvironmentId(env.revision.environment_id);
+    let actor = AccountId(owner.revision.account_id);
+
+    let retry_id = RetryPolicyId::new();
+    let retry = RetryPolicyCreationRecord::new(
+        retry_id,
+        environment_id,
+        "retry.with.dots".to_string(),
+        10,
+        "true".to_string(),
+        "{}".to_string(),
+        actor,
+    );
+    let _ = deps.retry_policy_repo.create(retry.clone()).await.unwrap();
+    let found = deps
+        .retry_policy_repo
+        .get_for_environment_and_name(environment_id.0, &retry.name)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(found.revision.retry_policy_id == retry_id.0);
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(matches!(
+        deps.retry_policy_repo.create(retry.clone()).await,
+        Err(RetryPolicyRepoError::NameViolatesUniqueness)
+    ));
+    let mut deleted_retry = retry.revision;
+    deleted_retry.revision_id = RetryPolicyRevision::INITIAL.next().unwrap().into();
+    deleted_retry.audit = DeletableRevisionAuditFields::deletion(actor.0);
+    let _ = deps.retry_policy_repo.delete(deleted_retry).await.unwrap();
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, &retry.name)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for path in [
+        vec!["single".to_string()],
+        vec!["segment.with.dots".to_string()],
+        vec![
+            "multi".to_string(),
+            "segment".to_string(),
+            "path".to_string(),
+        ],
+    ] {
+        let secret_id = AgentSecretId::new();
+        let creation = AgentSecretCreationRecord::new(
+            secret_id,
+            environment_id,
+            CanonicalAgentSecretPath(path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        );
+        let _ = deps
+            .agent_secret_repo
+            .create(creation.clone())
+            .await
+            .unwrap();
+        let found = deps
+            .agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, path.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        check!(found.revision.agent_secret_id == secret_id.0);
+        check!(matches!(
+            deps.agent_secret_repo.create(creation).await,
+            Err(golem_registry_service::repo::model::agent_secrets::AgentSecretRepoError::SecretViolatesUniqueness)
+        ));
+    }
+
+    let deleted_path = vec!["deleted".to_string(), "secret".to_string()];
+    let deleted_id = AgentSecretId::new();
+    let _ = deps
+        .agent_secret_repo
+        .create(AgentSecretCreationRecord::new(
+            deleted_id,
+            environment_id,
+            CanonicalAgentSecretPath(deleted_path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        ))
+        .await
+        .unwrap();
+    let _ = deps
+        .agent_secret_repo
+        .delete(
+            AgentSecretRevisionRecord::delete(deleted_id, AgentSecretRevision::INITIAL, actor)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, deleted_path)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, vec!["missing".to_string()])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;
@@ -2377,6 +2505,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
 
 struct EnvironmentServiceDeps {
     environment_service: Arc<EnvironmentService>,
+    component_service: Arc<ComponentService>,
     card_service: CardService,
 }
 
@@ -2419,6 +2548,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2432,13 +2564,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -2479,6 +2612,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2492,13 +2628,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -4652,6 +4789,34 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     );
     assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
 
+    let protected_component_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-component-tool").unwrap(),
+            version: "1.0.0".to_string(),
+            source: component_source,
+            definition: make_test_tool("protected-component-tool", "1.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let protected_component = deps
+        .tool_release_repo
+        .create(protected_component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(protected_component.release, protected_component_record);
+    assert_eq!(
+        protected_component.release.origin,
+        TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM
+    );
+    assert_eq!(
+        protected_component.release.system_availability,
+        Some(SYSTEM_TOOL_AVAILABILITY_GRANTABLE)
+    );
+
     let mut invalid_component = component_record.clone();
     invalid_component.tool_release_id = new_repo_uuid();
     invalid_component.tool_version = "invalid-component-fk".to_string();
@@ -5220,6 +5385,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         parameters: NormalizedJsonValue::new(serde_json::json!({
                             "revision": deployment_revision_id
                         })),
+                        config_keys_readable: Default::default(),
                         secret_keys_readable: SecretKeyScope::All,
                         secret_keys_revealable: SecretKeyScope::All,
                         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5535,6 +5701,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         account_id: AccountId(owner_account_id),
         account_email: remote_registered_tool.owner_account_email.clone(),
         parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 10 })),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5612,15 +5779,18 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(staged.remote_tools.len(), 1);
     assert!(staged.published_tools.is_empty());
 
+    let component_service = environment_service_deps(deps).component_service;
     let tool_release_service = match &deps.test_db {
         TestDb::Postgres(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service.clone(),
             AccountId(owner_account_id),
         ),
         TestDb::Sqlite(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service,
             AccountId(owner_account_id),
         ),
     };

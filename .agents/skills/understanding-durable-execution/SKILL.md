@@ -93,6 +93,17 @@ says how strict that commit is: `Always` waits for durable storage; `DurableOnly
 for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
 level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
 
+`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+commit and ignores receipt entries already folded into the published status. Primary/ephemeral
+threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
+may hide a committed suffix. Unless the remaining receipt is exactly the contiguous suffix after
+the last published index, the status actor catches up with `status::try_fold_status_from`: committed
+storage is read in bounded chunks, external `StreamSession` payloads are hydrated, and the result
+is published once. This avoids retaining an unbounded auto-flushed tail and adds neither oplog
+entries nor a protocol change. Gap recovery conservatively invalidates authority snapshots after
+the fold. Ephemeral `DurableOnly` intentionally remains non-flushing and keeps its no-I/O fast
+path. This is status reconstruction, not replay tolerance.
+
 ## Component map
 
 | Area | Files | Responsibility |
@@ -137,6 +148,20 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
+Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
+`Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
+after reading the worker's memory requirement succeeds and before changing the resident state to
+`WaitingForPermit`. The status fold therefore changes `Interrupted` back to `Running` immediately,
+even if permit admission is still blocked (for example while the interrupted invocation is parked
+in a pending p3 wait). `Resumed` does not enqueue an invocation: the existing
+`current_idempotency_key` identifies the invocation that reconstruction continues. A `Restart`
+does not use this marker and retains its normal `Idle`/automatic-recovery semantics; ephemeral
+agents retain their clean fail-stop lifecycle and never append it.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in
@@ -159,7 +184,7 @@ order and skips hints. Key kinds:
   recordings need no closing entry.
 - `BeginAtomicRegion` / `EndAtomicRegion`, `Jump`, `Revert`, `NoOp`.
 - `PendingUpdate`, `SuccessfulUpdate`, `FailedUpdate`, `Snapshot` (hint).
-- Lifecycle hints: `Suspend`, `Error`, `Interrupted`, `Exited`, `Restart`.
+- Lifecycle hints: `Suspend`, `Error`, `Interrupted`, `Resumed`, `Exited`, `Restart`.
 
 Hints are skipped by `skip_forward` (the physical cursor moves past them, but
 `last_replayed_non_hint_index` does not), take part in no `Start`/terminal pairing, and never
