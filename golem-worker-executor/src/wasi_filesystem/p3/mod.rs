@@ -489,28 +489,15 @@ fn p3_agent_write_result(
     result: Result<WriteResult, AgentFilesystemError>,
     placement: WritePlacement,
 ) -> P3WriteFutureResult {
-    match result {
-        Ok(result) => {
-            let written = usize::try_from(result.written)
-                .map_err(|_| wasmtime::Error::msg("filesystem write progress overflowed"))?;
-            let next = advance_write_placement(placement, result.written)
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-            Ok(Ok((written, next)))
-        }
-        Err(AgentFilesystemError::Sandbox(error)) => match error.io_error() {
-            Some(error) => Ok(Err(types::ErrorCode::from(error))),
-            None => Err(wasmtime::Error::msg(error.to_string())),
-        },
-        Err(AgentFilesystemError::AgentQuota(_)) => Ok(Err(types::ErrorCode::Quota)),
-        Err(AgentFilesystemError::PhysicalCapacity(_)) => {
-            Ok(Err(types::ErrorCode::InsufficientSpace))
-        }
-        Err(
-            error @ (AgentFilesystemError::Access(_)
-            | AgentFilesystemError::Baseline(_)
-            | AgentFilesystemError::RuntimeInvalidated),
-        ) => Err(wasmtime::Error::msg(error.to_string())),
-    }
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => return p3_agent_error(error).downcast().map(Err),
+    };
+    let written = usize::try_from(result.written)
+        .map_err(|_| wasmtime::Error::msg("filesystem write progress overflowed"))?;
+    let next = advance_write_placement(placement, result.written)
+        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+    Ok(Ok((written, next)))
 }
 
 /// Registers the WASI P3 filesystem types and preopens host interfaces.
@@ -3612,7 +3599,7 @@ mod tests {
     }
 
     #[test]
-    fn p2_p3_write_quota_and_capacity_errors_are_identical() {
+    fn p2_p3_write_quota_capacity_and_permission_errors_are_identical() {
         fn storage_error() -> FilesystemStorageError {
             FilesystemStorageError::io(
                 "write",
@@ -3635,6 +3622,12 @@ mod tests {
                 AgentFilesystemError::PhysicalCapacity(storage_error()),
                 P2ErrorCode::InsufficientSpace,
                 "ErrorCode::InsufficientSpace",
+            ),
+            (
+                AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted),
+                AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted),
+                P2ErrorCode::NotPermitted,
+                "ErrorCode::NotPermitted",
             ),
         ] {
             let p2: P2ErrorCode = p2_agent_write_result(Err(p2_error), WritePlacement::At(0))

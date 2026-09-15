@@ -1709,7 +1709,7 @@ async fn terminal_file_read_failure_invalidates_generation_handle() {
     let file = open_file(&generation_handle, &control, 30).await;
     control.push_read(Err(sandbox_error(
         "read",
-        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
     )));
 
     assert!(matches!(
@@ -2511,89 +2511,30 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
 }
 
 #[test]
-async fn a_hard_link_of_a_directory_that_the_sandbox_refuses_gives_not_permitted_and_keeps_the_generation()
- {
-    let (filesystem, control, window) = metered_resident().await;
-    let generation_handle = resident_generation_handle(&filesystem);
-    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
-    control.push_get_attributes(Err(missing("destination before the link")));
-    control.push_hard_link(Err(sandbox_error(
-        "hard link a directory",
-        std::io::ErrorKind::PermissionDenied,
-    )));
-    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
-
-    let linked = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Link {
-            source: at("directory"),
-            destination: at("alias"),
-        },
-    )
-    .unwrap()
-    .await;
-
-    assert!(
-        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
-        "{linked:?}"
-    );
-    assert_eq!(call_count(&control, "hard_link("), 1);
-    let source_read = control
-        .calls()
-        .into_iter()
-        .rfind(|call| call.starts_with("get_path_attributes("));
-    assert!(
-        source_read.as_deref().is_some_and(|call| {
-            call.contains(r#"path: "directory" }"#) && call.ends_with("follow=No)")
-        }),
-        "the lifecycle must read the source of the refused link without following a symlink: \
-         {source_read:?}"
-    );
-    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
-    control.push_get_attributes(Err(missing("directory before the insert")));
-    control.push_create_directory(Ok(()));
-    edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Insert {
-            destination: at("after-refused-link"),
-            object: NewObject::Directory,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
-
-    close_window(window, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
-    control.push_delete_and_verify(Ok(()));
-    delete(seal(filesystem)).await.unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-async fn a_hard_link_of_a_file_that_the_sandbox_refuses_with_a_permission_error_invalidates_the_generation()
+async fn a_hard_link_that_the_sandbox_refuses_with_a_permission_error_gives_not_permitted_and_keeps_the_generation()
  {
     use futures::StreamExt as _;
 
-    futures::stream::iter([libc::EPERM, libc::EACCES])
-        .for_each(|errno| async move {
+    // A sandbox refuses a hard link of a directory with a permission error: EPERM on Linux and
+    // macOS, and ERROR_ACCESS_DENIED on Windows. It refuses a hard link of a file with EPERM or
+    // EACCES when a permission check fails. The lifecycle does not examine the source, so the
+    // scripted sandbox gives only the error.
+    futures::stream::iter(["file", "directory"])
+        .for_each(|source| async move {
             let (filesystem, control, window) = metered_resident().await;
             let generation_handle = resident_generation_handle(&filesystem);
             let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
             control.push_get_attributes(Err(missing("destination before the link")));
-            control.push_hard_link(Err(FilesystemStorageError::io(
-                "hard link a file",
-                Path::new("<scripted>"),
-                std::io::Error::from_raw_os_error(errno),
+            control.push_hard_link(Err(sandbox_error(
+                "hard link",
+                std::io::ErrorKind::PermissionDenied,
             )));
-            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-            control.push_get_attributes(Err(missing("destination after the refused link")));
+            let reads_before = call_count(&control, "get_path_attributes(");
 
             let linked = edit_namespace(
                 &generation_handle,
                 NamespaceEdit::Link {
-                    source: at("source"),
+                    source: at(source),
                     destination: at("alias"),
                 },
             )
@@ -2601,22 +2542,32 @@ async fn a_hard_link_of_a_file_that_the_sandbox_refuses_with_a_permission_error_
             .await;
 
             assert!(
-                matches!(linked, Err(Error::RuntimeInvalidated)),
-                "errno {errno}: {linked:?}"
+                matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+                "{source}: {linked:?}"
+            );
+            assert_eq!(call_count(&control, "hard_link("), 1, "{source}");
+            // The only read is the read of the destination before the link.
+            assert_eq!(
+                call_count(&control, "get_path_attributes("),
+                reads_before + 1,
+                "{source}"
             );
             assert!(
-                matches!(
-                    edit_namespace(
-                        &generation_handle,
-                        NamespaceEdit::Insert {
-                            destination: at("after-terminal-link"),
-                            object: NewObject::Directory,
-                        },
-                    ),
-                    Err(AccessError::Revoked)
-                ),
-                "errno {errno}"
+                !filesystem_activity(&filesystem).has_terminal_failure(),
+                "{source}"
             );
+            control.push_get_attributes(Err(missing("directory before the insert")));
+            control.push_create_directory(Ok(()));
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Insert {
+                    destination: at("after-refused-link"),
+                    object: NewObject::Directory,
+                },
+            )
+            .unwrap()
+            .await
+            .unwrap();
 
             close_window(window, Instant::now() + Duration::from_secs(1))
                 .await
@@ -2798,6 +2749,61 @@ async fn unknown_mutating_open_effect_invalidates_without_retry() {
             .count(),
         1
     );
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_refused_creating_open_whose_postcondition_read_is_refused_too_gives_not_permitted_and_keeps_the_generation()
+ {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_open(Err(sandbox_error(
+        "open",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    // The read of the postcondition is a part of the agent's call. Its permission error does not
+    // invalidate the generation, and the refused open proves that nothing changed.
+    control.push_get_attributes(Err(sandbox_error(
+        "open postcondition",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    let opened = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "refused-create").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::ReadWrite,
+            disposition: FileDisposition::CreateIfMissing,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-create").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
 
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -3412,6 +3418,73 @@ async fn a_writable_open_through_a_symlink_refuses_the_read_only_file_that_it_op
         opened.as_ref().err()
     );
     assert_eq!(call_count(&control, "close("), 1);
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_through_a_symlink_that_the_sandbox_refuses_with_a_permission_error_gives_not_permitted_and_keeps_the_generation()
+ {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // Both resolutions of alias find a symlink to a writable file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Err(sandbox_error(
+        "open",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    let opening_gate = control.block("open");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "alias").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap(),
+    );
+    opening_gate.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the open runs. The open
+    // follows alias to that file. An executor that is not root gets EACCES from the kernel.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    opening_gate.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(
+        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert!(!has_call(&control, "close("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-open").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -5814,7 +5887,7 @@ async fn terminal_zero_progress_failure_invalidates_without_observing_usage() {
         .count();
     control.push_write(Ok(SandboxWriteAttempt::failed(
         0,
-        sandbox_error("write", std::io::ErrorKind::PermissionDenied),
+        sandbox_error("write", std::io::ErrorKind::ReadOnlyFilesystem),
     )));
 
     assert!(matches!(
@@ -5828,6 +5901,8 @@ async fn terminal_zero_progress_failure_invalidates_without_observing_usage() {
         .await,
         Err(Error::RuntimeInvalidated)
     ));
+    // The first failure invalidates the generation. The lifecycle does not retry the write.
+    assert_eq!(call_count(&control, "write("), 1);
     assert_eq!(
         control
             .calls()
@@ -5868,7 +5943,7 @@ async fn dropped_terminal_write_observer_notifies_the_resident_generation() {
         0,
         sandbox_error(
             "detached terminal write",
-            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ReadOnlyFilesystem,
         ),
     )));
     let write_gate = control.block("write");
@@ -5887,6 +5962,8 @@ async fn dropped_terminal_write_observer_notifies_the_resident_generation() {
     write_gate.release();
     activity.wait_for_terminal_failure().await;
     assert!(activity.has_terminal_failure());
+    // The first failure invalidates the generation. The lifecycle does not retry the write.
+    assert_eq!(call_count(&control, "write("), 1);
 
     control.push_observe_allocation(Ok(allocation(30, 3)));
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -6601,6 +6678,48 @@ async fn unknown_write_effect_invalidates_instead_of_retrying() {
         1
     );
 
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_permission_error_of_the_usage_read_after_storage_exhaustion_invalidates_the_generation()
+{
+    let (filesystem, control, window) =
+        authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(30, 3)).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 19).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    // The lifecycle reads the usage of the storage for itself. A permission error there is a
+    // failure of the host, not the error of the agent's write.
+    control.push_observe_allocation(Err(sandbox_error(
+        "observe allocation",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    assert!(matches!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await,
+        Err(Error::RuntimeInvalidated)
+    ));
+    assert_eq!(call_count(&control, "write("), 1);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+
+    control.push_observe_allocation(Ok(allocation(30, 3)));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -7837,6 +7956,75 @@ fn cause_effect_decision_keeps_quota_pressure_and_postconditions_distinct() {
         ),
         EffectDecision::Invalidate
     );
+}
+
+#[test]
+fn a_permission_error_is_a_guest_failure_without_effect_and_broken_storage_is_terminal() {
+    // A permission error is the error of the agent's operation: no effect, no retry,
+    // `not-permitted`. The storage predicate still counts it, for the usage reads of the executor.
+    assert!(!invalidates_generation(&sandbox_error(
+        "refused",
+        std::io::ErrorKind::PermissionDenied
+    )));
+    #[cfg(unix)]
+    {
+        [libc::EACCES, libc::EPERM].into_iter().for_each(|errno| {
+            let refused = || {
+                FilesystemStorageError::io(
+                    "refused",
+                    Path::new("<scripted>"),
+                    std::io::Error::from_raw_os_error(errno),
+                )
+            };
+            assert!(refused().is_terminal_failure(), "errno {errno}");
+            assert!(!invalidates_generation(&refused()), "errno {errno}");
+            assert_eq!(
+                classify_failure(&refused(), FailureFacts::default()),
+                FailureCause::Guest,
+                "errno {errno}"
+            );
+            assert!(error_proves_no_effect(&refused()), "errno {errno}");
+            assert!(
+                matches!(
+                    classified_error(FailureCause::Guest, refused()),
+                    Error::Access(AccessError::NotPermitted)
+                ),
+                "errno {errno}"
+            );
+        });
+    }
+    assert_eq!(
+        decide_effect(
+            FailureCause::Guest,
+            EffectEvidence::NoEffect,
+            RetryBudget::new(2),
+        ),
+        EffectDecision::ReturnFailure(FailureCause::Guest)
+    );
+    assert!(matches!(
+        classified_error(FailureCause::Guest, missing("guest error")),
+        Error::Sandbox(_)
+    ));
+    // Broken storage invalidates the generation.
+    #[cfg(target_os = "linux")]
+    {
+        [libc::EIO, libc::ESTALE, libc::ENODEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(
+                    invalidates_generation(&FilesystemStorageError::io(
+                        "broken",
+                        Path::new("<scripted>"),
+                        std::io::Error::from_raw_os_error(errno),
+                    )),
+                    "errno {errno}"
+                );
+            });
+    }
+    assert!(invalidates_generation(&sandbox_error(
+        "remount",
+        std::io::ErrorKind::ReadOnlyFilesystem
+    )));
 }
 
 #[test]

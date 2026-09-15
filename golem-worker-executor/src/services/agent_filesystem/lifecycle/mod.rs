@@ -2506,7 +2506,9 @@ async fn execute_open<Adapter: SandboxFilesystemAdapter>(
                             options = existing_open_after_postcondition(options);
                             continue;
                         }
-                        Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                        Err(postcondition_error)
+                            if invalidates_generation(&postcondition_error) =>
+                        {
                             generation.invalidate();
                             return Err(Error::RuntimeInvalidated);
                         }
@@ -3199,7 +3201,7 @@ async fn execute_create_directory<Adapter: SandboxFilesystemAdapter>(
                 .await
             {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
                     generation.invalidate();
                     return Err(Error::RuntimeInvalidated);
                 }
@@ -3250,7 +3252,7 @@ async fn execute_create_symlink<Adapter: SandboxFilesystemAdapter>(
         } else {
             match symlink_postcondition(&generation, target.clone(), &desired).await {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
                     generation.invalidate();
                     return Err(Error::RuntimeInvalidated);
                 }
@@ -3294,19 +3296,6 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        // A sandbox refuses a hard link of a directory with a permission error: EPERM on Linux and
-        // macOS, and ERROR_ACCESS_DENIED on Windows. The refused link has no effect, so the guest
-        // gets `not-permitted` and the filesystem stays valid, as on 1.5.x. Every other permission
-        // error of a hard link stays a terminal failure.
-        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
-            && matches!(
-                namespace_path_state(&generation, source.clone()).await,
-                Ok(NamespacePathState::Present(attributes))
-                    if attributes.kind == SandboxObjectKind::Directory
-            )
-        {
-            return Err(Error::Access(AccessError::NotPermitted));
-        }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect
         } else {
@@ -3314,7 +3303,7 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
                 Ok(destination_after) => {
                     hard_link_postcondition_evidence(&destination_before, &destination_after)
                 }
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
                     generation.invalidate();
                     return Err(Error::RuntimeInvalidated);
                 }
@@ -3365,7 +3354,7 @@ async fn execute_rename<Adapter: SandboxFilesystemAdapter>(
                     move_postcondition_evidence(&source_before, &source_after, &destination_after)
                 }
                 (Err(postcondition_error), _) | (_, Err(postcondition_error))
-                    if postcondition_error.is_terminal_failure() =>
+                    if invalidates_generation(&postcondition_error) =>
                 {
                     generation.invalidate();
                     return Err(Error::RuntimeInvalidated);
@@ -3432,7 +3421,7 @@ async fn execute_remove<Adapter: SandboxFilesystemAdapter>(
         } else {
             match namespace_path_state(&generation, target.clone()).await {
                 Ok(after) => remove_postcondition_evidence(&before, &after, expected),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                Err(postcondition_error) if invalidates_generation(&postcondition_error) => {
                     generation.invalidate();
                     return Err(Error::RuntimeInvalidated);
                 }
@@ -3714,11 +3703,11 @@ fn classify_query_error<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     source: FilesystemStorageError,
 ) -> Error {
-    if source.is_terminal_failure() {
+    if invalidates_generation(&source) {
         generation.invalidate();
         Error::RuntimeInvalidated
     } else {
-        Error::Sandbox(source)
+        returned_storage_error(source)
     }
 }
 
@@ -3871,8 +3860,20 @@ fn classified_error(cause: FailureCause, source: FilesystemStorageError) -> Erro
         FailureCause::PhysicalCapacity => Error::PhysicalCapacity(source),
         FailureCause::TerminalInfrastructure => Error::RuntimeInvalidated,
         FailureCause::Guest | FailureCause::TransientBackend | FailureCause::UnclassifiedIo => {
-            Error::Sandbox(source)
+            returned_storage_error(source)
         }
+    }
+}
+
+/// Gives the error that a call returns for a storage error that leaves the generation valid.
+///
+/// A permission error gives `AccessError::NotPermitted`, as the read-only checks of the lifecycle
+/// do. Another error gives `Error::Sandbox` with its source.
+fn returned_storage_error(source: FilesystemStorageError) -> Error {
+    if source.io_kind() == Some(std::io::ErrorKind::PermissionDenied) {
+        Error::Access(AccessError::NotPermitted)
+    } else {
+        Error::Sandbox(source)
     }
 }
 
@@ -4212,7 +4213,7 @@ struct FailureFacts {
 }
 
 fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> FailureCause {
-    if error.is_terminal_failure() {
+    if invalidates_generation(error) {
         FailureCause::TerminalInfrastructure
     } else if error.is_storage_exhaustion() && facts.quota_exhausted {
         FailureCause::AgentQuota
@@ -4226,13 +4227,24 @@ fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> Fail
             | Some(std::io::ErrorKind::InvalidFilename)
             | Some(std::io::ErrorKind::IsADirectory)
             | Some(std::io::ErrorKind::NotADirectory)
-            | Some(std::io::ErrorKind::CrossesDevices) => FailureCause::Guest,
+            | Some(std::io::ErrorKind::CrossesDevices)
+            | Some(std::io::ErrorKind::PermissionDenied) => FailureCause::Guest,
             Some(std::io::ErrorKind::WouldBlock) | Some(std::io::ErrorKind::Interrupted) => {
                 FailureCause::TransientBackend
             }
             _ => FailureCause::UnclassifiedIo,
         }
     }
+}
+
+/// Tells whether a storage error in the tree of the agent invalidates the generation.
+///
+/// A terminal failure of the storage invalidates the generation. A permission error does not
+/// invalidate it, although `FilesystemStorageError::is_terminal_failure` counts it. A permission
+/// error refuses only one operation in the tree, and that operation returns it. The usage reads
+/// after a storage exhaustion read the storage of the executor, so they use `is_terminal_failure`.
+fn invalidates_generation(error: &FilesystemStorageError) -> bool {
+    error.io_kind() != Some(std::io::ErrorKind::PermissionDenied) && error.is_terminal_failure()
 }
 
 fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {
@@ -4246,6 +4258,7 @@ fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {
             | Some(std::io::ErrorKind::IsADirectory)
             | Some(std::io::ErrorKind::NotADirectory)
             | Some(std::io::ErrorKind::CrossesDevices)
+            | Some(std::io::ErrorKind::PermissionDenied)
             | Some(std::io::ErrorKind::StorageFull)
             | Some(std::io::ErrorKind::QuotaExceeded)
     )

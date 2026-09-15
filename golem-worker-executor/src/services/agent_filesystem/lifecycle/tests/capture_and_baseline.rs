@@ -1017,6 +1017,85 @@ async fn storage_full_while_seeding_a_restored_tree_is_classified_like_initial_f
 }
 
 #[test]
+async fn an_initial_file_seed_that_the_sandbox_refuses_with_a_permission_error_fails_with_not_permitted()
+ {
+    let store = InitialFileStore::new().await;
+    // An install of initial files invalidates the generation when a step fails, whatever the
+    // error.
+    let file = store
+        .declare("/refused", AgentFilePermissions::ReadWrite, b"refused")
+        .await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(sandbox_error(
+        "seed",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    let failure = materialize_baseline(filesystem, store.prepare(&[file]).await, NO_RESTORE)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(failure.source, Error::Access(AccessError::NotPermitted)),
+        "{}",
+        failure.source
+    );
+    assert_eq!(call_count(&control, "seed("), 1);
+    assert!(
+        failure
+            .filesystem
+            .generation
+            .as_ref()
+            .unwrap()
+            .registry
+            .is_invalidated()
+    );
+    control.push_delete_and_verify(Ok(()));
+    delete(failure.filesystem).await.unwrap();
+}
+
+#[test]
+async fn a_restored_tree_seed_that_the_sandbox_refuses_with_a_permission_error_fails_with_not_permitted_and_keeps_the_generation()
+ {
+    let store = InitialFileStore::new().await;
+    // The seed of a restored tree runs outside an install, so the refused seed does not
+    // invalidate the generation.
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(sandbox_error(
+        "seed",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    let capture_record = record(&[], serde_json::json!([]), serde_json::json!([]));
+    let failure = materialize_baseline(
+        filesystem,
+        store.prepare(&[]).await,
+        Some(FixtureRestore(move |into: &Path| {
+            write_capture_directory(into, &[], &capture_record);
+            Ok(())
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(failure.source, Error::Access(AccessError::NotPermitted)),
+        "{}",
+        failure.source
+    );
+    assert_eq!(call_count(&control, "seed("), 1);
+    assert!(
+        !failure
+            .filesystem
+            .generation
+            .as_ref()
+            .unwrap()
+            .registry
+            .is_invalidated()
+    );
+    control.push_delete_and_verify(Ok(()));
+    delete(failure.filesystem).await.unwrap();
+}
+
+#[test]
 async fn a_failed_hard_link_of_a_restored_tree_returns_the_sealed_filesystem() {
     let store = InitialFileStore::new().await;
     let (filesystem, control, _) =
