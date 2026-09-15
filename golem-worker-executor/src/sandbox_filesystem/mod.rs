@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 mod adapter;
-mod file_update;
 mod host_directory;
 mod tree_copy;
 mod unmanaged;
@@ -141,15 +140,6 @@ impl FilesystemStorageError {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn scripted_task_failure(operation: &'static str) -> Self {
-        Self::task_failure(
-            operation,
-            Path::new("<scripted-native-task>"),
-            NativeExecutionError::panic(),
-        )
-    }
-
     pub(crate) fn cleanup_failed(&self) -> bool {
         self.inner.cleanup_failed
     }
@@ -204,7 +194,6 @@ enum NativeOperation {
     Read(usize),
     Write(usize),
     DirectoryEnumeration,
-    FileUpdate,
     RecursiveCleanup,
     Flush,
     Quota,
@@ -217,7 +206,6 @@ impl NativeOperation {
             Self::Metadata | Self::Open | Self::Namespace => true,
             Self::Read(bytes) | Self::Write(bytes) => bytes <= MAX_SHORT_TRANSFER_BYTES,
             Self::DirectoryEnumeration
-            | Self::FileUpdate
             | Self::RecursiveCleanup
             | Self::Flush
             | Self::Quota
@@ -888,30 +876,6 @@ impl SandboxFilesystemName {
     }
 }
 
-pub(crate) struct SandboxFileUpdate {
-    target: PathBuf,
-    source: PathBuf,
-    permissions: SandboxFilePermissions,
-}
-
-impl SandboxFileUpdate {
-    /// Describes one host-file replacement for [`SandboxFilesystem::update_files`].
-    ///
-    /// `target` is relative to the sandbox filesystem root and `permissions` controls the installed
-    /// file's resulting write permission.
-    pub(crate) fn new(
-        target: PathBuf,
-        source: PathBuf,
-        permissions: SandboxFilePermissions,
-    ) -> Self {
-        Self {
-            target,
-            source,
-            permissions,
-        }
-    }
-}
-
 impl SandboxFilesystem {
     fn new(
         root: NativeRoot,
@@ -942,74 +906,6 @@ impl SandboxFilesystem {
 
     pub(crate) fn root(&self) -> &Path {
         &self.root.path
-    }
-
-    /// Returns which candidate root-relative paths currently contain regular files.
-    ///
-    /// Callers use this before a transactional update when existing writable files should be
-    /// preserved rather than replaced.
-    pub(crate) async fn existing_file_targets(
-        &self,
-        targets: Vec<PathBuf>,
-    ) -> Result<HashSet<PathBuf>, FilesystemStorageError> {
-        let root = self.root().to_path_buf();
-        let operation_path = root.clone();
-        execute_native(
-            self.storage_profile(),
-            NativeOperation::FileUpdate,
-            move || {
-                targets
-                    .into_iter()
-                    .filter(|target| {
-                        std::fs::symlink_metadata(root.join(target))
-                            .is_ok_and(|metadata| metadata.is_file())
-                    })
-                    .collect()
-            },
-        )
-        .await
-        .map_err(|error| {
-            FilesystemStorageError::task_failure(
-                "inspect file update targets",
-                &operation_path,
-                error,
-            )
-        })
-    }
-
-    /// Applies a transactional set of file replacements and removals.
-    ///
-    /// `current` identifies targets owned by the previous update. Existing paths outside that set
-    /// are preserved. The operation stages replacements, rolls back on failure, and keeps quota
-    /// inheritance and destination permissions intact.
-    pub(crate) async fn update_files(
-        &self,
-        current: HashSet<PathBuf>,
-        updates: Vec<SandboxFileUpdate>,
-        removals: Vec<PathBuf>,
-    ) -> Result<(), FilesystemStorageError> {
-        let root = self.root().to_path_buf();
-        let operation_path = root.clone();
-        let copy_mode = self.file_copy_mode;
-        let quota_authority = self.quota_authority;
-        execute_native(
-            self.storage_profile(),
-            NativeOperation::FileUpdate,
-            move || {
-                file_update::apply_update(
-                    root,
-                    copy_mode,
-                    quota_authority,
-                    current,
-                    updates,
-                    removals,
-                )
-            },
-        )
-        .await
-        .map_err(|error| {
-            FilesystemStorageError::task_failure("apply file update", &operation_path, error)
-        })?
     }
 
     pub(crate) async fn observe_allocation(
@@ -1124,32 +1020,6 @@ impl SandboxFilesystem {
         match self.quota_authority {
             QuotaAuthority::Project { .. } => NativeStorageProfile::KnownLocal,
             QuotaAuthority::Unsupported => NativeStorageProfile::Unknown,
-        }
-    }
-}
-
-fn copy_file_blocking(
-    copy_mode: FileCopyMode,
-    quota_authority: QuotaAuthority,
-    materialization_root: &Path,
-    source: &Path,
-    target: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    match copy_mode {
-        FileCopyMode::Buffered => {
-            unmanaged::copy_file(materialization_root, source, target, read_only)
-        }
-        FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
-                unreachable!("reflink copy requires project quota authority")
-            };
-            #[cfg(target_os = "linux")]
-            {
-                xfs::reflink_file(materialization_root, project_id, source, target, read_only)
-            }
-            #[cfg(not(target_os = "linux"))]
-            unreachable!("managed XFS is unavailable on this platform");
         }
     }
 }
@@ -1319,45 +1189,6 @@ fn filesystem_lease_probe(path: &Path) -> Option<Arc<FilesystemLeaseProbeState>>
         .expect("sandbox filesystem lease probe registry poisoned")
         .get(path)
         .and_then(Weak::upgrade)
-}
-
-fn create_copy_parent<'a>(root: &Path, target: &'a Path) -> std::io::Result<&'a Path> {
-    let parent = target.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "file-copy target has no parent",
-        )
-    })?;
-    let relative = parent.strip_prefix(root).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "file-copy target escapes the sandbox filesystem",
-        )
-    })?;
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(component) = component else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "file-copy target contains an invalid path component",
-            ));
-        };
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "file-copy parent is not a directory",
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current)?;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(parent)
 }
 
 enum CapabilityCopyParent<'a> {
@@ -1753,7 +1584,6 @@ mod tests {
             NativeOperation::Read(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::Write(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::DirectoryEnumeration,
-            NativeOperation::FileUpdate,
             NativeOperation::RecursiveCleanup,
             NativeOperation::Flush,
             NativeOperation::Quota,

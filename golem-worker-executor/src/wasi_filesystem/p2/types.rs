@@ -103,7 +103,9 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         AgentFilesystemError::Sandbox(error) => p2_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => ErrorCode::InsufficientSpace.into(),
-        error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated) => {
+        error @ (AgentFilesystemError::Access(_)
+        | AgentFilesystemError::Baseline(_)
+        | AgentFilesystemError::RuntimeInvalidated) => {
             FsError::trap(wasmtime::Error::msg(error.to_string()))
         }
     }
@@ -441,10 +443,7 @@ fn p2_agent_path_target(
     })
 }
 
-fn p2_agent_flags(
-    generation_handle: &FilesystemGenerationHandle,
-    descriptor: &AgentDescriptor,
-) -> Result<DescriptorFlags, FsError> {
+fn p2_agent_flags(descriptor: &AgentDescriptor) -> Result<DescriptorFlags, FsError> {
     let (kind, mode) = descriptor.with_node(|node| (node.kind(), node.access()));
     let mut flags = DescriptorFlags::empty();
     if matches!(mode, AccessMode::Read | AccessMode::ReadWrite) {
@@ -456,13 +455,6 @@ fn p2_agent_flags(
         } else {
             DescriptorFlags::WRITE
         };
-    }
-    if kind == ObjectKind::File
-        && agent_filesystem::path_permissions(generation_handle, descriptor.path())
-            .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))?
-            == golem_common::model::component::AgentFilePermissions::ReadOnly
-    {
-        flags &= !DescriptorFlags::WRITE;
     }
     Ok(flags)
 }
@@ -751,7 +743,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        let flags = p2_agent_flags(&generation_handle, &descriptor)?;
+        let flags = p2_agent_flags(&descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
         }
@@ -775,7 +767,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        let flags = p2_agent_flags(&generation_handle, &descriptor)?;
+        let flags = p2_agent_flags(&descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
         }
@@ -818,9 +810,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "get_flags");
 
-        let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
-        p2_agent_flags(&generation_handle, &descriptor)
+        p2_agent_flags(&descriptor)
     }
 
     async fn get_type(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorType, FsError> {
