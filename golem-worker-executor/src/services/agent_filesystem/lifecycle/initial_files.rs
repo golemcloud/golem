@@ -202,7 +202,6 @@ fn emptied_directories<'a>(path: &'a Path, unlinked: &BTreeSet<&'a Path>) -> BTr
     unlinked
         .iter()
         .copied()
-        .filter(|unlinked| unlinked.starts_with(path) && *unlinked != path)
         .flat_map(|unlinked| {
             unlinked
                 .ancestors()

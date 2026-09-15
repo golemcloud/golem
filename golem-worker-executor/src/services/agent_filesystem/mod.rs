@@ -310,24 +310,92 @@ mod tests {
             .expect("/proc/self/status must have a Umask: line")
     }
 
-    #[cfg(target_os = "linux")]
+    /// Reads the file mode creation mask of the process. The function sets a mask and then sets
+    /// the mask from before again, so use it only in a process that runs one test.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn process_file_creation_mask() -> libc::mode_t {
+        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+        unsafe {
+            let mask = libc::umask(0o022);
+            libc::umask(mask);
+            mask
+        }
+    }
+
+    /// The environment variable that the child process of the umask binding test gets.
+    #[cfg(unix)]
+    const UMASK_BINDING_CHILD_VARIABLE: &str = "GOLEM_AGENT_FILESYSTEMS_UMASK_BINDING_CHILD";
+
+    /// Gives the name of the child test as the test harness filters it: the module path in the
+    /// crate, then the name of the function.
+    #[cfg(unix)]
+    fn umask_binding_child_test() -> String {
+        let module = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, module)| module);
+        format!("{module}::agent_filesystems_binding_in_a_child_process_clears_only_bit_0o200")
+    }
+
+    /// The file mode creation mask is a value of the process, and other tests of this binary change
+    /// it through `AgentFilesystems::new`. So the check runs in a child process that runs only the
+    /// child test.
+    #[cfg(unix)]
     #[test]
-    async fn agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask() {
-        let before = process_file_creation_mask();
+    fn agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask() {
+        let child = umask_binding_child_test();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                child.as_str(),
+                "--exact",
+                "--include-ignored",
+                "--test-threads",
+                "1",
+                "--nocapture",
+            ])
+            .env(UMASK_BINDING_CHILD_VARIABLE, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success() && stdout.contains(" 1 passed;"),
+            "the child test {child} must run and pass, and it ended with {}\nstdout:\n{stdout}\n\
+             stderr:\n{stderr}",
+            output.status
+        );
+    }
+
+    /// Runs only in the child process of
+    /// `agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask`.
+    ///
+    /// The test makes its temporary root under the mask that the process has. Then it sets the
+    /// mask 0o227 and binds the filesystems, which must change the mask to 0o027.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs only in the child process of the umask binding test"]
+    async fn agent_filesystems_binding_in_a_child_process_clears_only_bit_0o200() {
+        if std::env::var_os(UMASK_BINDING_CHILD_VARIABLE).is_none() {
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             deterministic_root_dir: Some(root.path().to_path_buf()),
             ..FilesystemStorageConfig::default()
         };
+        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+        unsafe {
+            libc::umask(0o227);
+        }
 
-        AgentFilesystems::new(&settings).await.unwrap();
+        let bound = AgentFilesystems::new(&settings).await;
 
-        let after = process_file_creation_mask();
+        let mask = process_file_creation_mask();
         assert_eq!(
-            after,
-            before & !0o200,
-            "binding must change the mask {before:o} only at bit 0o200, and the mask is {after:o}"
+            mask, 0o027,
+            "binding must change the mask 227 to 27, and the mask is {mask:o}"
         );
+        bound.unwrap();
     }
 
     #[cfg(target_os = "linux")]
