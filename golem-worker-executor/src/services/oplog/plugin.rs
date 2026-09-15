@@ -198,7 +198,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         let current_assignment = self.shard_service.current_assignment()?;
         let agent_id = Self::generate_local_agent_id(
             plugin_component_id,
-            &current_assignment.shard_ids,
+            &current_assignment.shard_id_set(),
             current_assignment.number_of_shards,
         );
 
@@ -414,7 +414,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
         let assignment = self.shard_service.current_assignment()?;
         let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
-        Ok(assignment.shard_ids.contains(&shard_id))
+        Ok(assignment.contains(&shard_id))
     }
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -430,7 +430,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         &entry.get().owned_agent_id.agent_id,
                         new_assignment.number_of_shards,
                     );
-                    if new_assignment.shard_ids.contains(&shard_id) {
+                    if new_assignment.contains(&shard_id) {
                         continue;
                     } else {
                         // The worker is removed from the in-memory map, but we leave it running to finish any pending invocations.
