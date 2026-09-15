@@ -2442,7 +2442,7 @@ async fn use_attached_lag_spy(
         .activate_attachment(attachment.clone(), now_millis)
         .await
         .unwrap();
-    consumer.reader = Some(DurableStreamReader::Attached(Box::new(
+    consumer.input.reader = Some(DurableStreamReader::Attached(Box::new(
         AttachedDurableCatchUpReader {
             source,
             attachment,
@@ -2460,12 +2460,10 @@ async fn receive_for_test(
     consumer: &mut DurableInputProducer,
 ) -> (CommittedProducerStreamEvent, bool, usize) {
     consumer.begin_receive();
-    let (reader, event, _, journaled, queued) = consumer.pending.take().unwrap().await.unwrap();
-    consumer.reader = reader;
-    let queued_len = queued.len();
-    consumer.journal.extend(queued);
-    consumer.consumer_read_ordinal += 1;
-    (event.unwrap(), journaled, queued_len)
+    let mut read = consumer.pending.take().unwrap().await.unwrap();
+    let queued_len = read.queued_events.len();
+    consumer.input.complete_receive(&mut read);
+    (read.event.unwrap(), read.journaled, queued_len)
 }
 
 #[test]
@@ -2526,29 +2524,38 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
         oplog,
         commits: commits.clone(),
     }));
-    let mut first = DurableInputProducer::new(
-        streams
-            .endpoint(handle.clone(), 0, SessionStreamRole::Input)
-            .await
-            .unwrap(),
+    let mut first = streams
+        .endpoint(handle.clone(), 0, SessionStreamRole::Input)
+        .await
+        .unwrap();
+    let mut read = first.receive(None).await.unwrap();
+    assert!(!read.journaled);
+    let expected = ProtoSchemaValue::try_from(SchemaValue::U32(42))
+        .unwrap()
+        .encode_to_vec();
+    assert_eq!(
+        read.event.as_ref().unwrap().payload,
+        CommittedProducerStreamEventPayload::Value(expected.clone())
     );
-    first.begin_receive();
-    let (_, event, _, journaled, _) = first.pending.take().unwrap().await.unwrap();
-    assert!(!journaled);
-    assert!(event.is_some());
     assert_eq!(commits.load(Ordering::Relaxed), 1);
+    assert_eq!(first.consumer_read_ordinal, 0);
+    first.complete_receive(&mut read);
+    assert_eq!(first.consumer_read_ordinal, 1);
 
-    let mut replay = DurableInputProducer::new(
-        streams
-            .endpoint(handle, 0, SessionStreamRole::Input)
-            .await
-            .unwrap(),
+    let mut replay = streams
+        .endpoint(handle, 0, SessionStreamRole::Input)
+        .await
+        .unwrap();
+    let mut read = replay.receive(None).await.unwrap();
+    assert!(read.journaled);
+    assert_eq!(
+        read.event.as_ref().unwrap().payload,
+        CommittedProducerStreamEventPayload::Value(expected)
     );
-    replay.begin_receive();
-    let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
-    assert!(journaled);
-    assert!(event.is_some());
     assert_eq!(commits.load(Ordering::Relaxed), 1);
+    assert_eq!(replay.consumer_read_ordinal, 0);
+    replay.complete_receive(&mut read);
+    assert_eq!(replay.consumer_read_ordinal, 1);
 }
 
 #[test]
@@ -2619,6 +2626,7 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     let source = LagRecordingSource::new(producer.clone(), 0);
     use_attached_lag_spy(&mut consumer, producer, &identity, &handle, source.clone()).await;
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2632,6 +2640,7 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     assert!(source.calls.lock().await.is_empty());
 
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2647,6 +2656,7 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     source.failures_remaining.store(1, Ordering::Relaxed);
     let before_attempt = Instant::now();
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2659,12 +2669,14 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     assert!(
         before_attempt
             < *consumer
+                .input
                 .reader
                 .as_mut()
                 .unwrap()
                 .journal_lag_sample_deadline()
     );
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2748,6 +2760,7 @@ async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_s
     let source = LagRecordingSource::new(producer.clone(), 0);
     use_attached_lag_spy(&mut consumer, producer, &identity, &handle, source.clone()).await;
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2779,6 +2792,7 @@ async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_s
     assert_eq!(source.calls.lock().await.len(), 1);
 
     *consumer
+        .input
         .reader
         .as_mut()
         .unwrap()
@@ -2855,26 +2869,25 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
         consumer.pending.take().unwrap(),
     );
     write_result.unwrap();
-    let (_, event, _, journaled, queued) = receive_result.unwrap();
-    assert!(!journaled);
+    let read = receive_result.unwrap();
+    assert!(!read.journaled);
     assert!(matches!(
-        event.unwrap().payload,
+        read.event.unwrap().payload,
         CommittedProducerStreamEventPayload::PackedU8(0)
     ));
-    assert_eq!(queued.len(), bytes.len() - 1);
-    assert!(queued.iter().all(|event| matches!(
+    assert_eq!(read.queued_events.len(), bytes.len() - 1);
+    assert!(read.queued_events.iter().all(|event| matches!(
         &event.payload,
         CommittedProducerStreamEventPayload::PackedU8(_)
     )));
     assert_eq!(commits.load(Ordering::Relaxed), 1);
 
-    let (history, _, next_ordinal, terminal) =
-        streams.consumer_history(handle.stream_id).await.unwrap();
-    assert_eq!(history.len(), bytes.len());
-    assert_eq!(next_ordinal, bytes.len() as u64);
-    assert!(!terminal);
+    let history = streams.consumer_history(handle.stream_id).await.unwrap();
+    assert_eq!(history.events.len(), bytes.len());
+    assert!(!history.terminal);
     assert_eq!(
         history
+            .events
             .into_iter()
             .map(|event| match event.payload {
                 CommittedProducerStreamEventPayload::PackedU8(byte) => byte,
@@ -3525,10 +3538,10 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
     );
     let mut replay = DurableInputProducer::new(endpoint);
     replay.begin_receive();
-    let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
-    assert!(journaled);
+    let read = replay.pending.take().unwrap().await.unwrap();
+    assert!(read.journaled);
     assert!(matches!(
-        event.unwrap().payload,
+        read.event.unwrap().payload,
         CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
     ));
 }
@@ -3596,10 +3609,10 @@ async fn source_unavailable_overlay_replays_without_reopening_the_source() {
     assert!(endpoint.reader.is_none());
     let mut replay = DurableInputProducer::new(endpoint);
     replay.begin_receive();
-    let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
-    assert!(journaled);
+    let read = replay.pending.take().unwrap().await.unwrap();
+    assert!(read.journaled);
     assert!(matches!(
-        event.unwrap().payload,
+        read.event.unwrap().payload,
         CommittedProducerStreamEventPayload::Cancel {
             role: StreamCancelRole::System,
             reason: StreamCancelReason::SourceUnavailable,
@@ -4151,10 +4164,10 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
         let mut consumer =
             DurableInputProducer::new(streams.endpoint(root.clone(), 0, *role).await.unwrap());
         consumer.begin_receive();
-        let (_, event, nested, journaled, _) = consumer.pending.take().unwrap().await.unwrap();
-        assert!(!journaled);
-        assert!(event.is_some());
-        assert_eq!(nested.len(), 1);
+        let read = consumer.pending.take().unwrap().await.unwrap();
+        assert!(!read.journaled);
+        assert!(read.event.is_some());
+        assert_eq!(read.endpoints.len(), 1);
     }
 
     let mut persisted_roles = HashMap::new();

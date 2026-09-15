@@ -83,6 +83,13 @@ journal in `consumer_read_ordinal` order, then reads producer oplog segments aft
 publication lock and discards overlap by offset. A restarted producer replays its items from its
 oplog and resumes writing after the last committed sequence.
 
+`DurableInputEndpoint` owns the consumer reader, replay queue, packed-byte buffering and read
+ordinal. It journals and commits a received item before returning `DurableInputRead`; completing
+that read restores its source and advances the ordinal. Its `StreamSession` supplies binding-local
+mapping and cancellation policy. `DurableInputProducer` is the Wasmtime adapter: it polls reads,
+converts values and handles guest-drop cleanup. Read futures and cancellation futures have
+different result types; cancellation does not manufacture a read result.
+
 Producer identity is checked wherever a durable stream identity crosses a boundary:
 `validate_forwarded_mapping` (`durable_session.rs`) requires the attachment's session key,
 consumer and expected producer fingerprint to match the durable session, and producer-side record

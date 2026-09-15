@@ -34,7 +34,7 @@ use crate::durable_host::suspendable_wait::SuspendableWaitRegistration;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
-use futures::future::try_join_all;
+use futures::future::{BoxFuture, try_join_all};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamHandle as ProtoDurableStreamHandle, DurableStreamMapping,
@@ -67,7 +67,6 @@ use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -4320,16 +4319,19 @@ impl StreamSession {
         consumer_read_ordinal: u64,
         role: SessionStreamRole,
     ) -> Result<DurableInputEndpoint, String> {
-        let (journal, after, _, terminal) = self.consumer_history(handle.stream_id).await?;
-        let mut reader = if terminal {
+        let history = self.consumer_history(handle.stream_id).await?;
+        let mut reader = if history.terminal {
             None
         } else {
-            Some(self.stream_reader(handle.clone(), after, role).await?)
+            Some(
+                self.stream_reader(handle.clone(), history.after, role)
+                    .await?,
+            )
         };
-        record_source_journal_lag(reader.as_mut(), after, true).await;
+        record_source_journal_lag(reader.as_mut(), history.after, true).await;
         Ok(DurableInputEndpoint {
             reader,
-            journal,
+            journal: history.events,
             streams: self.clone(),
             transport_stream_id: self
                 .mapping_for_handle(&handle, role)
@@ -4439,15 +4441,7 @@ impl StreamSession {
     async fn consumer_history(
         &self,
         stream_id: golem_common::model::durable_stream::StreamId,
-    ) -> Result<
-        (
-            VecDeque<CommittedProducerStreamEvent>,
-            Option<golem_common::model::durable_stream::StreamOffset>,
-            u64,
-            bool,
-        ),
-        String,
-    > {
+    ) -> Result<ConsumerHistory, String> {
         let mut events = Vec::new();
         for index in self.consumer_history_positions(stream_id).await? {
             let record = self.session_record_at(index).await?;
@@ -4568,15 +4562,19 @@ impl StreamSession {
             }
         }
         let after = events.last().map(|(_, event)| event.offset);
-        let next_ordinal = events.len() as u64;
         let terminal = events.last().is_some_and(|(_, event)| event.is_terminal());
-        Ok((
-            events.into_iter().map(|(_, event)| event).collect(),
+        Ok(ConsumerHistory {
+            events: events.into_iter().map(|(_, event)| event).collect(),
             after,
-            next_ordinal,
             terminal,
-        ))
+        })
     }
+}
+
+struct ConsumerHistory {
+    events: VecDeque<CommittedProducerStreamEvent>,
+    after: Option<golem_common::model::durable_stream::StreamOffset>,
+    terminal: bool,
 }
 
 #[async_trait::async_trait]
@@ -4591,7 +4589,8 @@ impl StreamAttachmentConsumerProbe for StreamSession {
     }
 }
 
-/// Session endpoint used by a guest-facing durable input consumer.
+/// Owns source reads, journal replay, and read ordinals independently of Wasmtime polling.
+/// Session topology and cancellation remain on its binding-local `StreamSession`.
 pub(crate) struct DurableInputEndpoint {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
@@ -4852,34 +4851,22 @@ impl AttachedDurableCatchUpReader {
     }
 }
 
-type DurableReceiveFuture = Pin<
-    Box<
-        dyn Future<
-                Output = Result<
-                    (
-                        Option<DurableStreamReader>,
-                        Option<CommittedProducerStreamEvent>,
-                        HashMap<u64, DurableInputEndpoint>,
-                        bool,
-                        VecDeque<CommittedProducerStreamEvent>,
-                    ),
-                    String,
-                >,
-            > + Send
-            + 'static,
-    >,
->;
-
-/// Wasmtime input producer backed by a durable session endpoint.
-pub(crate) struct DurableInputProducer {
+struct DurableInputRead {
     reader: Option<DurableStreamReader>,
-    journal: VecDeque<CommittedProducerStreamEvent>,
+    event: Option<CommittedProducerStreamEvent>,
+    endpoints: HashMap<u64, DurableInputEndpoint>,
+    #[cfg(test)]
+    journaled: bool,
+    queued_events: VecDeque<CommittedProducerStreamEvent>,
+}
+
+type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, String>>;
+
+/// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
+pub(crate) struct DurableInputProducer {
+    input: DurableInputEndpoint,
     pending: Option<DurableReceiveFuture>,
-    streams: StreamSession,
-    transport_stream_id: u64,
-    handle: DurableStreamHandle,
-    consumer_read_ordinal: u64,
-    role: SessionStreamRole,
+    pending_drop: Option<BoxFuture<'static, Result<(), String>>>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
@@ -4978,14 +4965,9 @@ impl DurableInputProducer {
     /// Creates a producer for an already materialized session endpoint.
     pub(crate) fn new(endpoint: DurableInputEndpoint) -> Self {
         Self {
-            reader: endpoint.reader,
-            journal: endpoint.journal,
+            input: endpoint,
             pending: None,
-            streams: endpoint.streams,
-            transport_stream_id: endpoint.transport_stream_id,
-            handle: endpoint.handle,
-            consumer_read_ordinal: endpoint.consumer_read_ordinal,
-            role: endpoint.role,
+            pending_drop: None,
             finished: false,
             dropping: false,
             drop_event_sink: None,
@@ -5006,20 +4988,22 @@ impl DurableInputProducer {
 
     #[cfg(test)]
     fn begin_receive(&mut self) {
-        self.begin_receive_with_registration(None);
+        self.pending = Some(self.input.receive(None));
     }
+}
 
-    fn begin_receive_with_registration(
+impl DurableInputEndpoint {
+    fn receive(
         &mut self,
         source_wait: Option<SuspendableWaitRegistration>,
-    ) {
+    ) -> DurableReceiveFuture {
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
         let streams = self.streams.clone();
         let stream_id = self.handle.stream_id;
         let ordinal = self.consumer_read_ordinal;
         let role = self.role;
-        self.pending = Some(Box::pin(async move {
+        Box::pin(async move {
             let mut journaled = queued_event.is_some();
             let event = match queued_event {
                 Some(event) => Some(event),
@@ -5224,8 +5208,23 @@ impl DurableInputProducer {
                     );
                 }
             }
-            Ok((reader, event, endpoints, journaled, queued_events))
-        }));
+            Ok(DurableInputRead {
+                reader,
+                event,
+                endpoints,
+                #[cfg(test)]
+                journaled,
+                queued_events,
+            })
+        })
+    }
+
+    fn complete_receive(&mut self, read: &mut DurableInputRead) {
+        self.reader = read.reader.take();
+        self.journal.append(&mut read.queued_events);
+        if read.event.is_some() {
+            self.consumer_read_ordinal += 1;
+        }
     }
 }
 
@@ -5237,14 +5236,14 @@ impl Drop for DurableInputProducer {
         let Some(drop_event_sink) = &self.drop_event_sink else {
             return;
         };
-        let role = match self.role {
+        let role = match self.input.role {
             SessionStreamRole::Input => StreamCancelRole::InputConsumer,
             SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
         };
         let _ = drop_event_sink.send(DropEvent::CancelDroppedDurableInput {
             cancellation: Box::new(DroppedDurableInput {
-                streams: self.streams.clone(),
-                transport_stream_id: self.transport_stream_id,
+                streams: self.input.streams.clone(),
+                transport_stream_id: self.input.transport_stream_id,
                 role,
             }),
         });
@@ -5269,13 +5268,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             if !self.dropping {
                 self.dropping = true;
                 self.pending = None;
-                let streams = self.streams.clone();
-                let transport_stream_id = self.transport_stream_id;
-                let role = match self.role {
+                let streams = self.input.streams.clone();
+                let transport_stream_id = self.input.transport_stream_id;
+                let role = match self.input.role {
                     SessionStreamRole::Input => StreamCancelRole::InputConsumer,
                     SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
                 };
-                self.pending = Some(Box::pin(async move {
+                self.pending_drop = Some(Box::pin(async move {
                     streams
                         .cancel_stream(
                             transport_stream_id,
@@ -5284,12 +5283,11 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                             Some("guest dropped its durable readable stream end".to_string()),
                             None,
                         )
-                        .await?;
-                    Ok((None, None, HashMap::new(), false, VecDeque::new()))
+                        .await
                 }));
             }
             match self
-                .pending
+                .pending_drop
                 .as_mut()
                 .expect("drop cancellation is missing")
                 .as_mut()
@@ -5301,41 +5299,38 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                 }
                 Poll::Ready(Ok(_)) => {
                     self.finished = true;
-                    self.pending = None;
-                    self.reader = None;
+                    self.pending_drop = None;
+                    self.input.reader = None;
                     return Poll::Ready(Ok(StreamResult::Cancelled));
                 }
             }
         }
         if self.pending.is_none() {
-            let source_wait = self.journal.is_empty().then(|| {
+            let source_wait = self.input.journal.is_empty().then(|| {
                 store
                     .data_mut()
                     .durable_ctx_mut()
                     .state
                     .register_passive_suspendable_wait()
             });
-            self.begin_receive_with_registration(source_wait);
+            self.pending = Some(self.input.receive(source_wait));
         }
-        let (reader, event, mut endpoints, _journaled, queued_events) =
-            match self.pending.as_mut().unwrap().as_mut().poll(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(result)) => result,
-                Poll::Ready(Err(error)) => {
-                    self.finished = true;
-                    return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                }
-            };
+        let mut read = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Ok(result)) => result,
+            Poll::Ready(Err(error)) => {
+                self.finished = true;
+                return Poll::Ready(Err(wasmtime::Error::msg(error)));
+            }
+        };
         self.pending = None;
-        self.reader = reader;
-        self.journal.extend(queued_events);
-        let Some(event) = event else {
+        self.input.complete_receive(&mut read);
+        let Some(event) = read.event else {
             self.finished = true;
             return Poll::Ready(Err(wasmtime::Error::msg(
                 "durable input stream source closed without a terminal event",
             )));
         };
-        self.consumer_read_ordinal += 1;
 
         let value = match event.payload {
             CommittedProducerStreamEventPayload::Value(bytes) => {
@@ -5349,7 +5344,7 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     }
                 };
                 match decode_recursive_stream_value(value, |stream_id, _| {
-                    endpoints
+                    read.endpoints
                         .remove(&stream_id)
                         .map(SchemaValueStream::from_host_endpoint)
                         .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
@@ -5414,12 +5409,12 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
     fn try_into(mut me: Pin<Box<Self>>, ty: TypeId) -> Result<Box<dyn Any>, Pin<Box<Self>>> {
         let producer = me.as_ref().get_ref();
         if ty == TypeId::of::<ForwardedDurableInput>()
-            && producer.consumer_read_ordinal == 0
-            && producer.journal.is_empty()
+            && producer.input.forwarded_handle().is_ok()
             && producer.pending.is_none()
+            && producer.pending_drop.is_none()
             && !producer.finished
         {
-            let handle = producer.handle.clone();
+            let handle = producer.input.handle.clone();
             me.as_mut().get_mut().finished = true;
             Ok(Box::new(ForwardedDurableInput { handle }))
         } else {
