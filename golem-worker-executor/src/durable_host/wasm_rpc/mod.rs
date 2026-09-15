@@ -20,7 +20,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
-    DurableSessionStreams, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
     strip_streams,
 };
 use crate::durable_host::permissions::resolve_invocation_scope_card;
@@ -2388,7 +2388,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     remote_fingerprint: AgentFingerprint,
     child_key: IdempotencyKey,
     auth_ctx: AuthCtx,
-) -> Result<DurableSessionStreams, Error> {
+) -> Result<StreamSession, Error> {
     let worker = ctx.public_state.worker();
     let caller = worker.get_initial_worker_metadata();
     let parent_key = ctx
@@ -2407,7 +2407,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         callee_fingerprint: caller.fingerprint,
         idempotency_key: parent_key,
     };
-    let streams = DurableSessionStreams::new(
+    let streams = StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),
         session_key,
@@ -4169,7 +4169,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 
 #[derive(Clone)]
 struct DurableStreamingTaskParams {
-    streams: DurableSessionStreams,
+    streams: StreamSession,
     input: golem_api_grpc::proto::golem::schema::SchemaValue,
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,

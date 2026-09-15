@@ -15,7 +15,7 @@
 use super::index::validate_items_payload;
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Admits one externally sequenced input and commits it before reporting acceptance.
     pub(crate) async fn append_external_input(
         self: &Arc<Self>,
@@ -24,18 +24,18 @@ impl DurableStreamProducer {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
-    ) -> Result<ExternalAppendOutcome, DurableStreamProducerError> {
+    ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         if let Some(payload) = &payload {
             match payload {
                 StreamItemsPayload::Values(values) => {
                     if values.is_empty() {
-                        return Err(DurableStreamProducerError::InvalidValueBatch);
+                        return Err(StreamStoreError::InvalidValueBatch);
                     }
                     if values
                         .iter()
                         .any(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE)
                     {
-                        return Err(DurableStreamProducerError::ItemTooLarge);
+                        return Err(StreamStoreError::ItemTooLarge);
                     }
                 }
                 StreamItemsPayload::PackedU8(_) => validate_items_payload(payload)?,
@@ -69,11 +69,11 @@ impl DurableStreamProducer {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
-    ) -> Result<ExternalAppendOutcome, DurableStreamProducerError> {
+    ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         if let Some(producer) = &producer {
             if matches!(&producer.id, ExternalProducerId::Client(id) if id.is_empty()) {
-                return Err(DurableStreamProducerError::InvalidValueBatch);
+                return Err(StreamStoreError::InvalidValueBatch);
             }
             keys.push(ProducerMetadataKey::ExternalProducerHead(
                 session_key.clone(),
@@ -101,12 +101,12 @@ impl DurableStreamProducer {
                     .as_ref()
                     .is_some_and(|producer| producer.id == ExternalProducerId::Attached))
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let stream = &index.streams[&stream_id];
         index.ensure_producer_write_allowed()?;
         if payload.is_none() && !close {
-            return Err(DurableStreamProducerError::InvalidValueBatch);
+            return Err(StreamStoreError::InvalidValueBatch);
         }
         if stream.terminal {
             if close
@@ -151,7 +151,7 @@ impl DurableStreamProducer {
                     if request.id == ExternalProducerId::Attached {
                         // Attached item retries validate their original payload through
                         // write_items_owned; an end frame cannot stand in for an item.
-                        return Err(DurableStreamProducerError::EventConflict);
+                        return Err(StreamStoreError::EventConflict);
                     }
                     let offset = index
                         .external_producer_offsets
@@ -164,7 +164,7 @@ impl DurableStreamProducer {
                         ))
                         .copied()
                         .ok_or_else(|| {
-                            DurableStreamProducerError::CorruptHistory(
+                            StreamStoreError::CorruptHistory(
                                 "external producer sequence has no original offset".into(),
                             )
                         })?;
@@ -198,14 +198,14 @@ impl DurableStreamProducer {
             .map_or(0, |value| value.logical_item_count()) as u64;
         let terminal_sequence = first_sequence
             .checked_add(item_count)
-            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            .ok_or(StreamStoreError::CounterOverflow)?;
         let producer_fingerprint = self.producer_fingerprint;
         let session = session_key.clone();
         if let Some(producer) = &producer {
             producer
                 .sequence
                 .checked_add(1)
-                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                .ok_or(StreamStoreError::CounterOverflow)?;
         }
         let producer_record = producer.clone();
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
@@ -325,7 +325,7 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
 
         let (events, _) = self

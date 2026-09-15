@@ -222,11 +222,11 @@ impl<E> DurableStreamReadError<E> {
     }
 
     pub(crate) fn from_producer(
-        error: crate::durable_host::durable_stream::DurableStreamProducerError,
+        error: crate::durable_host::durable_stream::StreamStoreError,
         map: impl FnOnce(String) -> E,
     ) -> Self {
         match error {
-            crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired => {
+            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired => {
                 Self::Unavailable
             }
             error => Self::Other(map(error.to_string())),

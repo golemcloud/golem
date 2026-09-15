@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::durable_stream::{
-    DurableStreamCommit, DurableStreamProducer, DurableStreamProducerError,
+    DurableStreamCommit, DurableStreamStore, StreamStoreError,
 };
 use crate::services::activity::ActivityGate;
 use futures::FutureExt;
@@ -21,8 +21,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
-type LoadResult = Result<Arc<DurableStreamProducer>, DurableStreamProducerError>;
-pub(super) type EphemeralArchival = watch::Sender<Option<Result<(), DurableStreamProducerError>>>;
+type LoadResult = Result<Arc<DurableStreamStore>, StreamStoreError>;
+pub(super) type EphemeralArchival = watch::Sender<Option<Result<(), StreamStoreError>>>;
 
 /// Owns initialization and replacement independently of the callers waiting for a producer.
 #[derive(Default)]
@@ -34,12 +34,12 @@ pub(super) struct DurableStreamProducerSlot {
 #[derive(Default)]
 struct SlotState {
     responses: usize,
-    producer: Option<Arc<DurableStreamProducer>>,
+    producer: Option<Arc<DurableStreamStore>>,
     loading: Option<watch::Receiver<Option<LoadResult>>>,
-    failure: Option<DurableStreamProducerError>,
+    failure: Option<StreamStoreError>,
     retired: bool,
-    retirement: Option<watch::Receiver<Option<Result<(), DurableStreamProducerError>>>>,
-    archival: Option<watch::Receiver<Option<Result<(), DurableStreamProducerError>>>>,
+    retirement: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
+    archival: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
 }
 
 /// Keeps normal ephemeral archival behind the response and all of its stream readers.
@@ -58,10 +58,10 @@ impl Drop for EphemeralResponseLease {
 impl DurableStreamProducerSlot {
     pub(super) fn retain_response(
         self: &Arc<Self>,
-    ) -> Result<Arc<EphemeralResponseLease>, DurableStreamProducerError> {
+    ) -> Result<Arc<EphemeralResponseLease>, StreamStoreError> {
         let mut state = self.state.lock().unwrap();
         if state.retired {
-            return Err(DurableStreamProducerError::RecoveryRequired);
+            return Err(StreamStoreError::RecoveryRequired);
         }
         state.responses += 1;
         Ok(Arc::new(EphemeralResponseLease { slot: self.clone() }))
@@ -70,7 +70,7 @@ impl DurableStreamProducerSlot {
     /// A missing lease means normal archival completed; the caller must resolve a new owner.
     pub(super) async fn retain_response_or_wait_for_archive(
         self: &Arc<Self>,
-    ) -> Result<Option<Arc<EphemeralResponseLease>>, DurableStreamProducerError> {
+    ) -> Result<Option<Arc<EphemeralResponseLease>>, StreamStoreError> {
         let archival = {
             let mut state = self.state.lock().unwrap();
             if !state.retired {
@@ -82,7 +82,7 @@ impl DurableStreamProducerSlot {
             state
                 .archival
                 .clone()
-                .ok_or(DurableStreamProducerError::RecoveryRequired)?
+                .ok_or(StreamStoreError::RecoveryRequired)?
         };
         wait_for_result(archival).await?;
         Ok(None)
@@ -129,7 +129,7 @@ impl DurableStreamProducerSlot {
     pub(super) fn retire(
         self: &Arc<Self>,
         commit: DurableStreamCommit,
-    ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
+    ) -> impl Future<Output = Result<(), StreamStoreError>> + Send + 'static {
         self.retire_with_commit(Some(commit))
     }
 
@@ -137,14 +137,14 @@ impl DurableStreamProducerSlot {
     /// An already-started retirement is joined, including its previously admitted final commit.
     pub(super) fn shutdown(
         self: &Arc<Self>,
-    ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
+    ) -> impl Future<Output = Result<(), StreamStoreError>> + Send + 'static {
         self.retire_with_commit(None)
     }
 
     fn retire_with_commit(
         self: &Arc<Self>,
         commit: Option<DurableStreamCommit>,
-    ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
+    ) -> impl Future<Output = Result<(), StreamStoreError>> + Send + 'static {
         let retirement = {
             let mut state = self.state.lock().unwrap();
             state.retired = true;
@@ -178,7 +178,7 @@ impl DurableStreamProducerSlot {
                     .catch_unwind()
                     .await
                     .map_err(|_| {
-                        DurableStreamProducerError::Oplog(
+                        StreamStoreError::Oplog(
                             "durable stream producer retirement panicked".to_string(),
                         )
                     });
@@ -232,7 +232,7 @@ impl DurableStreamProducerSlot {
         let loading = {
             let mut state = self.state.lock().unwrap();
             if state.retired {
-                return Err(DurableStreamProducerError::RecoveryRequired);
+                return Err(StreamStoreError::RecoveryRequired);
             }
             if let Some(failure) = &state.failure {
                 return Err(failure.clone());
@@ -263,7 +263,7 @@ impl DurableStreamProducerSlot {
                     .catch_unwind()
                     .await
                     .unwrap_or_else(|_| {
-                        Err(DurableStreamProducerError::Oplog(
+                        Err(StreamStoreError::Oplog(
                             "durable stream producer loading panicked".to_string(),
                         ))
                     });
@@ -283,7 +283,7 @@ impl DurableStreamProducerSlot {
                         Err(_) => {}
                     }
                     if state.retired {
-                        result = Err(DurableStreamProducerError::RecoveryRequired);
+                        result = Err(StreamStoreError::RecoveryRequired);
                     }
                     state.loading = None;
                     reply.send_replace(Some(result));
@@ -296,16 +296,14 @@ impl DurableStreamProducerSlot {
 }
 
 async fn wait_for_result<T: Clone>(
-    mut receiver: watch::Receiver<Option<Result<T, DurableStreamProducerError>>>,
-) -> Result<T, DurableStreamProducerError> {
+    mut receiver: watch::Receiver<Option<Result<T, StreamStoreError>>>,
+) -> Result<T, StreamStoreError> {
     loop {
         if let Some(result) = receiver.borrow_and_update().clone() {
             return result;
         }
         receiver.changed().await.map_err(|_| {
-            DurableStreamProducerError::Oplog(
-                "durable stream producer operation stopped".to_string(),
-            )
+            StreamStoreError::Oplog("durable stream producer operation stopped".to_string())
         })?;
     }
 }

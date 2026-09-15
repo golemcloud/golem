@@ -15,14 +15,14 @@
 use super::index::attachment_sort_key;
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Commits deterministic source-unavailable state for unread consumer history.
     pub(crate) async fn commit_source_unavailable_overlay(
         &self,
         key: StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         self.run_lifecycle(0, move |owner| async move {
             owner
                 .commit_source_unavailable_overlay_owned(key, source_offset, consumer_read_ordinal)
@@ -36,12 +36,12 @@ impl DurableStreamProducer {
         key: StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         if key.consumer_environment_id != self.environment_id
             || key.consumer != self.producer
             || key.expected_consumer_fingerprint != self.producer_fingerprint
         {
-            return Err(DurableStreamProducerError::InvalidAttachmentState);
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         let mut index = self
             .index_for([ProducerMetadataKey::ConsumerHead(
@@ -65,21 +65,21 @@ impl DurableStreamProducer {
                     .oplog
                     .download_payload(record)
                     .await
-                    .map_err(DurableStreamProducerError::Oplog)?;
+                    .map_err(StreamStoreError::Oplog)?;
                 match record {
                     StreamSessionRecord::ConsumerItemValue(record)
                         if record.session_key == key.session_key
                             && record.stream_id == key.stream_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "consumer value journal contains a read-ordinal gap".to_string(),
                             ));
                         }
                         for index in 0..record.logical_item_count() {
                             source_offsets.push(record.source_offset_at(index).ok_or_else(
                                 || {
-                                    DurableStreamProducerError::CorruptHistory(
+                                    StreamStoreError::CorruptHistory(
                                         "packed-u8 consumer journal offset range is invalid"
                                             .to_string(),
                                     )
@@ -92,7 +92,7 @@ impl DurableStreamProducer {
                             && record.stream_id == key.stream_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "consumer terminal journal contains a read-ordinal gap".to_string(),
                             ));
                         }
@@ -103,14 +103,14 @@ impl DurableStreamProducer {
                             && record.key.stream_id == key.stream_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "source-unavailable overlay contains a read-ordinal gap"
                                     .to_string(),
                             ));
                         }
                         match &overlay {
                             Some(existing) if existing != &record => {
-                                return Err(DurableStreamProducerError::CorruptHistory(
+                                return Err(StreamStoreError::CorruptHistory(
                                     "conflicting source-unavailable overlays".to_string(),
                                 ));
                             }
@@ -129,11 +129,11 @@ impl DurableStreamProducer {
             {
                 Ok(true)
             } else {
-                Err(DurableStreamProducerError::AttachmentConflict)
+                Err(StreamStoreError::AttachmentConflict)
             };
         }
         if source_offsets.len() as u64 != consumer_read_ordinal {
-            return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
+            return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
         let record = StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -163,7 +163,7 @@ impl DurableStreamProducer {
     pub(crate) async fn consumer_source_unavailable(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<Option<StreamOffset>, DurableStreamProducerError> {
+    ) -> Result<Option<StreamOffset>, StreamStoreError> {
         if key.consumer_environment_id != self.environment_id
             || key.consumer != self.producer
             || key.expected_consumer_fingerprint != self.producer_fingerprint
@@ -171,7 +171,7 @@ impl DurableStreamProducer {
             || key.consumer_invocation.callee != self.producer
             || key.consumer_invocation.callee_fingerprint != self.producer_fingerprint
         {
-            return Err(DurableStreamProducerError::InvalidAttachmentState);
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         let index = self
             .index_for([ProducerMetadataKey::ConsumerHead(
@@ -189,7 +189,7 @@ impl DurableStreamProducer {
     async fn persist_attachment_record(
         &self,
         record: StreamSessionRecord,
-    ) -> Result<AttachmentApplyOutcome, DurableStreamProducerError> {
+    ) -> Result<AttachmentApplyOutcome, StreamStoreError> {
         self.run_lifecycle(0, move |owner| async move {
             owner.persist_attachment_record_owned(record).await
         })
@@ -199,9 +199,9 @@ impl DurableStreamProducer {
     async fn persist_attachment_record_owned(
         &self,
         record: StreamSessionRecord,
-    ) -> Result<AttachmentApplyOutcome, DurableStreamProducerError> {
+    ) -> Result<AttachmentApplyOutcome, StreamStoreError> {
         if !record.has_supported_format() {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable attachment record".to_string(),
             ));
         }
@@ -244,7 +244,7 @@ impl DurableStreamProducer {
 }
 
 #[async_trait]
-impl StreamAttachmentControl for DurableStreamProducer {
+impl StreamAttachmentControl for DurableStreamStore {
     #[tracing::instrument(
         name = "durable_stream.attachment.prepare",
         skip_all,
@@ -254,7 +254,7 @@ impl StreamAttachmentControl for DurableStreamProducer {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let lease_expires_at_millis = attachment_lease_expiry(now_millis)?;
         let outcome = self
             .persist_attachment_record(StreamSessionRecord::AttachmentPrepared(
@@ -289,7 +289,7 @@ impl StreamAttachmentControl for DurableStreamProducer {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let lease_expires_at_millis = attachment_lease_expiry(now_millis)?;
         let outcome = self
             .persist_attachment_record(StreamSessionRecord::AttachmentActivated(
@@ -318,10 +318,10 @@ impl StreamAttachmentControl for DurableStreamProducer {
     async fn detach_attachment(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<StreamAttachmentView, DurableStreamProducerError> {
+    ) -> Result<StreamAttachmentView, StreamStoreError> {
         let view = self.attachment_view(key).await?;
         if !matches!(view.state, StreamAttachmentState::Active) {
-            return Err(DurableStreamProducerError::InvalidAttachmentState);
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         Ok(view)
     }
@@ -335,7 +335,7 @@ impl StreamAttachmentControl for DurableStreamProducer {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let lease_expires_at_millis = attachment_lease_expiry(now_millis)?;
         let outcome = self
             .persist_attachment_record(StreamSessionRecord::AttachmentRenewed(
@@ -371,7 +371,7 @@ impl StreamAttachmentControl for DurableStreamProducer {
         key: StreamAttachmentKey,
         reason: StreamAttachmentFinalizationReason,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let outcome = self
             .persist_attachment_record(StreamSessionRecord::AttachmentFinalized(
                 StreamAttachmentFinalizedRecord {
@@ -399,13 +399,13 @@ impl StreamAttachmentControl for DurableStreamProducer {
     }
 }
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Validates producer identity and checks whether this session has an active attachment to the stream.
     pub(crate) async fn has_active_attachment(
         &self,
         session: &StreamSessionKey,
         handle: &DurableStreamHandle,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         let index = self
             .index_for([
                 ProducerMetadataKey::Stream(handle.stream_id),
@@ -422,7 +422,7 @@ impl DurableStreamProducer {
                         == handle.expected_producer_fingerprint
             })
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         Ok(index
             .active_attachments_by_session_stream
@@ -441,7 +441,7 @@ impl DurableStreamProducer {
     /// Returns attachment and cascade evidence that currently governs deletion.
     pub(crate) async fn deletion_diagnostics(
         &self,
-    ) -> Result<StreamDeletionDiagnostics, DurableStreamProducerError> {
+    ) -> Result<StreamDeletionDiagnostics, StreamStoreError> {
         let index = self.index_for_cleanup().await?;
         let mut cascade_completed = index
             .cascade_outbox
@@ -463,7 +463,7 @@ impl DurableStreamProducer {
         &self,
         now_millis: u64,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.commit_deletion_barrier(now_millis, false).await?;
         let dependents = self.index.lock().await.incomplete_cascade_dependents();
         for key in dependents {
@@ -480,20 +480,20 @@ impl DurableStreamProducer {
                     let inspection = probe
                         .journal_inspection(&key)
                         .await?
-                        .ok_or(DurableStreamProducerError::InvalidAttachmentState)?;
+                        .ok_or(StreamStoreError::InvalidAttachmentState)?;
                     let producer_offsets = {
                         let index = self.index.lock().await;
                         index
                             .streams
                             .get(&key.stream_id)
-                            .ok_or(DurableStreamProducerError::UnknownStream(key.stream_id))?
+                            .ok_or(StreamStoreError::UnknownStream(key.stream_id))?
                             .offsets()
                     };
                     if inspection.source_offsets.len() > producer_offsets.len()
                         || producer_offsets[..inspection.source_offsets.len()]
                             != inspection.source_offsets
                     {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "consumer journal is not an exact prefix of producer history"
                                 .to_string(),
                         ));
@@ -505,7 +505,7 @@ impl DurableStreamProducer {
                             producer_offsets[inspection.source_offsets.len()];
                         if let Some(existing) = inspection.source_unavailable {
                             if existing != first_unjournaled_offset {
-                                return Err(DurableStreamProducerError::CorruptHistory(
+                                return Err(StreamStoreError::CorruptHistory(
                                     "source-unavailable overlay does not identify the first unjournaled producer position"
                                         .to_string(),
                                 ));
@@ -531,7 +531,7 @@ impl DurableStreamProducer {
         if incomplete.is_empty() {
             Ok(())
         } else {
-            Err(DurableStreamProducerError::DeletionBlocked(incomplete))
+            Err(StreamStoreError::DeletionBlocked(incomplete))
         }
     }
 
@@ -539,7 +539,7 @@ impl DurableStreamProducer {
         &self,
         now_millis: u64,
         require_no_dependents: bool,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.run_lifecycle(0, move |owner| async move {
             owner
                 .commit_deletion_barrier_owned(now_millis, require_no_dependents)
@@ -552,7 +552,7 @@ impl DurableStreamProducer {
         &self,
         now_millis: u64,
         require_no_dependents: bool,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let mut index = self.index_for_cleanup().await?;
         if index.deleting {
             crate::metrics::durable_stream::record_producer_operation("deletion_barrier", true);
@@ -561,7 +561,7 @@ impl DurableStreamProducer {
         if require_no_dependents {
             let dependents = index.live_dependents();
             if !dependents.is_empty() {
-                return Err(DurableStreamProducerError::DeletionBlocked(dependents));
+                return Err(StreamStoreError::DeletionBlocked(dependents));
             }
         }
         let mut open_streams = index
@@ -621,7 +621,7 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
@@ -635,7 +635,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     terminal_events.push(index.apply_cancel(
                         oplog_index,
                         entity_parent_start_index,
@@ -648,7 +648,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     index.apply_deletion_record(
                         &record,
                         self.environment_id,
@@ -657,7 +657,7 @@ impl DurableStreamProducer {
                     )?;
                 }
                 _ => {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "durable deletion barrier batch contains an unexpected entry".to_string(),
                     ));
                 }
@@ -687,7 +687,7 @@ impl DurableStreamProducer {
         key: StreamAttachmentKey,
         now_millis: u64,
         result: StreamCascadeDependentResult,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.run_lifecycle(0, move |owner| async move {
             owner
                 .commit_cascade_outbox_owned(key, now_millis, result)
@@ -701,7 +701,7 @@ impl DurableStreamProducer {
         key: StreamAttachmentKey,
         now_millis: u64,
         result: StreamCascadeDependentResult,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let mut index = self.index.lock().await;
         self.ensure_healthy()?;
         if let Some(existing) = index.cascade_outbox.get(&key) {
@@ -709,7 +709,7 @@ impl DurableStreamProducer {
                 crate::metrics::durable_stream::record_cascade("replayed");
                 Ok(())
             } else {
-                Err(DurableStreamProducerError::CorruptHistory(
+                Err(StreamStoreError::CorruptHistory(
                     "conflicting durable cascade completion".to_string(),
                 ))
             };
@@ -761,7 +761,7 @@ impl DurableStreamProducer {
     pub(super) async fn attachment_view(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<StreamAttachmentView, DurableStreamProducerError> {
+    ) -> Result<StreamAttachmentView, StreamStoreError> {
         self.index_for([ProducerMetadataKey::Attachment(
             key.attachment_id,
             key.stream_id,
@@ -772,7 +772,7 @@ impl DurableStreamProducer {
         .attachment_views()
         .into_iter()
         .find(|view| view.key == *key)
-        .ok_or(DurableStreamProducerError::InvalidAttachmentState)
+        .ok_or(StreamStoreError::InvalidAttachmentState)
     }
 
     /// Reconciles expired or abandoned attachments from durable consumer evidence.
@@ -782,7 +782,7 @@ impl DurableStreamProducer {
         renewal_target_millis: u64,
         batch_size: usize,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
-    ) -> Result<usize, DurableStreamProducerError> {
+    ) -> Result<usize, StreamStoreError> {
         self.ensure_healthy()?;
         let (deleting, candidates) =
             if let Some(candidates) = self.indexed_attachment_candidates(batch_size).await? {
@@ -993,8 +993,8 @@ enum ReconciliationAction {
     Finalize(StreamAttachmentFinalizationReason),
 }
 
-pub(super) fn attachment_lease_expiry(now_millis: u64) -> Result<u64, DurableStreamProducerError> {
+pub(super) fn attachment_lease_expiry(now_millis: u64) -> Result<u64, StreamStoreError> {
     now_millis
         .checked_add(STREAM_ATTACHMENT_LEASE_TTL_MILLIS)
-        .ok_or(DurableStreamProducerError::CounterOverflow)
+        .ok_or(StreamStoreError::CounterOverflow)
 }

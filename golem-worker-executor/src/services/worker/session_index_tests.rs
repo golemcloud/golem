@@ -1583,8 +1583,8 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
 
 #[test]
 async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain() {
-    use crate::durable_host::durable_session::DurableSessionStreams;
-    use crate::durable_host::durable_stream::DurableStreamProducer;
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::durable_stream::DurableStreamStore;
     use golem_common::model::durable_stream::{
         ResumeAttemptDescriptor, StreamResumeOperation, StreamSessionAttachedRecord,
         StreamSessionDetachedRecord, StreamSessionResumeAttemptRecord,
@@ -1618,7 +1618,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     .await;
     oplog.commit(CommitLevel::Always).await;
 
-    let producer = DurableStreamProducer::load(
+    let producer = DurableStreamStore::load(
         oplog.clone(),
         id.environment_id,
         id.agent_id.clone(),
@@ -1627,7 +1627,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     )
     .await
     .unwrap();
-    let old = DurableSessionStreams::new(producer.clone(), oplog.clone(), session.clone(), [])
+    let old = StreamSession::new(producer.clone(), oplog.clone(), session.clone(), [])
         .with_attachment(1, first_attempt);
     old.ensure_current_attachment().await.unwrap();
 
@@ -1654,7 +1654,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog_service.get_last_index(&id, AgentMode::Durable).await,
         attached
     );
-    let new = DurableSessionStreams::new(producer, oplog.clone(), session.clone(), [])
+    let new = StreamSession::new(producer, oplog.clone(), session.clone(), [])
         .with_attachment(2, takeover_attempt);
     assert!(old.ensure_current_attachment().await.is_err());
     new.ensure_current_attachment().await.unwrap();

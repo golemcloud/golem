@@ -14,7 +14,7 @@
 
 use super::{WorkerExecutorImpl, extract_owned_agent_id};
 use crate::durable_host::durable_session::{
-    DurableSessionStreams, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
 use crate::durable_host::durable_stream::ProducerRegistrationRequest;
 use crate::durable_host::stream_session::{
@@ -151,7 +151,7 @@ fn publish_acceptance(
 
 struct AcceptedInvocation {
     component_revision: Option<ComponentRevision>,
-    durable_streams: Option<DurableSessionStreams>,
+    durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
 }
@@ -168,7 +168,7 @@ pub(crate) fn decode_invocation_input(
     })
 }
 
-async fn detach_durable_attachment(streams: Option<DurableSessionStreams>) {
+async fn detach_durable_attachment(streams: Option<StreamSession>) {
     if let Some(streams) = streams
         && let Err(error) = streams.detach_current().await
     {
@@ -899,7 +899,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let durable_attachment = accepted.durable_streams.clone();
         *response_lease.lock().unwrap() = durable_attachment
             .as_ref()
-            .and_then(DurableSessionStreams::response_lease);
+            .and_then(StreamSession::response_lease);
         until_response_closed(&outward, &forwarder_stopped, async {
         let high_waters = if let Some(durable_streams) = &accepted.durable_streams {
             match durable_streams.input_high_waters().await {
@@ -2706,7 +2706,7 @@ async fn send_worker_failure(
 }
 
 async fn route_durable_request(
-    streams: &DurableSessionStreams,
+    streams: &StreamSession,
     responses: &mpsc::Sender<InvocationResponse>,
     state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
     request: InvocationRequest,

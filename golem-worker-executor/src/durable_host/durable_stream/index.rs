@@ -62,11 +62,11 @@ impl ProducerStreamIndex {
     pub(super) fn entity_parent_start_index(
         &self,
         stream_id: StreamId,
-    ) -> Result<Option<OplogIndex>, DurableStreamProducerError> {
+    ) -> Result<Option<OplogIndex>, StreamStoreError> {
         self.entity_parent_start_indices
             .get(&stream_id)
             .copied()
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
+            .ok_or(StreamStoreError::UnknownStream(stream_id))
     }
 
     pub(super) fn session_entity_parent_start_index(
@@ -83,10 +83,10 @@ impl ProducerStreamIndex {
         &mut self,
         session_key: &StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         match self.session_entity_parent_start_indices.get(session_key) {
             Some(existing) if *existing != entity_parent_start_index => {
-                Err(DurableStreamProducerError::CorruptHistory(
+                Err(StreamStoreError::CorruptHistory(
                     "durable stream session contains conflicting entity attribution".to_string(),
                 ))
             }
@@ -99,9 +99,9 @@ impl ProducerStreamIndex {
         }
     }
 
-    pub(super) fn ensure_producer_write_allowed(&self) -> Result<(), DurableStreamProducerError> {
+    pub(super) fn ensure_producer_write_allowed(&self) -> Result<(), StreamStoreError> {
         if self.deleting {
-            Err(DurableStreamProducerError::ProducerDeleting)
+            Err(StreamStoreError::ProducerDeleting)
         } else {
             Ok(())
         }
@@ -113,14 +113,14 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         match record {
             StreamSessionRecord::ProducerDeleting(record) => {
                 if record.producer_environment_id != environment_id
                     || record.producer != *producer
                     || record.producer_fingerprint != producer_fingerprint
                 {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "durable stream deletion barrier identifies another producer incarnation"
                             .to_string(),
                     ));
@@ -132,7 +132,7 @@ impl ProducerStreamIndex {
                     || record.consumer != *producer
                     || record.consumer_fingerprint != producer_fingerprint
                 {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "durable stream consumer deletion intent identifies another consumer incarnation"
                             .to_string(),
                     ));
@@ -148,7 +148,7 @@ impl ProducerStreamIndex {
                 )?;
                 match self.cascade_outbox.get(&record.key) {
                     Some(existing) if existing != &record.result => {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "conflicting durable stream cascade outbox result".to_string(),
                         ));
                     }
@@ -176,7 +176,7 @@ impl ProducerStreamIndex {
         &mut self,
         entity_parent_start_index: Option<OplogIndex>,
         record: &StreamSessionRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if self.consumer_deleting
             && matches!(
                 record,
@@ -184,7 +184,7 @@ impl ProducerStreamIndex {
                     | StreamSessionRecord::TopologyActivated(_)
             )
         {
-            return Err(DurableStreamProducerError::ConsumerDeleting);
+            return Err(StreamStoreError::ConsumerDeleting);
         }
         if let Some(session_key) = crate::worker::stream_session_record_key(record) {
             self.apply_session_attribution(session_key, entity_parent_start_index)?;
@@ -208,18 +208,18 @@ impl ProducerStreamIndex {
             StreamSessionRecord::Prepared(_) | StreamSessionRecord::InvocationResult(_)
         ) && mappings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE
         {
-            return Err(DurableStreamProducerError::ValueStreamLimit);
+            return Err(StreamStoreError::ValueStreamLimit);
         }
         let existing_mappings = self.session_stream_mappings.get(session_key);
         let mut new_mappings = HashSet::new();
         for mapping in mappings {
             if mapping.handle.format_version != DURABLE_STREAM_FORMAT_VERSION {
-                return Err(DurableStreamProducerError::InvalidHandle);
+                return Err(StreamStoreError::InvalidHandle);
             }
             if let Some((existing, _)) = self.referenced_handles.get(&mapping.handle.stream_id)
                 && existing != &mapping.handle
             {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "durable stream mapping relabels an existing stream handle".to_string(),
                 ));
             }
@@ -237,7 +237,7 @@ impl ProducerStreamIndex {
             .checked_add(new_mappings.len())
             .is_none_or(|count| count > MAX_DURABLE_STREAMS_PER_SESSION)
         {
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         let new_mapping_count = new_mappings.len();
         for mapping in mappings {
@@ -272,7 +272,7 @@ impl ProducerStreamIndex {
     pub(super) fn apply_consumer_journal_record(
         &mut self,
         record: &StreamSessionRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if matches!(
             record,
             StreamSessionRecord::ConsumerItemValue(_)
@@ -280,7 +280,7 @@ impl ProducerStreamIndex {
                 | StreamSessionRecord::SourceUnavailable(_)
         ) && !record.has_supported_format()
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable consumer journal record".to_string(),
             ));
         }
@@ -312,14 +312,14 @@ impl ProducerStreamIndex {
                     {
                         Ok(())
                     } else {
-                        Err(DurableStreamProducerError::AttachmentConflict)
+                        Err(StreamStoreError::AttachmentConflict)
                     };
                 }
                 if journal.is_some_and(|journal| journal.terminal)
                     || record.consumer_read_ordinal
                         != journal.map_or(0, |journal| journal.next_read_ordinal)
                 {
-                    return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
+                    return Err(StreamStoreError::ConsumerJournalAdvanced);
                 }
                 let journal = self
                     .consumer_journals
@@ -335,21 +335,18 @@ impl ProducerStreamIndex {
         if journal.is_some_and(|journal| journal.terminal || journal.source_unavailable.is_some())
             || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
         {
-            return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
+            return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
         let next_read_ordinal = ordinal
-            .checked_add(
-                u64::try_from(item_count)
-                    .map_err(|_| DurableStreamProducerError::CounterOverflow)?,
-            )
-            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            .checked_add(u64::try_from(item_count).map_err(|_| StreamStoreError::CounterOverflow)?)
+            .ok_or(StreamStoreError::CounterOverflow)?;
         let last_source_offset = match record {
             StreamSessionRecord::ConsumerItemValue(record) => record
                 .logical_item_count()
                 .checked_sub(1)
                 .and_then(|index| record.source_offset_at(index))
                 .ok_or_else(|| {
-                    DurableStreamProducerError::CorruptHistory(
+                    StreamStoreError::CorruptHistory(
                         "consumer journal source offset range is empty or invalid".to_string(),
                     )
                 })?,
@@ -387,10 +384,10 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         validate_version(record.format_version)?;
         if registration_coordinate_depth(&record.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream registration coordinate exceeds the traversal-depth limit".to_string(),
             ));
         }
@@ -398,14 +395,12 @@ impl ProducerStreamIndex {
             || record.handle.format_version != DURABLE_STREAM_FORMAT_VERSION
             || record.handle.stream_id
                 != StreamId::derive(environment_id, producer, producer_fingerprint, oplog_index)
-                    .map_err(|error| {
-                        DurableStreamProducerError::CorruptHistory(error.to_string())
-                    })?
+                    .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?
             || record.handle.producer_environment_id != environment_id
             || record.handle.producer != *producer
             || record.handle.expected_producer_fingerprint != producer_fingerprint
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         if let Some(existing_id) = self.coordinates.get(&record.coordinate) {
             let existing = self
@@ -422,16 +417,16 @@ impl ProducerStreamIndex {
             {
                 Ok(())
             } else {
-                Err(DurableStreamProducerError::RegistrationDivergence)
+                Err(StreamStoreError::RegistrationDivergence)
             };
         }
         if self.registrations.contains_key(&record.handle.stream_id) {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         let session_key = self
             .registration_session_key(&record.coordinate, &record.session_mapping)
             .ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
+                StreamStoreError::CorruptHistory(
                     "nested stream registration references an unknown parent stream".to_string(),
                 )
             })?;
@@ -445,12 +440,12 @@ impl ProducerStreamIndex {
                 .flatten()
                 != entity_parent_start_index
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "nested stream attribution differs from its parent stream".to_string(),
             ));
         }
         if self.finished_sessions.contains(&session_key) {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream registration follows its session Finished record".to_string(),
             ));
         }
@@ -462,7 +457,7 @@ impl ProducerStreamIndex {
                 },
                 None,
             ) => *self.stream_roles.get(parent_stream_id).ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
+                StreamStoreError::CorruptHistory(
                     "nested stream registration references a parent without a session role"
                         .to_string(),
                 )
@@ -496,7 +491,7 @@ impl ProducerStreamIndex {
                 .unwrap_or_default()
                 >= MAX_DURABLE_STREAMS_PER_SESSION
         {
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         self.apply_session_attribution(&session_key, entity_parent_start_index)?;
         self.coordinates
@@ -533,9 +528,9 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         if pending_registrations.len() != record.newly_registered_stream_ids.len() {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "nested registrations are not claimed by their enclosing item batch".to_string(),
             ));
         }
@@ -551,7 +546,7 @@ impl ProducerStreamIndex {
             .as_u64()
             .checked_sub(pending_registrations.len() as u64)
             .ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
+                StreamStoreError::CorruptHistory(
                     "nested registrations precede the beginning of the oplog".to_string(),
                 )
             })?;
@@ -572,7 +567,7 @@ impl ProducerStreamIndex {
                     logical_item_count,
                 )
             {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "nested registration batch does not match its enclosing stream item"
                         .to_string(),
                 ));
@@ -605,13 +600,13 @@ impl ProducerStreamIndex {
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamItemsRecord,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         validate_version(record.format_version)?;
         if record.producer_fingerprint != producer_fingerprint {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream item attribution differs from its registration".to_string(),
             ));
         }
@@ -619,9 +614,9 @@ impl ProducerStreamIndex {
         let session_key = self
             .stream_sessions
             .get(&record.stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(record.stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
         if self.finished_sessions.contains(session_key) {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream item follows its session Finished record".to_string(),
             ));
         }
@@ -629,7 +624,7 @@ impl ProducerStreamIndex {
         if matches!(record.payload, StreamItemsPayload::PackedU8(_))
             && !record.nested_stream_ids.is_empty()
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "packed-u8 stream items cannot contain nested streams".to_string(),
             ));
         }
@@ -643,7 +638,7 @@ impl ProducerStreamIndex {
                 ) && self.referenced_handles.get(nested_stream_id).is_none_or(
                     |(_, referenced_sessions)| !referenced_sessions.contains(session_key),
                 ) {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "nested stream registration does not identify its enclosing stream item"
                             .to_string(),
                     ));
@@ -653,7 +648,7 @@ impl ProducerStreamIndex {
                 .get(nested_stream_id)
                 .is_none_or(|(_, referenced_sessions)| !referenced_sessions.contains(session_key))
             {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream item batch references an unknown durable stream handle".to_string(),
                 ));
             }
@@ -677,13 +672,13 @@ impl ProducerStreamIndex {
             .as_u64()
             .checked_sub(record.newly_registered_stream_ids.len() as u64)
             .ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
+                StreamStoreError::CorruptHistory(
                     "nested registrations precede the beginning of the oplog".to_string(),
                 )
             })?;
         let nested_ids: HashSet<_> = record.nested_stream_ids.iter().copied().collect();
         if nested_ids.len() != record.nested_stream_ids.len() {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream item batch contains duplicate nested stream ownership".to_string(),
             ));
         }
@@ -691,7 +686,7 @@ impl ProducerStreamIndex {
             HashSet::with_capacity(record.newly_registered_stream_ids.len());
         for (position, stream_id) in record.newly_registered_stream_ids.iter().enumerate() {
             if !newly_registered_ids.insert(*stream_id) || !nested_ids.contains(stream_id) {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream item batch has an invalid newly registered stream list".to_string(),
                 ));
             }
@@ -701,7 +696,7 @@ impl ProducerStreamIndex {
                 .get(stream_id)
                 .is_none_or(|registration| registration.registration_oplog_index != expected_index)
             {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream item batch does not follow its declared nested registrations"
                         .to_string(),
                 ));
@@ -710,21 +705,19 @@ impl ProducerStreamIndex {
         let stream = self
             .streams
             .get_mut(&record.stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(record.stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
         if stream.terminal {
-            return Err(DurableStreamProducerError::AlreadyTerminal(
-                record.stream_id,
-            ));
+            return Err(StreamStoreError::AlreadyTerminal(record.stream_id));
         }
         if record.first_sequence != stream.next_sequence {
-            return Err(DurableStreamProducerError::SequenceGap {
+            return Err(StreamStoreError::SequenceGap {
                 expected: stream.next_sequence,
                 actual: record.first_sequence,
             });
         }
         let payloads = logical_payloads(&record.payload);
         if payloads.len() != record.offsets.len() {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "item count does not match offset count".to_string(),
             ));
         }
@@ -740,14 +733,14 @@ impl ProducerStreamIndex {
             .enumerate()
         {
             if offset != StreamOffset::new(oplog_index, sub_index as u32) {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream item offset does not match its producer oplog position".to_string(),
                 ));
             }
             let sequence = record
                 .first_sequence
                 .checked_add(sub_index as u64)
-                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                .ok_or(StreamStoreError::CounterOverflow)?;
             let event = CommittedProducerStreamEvent {
                 stream_id: record.stream_id,
                 producer_sequence: sequence,
@@ -763,7 +756,7 @@ impl ProducerStreamIndex {
         stream.next_sequence = stream
             .next_sequence
             .checked_add(events.len() as u64)
-            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            .ok_or(StreamStoreError::CounterOverflow)?;
         stream.last_offset = record.offsets.last().copied();
         stream.batches.insert(record.first_sequence, oplog_index);
         self.batch_positions.insert(
@@ -779,22 +772,22 @@ impl ProducerStreamIndex {
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamEndRecord,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<CommittedProducerStreamEvent, DurableStreamProducerError> {
+    ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         validate_version(record.format_version)?;
         if record.producer_fingerprint != producer_fingerprint
             || record.offset != StreamOffset::new(oplog_index, 0)
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream end attribution differs from its registration".to_string(),
             ));
         }
         let stream = self
             .streams
             .get_mut(&record.stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(record.stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
         validate_terminal_sequence(stream, record.stream_id, record.sequence)?;
         let event = CommittedProducerStreamEvent {
             stream_id: record.stream_id,
@@ -820,7 +813,7 @@ impl ProducerStreamIndex {
     pub(super) fn apply_finished(
         &mut self,
         record: &StreamSessionFinishedRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         validate_version(record.format_version)?;
         if self.finished_sessions.contains(&record.session_key) {
             return Ok(());
@@ -830,7 +823,7 @@ impl ProducerStreamIndex {
             .get(&record.session_key)
             .is_some_and(|streams| !streams.is_empty())
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "session Finished record precedes a materialized stream terminal".to_string(),
             ));
         }
@@ -844,22 +837,22 @@ impl ProducerStreamIndex {
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamCancelRecord,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<CommittedProducerStreamEvent, DurableStreamProducerError> {
+    ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         validate_version(record.format_version)?;
         if record.producer_fingerprint != producer_fingerprint
             || record.offset != StreamOffset::new(oplog_index, 0)
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream cancellation attribution differs from its registration".to_string(),
             ));
         }
         let stream = self
             .streams
             .get_mut(&record.stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(record.stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
         validate_terminal_sequence(stream, record.stream_id, record.sequence)?;
         let event = CommittedProducerStreamEvent {
             stream_id: record.stream_id,
@@ -892,12 +885,12 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<AttachmentApplyOutcome, DurableStreamProducerError> {
+    ) -> Result<AttachmentApplyOutcome, StreamStoreError> {
         let (key, state) = match record {
             StreamSessionRecord::AttachmentPrepared(record) => {
                 validate_version(record.format_version)?;
                 if record.lease_expires_at_millis <= record.prepared_at_millis {
-                    return Err(DurableStreamProducerError::AttachmentConflict);
+                    return Err(StreamStoreError::AttachmentConflict);
                 }
                 (
                     &record.key,
@@ -910,7 +903,7 @@ impl ProducerStreamIndex {
             StreamSessionRecord::AttachmentActivated(record) => {
                 validate_version(record.format_version)?;
                 if record.lease_expires_at_millis <= record.activated_at_millis {
-                    return Err(DurableStreamProducerError::AttachmentConflict);
+                    return Err(StreamStoreError::AttachmentConflict);
                 }
                 (
                     &record.key,
@@ -923,7 +916,7 @@ impl ProducerStreamIndex {
             StreamSessionRecord::AttachmentRenewed(record) => {
                 validate_version(record.format_version)?;
                 if record.lease_expires_at_millis <= record.renewed_at_millis {
-                    return Err(DurableStreamProducerError::AttachmentConflict);
+                    return Err(StreamStoreError::AttachmentConflict);
                 }
                 (
                     &record.key,
@@ -963,7 +956,7 @@ impl ProducerStreamIndex {
                     | StreamSessionRecord::AttachmentRenewed(_)
             )
         {
-            return Err(DurableStreamProducerError::ProducerDeleting);
+            return Err(StreamStoreError::ProducerDeleting);
         }
 
         if matches!(record, StreamSessionRecord::AttachmentPrepared(_)) {
@@ -978,7 +971,7 @@ impl ProducerStreamIndex {
                     );
                     Ok(AttachmentApplyOutcome::Changed)
                 }
-                None => Err(DurableStreamProducerError::InvalidEpoch {
+                None => Err(StreamStoreError::InvalidEpoch {
                     current: 0,
                     actual: key.epoch,
                 }),
@@ -992,7 +985,7 @@ impl ProducerStreamIndex {
                             .entry((key.session_key.clone(), key.stream_id))
                             .or_default();
                         *count = count.checked_sub(1).ok_or_else(|| {
-                            DurableStreamProducerError::CorruptHistory(
+                            StreamStoreError::CorruptHistory(
                                 "active attachment session count underflow".into(),
                             )
                         })?;
@@ -1013,17 +1006,17 @@ impl ProducerStreamIndex {
                             {
                                 Ok(AttachmentApplyOutcome::Replayed)
                             }
-                            _ => Err(DurableStreamProducerError::InvalidAttachmentState),
+                            _ => Err(StreamStoreError::InvalidAttachmentState),
                         }
                     }
                 }
             };
         }
 
-        let existing = existing.ok_or(DurableStreamProducerError::InvalidAttachmentState)?;
+        let existing = existing.ok_or(StreamStoreError::InvalidAttachmentState)?;
         validate_attachment_epoch(existing, key)?;
         if existing.key != *key {
-            return Err(DurableStreamProducerError::AttachmentConflict);
+            return Err(StreamStoreError::AttachmentConflict);
         }
 
         let outcome = match record {
@@ -1031,7 +1024,7 @@ impl ProducerStreamIndex {
                 IndexedStreamAttachmentState::Prepared { .. } => AttachmentApplyOutcome::Changed,
                 IndexedStreamAttachmentState::Active { .. } => AttachmentApplyOutcome::Replayed,
                 IndexedStreamAttachmentState::Finalized { .. } => {
-                    return Err(DurableStreamProducerError::InvalidAttachmentState);
+                    return Err(StreamStoreError::InvalidAttachmentState);
                 }
             },
             StreamSessionRecord::AttachmentRenewed(record) => match existing.state {
@@ -1042,7 +1035,7 @@ impl ProducerStreamIndex {
                     AttachmentApplyOutcome::Changed
                 }
                 IndexedStreamAttachmentState::Active { .. } => AttachmentApplyOutcome::Replayed,
-                _ => return Err(DurableStreamProducerError::InvalidAttachmentState),
+                _ => return Err(StreamStoreError::InvalidAttachmentState),
             },
             StreamSessionRecord::AttachmentFinalized(_) => match existing.state {
                 IndexedStreamAttachmentState::Prepared { .. }
@@ -1062,10 +1055,10 @@ impl ProducerStreamIndex {
                 if is_active {
                     *count = count
                         .checked_add(1)
-                        .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                        .ok_or(StreamStoreError::CounterOverflow)?;
                 } else {
                     *count = count.checked_sub(1).ok_or_else(|| {
-                        DurableStreamProducerError::CorruptHistory(
+                        StreamStoreError::CorruptHistory(
                             "active attachment session count underflow".into(),
                         )
                     })?;
@@ -1088,11 +1081,11 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let registration = self
             .registrations
             .get(&key.stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(key.stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(key.stream_id))?;
         if key.producer_environment_id != environment_id
             || key.producer != *producer
             || key.expected_producer_fingerprint != producer_fingerprint
@@ -1108,10 +1101,10 @@ impl ProducerStreamIndex {
                 &key.session_key.callee,
                 &key.session_key.idempotency_key,
             )
-            .map_err(|error| DurableStreamProducerError::CorruptHistory(error.to_string()))?
+            .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?
                 != key.attachment_id
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         Ok(())
     }
@@ -1201,14 +1194,14 @@ pub(super) fn attachment_sort_key(
 pub(super) fn validate_attachment_epoch(
     existing: &IndexedStreamAttachment,
     requested: &StreamAttachmentKey,
-) -> Result<(), DurableStreamProducerError> {
+) -> Result<(), StreamStoreError> {
     if requested.epoch < existing.key.epoch {
-        Err(DurableStreamProducerError::StaleEpoch {
+        Err(StreamStoreError::StaleEpoch {
             current: existing.key.epoch,
             actual: requested.epoch,
         })
     } else if requested.epoch > existing.key.epoch {
-        Err(DurableStreamProducerError::InvalidEpoch {
+        Err(StreamStoreError::InvalidEpoch {
             current: existing.key.epoch,
             actual: requested.epoch,
         })
@@ -1237,12 +1230,12 @@ pub(super) fn validate_terminal_sequence(
     stream: &IndexedProducerStream,
     stream_id: StreamId,
     sequence: u64,
-) -> Result<(), DurableStreamProducerError> {
+) -> Result<(), StreamStoreError> {
     if stream.terminal {
-        return Err(DurableStreamProducerError::AlreadyTerminal(stream_id));
+        return Err(StreamStoreError::AlreadyTerminal(stream_id));
     }
     if sequence != stream.next_sequence {
-        return Err(DurableStreamProducerError::SequenceGap {
+        return Err(StreamStoreError::SequenceGap {
             expected: stream.next_sequence,
             actual: sequence,
         });
@@ -1250,21 +1243,19 @@ pub(super) fn validate_terminal_sequence(
     Ok(())
 }
 
-pub(super) fn validate_version(version: u8) -> Result<(), DurableStreamProducerError> {
+pub(super) fn validate_version(version: u8) -> Result<(), StreamStoreError> {
     if version == DURABLE_STREAM_FORMAT_VERSION {
         Ok(())
     } else {
-        Err(DurableStreamProducerError::UnsupportedVersion(version))
+        Err(StreamStoreError::UnsupportedVersion(version))
     }
 }
 
-pub(super) fn validate_items_payload(
-    payload: &StreamItemsPayload,
-) -> Result<(), DurableStreamProducerError> {
+pub(super) fn validate_items_payload(payload: &StreamItemsPayload) -> Result<(), StreamStoreError> {
     match payload {
         StreamItemsPayload::Values(values) if values.len() != 1 => {
             crate::metrics::durable_stream::record_limit_violation("value_batch_items");
-            Err(DurableStreamProducerError::InvalidValueBatch)
+            Err(StreamStoreError::InvalidValueBatch)
         }
         StreamItemsPayload::Values(values)
             if values
@@ -1272,13 +1263,13 @@ pub(super) fn validate_items_payload(
                 .is_some_and(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE) =>
         {
             crate::metrics::durable_stream::record_limit_violation("item_size");
-            Err(DurableStreamProducerError::ItemTooLarge)
+            Err(StreamStoreError::ItemTooLarge)
         }
         StreamItemsPayload::PackedU8(bytes)
             if bytes.is_empty() || bytes.len() > MAX_PACKED_U8_STREAM_ITEM_SIZE =>
         {
             crate::metrics::durable_stream::record_limit_violation("packed_u8_batch_size");
-            Err(DurableStreamProducerError::InvalidPackedU8Batch)
+            Err(StreamStoreError::InvalidPackedU8Batch)
         }
         _ => Ok(()),
     }
@@ -1329,10 +1320,10 @@ pub(super) fn nested_coordinate_matches_item(
     )
 }
 
-pub(super) fn resource_exhausted_error_context() -> Result<Vec<u8>, DurableStreamProducerError> {
+pub(super) fn resource_exhausted_error_context() -> Result<Vec<u8>, StreamStoreError> {
     let error = AgentError::CustomError(TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::string()),
         SchemaValue::String("ResourceExhausted".to_string()),
     ));
-    golem_common::serialization::serialize(&error).map_err(DurableStreamProducerError::Oplog)
+    golem_common::serialization::serialize(&error).map_err(StreamStoreError::Oplog)
 }

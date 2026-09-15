@@ -30,7 +30,7 @@ restarts, so a deleted-and-recreated agent with the same `AgentId` is a differen
 Only these are authoritative:
 
 - The **producer's own oplog** holds `StreamRegistered`, `StreamItems`, `StreamEnd` and
-  `StreamCancel` (`DurableStreamProducer::{register, write_items, end, cancel_open}` in
+  `StreamCancel` (`DurableStreamStore::{register, write_items, end, cancel_open}` in
   `durable_host/durable_stream/mod.rs`). Each `StreamItemsRecord` carries `first_sequence`, per-item
   `StreamOffset { oplog index, sub_index }` and `producer_fingerprint`. Records are committed
   first and only then published to `DurableLiveStreamBus` (`durable_host/stream_bus.rs`), which is
@@ -43,6 +43,17 @@ Only these are authoritative:
 
 All of these entries are hints (`is_hint()`): they take part in no `Start`/terminal pairing and
 never satisfy a claim, so a stream-only change cannot desynchronize `Start`/`End` pairing.
+
+The ownership layers are deliberately local. `DurableStreamStore` is the existing per-worker
+journal/index store; it still owns queue admission, serialized local mutations, durable commit and
+post-commit publication, and reports `StreamStoreError`. A per-invocation `StreamSession` runtime
+owns binding-local mappings and consumes the store. Clones of one runtime share those existing
+bindings, while separate constructors remain independent even when given the same session key;
+there is no centralized session registry. Pure `SessionControlMetadata` and
+`SessionTopologyMetadata` projections live in `durable_host/durable_stream/session_state.rs` so
+the store, runtime and services can consume journal state without the store depending on the
+session runtime. RPC adapter separation, independent readers and explicit context remain future
+work; this ownership change alters no wire or oplog format.
 
 ### RPC result versus stream draining
 
@@ -124,10 +135,11 @@ producer-less empty close remains idempotent. No resident dedupe state or new re
 
 ### Mutation ownership
 
-Each resident producer has one mutation task and a request channel. It runs durable mutation
-bodies serially; nested same-producer calls run inline. Dropping a caller's reply receiver does
-not cancel an accepted mutation. Retirement closes the channel, lets an already-running body
-settle, and rejects queued bodies before they start.
+Each resident `DurableStreamStore` retains one local mutation task and request channel; this is the
+existing store, not a new actor or wrapper. It runs durable mutation bodies serially; nested
+same-store calls run inline. Dropping a caller's reply receiver does not cancel an accepted
+mutation. Retirement closes the channel, lets an already-running body drain, and rejects queued
+bodies before they start.
 
 The same task polls completion work separately from mutation bodies: commit callback tails,
 remote cancellations, and live publication waits cannot prevent the next mutation from running.

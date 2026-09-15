@@ -15,13 +15,13 @@
 use super::index::registration_coordinate_depth;
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
     /// Durably registers a stream before its handle can be exposed to a consumer.
     pub(crate) async fn register(
         &self,
         request: ProducerRegistrationRequest,
-    ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, StreamStoreError> {
         self.run_owned(0, move |owner| async move {
             owner.register_owned(request).await
         })
@@ -31,10 +31,10 @@ impl DurableStreamProducer {
     async fn register_owned(
         &self,
         request: ProducerRegistrationRequest,
-    ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, StreamStoreError> {
         if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
             crate::metrics::durable_stream::record_limit_violation("traversal_depth");
-            return Err(DurableStreamProducerError::TraversalDepthLimit);
+            return Err(StreamStoreError::TraversalDepthLimit);
         }
         let mut index = self
             .index_for(ProducerMetadataKey::registration(&request))
@@ -59,27 +59,27 @@ impl DurableStreamProducer {
                     replayed: true,
                 });
             }
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         index.ensure_producer_write_allowed()?;
         if !matches!(
             &request.coordinate,
             StreamRegistrationCoordinate::Root { .. }
         ) {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         let session_key = index
             .registration_session_key(&request.coordinate, &request.session_mapping)
             .ok_or_else(|| match &request.coordinate {
                 StreamRegistrationCoordinate::Nested {
                     parent_stream_id, ..
-                } => DurableStreamProducerError::UnknownStream(*parent_stream_id),
+                } => StreamStoreError::UnknownStream(*parent_stream_id),
                 StreamRegistrationCoordinate::Root { .. } => {
                     unreachable!("root registration always defines its session")
                 }
             })?;
         if index.finished_sessions.contains(&session_key) {
-            return Err(DurableStreamProducerError::SessionFinished(session_key));
+            return Err(StreamStoreError::SessionFinished(session_key));
         }
         if index
             .session_stream_counts
@@ -89,7 +89,7 @@ impl DurableStreamProducer {
             >= MAX_DURABLE_STREAMS_PER_SESSION
         {
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         StreamId::derive(
             self.environment_id,
@@ -97,7 +97,7 @@ impl DurableStreamProducer {
             self.producer_fingerprint,
             OplogIndex::INITIAL,
         )
-        .map_err(|error| DurableStreamProducerError::CorruptHistory(error.to_string()))?;
+        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
 
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
@@ -120,7 +120,7 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -132,7 +132,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         index.apply_registration(
             oplog_index,
             entity_parent_start_index,
@@ -169,7 +169,7 @@ impl DurableStreamProducer {
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
-    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), DurableStreamProducerError> {
+    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), StreamStoreError> {
         self.run_owned(result.len() * 2, move |owner| async move {
             owner
                 .register_result_streams_owned(
@@ -189,7 +189,7 @@ impl DurableStreamProducer {
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
-    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), DurableStreamProducerError> {
+    ) -> Result<(Vec<DurableStreamHandle>, StreamSessionRecord), StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Session(session_key.clone())];
         for output in &outputs {
             match &output.source {
@@ -211,7 +211,7 @@ impl DurableStreamProducer {
         for (position, output) in outputs.iter().enumerate() {
             if let Some(epoch) = output.cancellation_epoch {
                 if epoch == 0 {
-                    return Err(DurableStreamProducerError::InvalidAttachmentState);
+                    return Err(StreamStoreError::InvalidAttachmentState);
                 }
                 let terminal = match &output.source {
                     ProducerOutputSource::New(_) => Some((0, entity_parent_start_index)),
@@ -219,7 +219,7 @@ impl DurableStreamProducer {
                         let stream = index
                             .streams
                             .get(&handle.stream_id)
-                            .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
+                            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
                         if stream.terminal {
                             None
                         } else {
@@ -277,27 +277,27 @@ impl DurableStreamProducer {
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
-            return Err(DurableStreamProducerError::ValueStreamLimit);
+            return Err(StreamStoreError::ValueStreamLimit);
         }
         let mut coordinates = HashSet::new();
         if requests.iter().any(|request| {
             request.entity_parent_start_index != entity_parent_start_index
                 || !coordinates.insert(&request.coordinate)
         }) {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         if requests.is_empty()
             && let Some(result_offset) = result_offset
         {
             let expected = make_result(Vec::new());
             let StreamSessionRecord::InvocationResult(_) = &expected else {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "empty result registration did not build an invocation-result record"
                         .to_string(),
                 ));
             };
             if !expected.has_supported_format() {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "result registration built a malformed invocation-result record".to_string(),
                 ));
             }
@@ -306,7 +306,7 @@ impl DurableStreamProducer {
             return if record == expected {
                 Ok((Vec::new(), record))
             } else {
-                Err(DurableStreamProducerError::RegistrationDivergence)
+                Err(StreamStoreError::RegistrationDivergence)
             };
         }
         let existing_handles = requests
@@ -322,7 +322,7 @@ impl DurableStreamProducer {
             .collect::<Vec<_>>();
         if existing_handles.iter().any(Option::is_some) {
             if existing_handles.iter().any(Option::is_none) {
-                return Err(DurableStreamProducerError::RegistrationDivergence);
+                return Err(StreamStoreError::RegistrationDivergence);
             }
             let handles = existing_handles
                 .into_iter()
@@ -340,19 +340,17 @@ impl DurableStreamProducer {
                     return Ok((handles, record));
                 }
             }
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         if index.finished_sessions.contains(&result_session_key) {
-            return Err(DurableStreamProducerError::SessionFinished(
-                result_session_key,
-            ));
+            return Err(StreamStoreError::SessionFinished(result_session_key));
         }
         let session_key = requests.first().and_then(|request| {
             index.registration_session_key(&request.coordinate, &request.session_mapping)
         });
         if let Some(session_key) = session_key {
             if index.finished_sessions.contains(&session_key) {
-                return Err(DurableStreamProducerError::SessionFinished(session_key));
+                return Err(StreamStoreError::SessionFinished(session_key));
             }
             let current = index
                 .session_stream_counts
@@ -364,21 +362,21 @@ impl DurableStreamProducer {
                 .is_none_or(|count| count > MAX_DURABLE_STREAMS_PER_SESSION)
             {
                 crate::metrics::durable_stream::record_limit_violation("streams_per_session");
-                return Err(DurableStreamProducerError::StreamLimit);
+                return Err(StreamStoreError::StreamLimit);
             }
         }
         for request in &requests {
             if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH
             {
                 crate::metrics::durable_stream::record_limit_violation("traversal_depth");
-                return Err(DurableStreamProducerError::TraversalDepthLimit);
+                return Err(StreamStoreError::TraversalDepthLimit);
             }
             if !matches!(
                 request.coordinate,
                 StreamRegistrationCoordinate::Root { .. }
             ) || index.coordinates.contains_key(&request.coordinate)
             {
-                return Err(DurableStreamProducerError::RegistrationDivergence);
+                return Err(StreamStoreError::RegistrationDivergence);
             }
         }
 
@@ -476,7 +474,7 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
 
         let mut handles = Vec::new();
@@ -493,7 +491,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     handles.push(record.handle.clone());
                     index.apply_registration(
                         oplog_index,
@@ -520,7 +518,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     index.apply_session_references(entity_parent_start_index, &record)?;
                     index.apply_result_offset(oplog_index, &record);
                     if matches!(record, StreamSessionRecord::InvocationResult(_)) {
@@ -536,7 +534,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     let event = index.apply_cancel(
                         oplog_index,
                         entity_parent_start_index,
@@ -549,7 +547,7 @@ impl DurableStreamProducer {
                     cancelled_count += 1;
                 }
                 _ => {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "result registration batch contains an unexpected oplog entry".to_string(),
                     ));
                 }
@@ -561,7 +559,7 @@ impl DurableStreamProducer {
         Ok((
             handles,
             session_record.ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
+                StreamStoreError::CorruptHistory(
                     "result registration batch contains no session record".to_string(),
                 )
             })?,
@@ -572,21 +570,21 @@ impl DurableStreamProducer {
     pub(crate) async fn validate_registration(
         &self,
         request: &ProducerRegistrationRequest,
-    ) -> Result<DurableStreamHandle, DurableStreamProducerError> {
+    ) -> Result<DurableStreamHandle, StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Coordinate(request.coordinate.clone())])
             .await?;
         let stream_id = index
             .coordinates
             .get(&request.coordinate)
-            .ok_or(DurableStreamProducerError::RegistrationDivergence)?;
+            .ok_or(StreamStoreError::RegistrationDivergence)?;
         let registration = index.registrations.get(stream_id).ok_or_else(|| {
-            DurableStreamProducerError::CorruptHistory(
+            StreamStoreError::CorruptHistory(
                 "registration coordinate points at a missing registration".to_string(),
             )
         })?;
         if !registration_matches(registration, request) {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         Ok(registration.handle.clone())
     }
@@ -596,17 +594,15 @@ impl DurableStreamProducer {
         &self,
         session_key: &StreamSessionKey,
         new_stream_count: usize,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if new_stream_count > MAX_NEW_STREAM_HANDLES_PER_VALUE {
-            return Err(DurableStreamProducerError::ValueStreamLimit);
+            return Err(StreamStoreError::ValueStreamLimit);
         }
         let index = self
             .index_for([ProducerMetadataKey::Session(session_key.clone())])
             .await?;
         if new_stream_count != 0 && index.finished_sessions.contains(session_key) {
-            return Err(DurableStreamProducerError::SessionFinished(
-                session_key.clone(),
-            ));
+            return Err(StreamStoreError::SessionFinished(session_key.clone()));
         }
         let current = index
             .session_stream_counts
@@ -617,7 +613,7 @@ impl DurableStreamProducer {
             .checked_add(new_stream_count)
             .is_none_or(|count| count > MAX_DURABLE_STREAMS_PER_SESSION)
         {
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         Ok(())
     }

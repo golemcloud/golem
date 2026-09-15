@@ -39,14 +39,14 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
     async fn status(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError>;
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError>;
 
     /// Inspects an attachment while requiring an exact durable mapping when supplied.
     async fn status_exact(
         &self,
         key: &StreamAttachmentKey,
         _mapping: Option<&StreamSessionMappingRecord>,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         self.status(key).await
     }
 
@@ -54,7 +54,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
         Ok(None)
     }
 
@@ -62,7 +62,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
     async fn journal_summary(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalSummary>, StreamStoreError> {
         Ok(None)
     }
 
@@ -72,8 +72,8 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
         _key: &StreamAttachmentKey,
         _source_offset: StreamOffset,
         _consumer_read_ordinal: u64,
-    ) -> Result<(), DurableStreamProducerError> {
-        Err(DurableStreamProducerError::Oplog(
+    ) -> Result<(), StreamStoreError> {
+        Err(StreamStoreError::Oplog(
             "consumer probe cannot commit a source-unavailable overlay".to_string(),
         ))
     }
@@ -118,7 +118,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         key: &StreamAttachmentKey,
         mapping: &StreamSessionMappingRecord,
         intent: &golem_common::model::durable_stream::StreamConsumerCancelIntentRecord,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         self.inspect_status(key, Some(mapping), Some(intent)).await
     }
 
@@ -130,7 +130,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         expected_cancel: Option<
             &golem_common::model::durable_stream::StreamConsumerCancelIntentRecord,
         >,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         let session_owner = OwnedAgentId::new(
             key.session_key.callee_environment_id,
             &key.session_key.callee,
@@ -139,7 +139,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .get_agent_mode(&session_owner)
             .await
-            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -147,14 +147,12 @@ impl DbDirectStreamAttachmentConsumerProbe {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
         let session_index = self.oplog_service.stream_session_index().ok_or_else(|| {
-            DurableStreamProducerError::Oplog(
-                "stream session index service is unavailable".to_string(),
-            )
+            StreamStoreError::Oplog("stream session index service is unavailable".to_string())
         })?;
         let identity = session_index
             .lookup_producer_identity(&session_owner, session_mode)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         if identity.producer_fingerprint != key.session_key.callee_fingerprint {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
@@ -165,7 +163,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key.idempotency_key,
             )
             .await
-            .map_err(DurableStreamProducerError::Oplog)?
+            .map_err(StreamStoreError::Oplog)?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -173,7 +171,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
         if let Some(error) = status.lifecycle_error {
-            return Err(DurableStreamProducerError::CorruptHistory(error));
+            return Err(StreamStoreError::CorruptHistory(error));
         }
         let Some(prepared_attempt_id) = status.prepared_attempt_id else {
             return Ok(ConsumerAttachmentStatus::Missing);
@@ -183,7 +181,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             &key.session_key.callee,
             &key.session_key.idempotency_key,
         )
-        .map_err(|error| DurableStreamProducerError::CorruptHistory(error.to_string()))?;
+        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
         if key.attachment_id != primary_attachment_id {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
@@ -197,14 +195,14 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 if initial_attempt_id != prepared_attempt_id
                     || status.validated_initial_pending_invocation != Some(pending_index)
                 {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "durable Attached record does not identify its Prepared attempt and pending invocation"
                             .to_string(),
                     ));
                 }
             }
             _ => {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "durable attachment lifecycle index is incomplete".to_string(),
                 ));
             }
@@ -225,7 +223,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .get_agent_mode(&consumer)
             .await
-            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -241,7 +239,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         let identity = session_index
             .lookup_producer_identity(&consumer, agent_mode)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         if identity.producer_fingerprint != key.expected_consumer_fingerprint {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
@@ -249,7 +247,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .lookup_durable_stream_control_metadata(&consumer, agent_mode, &key.session_key)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         if !metadata.covered_through.is_defined() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
@@ -264,11 +262,11 @@ impl DbDirectStreamAttachmentConsumerProbe {
                         ConsumerAttachmentStatus::Missing
                     }
                 })
-                .map_err(DurableStreamProducerError::CorruptHistory);
+                .map_err(StreamStoreError::CorruptHistory);
         }
         let topology = metadata
             .topology_status(key, expected_mapping)
-            .map_err(DurableStreamProducerError::CorruptHistory)?;
+            .map_err(StreamStoreError::CorruptHistory)?;
         if matches!(
             topology,
             ConsumerAttachmentStatus::EpochMismatch | ConsumerAttachmentStatus::IncarnationMismatch
@@ -285,11 +283,9 @@ impl DbDirectStreamAttachmentConsumerProbe {
         match (attachment_authority, topology) {
             (Some(_), topology) => Ok(topology),
             (None, ConsumerAttachmentStatus::Prepared) => Ok(ConsumerAttachmentStatus::Prepared),
-            (None, ConsumerAttachmentStatus::Active) => {
-                Err(DurableStreamProducerError::CorruptHistory(
-                    "durable topology activation precedes session attachment".to_string(),
-                ))
-            }
+            (None, ConsumerAttachmentStatus::Active) => Err(StreamStoreError::CorruptHistory(
+                "durable topology activation precedes session attachment".to_string(),
+            )),
             (None, topology) => Ok(topology),
         }
     }
@@ -300,7 +296,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
     async fn status(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         self.status_exact(key, None).await
     }
 
@@ -308,7 +304,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         &self,
         key: &StreamAttachmentKey,
         expected_mapping: Option<&StreamSessionMappingRecord>,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         self.inspect_status(key, expected_mapping, None).await
     }
 
@@ -320,13 +316,13 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
     async fn journal_inspection(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
         let Some(metadata) = self
             .worker_service
             .get(&consumer)
             .await
-            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
             return Ok(None);
         };
@@ -361,20 +357,20 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 .oplog_service
                 .download_payload(&consumer, AgentMode::Durable, record)
                 .await
-                .map_err(DurableStreamProducerError::Oplog)?;
+                .map_err(StreamStoreError::Oplog)?;
             match record {
                 StreamSessionRecord::ConsumerItemValue(record)
                     if record.session_key == key.session_key
                         && record.stream_id == key.stream_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "consumer value journal contains a read-ordinal gap".to_string(),
                         ));
                     }
                     for index in 0..record.logical_item_count() {
                         offsets.push(record.source_offset_at(index).ok_or_else(|| {
-                            DurableStreamProducerError::CorruptHistory(
+                            StreamStoreError::CorruptHistory(
                                 "packed-u8 consumer journal offset range is invalid".to_string(),
                             )
                         })?);
@@ -385,7 +381,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                         && record.stream_id == key.stream_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "consumer terminal journal contains a read-ordinal gap".to_string(),
                         ));
                     }
@@ -396,13 +392,13 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                         && record.key.stream_id == key.stream_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "source-unavailable overlay contains a read-ordinal gap".to_string(),
                         ));
                     }
                     match overlay {
                         Some(existing) if existing != record.source_offset => {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "conflicting source-unavailable overlays".to_string(),
                             ));
                         }
@@ -422,13 +418,13 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
     async fn journal_summary(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalSummary>, StreamStoreError> {
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
         let Some(metadata) = self
             .worker_service
             .get(&consumer)
             .await
-            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
             return Ok(None);
         };
@@ -448,7 +444,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 )],
             )
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let Some(ProducerMetadataRow::ConsumerHead(head)) = rows.pop().flatten() else {
             return Ok(None);
         };
@@ -465,9 +461,9 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         key: &StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let rpc = self.rpc.as_ref().ok_or_else(|| {
-            DurableStreamProducerError::Oplog(
+            StreamStoreError::Oplog(
                 "consumer probe has no route for a source-unavailable overlay".to_string(),
             )
         })?;
@@ -484,7 +480,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             &AuthCtx::System,
         )
         .await
-        .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+        .map_err(|error| StreamStoreError::Oplog(error.to_string()))?;
         Ok(())
     }
 }

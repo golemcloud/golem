@@ -54,13 +54,13 @@ impl MutationQueue {
         Self(std::sync::Mutex::new(Some(sender)))
     }
 
-    fn send(&self, mutation: Mutation) -> Result<(), DurableStreamProducerError> {
+    fn send(&self, mutation: Mutation) -> Result<(), StreamStoreError> {
         let sender = self.0.lock().unwrap();
         sender
             .as_ref()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?
+            .ok_or(StreamStoreError::RecoveryRequired)?
             .send(mutation)
-            .map_err(|_| DurableStreamProducerError::RecoveryRequired)
+            .map_err(|_| StreamStoreError::RecoveryRequired)
     }
 
     fn close(&self) {
@@ -74,19 +74,18 @@ tokio::task_local! {
 }
 
 pub(super) struct ProducerMutationScope {
-    pub(super) producer: Arc<DurableStreamProducer>,
+    pub(super) producer: Arc<DurableStreamStore>,
     commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub(super) session_records_changed: AtomicBool,
     pub(super) publications: std::sync::Mutex<Vec<PublicationReceipt>>,
-    remote_cancellations: std::sync::Mutex<
-        Vec<futures::future::BoxFuture<'static, Result<(), DurableStreamProducerError>>>,
-    >,
+    remote_cancellations:
+        std::sync::Mutex<Vec<futures::future::BoxFuture<'static, Result<(), StreamStoreError>>>>,
     _operation: OwnedSemaphorePermit,
     _memory: OwnedSemaphorePermit,
 }
 
 struct ProducerMutationEffects {
-    producer: Arc<DurableStreamProducer>,
+    producer: Arc<DurableStreamStore>,
     pending: AtomicBool,
 }
 
@@ -98,11 +97,11 @@ impl Drop for ProducerMutationEffects {
     }
 }
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Rejects work after the resident producer has been poisoned or retired.
-    pub(crate) fn ensure_healthy(&self) -> Result<(), DurableStreamProducerError> {
+    pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
         if self.poisoned.load(Ordering::Acquire) {
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         } else {
             Ok(())
         }
@@ -117,12 +116,12 @@ impl DurableStreamProducer {
     pub(crate) async fn with_metadata_activity<T>(
         &self,
         lookup: impl Future<Output = T>,
-    ) -> Result<T, DurableStreamProducerError> {
+    ) -> Result<T, StreamStoreError> {
         self.ensure_healthy()?;
         let activity = self
             .durable_activity
             .inherit_or_enter()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+            .ok_or(StreamStoreError::RecoveryRequired)?;
         let result = activity.scope(lookup).await;
         self.ensure_healthy()?;
         Ok(result)
@@ -131,11 +130,11 @@ impl DurableStreamProducer {
     /// Cancels only the forwarded waiter on retirement; local durable mutations finish independently.
     pub(crate) async fn remote_until_retired<T>(
         &self,
-        remote: impl Future<Output = Result<T, DurableStreamProducerError>>,
-    ) -> Result<T, DurableStreamProducerError> {
+        remote: impl Future<Output = Result<T, StreamStoreError>>,
+    ) -> Result<T, StreamStoreError> {
         tokio::select! {
             biased;
-            _ = self.retirement.cancelled() => Err(DurableStreamProducerError::RecoveryRequired),
+            _ = self.retirement.cancelled() => Err(StreamStoreError::RecoveryRequired),
             result = remote => result,
         }
     }
@@ -215,7 +214,7 @@ impl DurableStreamProducer {
     ) -> Result<T, E>
     where
         T: Send + 'static,
-        E: From<DurableStreamProducerError> + Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
         F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
@@ -231,7 +230,7 @@ impl DurableStreamProducer {
     ) -> Result<T, E>
     where
         T: Send + 'static,
-        E: From<DurableStreamProducerError> + Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
         F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
@@ -242,7 +241,7 @@ impl DurableStreamProducer {
     /// Defers remote cancellation until the current mutation has reached its durable boundary.
     pub(crate) fn defer_remote_cancellation(
         &self,
-        cancellation: impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static,
+        cancellation: impl Future<Output = Result<(), StreamStoreError>> + Send + 'static,
     ) {
         MUTATION_SCOPE.with(|scope| {
             assert!(std::ptr::eq(scope.producer.as_ref(), self));
@@ -262,7 +261,7 @@ impl DurableStreamProducer {
     ) -> Result<T, E>
     where
         T: Send + 'static,
-        E: From<DurableStreamProducerError> + Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
         F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
@@ -280,7 +279,7 @@ impl DurableStreamProducer {
                 .await;
         }
         if !lifecycle && retained_bytes > 256 * 1024 * 1024 {
-            return Err(DurableStreamProducerError::ItemTooLarge.into());
+            return Err(StreamStoreError::ItemTooLarge.into());
         }
         let (operations, bytes) = if lifecycle {
             (&self.lifecycle_operations, &self.lifecycle_operation_bytes)
@@ -291,7 +290,7 @@ impl DurableStreamProducer {
             .clone()
             .acquire_owned()
             .await
-            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?;
+            .map_err(|_| StreamStoreError::RecoveryRequired)?;
         let memory = bytes
             .clone()
             .acquire_many_owned(
@@ -300,12 +299,12 @@ impl DurableStreamProducer {
                 retained_bytes.min(256 * 1024 * 1024) as u32,
             )
             .await
-            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?;
+            .map_err(|_| StreamStoreError::RecoveryRequired)?;
         self.ensure_healthy()?;
         let activity = self
             .durable_activity
             .try_enter()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+            .ok_or(StreamStoreError::RecoveryRequired)?;
         let (reply, result) = oneshot::channel();
         let scope = Arc::new(ProducerMutationScope {
             producer: producer.clone(),
@@ -332,10 +331,10 @@ impl DurableStreamProducer {
                         Ok(outcome) => outcome,
                         Err(_) => {
                             producer.poison();
-                            Err(DurableStreamProducerError::Oplog(
-                                "durable stream mutation panicked".into(),
+                            Err(
+                                StreamStoreError::Oplog("durable stream mutation panicked".into())
+                                    .into(),
                             )
-                            .into())
                         }
                     };
                     // Callback tails, remote calls and live fanout must not block the
@@ -358,7 +357,7 @@ impl DurableStreamProducer {
                             for tail in tails {
                                 if let Err(error) = tail.await {
                                     producer.poison();
-                                    outcome = Err(DurableStreamProducerError::Oplog(format!(
+                                    outcome = Err(StreamStoreError::Oplog(format!(
                                         "durable stream commit callback failed: {error}"
                                     ))
                                     .into());
@@ -387,7 +386,7 @@ impl DurableStreamProducer {
                                         Ok(Ok(())) => {}
                                         Ok(Err(error)) => outcome = Err(error.into()),
                                         Err(_) => {
-                                            outcome = Err(DurableStreamProducerError::Oplog(
+                                            outcome = Err(StreamStoreError::Oplog(
                                                 "remote stream cancellation panicked".into(),
                                             )
                                             .into());
@@ -401,8 +400,7 @@ impl DurableStreamProducer {
                                         DurableLiveStreamBusError::PublicationAborted,
                                     )) {
                                         producer.poison();
-                                        outcome =
-                                            Err(DurableStreamProducerError::from(error).into());
+                                        outcome = Err(StreamStoreError::from(error).into());
                                     }
                                 }
                             }
@@ -424,7 +422,7 @@ impl DurableStreamProducer {
                 .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
             {
                 self.poison();
-                outcome = Err(DurableStreamProducerError::from(error).into());
+                outcome = Err(StreamStoreError::from(error).into());
             }
         }
         outcome

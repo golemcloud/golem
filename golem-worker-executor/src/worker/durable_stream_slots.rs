@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::durable_host::durable_stream::{
-    CommittedProducerStreamEventPayload, DurableStreamProducerError, ExternalAppendOutcome,
-    ExternalProducer, StreamHandleReadResult,
+    CommittedProducerStreamEventPayload, ExternalAppendOutcome, ExternalProducer,
+    StreamHandleReadResult, StreamStoreError,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::durable_stream::{
@@ -161,13 +161,13 @@ struct SlotSchema {
     is_stream: bool,
 }
 
-fn append_error(error: DurableStreamProducerError) -> WorkerExecutorError {
+fn append_error(error: StreamStoreError) -> WorkerExecutorError {
     match error {
-        DurableStreamProducerError::InvalidValueBatch
-        | DurableStreamProducerError::ItemTooLarge
-        | DurableStreamProducerError::InvalidPackedU8Batch
-        | DurableStreamProducerError::InvalidHandle
-        | DurableStreamProducerError::UnknownStream(_) => {
+        StreamStoreError::InvalidValueBatch
+        | StreamStoreError::ItemTooLarge
+        | StreamStoreError::InvalidPackedU8Batch
+        | StreamStoreError::InvalidHandle
+        | StreamStoreError::UnknownStream(_) => {
             WorkerExecutorError::invalid_request(error.to_string())
         }
         _ => WorkerExecutorError::runtime(error.to_string()),
@@ -645,17 +645,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(ExportStreamControlResult::NotFound);
         }
         let producer = self.durable_stream_producer().await?;
-        let streams = DurableSessionStreams::new(
+        let streams = StreamSession::new(
             producer.clone(),
             self.oplog.clone(),
             prepared.attempt.session_key.clone(),
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())

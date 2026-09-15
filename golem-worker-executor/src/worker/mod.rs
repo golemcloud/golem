@@ -42,14 +42,12 @@ use self::agent_config::{
     effective_agent_config, ensure_required_agent_secrets_are_configured,
     parse_worker_creation_agent_config,
 };
-use crate::durable_host::durable_session::{
-    DurableSessionStreams, DurableStreamConsumerJournal, SessionControlMetadata,
-};
+use crate::durable_host::durable_session::{DurableStreamConsumerJournal, StreamSession};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
-    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamProducer,
-    ProducerRegistrationRequest, RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe,
-    StreamAttachmentControl,
+    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamStore,
+    ProducerRegistrationRequest, RoutedStreamAttachmentControl, SessionControlMetadata,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -197,14 +195,14 @@ pub(crate) struct DurableStreamingInvocationRequest {
 
 pub(crate) struct DurableStreamingInvocationAcceptance {
     pub(crate) prepared: StreamSessionPreparedRecord,
-    pub(crate) streams: DurableSessionStreams,
+    pub(crate) streams: StreamSession,
     pub(crate) replayed: bool,
 }
 
 pub(crate) struct DurableStreamingResumeAcceptance {
     pub(crate) prepared: StreamSessionPreparedRecord,
     pub(crate) mappings: Vec<StreamSessionMappingRecord>,
-    pub(crate) streams: DurableSessionStreams,
+    pub(crate) streams: StreamSession,
     pub(crate) epoch: u64,
     pub(crate) replayed: bool,
 }
@@ -1874,7 +1872,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Err(WorkerExecutorError::runtime("Worker deletion interrupted by owner retirement"))
                     }
                     result = async {
-                        let producer = DurableStreamProducer::load_indexed_with_commit(
+                        let producer = DurableStreamStore::load_indexed_with_commit(
                             self.oplog.clone(),
                             self.owned_agent_id.clone(),
                             self.initial_worker_metadata.fingerprint,
@@ -1953,7 +1951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn finish_deleting_streams(
         &self,
-        producer: &Arc<DurableStreamProducer>,
+        producer: &Arc<DurableStreamStore>,
     ) -> Result<(), WorkerExecutorError> {
         self.finalize_durable_stream_consumer_dependencies(producer)
             .await?;
@@ -2003,7 +2001,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn finalize_durable_stream_consumer_dependencies(
         &self,
-        producer: &DurableStreamProducer,
+        producer: &DurableStreamStore,
     ) -> Result<(), WorkerExecutorError> {
         let current = self.oplog.current_oplog_index().await;
         let mut deleting_recorded = false;
@@ -4159,7 +4157,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
         acceptance_match: DurableStreamingAcceptanceMatch,
-        producer: Arc<DurableStreamProducer>,
+        producer: Arc<DurableStreamStore>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
@@ -4386,17 +4384,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             prepared.stream_mappings.as_slice()
         };
-        let streams = DurableSessionStreams::new(
+        let streams = StreamSession::new(
             producer.clone(),
             self.oplog.clone(),
             session_key,
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_attachment(1, prepared.attempt.attempt_id)
         .with_rpc(self.rpc())
@@ -4646,25 +4638,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let make_streams =
-            |epoch, attempt_id| -> Result<DurableSessionStreams, WorkerExecutorError> {
-                Ok(DurableSessionStreams::new(
-                    producer.clone(),
-                    self.oplog.clone(),
-                    attempt.session_key.clone(),
-                    mappings.iter().map(|mapping| {
-                        (
-                            mapping.transport_stream_id,
-                            mapping.handle.clone(),
-                            mapping.role,
-                        )
-                    }),
-                )
-                .with_attachment(epoch, attempt_id)
-                .with_rpc(self.rpc())
-                .with_consumer_journal(self.durable_stream_consumer_journal())
-                .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?))
-            };
+        let make_streams = |epoch, attempt_id| -> Result<StreamSession, WorkerExecutorError> {
+            Ok(StreamSession::new(
+                producer.clone(),
+                self.oplog.clone(),
+                attempt.session_key.clone(),
+                mappings.iter().cloned(),
+            )
+            .with_attachment(epoch, attempt_id)
+            .with_rpc(self.rpc())
+            .with_consumer_journal(self.durable_stream_consumer_journal())
+            .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?))
+        };
 
         for record in &records {
             if let StreamSessionRecord::ResumeAttempt(existing) = record
@@ -4962,17 +4947,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(invocation);
         }
         let producer = self.durable_stream_producer().await?;
-        let streams = DurableSessionStreams::new(
+        let streams = StreamSession::new(
             producer,
             self.oplog.clone(),
             prepared.attempt.session_key.clone(),
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
@@ -5022,17 +5001,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let requires_attachment =
             stream_effective_identity_is_agent(&prepared.attempt.effective_identity);
-        let mut streams = DurableSessionStreams::new(
+        let mut streams = StreamSession::new(
             self.durable_stream_producer().await?,
             self.oplog.clone(),
             prepared.attempt.session_key,
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
@@ -5099,14 +5072,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .stream_mappings
             .iter()
             .chain(&result_mappings)
-            .map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            });
-        let streams = DurableSessionStreams::new(
+            .cloned();
+        let streams = StreamSession::new(
             self.durable_stream_producer().await?,
             self.oplog.clone(),
             prepared.attempt.session_key,
@@ -5146,7 +5113,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn durable_stream_producer(
         &self,
-    ) -> Result<Arc<DurableStreamProducer>, WorkerExecutorError> {
+    ) -> Result<Arc<DurableStreamStore>, WorkerExecutorError> {
         self.load_durable_stream_producer()
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
@@ -5196,10 +5163,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn load_durable_stream_producer(
         &self,
-    ) -> Result<
-        Arc<DurableStreamProducer>,
-        crate::durable_host::durable_stream::DurableStreamProducerError,
-    > {
+    ) -> Result<Arc<DurableStreamStore>, crate::durable_host::durable_stream::StreamStoreError>
+    {
         let commit = self.durable_stream_commit();
         let oplog = self.oplog.clone();
         let owner = self.owned_agent_id.clone();
@@ -5214,7 +5179,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mode = self.agent_mode();
         self.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
-                DurableStreamProducer::load_indexed_with_commit(
+                DurableStreamStore::load_indexed_with_commit(
                     oplog,
                     owner,
                     fingerprint,
@@ -5309,7 +5274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut recoverable = Vec::new();
         let mut first_error = None;
         for (key, metadata) in sessions {
-            let streams = DurableSessionStreams::new(
+            let streams = StreamSession::new(
                 self.durable_stream_producer().await?,
                 self.oplog.clone(),
                 key.clone(),
@@ -5411,7 +5376,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     mapping.clone(),
                     auth_ctx.clone(),
                 );
-                let streams = DurableSessionStreams::new(
+                let streams = StreamSession::new(
                     producer.clone(),
                     self.oplog.clone(),
                     session_key.clone(),

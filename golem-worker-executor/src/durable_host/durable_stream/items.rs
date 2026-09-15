@@ -21,7 +21,7 @@ use super::registration::{registration_matches, registration_record};
 use super::terminals::fenced_by_terminal;
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     #[cfg(test)]
     /// Appends values in producer order and returns only after their durable receipt.
     pub(crate) async fn write_items(
@@ -29,7 +29,7 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         first_sequence: u64,
         payload: StreamItemsPayload,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested(stream_id, first_sequence, payload, Vec::new())
             .await
     }
@@ -38,7 +38,7 @@ impl DurableStreamProducer {
     pub(crate) async fn handle_for_coordinate(
         &self,
         coordinate: &StreamRegistrationCoordinate,
-    ) -> Result<Option<DurableStreamHandle>, DurableStreamProducerError> {
+    ) -> Result<Option<DurableStreamHandle>, StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Coordinate(coordinate.clone())])
             .await?;
@@ -53,14 +53,14 @@ impl DurableStreamProducer {
     pub(crate) async fn stream_head(
         &self,
         handle: &DurableStreamHandle,
-    ) -> Result<(Option<StreamOffset>, bool, bool), DurableStreamProducerError> {
+    ) -> Result<(Option<StreamOffset>, bool, bool), StreamStoreError> {
         let index = self.index_for_terminal([], handle.stream_id).await?;
         if index
             .registrations
             .get(&handle.stream_id)
             .is_none_or(|registration| &registration.handle != handle)
         {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let stream = &index.streams[&handle.stream_id];
         let cancelled = stream.terminal_event.as_ref().is_some_and(|event| {
@@ -76,10 +76,10 @@ impl DurableStreamProducer {
     pub(crate) async fn read_by_handle(
         self: &Arc<Self>,
         request: golem_common::model::durable_stream::StreamHandleReadRequest,
-    ) -> Result<StreamHandleReadResult, DurableStreamProducerError> {
+    ) -> Result<StreamHandleReadResult, StreamStoreError> {
         if let Some(offset) = request.after {
             StreamOffset::from_bytes(offset.0)
-                .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
+                .map_err(|error| StreamStoreError::InvalidOffset(error.to_string()))?;
         }
         let (mut head, mut closed, mut cancelled) = self.stream_head(&request.handle).await?;
         if request.max_items == 0 {
@@ -92,7 +92,7 @@ impl DurableStreamProducer {
             });
         }
         if request.max_bytes == 0 {
-            return Err(DurableStreamProducerError::InvalidValueBatch);
+            return Err(StreamStoreError::InvalidValueBatch);
         }
         let mut events = if head.is_some() && request.after <= head {
             self.read_segment(&request.handle, request.after, head)
@@ -135,7 +135,7 @@ impl DurableStreamProducer {
             };
             if count == max_items || bytes + size > max_bytes {
                 if count == 0 {
-                    return Err(DurableStreamProducerError::InvalidValueBatch);
+                    return Err(StreamStoreError::InvalidValueBatch);
                 }
                 break;
             }
@@ -158,18 +158,18 @@ impl DurableStreamProducer {
         &self,
         stream_id: StreamId,
         first_sequence: u64,
-    ) -> Result<Vec<DurableStreamHandle>, DurableStreamProducerError> {
+    ) -> Result<Vec<DurableStreamHandle>, StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Batch(stream_id, first_sequence)])
             .await?;
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         let oplog_index = *stream
             .batches
             .get(&first_sequence)
-            .ok_or(DurableStreamProducerError::EventConflict)?;
+            .ok_or(StreamStoreError::EventConflict)?;
         drop(index);
         let record = self.read_item_batch(oplog_index).await?;
         self.resolve_nested_handles(&record.nested_stream_ids).await
@@ -178,37 +178,37 @@ impl DurableStreamProducer {
     pub(super) async fn read_result_record(
         &self,
         oplog_index: OplogIndex,
-    ) -> Result<StreamSessionRecord, DurableStreamProducerError> {
+    ) -> Result<StreamSessionRecord, StreamStoreError> {
         let OplogEntry::StreamSession { record, .. } = self.oplog.read(oplog_index).await else {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "result metadata points at a non-session record".into(),
             ));
         };
         self.oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)
+            .map_err(StreamStoreError::Oplog)
     }
 
     pub(super) async fn read_item_batch(
         &self,
         oplog_index: OplogIndex,
-    ) -> Result<StreamItemsRecord, DurableStreamProducerError> {
+    ) -> Result<StreamItemsRecord, StreamStoreError> {
         let OplogEntry::StreamItems { record, .. } = self.oplog.read(oplog_index).await else {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "stream batch index points at a non-item record".into(),
             ));
         };
         self.oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)
+            .map_err(StreamStoreError::Oplog)
     }
 
     pub(super) async fn resolve_nested_handles(
         &self,
         stream_ids: &[StreamId],
-    ) -> Result<Vec<DurableStreamHandle>, DurableStreamProducerError> {
+    ) -> Result<Vec<DurableStreamHandle>, StreamStoreError> {
         if stream_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -238,7 +238,7 @@ impl DurableStreamProducer {
                             .get(stream_id)
                             .map(|(handle, _)| handle.clone())
                     })
-                    .ok_or(DurableStreamProducerError::UnknownStream(*stream_id))
+                    .ok_or(StreamStoreError::UnknownStream(*stream_id))
             })
             .collect()
     }
@@ -246,7 +246,7 @@ impl DurableStreamProducer {
     async fn materialize_item_batch(
         &self,
         record: &StreamItemsRecord,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         self.materialize_item_batch_range(record, record.first_sequence, usize::MAX)
             .await
     }
@@ -256,7 +256,7 @@ impl DurableStreamProducer {
         record: &StreamItemsRecord,
         first_sequence: u64,
         limit: usize,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         let nested_handles = self
             .resolve_nested_handles(&record.nested_stream_ids)
             .await?;
@@ -279,7 +279,7 @@ impl DurableStreamProducer {
                     producer_sequence: record
                         .first_sequence
                         .checked_add(sub_index as u64)
-                        .ok_or(DurableStreamProducerError::CounterOverflow)?,
+                        .ok_or(StreamStoreError::CounterOverflow)?,
                     offset: *offset,
                     packed_u8_batch_end,
                     terminal_author: None,
@@ -294,14 +294,14 @@ impl DurableStreamProducer {
     pub(crate) async fn input_high_water(
         &self,
         stream_id: StreamId,
-    ) -> Result<Option<InputStreamHighWater>, DurableStreamProducerError> {
+    ) -> Result<Option<InputStreamHighWater>, StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         let Some(resulting_offset) = stream.last_offset else {
             return Ok(None);
         };
@@ -321,7 +321,7 @@ impl DurableStreamProducer {
         &self,
         session_key: &StreamSessionKey,
         stream_id: StreamId,
-    ) -> Result<Option<InputStreamHighWater>, DurableStreamProducerError> {
+    ) -> Result<Option<InputStreamHighWater>, StreamStoreError> {
         let index = self
             .index_for_terminal(
                 [
@@ -338,7 +338,7 @@ impl DurableStreamProducer {
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         let head = index.external_producer_heads.get(&(
             session_key.clone(),
             stream_id,
@@ -349,7 +349,7 @@ impl DurableStreamProducer {
             return Ok(None);
         }
         let resulting_offset = stream.last_offset.ok_or_else(|| {
-            DurableStreamProducerError::CorruptHistory(
+            StreamStoreError::CorruptHistory(
                 "terminal attached input has no resulting offset".into(),
             )
         })?;
@@ -374,7 +374,7 @@ impl DurableStreamProducer {
         first_sequence: u64,
         payload: StreamItemsPayload,
         nested: Vec<ProducerRegistrationRequest>,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested_sources_at_depth(
             stream_id,
             first_sequence,
@@ -397,7 +397,7 @@ impl DurableStreamProducer {
         payload: StreamItemsPayload,
         nested: Vec<ProducerRegistrationRequest>,
         traversal_depth: usize,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested_sources_at_depth(
             stream_id,
             first_sequence,
@@ -418,7 +418,7 @@ impl DurableStreamProducer {
         first_sequence: u64,
         payload: StreamItemsPayload,
         nested: Vec<NestedStreamWrite>,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         self.write_items_with_nested_sources_at_depth(stream_id, first_sequence, payload, nested, 0)
             .await
     }
@@ -435,7 +435,7 @@ impl DurableStreamProducer {
         payload: StreamItemsPayload,
         nested_sources: Vec<NestedStreamWrite>,
         traversal_depth: usize,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         let memory = Self::retained_payload_bytes(&payload)?;
         self.run_owned(memory, move |owner| async move {
             owner
@@ -461,11 +461,11 @@ impl DurableStreamProducer {
         transport_first_sequence: u64,
         payload: StreamItemsPayload,
         nested: Vec<ProducerRegistrationRequest>,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         let memory = Self::retained_payload_bytes(&payload)?;
         let _transport_next_sequence = transport_first_sequence
             .checked_add(payload.logical_item_count() as u64)
-            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            .ok_or(StreamStoreError::CounterOverflow)?;
         let session_key = session_key.clone();
         self.run_owned(memory, move |owner| async move {
             let id = ExternalProducerId::Attached;
@@ -493,7 +493,7 @@ impl DurableStreamProducer {
             let stream = index
                 .streams
                 .get(&stream_id)
-                .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+                .ok_or(StreamStoreError::UnknownStream(stream_id))?;
             let (global_first_sequence, index) =
                 if let Some(head) = index.external_producer_heads.get(&identity) {
                     if transport_first_sequence < head.next_sequence {
@@ -508,12 +508,12 @@ impl DurableStreamProducer {
                             ))
                             .copied()
                             .ok_or_else(|| {
-                                DurableStreamProducerError::CorruptHistory(
+                                StreamStoreError::CorruptHistory(
                                     "attached producer sequence has no original offset".into(),
                                 )
                             })?;
                         if stream.terminal && stream.last_offset == Some(offset) {
-                            return Err(DurableStreamProducerError::EventConflict);
+                            return Err(StreamStoreError::EventConflict);
                         }
                         drop(index);
                         let sequence = owner
@@ -526,11 +526,11 @@ impl DurableStreamProducer {
                             return Err(if Some(head.last_offset) == stream.last_offset {
                                 fenced_by_terminal(stream)
                             } else {
-                                DurableStreamProducerError::ClosedByOtherProducer
+                                StreamStoreError::ClosedByOtherProducer
                             });
                         }
                         if transport_first_sequence != head.next_sequence {
-                            return Err(DurableStreamProducerError::SequenceGap {
+                            return Err(StreamStoreError::SequenceGap {
                                 expected: head.next_sequence,
                                 actual: transport_first_sequence,
                             });
@@ -539,10 +539,10 @@ impl DurableStreamProducer {
                     }
                 } else {
                     if stream.terminal {
-                        return Err(DurableStreamProducerError::ClosedByOtherProducer);
+                        return Err(StreamStoreError::ClosedByOtherProducer);
                     }
                     if transport_first_sequence != 0 {
-                        return Err(DurableStreamProducerError::SequenceGap {
+                        return Err(StreamStoreError::SequenceGap {
                             expected: 0,
                             actual: transport_first_sequence,
                         });
@@ -552,7 +552,7 @@ impl DurableStreamProducer {
             let delta = global_first_sequence
                 .checked_sub(transport_first_sequence)
                 .ok_or_else(|| {
-                    DurableStreamProducerError::CorruptHistory(
+                    StreamStoreError::CorruptHistory(
                         "attached transport sequence exceeds global stream sequence".into(),
                     )
                 })?;
@@ -566,11 +566,11 @@ impl DurableStreamProducer {
                     {
                         *parent_producer_sequence = parent_producer_sequence
                             .checked_add(delta)
-                            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                            .ok_or(StreamStoreError::CounterOverflow)?;
                     }
                     Ok(request)
                 })
-                .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
+                .collect::<Result<Vec<_>, StreamStoreError>>()?;
             owner
                 .write_items_owned(
                     stream_id,
@@ -599,7 +599,7 @@ impl DurableStreamProducer {
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         transport_sequence: u64,
-    ) -> Result<u64, DurableStreamProducerError> {
+    ) -> Result<u64, StreamStoreError> {
         let index = self
             .index_for_terminal(
                 [
@@ -636,7 +636,7 @@ impl DurableStreamProducer {
             .streams
             .get(&stream_id)
             .map(|stream| stream.next_sequence)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
+            .ok_or(StreamStoreError::UnknownStream(stream_id))
     }
 
     async fn write_items_owned(
@@ -648,7 +648,7 @@ impl DurableStreamProducer {
         traversal_depth: usize,
         external_producer: Option<ExternalProducer>,
         index: Option<MutexGuard<'_, ProducerStreamIndex>>,
-    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<Vec<StreamOffset>>, StreamStoreError> {
         validate_items_payload(&payload)?;
         let item_count = payload.logical_item_count() as u64;
         let nested = nested_sources
@@ -685,18 +685,18 @@ impl DurableStreamProducer {
             .iter()
             .any(|request| request.entity_parent_start_index != entity_parent_start_index)
         {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         let session_key = index
             .stream_sessions
             .get(&stream_id)
             .cloned()
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         let session_finished = index.finished_sessions.contains(&session_key);
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if first_sequence < stream.next_sequence {
             if let Some(oplog_index) = stream.batches.get(&first_sequence).copied() {
                 drop(index);
@@ -723,7 +723,7 @@ impl DurableStreamProducer {
                     );
                 drop(index);
                 if !matches {
-                    return Err(DurableStreamProducerError::EventConflict);
+                    return Err(StreamStoreError::EventConflict);
                 }
                 let events = self.materialize_item_batch(&record).await?;
                 self.publish_repair(stream_id, events).await?;
@@ -749,11 +749,11 @@ impl DurableStreamProducer {
                 self.publish_repair(stream_id, vec![terminal]).await?;
                 return Err(error);
             }
-            return Err(DurableStreamProducerError::EventConflict);
+            return Err(StreamStoreError::EventConflict);
         }
         index.ensure_producer_write_allowed()?;
         if session_finished {
-            return Err(DurableStreamProducerError::SessionFinished(session_key));
+            return Err(StreamStoreError::SessionFinished(session_key));
         }
         if stream.terminal {
             let terminal = stream
@@ -767,7 +767,7 @@ impl DurableStreamProducer {
             return Err(error);
         }
         if first_sequence != stream.next_sequence {
-            return Err(DurableStreamProducerError::SequenceGap {
+            return Err(StreamStoreError::SequenceGap {
                 expected: stream.next_sequence,
                 actual: first_sequence,
             });
@@ -781,13 +781,13 @@ impl DurableStreamProducer {
             self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("traversal_depth");
-            return Err(DurableStreamProducerError::TraversalDepthLimit);
+            return Err(StreamStoreError::TraversalDepthLimit);
         }
         if nested_sources.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
-            return Err(DurableStreamProducerError::ValueStreamLimit);
+            return Err(StreamStoreError::ValueStreamLimit);
         }
         if (matches!(payload, StreamItemsPayload::PackedU8(_)) && !nested_sources.is_empty())
             || nested.iter().any(|request| {
@@ -799,7 +799,7 @@ impl DurableStreamProducer {
                 )
             })
         {
-            return Err(DurableStreamProducerError::RegistrationDivergence);
+            return Err(StreamStoreError::RegistrationDivergence);
         }
         for source in &nested_sources {
             if let NestedStreamWrite::Forward(handle) = source
@@ -811,7 +811,7 @@ impl DurableStreamProducer {
                         },
                     ))
             {
-                return Err(DurableStreamProducerError::InvalidHandle);
+                return Err(StreamStoreError::InvalidHandle);
             }
         }
         let mut seen_coordinates = HashSet::with_capacity(nested.len());
@@ -819,7 +819,7 @@ impl DurableStreamProducer {
         let mut new_nested = Vec::new();
         for request in &nested {
             if !seen_coordinates.insert(request.coordinate.clone()) {
-                return Err(DurableStreamProducerError::RegistrationDivergence);
+                return Err(StreamStoreError::RegistrationDivergence);
             }
             if let Some(existing_id) = index.coordinates.get(&request.coordinate) {
                 let existing = index
@@ -827,7 +827,7 @@ impl DurableStreamProducer {
                     .get(existing_id)
                     .expect("coordinate index points at a missing registration");
                 if !registration_matches(existing, request) {
-                    return Err(DurableStreamProducerError::RegistrationDivergence);
+                    return Err(StreamStoreError::RegistrationDivergence);
                 }
                 existing_nested.insert(request.coordinate.clone(), *existing_id);
             } else {
@@ -838,7 +838,7 @@ impl DurableStreamProducer {
             self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
-            return Err(DurableStreamProducerError::ValueStreamLimit);
+            return Err(StreamStoreError::ValueStreamLimit);
         }
         let mut new_streams_by_session = HashMap::<StreamSessionKey, usize>::new();
         for request in &new_nested {
@@ -847,7 +847,7 @@ impl DurableStreamProducer {
                 .ok_or_else(|| match &request.coordinate {
                     StreamRegistrationCoordinate::Nested {
                         parent_stream_id, ..
-                    } => DurableStreamProducerError::UnknownStream(*parent_stream_id),
+                    } => StreamStoreError::UnknownStream(*parent_stream_id),
                     StreamRegistrationCoordinate::Root { .. } => {
                         unreachable!("root registration always defines its session")
                     }
@@ -870,13 +870,13 @@ impl DurableStreamProducer {
             self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         if first_sequence.checked_add(item_count).is_none() {
             self.commit_resource_exhausted_terminal(index, stream_id, first_sequence)
                 .await?;
             crate::metrics::durable_stream::record_limit_violation("sequence");
-            return Err(DurableStreamProducerError::CounterOverflow);
+            return Err(StreamStoreError::CounterOverflow);
         }
         let ingress_session_key = index
             .registrations
@@ -1007,7 +1007,7 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
 
         let (item_events, newly_registered_stream_count) = self
@@ -1037,7 +1037,7 @@ impl DurableStreamProducer {
         &self,
         index: &mut ProducerStreamIndex,
         entries: Vec<(OplogIndex, OplogEntry)>,
-    ) -> Result<(Vec<CommittedProducerStreamEvent>, usize), DurableStreamProducerError> {
+    ) -> Result<(Vec<CommittedProducerStreamEvent>, usize), StreamStoreError> {
         let mut registrations = Vec::new();
         let mut registered_ids = Vec::new();
         let mut events = Vec::new();
@@ -1052,7 +1052,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     registrations.push((oplog_index, entity_parent_start_index, record));
                 }
                 OplogEntry::StreamItems {
@@ -1064,7 +1064,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     registered_ids.extend_from_slice(&record.newly_registered_stream_ids);
                     events.extend(index.apply_item_batch(
                         oplog_index,
@@ -1085,7 +1085,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     events.push(index.apply_end(
                         oplog_index,
                         entity_parent_start_index,
@@ -1102,7 +1102,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     index.apply_session_references(entity_parent_start_index, &record)?;
                     match record {
                         StreamSessionRecord::ExternalProducerState(record) => {

@@ -17,7 +17,7 @@ use super::mutation::MUTATION_SCOPE;
 use super::registration::registration_record;
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Installs the runtime service used to project durable session control metadata.
     pub(crate) fn set_control_metadata_provider(
         &self,
@@ -31,7 +31,7 @@ impl DurableStreamProducer {
     pub(crate) async fn persisted_control_metadata(
         &self,
         key: &StreamSessionKey,
-    ) -> Result<Option<crate::durable_host::durable_session::SessionControlMetadata>, String> {
+    ) -> Result<Option<SessionControlMetadata>, String> {
         self.ensure_healthy()?;
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(None);
@@ -39,7 +39,7 @@ impl DurableStreamProducer {
         let activity = self
             .durable_activity
             .inherit_or_enter()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+            .ok_or(StreamStoreError::RecoveryRequired)?;
         let owner = OwnedAgentId::new(self.environment_id, &self.producer);
         activity
             .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, key))
@@ -60,7 +60,7 @@ impl DurableStreamProducer {
         let activity = self
             .durable_activity
             .inherit_or_enter()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+            .ok_or(StreamStoreError::RecoveryRequired)?;
         activity
             .scope(async {
                 let owner = OwnedAgentId::new(self.environment_id, &self.producer);
@@ -96,7 +96,7 @@ impl DurableStreamProducer {
     pub(crate) async fn append_session_record(
         &self,
         record: StreamSessionRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.append_session_record_attributed(None, record).await
     }
 
@@ -105,9 +105,9 @@ impl DurableStreamProducer {
         &self,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let memory = golem_common::serialization::serialize(&record)
-            .map_err(DurableStreamProducerError::Oplog)?
+            .map_err(StreamStoreError::Oplog)?
             .len();
         self.run_owned(memory, move |owner| async move {
             owner
@@ -122,7 +122,7 @@ impl DurableStreamProducer {
         &self,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecord,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.append_session_records_owned(entity_parent_start_index, vec![record])
             .await
     }
@@ -132,9 +132,9 @@ impl DurableStreamProducer {
         &self,
         entity_parent_start_index: Option<OplogIndex>,
         records: Vec<StreamSessionRecord>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if records.iter().any(|record| !record.has_supported_format()) {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
         }
@@ -152,7 +152,7 @@ impl DurableStreamProducer {
                         | StreamSessionRecord::SourceUnavailable(_)
                 )
             {
-                return Err(DurableStreamProducerError::ProducerDeleting);
+                return Err(StreamStoreError::ProducerDeleting);
             }
             if staged.consumer_deleting
                 && matches!(
@@ -161,7 +161,7 @@ impl DurableStreamProducer {
                         | StreamSessionRecord::TopologyActivated(_)
                 )
             {
-                return Err(DurableStreamProducerError::ConsumerDeleting);
+                return Err(StreamStoreError::ConsumerDeleting);
             }
             staged.apply_session_references(entity_parent_start_index, record)?;
             staged.apply_deletion_record(
@@ -196,7 +196,7 @@ impl DurableStreamProducer {
                     .collect()
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         for (position, key) in result_keys {
             staged
                 .invocation_results
@@ -234,16 +234,14 @@ impl DurableStreamProducer {
     pub(crate) async fn ensure_session_accepts_new_events(
         &self,
         session_key: &StreamSessionKey,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if self
             .index_for([ProducerMetadataKey::Session(session_key.clone())])
             .await?
             .finished_sessions
             .contains(session_key)
         {
-            Err(DurableStreamProducerError::SessionFinished(
-                session_key.clone(),
-            ))
+            Err(StreamStoreError::SessionFinished(session_key.clone()))
         } else {
             Ok(())
         }
@@ -280,9 +278,9 @@ impl DurableStreamProducer {
         make_prepared: impl FnOnce(Vec<(u64, DurableStreamHandle)>) -> StreamSessionPreparedRecord
         + Send
         + 'static,
-    ) -> Result<StreamSessionPreparedRecord, DurableStreamProducerError> {
+    ) -> Result<StreamSessionPreparedRecord, StreamStoreError> {
         let memory = golem_common::serialization::serialize(&pending_invocation)
-            .map_err(DurableStreamProducerError::Oplog)?
+            .map_err(StreamStoreError::Oplog)?
             .len();
         self.run_owned(memory, move |owner| async move {
             owner
@@ -300,7 +298,7 @@ impl DurableStreamProducer {
         make_prepared: impl FnOnce(Vec<(u64, DurableStreamHandle)>) -> StreamSessionPreparedRecord
         + Send
         + 'static,
-    ) -> Result<StreamSessionPreparedRecord, DurableStreamProducerError> {
+    ) -> Result<StreamSessionPreparedRecord, StreamStoreError> {
         let mut index = self
             .index_for(
                 requests
@@ -312,32 +310,32 @@ impl DurableStreamProducer {
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_DURABLE_STREAMS_PER_SESSION {
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
-            return Err(DurableStreamProducerError::StreamLimit);
+            return Err(StreamStoreError::StreamLimit);
         }
         let entity_parent_start_index = requests
             .first()
             .and_then(|(_, request)| request.entity_parent_start_index);
         for (_, request) in &requests {
             if request.entity_parent_start_index != entity_parent_start_index {
-                return Err(DurableStreamProducerError::RegistrationDivergence);
+                return Err(StreamStoreError::RegistrationDivergence);
             }
             if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH
             {
                 crate::metrics::durable_stream::record_limit_violation("traversal_depth");
-                return Err(DurableStreamProducerError::TraversalDepthLimit);
+                return Err(StreamStoreError::TraversalDepthLimit);
             }
             if !matches!(
                 request.coordinate,
                 StreamRegistrationCoordinate::Root { .. }
             ) || index.coordinates.contains_key(&request.coordinate)
             {
-                return Err(DurableStreamProducerError::RegistrationDivergence);
+                return Err(StreamStoreError::RegistrationDivergence);
             }
             if let Some(session_key) =
                 index.registration_session_key(&request.coordinate, &request.session_mapping)
                 && index.finished_sessions.contains(&session_key)
             {
-                return Err(DurableStreamProducerError::SessionFinished(session_key));
+                return Err(StreamStoreError::SessionFinished(session_key));
             }
         }
 
@@ -403,7 +401,7 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
 
         let mut prepared = None;
         let mut registrations = Vec::with_capacity(requests.len());
@@ -418,7 +416,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     registrations.push((oplog_index, entity_parent_start_index, record));
                 }
                 OplogEntry::StreamSession { record, .. } => {
@@ -426,12 +424,12 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     match record {
                         StreamSessionRecord::Prepared(record) => prepared = Some(record),
                         StreamSessionRecord::Attached(_) => {}
                         _ => {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "preparation batch contains an unexpected session record"
                                     .to_string(),
                             ));
@@ -440,14 +438,14 @@ impl DurableStreamProducer {
                 }
                 OplogEntry::PendingAgentInvocation { .. } => {}
                 _ => {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "preparation batch contains an unexpected oplog entry".to_string(),
                     ));
                 }
             }
         }
         let prepared = prepared.ok_or_else(|| {
-            DurableStreamProducerError::CorruptHistory(
+            StreamStoreError::CorruptHistory(
                 "preparation batch contains no Prepared session record".to_string(),
             )
         })?;
@@ -494,7 +492,7 @@ impl DurableStreamProducer {
     pub(crate) async fn has_open_forwarded_session_input(
         &self,
         session_key: &StreamSessionKey,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         let index = self.index_for_session_streams(session_key).await?;
         let Some(mappings) = index.session_stream_mappings.get(session_key) else {
             return Ok(false);
@@ -527,7 +525,7 @@ impl DurableStreamProducer {
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
         input_cancel_reason: StreamCancelReason,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if self
             .index_for([ProducerMetadataKey::Session(session_key.clone())])
             .await?
@@ -565,7 +563,7 @@ impl DurableStreamProducer {
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
         input_cancel_reason: StreamCancelReason,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let mut index = self.index_for_session_streams(&session_key).await?;
         if index.finished_sessions.contains(&session_key) {
             return Ok(());
@@ -603,7 +601,7 @@ impl DurableStreamProducer {
             .iter()
             .any(|(_, _, _, attribution)| *attribution != entity_parent_start_index)
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "session stream attribution differs from its session".to_string(),
             ));
         }
@@ -669,7 +667,7 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
 
         let mut terminal_events = Vec::new();
@@ -684,7 +682,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     let event = index.apply_end(
                         oplog_index,
                         entity_parent_start_index,
@@ -706,7 +704,7 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     let event = index.apply_cancel(
                         oplog_index,
                         entity_parent_start_index,
@@ -728,10 +726,10 @@ impl DurableStreamProducer {
                         .oplog
                         .download_payload(record)
                         .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                        .map_err(StreamStoreError::Oplog)?;
                     index.apply_session_references(entity_parent_start_index, &record)?;
                     let StreamSessionRecord::Finished(record) = record else {
-                        return Err(DurableStreamProducerError::CorruptHistory(
+                        return Err(StreamStoreError::CorruptHistory(
                             "session finish batch contains an unexpected session record"
                                 .to_string(),
                         ));
@@ -739,7 +737,7 @@ impl DurableStreamProducer {
                     index.apply_finished(&record)?;
                 }
                 _ => {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "session finish batch contains an unexpected oplog entry".to_string(),
                     ));
                 }

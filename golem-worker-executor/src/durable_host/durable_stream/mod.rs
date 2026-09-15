@@ -24,6 +24,7 @@ mod publication;
 mod registration;
 mod routing;
 mod session;
+mod session_state;
 mod terminals;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -34,6 +35,7 @@ pub(crate) use probe::{
 };
 use publication::CommittedEventRetention;
 pub(crate) use routing::{RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl};
+pub(crate) use session_state::SessionControlMetadata;
 
 use crate::durable_host::stream_bus::{
     DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
@@ -127,7 +129,7 @@ pub(crate) struct PendingCommittedCancellation {
     reason: StreamCancelReason,
     publication: PublicationReceipt,
     event: CommittedProducerStreamEvent,
-    outcome: Result<ProducerWriteOutcome<StreamOffset>, DurableStreamProducerError>,
+    outcome: Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -209,8 +211,8 @@ pub(crate) enum ExternalAppendOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Contract and persistence failures detected by the producer journal.
-pub(crate) enum DurableStreamProducerError {
+/// Contract and persistence failures detected by the durable stream store.
+pub(crate) enum StreamStoreError {
     UnsupportedVersion(u8),
     InvalidHandle,
     RegistrationDivergence,
@@ -245,21 +247,21 @@ pub(crate) enum DurableStreamProducerError {
     LiveBus(DurableLiveStreamBusError),
 }
 
-impl std::fmt::Display for DurableStreamProducerError {
+impl std::fmt::Display for StreamStoreError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
-impl std::error::Error for DurableStreamProducerError {}
+impl std::error::Error for StreamStoreError {}
 
-impl From<DurableStreamProducerError> for String {
-    fn from(error: DurableStreamProducerError) -> Self {
+impl From<StreamStoreError> for String {
+    fn from(error: StreamStoreError) -> Self {
         error.to_string()
     }
 }
 
-impl DurableStreamProducerError {
+impl StreamStoreError {
     /// Formats the dependent attachment identities that currently block deletion.
     pub(crate) fn deletion_blocked_evidence(&self) -> Option<String> {
         let Self::DeletionBlocked(dependents) = self else {
@@ -285,7 +287,7 @@ impl DurableStreamProducerError {
     }
 }
 
-impl From<DurableLiveStreamBusError> for DurableStreamProducerError {
+impl From<DurableLiveStreamBusError> for StreamStoreError {
     fn from(value: DurableLiveStreamBusError) -> Self {
         match value {
             DurableLiveStreamBusError::Retired => Self::RecoveryRequired,
@@ -431,8 +433,9 @@ pub(crate) type DurableStreamCommit = Arc<
     dyn Fn(Option<oneshot::Sender<()>>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
 >;
 
-/// Producer journal and disposable live publication state for streams owned by one agent.
-pub(crate) struct DurableStreamProducer {
+/// Owns one agent's persisted stream journal, indexes, and disposable live publication state.
+/// Session-specific transport and consumer behavior belongs to `StreamSession` instead.
+pub(crate) struct DurableStreamStore {
     self_weak: std::sync::Weak<Self>,
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
@@ -463,7 +466,7 @@ pub(crate) struct DurableStreamProducer {
         std::sync::Mutex<HashMap<StreamSessionKey, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     #[cfg(test)]
     pub(crate) async fn load(
         oplog: Arc<dyn Oplog>,
@@ -471,7 +474,7 @@ impl DurableStreamProducer {
         producer: AgentId,
         producer_fingerprint: AgentFingerprint,
         live_join_capacity: Option<usize>,
-    ) -> Result<Arc<Self>, DurableStreamProducerError> {
+    ) -> Result<Arc<Self>, StreamStoreError> {
         let commit_oplog = oplog.clone();
         let commit: DurableStreamCommit = Arc::new(move |committed| {
             let oplog = commit_oplog.clone();
@@ -501,7 +504,7 @@ impl DurableStreamProducer {
         producer_fingerprint: AgentFingerprint,
         live_join_capacity: Option<usize>,
         commit: DurableStreamCommit,
-    ) -> Result<Arc<Self>, DurableStreamProducerError> {
+    ) -> Result<Arc<Self>, StreamStoreError> {
         let live_join_capacity = live_join_capacity.unwrap_or(DEFAULT_LIVE_JOIN_BUFFER_SIZE);
         DurableLiveStreamBus::<CommittedProducerStreamEvent>::new(live_join_capacity)?;
         let index = Self::read_complete_index(
@@ -527,7 +530,7 @@ impl DurableStreamProducer {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
-    ) -> Result<ProducerStreamIndex, DurableStreamProducerError> {
+    ) -> Result<ProducerStreamIndex, StreamStoreError> {
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
         let current_index = oplog.current_oplog_index().await;
@@ -546,7 +549,7 @@ impl DurableStreamProducer {
                         let record = oplog
                             .download_payload(record)
                             .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                            .map_err(StreamStoreError::Oplog)?;
                         if matches!(
                             &record.coordinate,
                             StreamRegistrationCoordinate::Nested { .. }
@@ -558,7 +561,7 @@ impl DurableStreamProducer {
                             ));
                         } else {
                             if !pending_nested_registrations.is_empty() {
-                                return Err(DurableStreamProducerError::CorruptHistory(
+                                return Err(StreamStoreError::CorruptHistory(
                                     "nested registration batch is missing its enclosing item"
                                         .to_string(),
                                 ));
@@ -581,7 +584,7 @@ impl DurableStreamProducer {
                         let record = oplog
                             .download_payload(record)
                             .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                            .map_err(StreamStoreError::Oplog)?;
                         index.apply_item_batch(
                             oplog_index,
                             entity_parent_start_index,
@@ -598,7 +601,7 @@ impl DurableStreamProducer {
                         ..
                     } => {
                         if !pending_nested_registrations.is_empty() {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "nested registration batch is missing its enclosing item"
                                     .to_string(),
                             ));
@@ -606,7 +609,7 @@ impl DurableStreamProducer {
                         let record = oplog
                             .download_payload(record)
                             .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                            .map_err(StreamStoreError::Oplog)?;
                         index.apply_end(
                             oplog_index,
                             entity_parent_start_index,
@@ -620,7 +623,7 @@ impl DurableStreamProducer {
                         ..
                     } => {
                         if !pending_nested_registrations.is_empty() {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "nested registration batch is missing its enclosing item"
                                     .to_string(),
                             ));
@@ -628,7 +631,7 @@ impl DurableStreamProducer {
                         let record = oplog
                             .download_payload(record)
                             .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                            .map_err(StreamStoreError::Oplog)?;
                         index.apply_cancel(
                             oplog_index,
                             entity_parent_start_index,
@@ -642,7 +645,7 @@ impl DurableStreamProducer {
                         ..
                     } => {
                         if !pending_nested_registrations.is_empty() {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "nested registration batch is missing its enclosing item"
                                     .to_string(),
                             ));
@@ -650,7 +653,7 @@ impl DurableStreamProducer {
                         let record = oplog
                             .download_payload(record)
                             .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                            .map_err(StreamStoreError::Oplog)?;
                         index.apply_session_references(entity_parent_start_index, &record)?;
                         index.apply_result_offset(oplog_index, &record);
                         if let StreamSessionRecord::ExternalProducerState(value) = &record {
@@ -674,7 +677,7 @@ impl DurableStreamProducer {
                     }
                     _ => {
                         if !pending_nested_registrations.is_empty() {
-                            return Err(DurableStreamProducerError::CorruptHistory(
+                            return Err(StreamStoreError::CorruptHistory(
                                 "nested registration batch is missing its enclosing item"
                                     .to_string(),
                             ));
@@ -684,7 +687,7 @@ impl DurableStreamProducer {
             }
         }
         if !pending_nested_registrations.is_empty() {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "nested registration batch is missing its enclosing item".to_string(),
             ));
         }
@@ -700,7 +703,7 @@ impl DurableStreamProducer {
         live_join_capacity: usize,
         commit: DurableStreamCommit,
         index: ProducerStreamIndex,
-    ) -> Result<Arc<Self>, DurableStreamProducerError> {
+    ) -> Result<Arc<Self>, StreamStoreError> {
         let mut buses = BTreeMap::new();
         for (stream_id, stream) in &index.streams {
             let bus = Arc::new(DurableLiveStreamBus::from_committed_high_water(
@@ -782,7 +785,7 @@ impl DurableStreamProducer {
     }
 }
 
-impl Drop for DurableStreamProducer {
+impl Drop for DurableStreamStore {
     fn drop(&mut self) {
         self.terminal_progress.notify_one();
         crate::metrics::durable_stream::remove_open_streams(
@@ -800,7 +803,7 @@ pub(crate) trait StreamSegmentSource: Send + Sync {
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError>;
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError>;
 }
 
 #[async_trait]
@@ -811,7 +814,7 @@ pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
-    ) -> Result<usize, DurableStreamProducerError>;
+    ) -> Result<usize, StreamStoreError>;
 
     /// Reads currently available committed events under an active attachment.
     async fn read_attached_segment(
@@ -821,7 +824,7 @@ pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
         now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError>;
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError>;
 
     /// Waits for committed history beyond `after` while the attachment remains valid.
     async fn wait_for_attached_segment(
@@ -830,7 +833,7 @@ pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
         handle: &DurableStreamHandle,
         now_millis: u64,
         after: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError>;
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError>;
 }
 
 #[async_trait]
@@ -841,27 +844,27 @@ pub(crate) trait StreamAttachmentControl: Send + Sync {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError>;
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     /// Makes a prepared attachment active and renews its lease.
     async fn activate_attachment(
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError>;
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     /// Finalizes a transport attachment without cancelling the stream itself.
     async fn detach_attachment(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<StreamAttachmentView, DurableStreamProducerError>;
+    ) -> Result<StreamAttachmentView, StreamStoreError>;
 
     /// Extends the lease of the same attachment epoch.
     async fn renew_attachment(
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError>;
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     /// Durably removes the consumer's remaining dependency on producer history.
     async fn finalize_attachment(
@@ -869,7 +872,7 @@ pub(crate) trait StreamAttachmentControl: Send + Sync {
         key: StreamAttachmentKey,
         reason: StreamAttachmentFinalizationReason,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError>;
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     #[cfg(test)]
     async fn inspect_attachments(&self) -> Vec<StreamAttachmentView>;

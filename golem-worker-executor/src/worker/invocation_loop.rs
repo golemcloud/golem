@@ -888,7 +888,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             {
                 if let Some(archival) = archival {
                     archival.send_replace(Some(Err(
-                        crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired,
+                        crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired,
                     )));
                 }
                 return;
@@ -908,7 +908,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await;
             if let Some(archival) = archival {
                 archival.send_replace(Some(result.clone().map_err(|error| {
-                    crate::durable_host::durable_stream::DurableStreamProducerError::Oplog(error.to_string())
+                    crate::durable_host::durable_stream::StreamStoreError::Oplog(error.to_string())
                 })));
             }
             if let Err(error) = result {

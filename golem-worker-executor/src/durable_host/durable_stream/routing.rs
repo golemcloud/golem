@@ -27,7 +27,7 @@ pub(crate) struct RoutedAttachedStreamSegmentSource {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecord,
     auth_ctx: AuthCtx,
-    metadata: Arc<DurableStreamProducer>,
+    metadata: Arc<DurableStreamStore>,
 }
 
 impl RoutedAttachedStreamSegmentSource {
@@ -36,7 +36,7 @@ impl RoutedAttachedStreamSegmentSource {
         rpc: Arc<dyn Rpc>,
         mapping: StreamSessionMappingRecord,
         auth_ctx: AuthCtx,
-        metadata: Arc<DurableStreamProducer>,
+        metadata: Arc<DurableStreamStore>,
     ) -> Self {
         Self {
             rpc,
@@ -49,7 +49,7 @@ impl RoutedAttachedStreamSegmentSource {
     async fn read_routed(
         &self,
         request: AttachedStreamSegmentRequest,
-    ) -> Result<Vec<u8>, DurableStreamProducerError> {
+    ) -> Result<Vec<u8>, StreamStoreError> {
         let mut delay = std::time::Duration::from_millis(100);
         loop {
             match self
@@ -64,7 +64,7 @@ impl RoutedAttachedStreamSegmentSource {
             {
                 Ok(payload) => return Ok(payload),
                 Err(DurableStreamReadError::Other(error)) => {
-                    return Err(DurableStreamProducerError::Oplog(error.to_string()));
+                    return Err(StreamStoreError::Oplog(error.to_string()));
                 }
                 Err(DurableStreamReadError::Unavailable) => {
                     tokio::time::sleep(delay).await;
@@ -81,9 +81,9 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
-    ) -> Result<usize, DurableStreamProducerError> {
+    ) -> Result<usize, StreamStoreError> {
         if self.mapping.handle != *handle {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         self.metadata.journal_lag_events(handle, after).await
     }
@@ -95,9 +95,9 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
         _now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         if self.mapping.handle != *handle {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let payload = self
             .read_routed(AttachedStreamSegmentRequest {
@@ -109,8 +109,7 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
                 wait_for_events: false,
             })
             .await?;
-        golem_common::serialization::deserialize(&payload)
-            .map_err(DurableStreamProducerError::CorruptHistory)
+        golem_common::serialization::deserialize(&payload).map_err(StreamStoreError::CorruptHistory)
     }
 
     async fn wait_for_attached_segment(
@@ -119,9 +118,9 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
         handle: &DurableStreamHandle,
         _now_millis: u64,
         after: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         if self.mapping.handle != *handle {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let payload = self
             .read_routed(AttachedStreamSegmentRequest {
@@ -133,8 +132,7 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
                 wait_for_events: true,
             })
             .await?;
-        golem_common::serialization::deserialize(&payload)
-            .map_err(DurableStreamProducerError::CorruptHistory)
+        golem_common::serialization::deserialize(&payload).map_err(StreamStoreError::CorruptHistory)
     }
 }
 
@@ -155,7 +153,7 @@ impl RoutedStreamAttachmentControl {
     async fn execute(
         &self,
         operation: StreamAttachmentControlOperation,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         self.rpc
             .control_durable_stream_attachment(
                 StreamAttachmentControlRequest {
@@ -166,7 +164,7 @@ impl RoutedStreamAttachmentControl {
                 &self.auth_ctx,
             )
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))
+            .map_err(|error| StreamStoreError::Oplog(error.to_string()))
     }
 
     /// Forwards cancellation and waits for the producer's durable receipt, not callback delivery.
@@ -176,7 +174,7 @@ impl RoutedStreamAttachmentControl {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<bool, DurableStreamProducerError> {
+    ) -> Result<bool, StreamStoreError> {
         self.execute(StreamAttachmentControlOperation::Cancel {
             key,
             role,
@@ -193,7 +191,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let replayed = self
             .execute(StreamAttachmentControlOperation::Prepare {
                 key: key.clone(),
@@ -214,7 +212,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let replayed = self
             .execute(StreamAttachmentControlOperation::Activate {
                 key: key.clone(),
@@ -234,7 +232,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
     async fn detach_attachment(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<StreamAttachmentView, DurableStreamProducerError> {
+    ) -> Result<StreamAttachmentView, StreamStoreError> {
         self.execute(StreamAttachmentControlOperation::Detach { key: key.clone() })
             .await?;
         Ok(StreamAttachmentView {
@@ -248,7 +246,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
         &self,
         key: StreamAttachmentKey,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let replayed = self
             .execute(StreamAttachmentControlOperation::Renew {
                 key: key.clone(),
@@ -270,7 +268,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
         key: StreamAttachmentKey,
         reason: StreamAttachmentFinalizationReason,
         now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
         let replayed = self
             .execute(StreamAttachmentControlOperation::Finalize {
                 key: key.clone(),

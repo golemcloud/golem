@@ -15,13 +15,13 @@
 use super::index::{resource_exhausted_error_context, validate_terminal_sequence};
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     pub(super) async fn commit_resource_exhausted_terminal(
         &self,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let result = StreamEndResult::ErrorContext(resource_exhausted_error_context()?);
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
@@ -43,7 +43,7 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -60,7 +60,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let event = index.apply_end(
             oplog_index,
             entity_parent_start_index,
@@ -81,7 +81,7 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         sequence: u64,
         result: StreamEndResult,
-    ) -> Result<ProducerWriteOutcome<StreamOffset>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let memory = match &result {
             StreamEndResult::ErrorContext(bytes) => bytes.len(),
             _ => 0,
@@ -100,7 +100,7 @@ impl DurableStreamProducer {
         sequence: u64,
         result: StreamEndResult,
         authored_by: StreamTerminalAuthor,
-    ) -> Result<ProducerWriteOutcome<StreamOffset>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let index = self.index_for_terminal([], stream_id).await?;
         self.end_authored_locked(index, stream_id, sequence, result, authored_by)
             .await
@@ -118,7 +118,7 @@ impl DurableStreamProducer {
         sequence: u64,
         result: StreamEndResult,
         authored_by: StreamTerminalAuthor,
-    ) -> Result<ProducerWriteOutcome<StreamOffset>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         match replay_terminal(
             &index,
             stream_id,
@@ -145,7 +145,7 @@ impl DurableStreamProducer {
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
-                let error = DurableStreamProducerError::FencedByTerminal(event.payload.clone());
+                let error = StreamStoreError::FencedByTerminal(event.payload.clone());
                 drop(index);
                 self.publish_repair(stream_id, vec![event]).await?;
                 return Err(error);
@@ -188,7 +188,7 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -205,7 +205,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let event = index.apply_end(
             oplog_index,
             entity_parent_start_index,
@@ -244,7 +244,7 @@ impl DurableStreamProducer {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<PendingCommittedCancellation, DurableStreamProducerError> {
+    ) -> Result<PendingCommittedCancellation, StreamStoreError> {
         let payload = CommittedProducerStreamEventPayload::Cancel {
             role,
             reason,
@@ -277,7 +277,7 @@ impl DurableStreamProducer {
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
-                let error = DurableStreamProducerError::FencedByTerminal(event.payload.clone());
+                let error = StreamStoreError::FencedByTerminal(event.payload.clone());
                 let publication = self.enqueue_events(stream_id, vec![event.clone()], true)?;
                 drop(index);
                 self.cancel_source(stream_id);
@@ -316,7 +316,7 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -333,7 +333,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let event = index.apply_cancel(
             oplog_index,
             entity_parent_start_index,
@@ -363,7 +363,7 @@ impl DurableStreamProducer {
     pub(crate) async fn publish_committed_cancellation(
         &self,
         pending: PendingCommittedCancellation,
-    ) -> Result<ProducerWriteOutcome<StreamOffset>, DurableStreamProducerError> {
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let offset = pending.event.offset;
         self.wait_for_publication(pending.publication).await?;
         if let Ok(outcome) = &pending.outcome {
@@ -388,7 +388,7 @@ impl DurableStreamProducer {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<Option<PendingCommittedCancellation>, DurableStreamProducerError> {
+    ) -> Result<Option<PendingCommittedCancellation>, StreamStoreError> {
         self.run_lifecycle(
             details.as_ref().map_or(0, String::len),
             move |owner| async move {
@@ -406,14 +406,14 @@ impl DurableStreamProducer {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<Option<PendingCommittedCancellation>, DurableStreamProducerError> {
+    ) -> Result<Option<PendingCommittedCancellation>, StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if stream.terminal {
             drop(index);
             self.cancel_source(stream_id);
@@ -432,7 +432,7 @@ impl DurableStreamProducer {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         self.run_lifecycle(
             details.as_ref().map_or(0, String::len),
             move |owner| async move {
@@ -450,7 +450,7 @@ impl DurableStreamProducer {
         role: StreamCancelRole,
         reason: StreamCancelReason,
         details: Option<String>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if let Some(pending) = self
             .commit_cancel_open(stream_id, role, reason, details)
             .await?
@@ -513,7 +513,7 @@ impl DurableStreamProducer {
         &self,
         stream_id: StreamId,
         result: StreamEndResult,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let memory = match &result {
             StreamEndResult::ErrorContext(bytes) => bytes.len(),
             _ => 0,
@@ -528,14 +528,14 @@ impl DurableStreamProducer {
         &self,
         stream_id: StreamId,
         result: StreamEndResult,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
         let stream = index
             .streams
             .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if stream.terminal {
             return Ok(());
         }
@@ -564,11 +564,11 @@ fn replay_terminal(
     sequence: u64,
     expected_payload: &CommittedProducerStreamEventPayload,
     expected_author: StreamTerminalAuthor,
-) -> Result<TerminalReplayDecision, DurableStreamProducerError> {
+) -> Result<TerminalReplayDecision, StreamStoreError> {
     let stream = index
         .streams
         .get(&stream_id)
-        .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+        .ok_or(StreamStoreError::UnknownStream(stream_id))?;
     if let Some(event) = &stream.terminal_event
         && event.producer_sequence == sequence
     {
@@ -584,10 +584,10 @@ fn replay_terminal(
         {
             return Ok(TerminalReplayDecision::Fenced(event.clone()));
         }
-        return Err(DurableStreamProducerError::EventConflict);
+        return Err(StreamStoreError::EventConflict);
     }
     if sequence < stream.next_sequence {
-        return Err(DurableStreamProducerError::EventConflict);
+        return Err(StreamStoreError::EventConflict);
     }
     Ok(TerminalReplayDecision::Append)
 }
@@ -596,16 +596,16 @@ fn validate_new_terminal(
     index: &ProducerStreamIndex,
     stream_id: StreamId,
     sequence: u64,
-) -> Result<(), DurableStreamProducerError> {
+) -> Result<(), StreamStoreError> {
     let stream = index
         .streams
         .get(&stream_id)
-        .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+        .ok_or(StreamStoreError::UnknownStream(stream_id))?;
     validate_terminal_sequence(stream, stream_id, sequence)
 }
 
-pub(super) fn fenced_by_terminal(stream: &IndexedProducerStream) -> DurableStreamProducerError {
-    DurableStreamProducerError::FencedByTerminal(
+pub(super) fn fenced_by_terminal(stream: &IndexedProducerStream) -> StreamStoreError {
+    StreamStoreError::FencedByTerminal(
         stream
             .terminal_event
             .as_ref()

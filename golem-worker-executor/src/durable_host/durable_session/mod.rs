@@ -16,11 +16,10 @@ use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
-    ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamProducer,
-    DurableStreamProducerError, NestedStreamWrite, ProducerOutputRegistration,
-    ProducerOutputSource, ProducerRegistrationRequest, RoutedAttachedStreamSegmentSource,
-    RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-    StreamSegmentSource,
+    ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamStore, NestedStreamWrite,
+    ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
+    RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl, SessionControlMetadata,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource, StreamStoreError,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -92,13 +91,14 @@ pub(crate) trait DurableStreamConsumerJournal: Send + Sync {
 }
 
 #[derive(Clone)]
-/// Durable session identity plus disposable mappings and transport collaborators.
-pub(crate) struct DurableSessionStreams {
-    pub(crate) producer: Arc<DurableStreamProducer>,
+/// Runs one durable Stream Session's disposable mappings and transport collaborators.
+/// Persisted stream records and indexes remain owned by `DurableStreamStore`.
+pub(crate) struct StreamSession {
+    pub(crate) producer: Arc<DurableStreamStore>,
     pub(crate) oplog: Arc<dyn Oplog>,
     pub(crate) session_key: StreamSessionKey,
     consumer_invocation: StreamInvocationId,
-    mappings: Arc<RwLock<HashMap<u64, (DurableStreamHandle, SessionStreamRole)>>>,
+    mappings: Arc<RwLock<HashMap<u64, StreamSessionMappingRecord>>>,
     input_schema: Option<Arc<DurableInputSchema>>,
     rpc: Option<Arc<dyn Rpc>>,
     consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
@@ -114,502 +114,6 @@ pub(crate) struct DurableSessionStreams {
     response_lease: Option<Arc<crate::worker::EphemeralResponseLease>>,
 }
 
-#[derive(Clone, Default, desert_rust::BinaryCodec)]
-/// Projection of one session's journal records through `covered_through`.
-/// Local refreshes include the append buffer; persisted projections cover committed history.
-pub struct SessionControlMetadata {
-    pub(crate) covered_through: OplogIndex,
-    pub(crate) recovery_slot: Option<u64>,
-    pub(crate) prepared: Option<OplogIndex>,
-    pub(crate) initial_attached: Option<OplogIndex>,
-    malformed_record: bool,
-    explicit_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    persisted_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    recoverable_mappings: Vec<(OplogIndex, StreamSessionMappingRecord)>,
-    acceptance_mappings: Vec<StreamSessionMappingRecord>,
-    caller_attempt: Option<AttemptId>,
-    caller_attempt_conflict: bool,
-    pub(crate) invocation_result: Option<OplogIndex>,
-    pub(crate) finished: Option<OplogIndex>,
-    root_outputs: Vec<u64>,
-    topology_epoch: Option<u64>,
-    topologies: HashMap<
-        (
-            AttachmentId,
-            golem_common::model::StreamId,
-            u64,
-            SessionStreamRole,
-        ),
-        SessionTopologyMetadata,
-    >,
-    visible_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    topology_error: Option<String>,
-    finalized_attachments:
-        HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKey>,
-    closed_consumer_streams: HashSet<golem_common::model::StreamId>,
-    cancel_intents: HashMap<golem_common::model::StreamId, StreamConsumerCancelIntentRecord>,
-    applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecord>,
-    tombstoned_slots: HashMap<String, SessionStreamRole>,
-    cancellation_requested: bool,
-    pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
-    pub(crate) consumer_deleting:
-        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
-}
-
-#[derive(Clone, desert_rust::BinaryCodec)]
-struct SessionTopologyMetadata {
-    attachment: StreamAttachmentKey,
-    mapping: StreamSessionMappingRecord,
-    active: bool,
-    prepared_index: Option<OplogIndex>,
-    activated_index: Option<OplogIndex>,
-    repeated_activation_index: Option<OplogIndex>,
-}
-
-impl SessionControlMetadata {
-    /// Returns mappings that were durably established before session acceptance.
-    pub(crate) fn acceptance_mappings(&self) -> Result<Vec<StreamSessionMappingRecord>, String> {
-        if self.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
-        if let Some(error) = &self.topology_error {
-            return Err(error.clone());
-        }
-        Ok(self.acceptance_mappings.clone())
-    }
-
-    /// Checks that cancellation and its exact topology mapping are both committed.
-    pub(crate) fn has_committed_cancellation(
-        &self,
-        key: &StreamAttachmentKey,
-        mapping: &StreamSessionMappingRecord,
-        intent: &StreamConsumerCancelIntentRecord,
-    ) -> Result<bool, String> {
-        if self.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
-        if let Some(error) = &self.topology_error {
-            return Err(error.clone());
-        }
-        let consumer_matches = key.consumer_invocation == key.session_key
-            || self.topologies.values().any(|topology| {
-                let mut current_key = key.clone();
-                current_key.epoch = topology.attachment.epoch;
-                topology.attachment == current_key && topology.mapping == *mapping
-            });
-        Ok(consumer_matches
-            && intent.session_key == key.session_key
-            && intent.stream_id == key.stream_id
-            && intent.epoch == key.epoch
-            && mapping.handle.stream_id == key.stream_id
-            && self.cancel_intents.get(&key.stream_id) == Some(intent)
-            && self.persisted_mappings.contains(&(
-                mapping.transport_stream_id,
-                mapping.handle.clone(),
-                mapping.role,
-            )))
-    }
-
-    /// Returns whether durable topology or cancellation work remains incomplete.
-    pub(crate) fn needs_recovery(
-        &self,
-        owner: &golem_common::model::OwnedAgentId,
-        key: &StreamSessionKey,
-    ) -> bool {
-        self.needs_topology_recovery(owner, key)
-            || self
-                .cancel_intents
-                .values()
-                .any(|intent| !self.applied_cancel_intents.contains(intent))
-    }
-
-    /// Returns whether any committed cancellation intent lacks its applied marker.
-    pub(crate) fn has_cancellation_intents(&self) -> bool {
-        self.cancel_intents
-            .values()
-            .any(|intent| !self.applied_cancel_intents.contains(intent))
-    }
-
-    /// Returns whether attachments must be reconstructed or finalized from the journal.
-    pub(crate) fn needs_topology_recovery(
-        &self,
-        owner: &golem_common::model::OwnedAgentId,
-        key: &StreamSessionKey,
-    ) -> bool {
-        self.malformed_record
-            || self.topology_error.is_some()
-            || (self.prepared.is_some() && self.finished.is_none())
-            || self.topologies.values().any(|topology| {
-                let local = key.callee_environment_id == owner.environment_id
-                    && key.callee == owner.agent_id
-                    && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
-                !(local && self.finished.is_some())
-                    && !self
-                        .cancel_intents
-                        .contains_key(&topology.attachment.stream_id)
-                    && !self
-                        .closed_consumer_streams
-                        .contains(&topology.attachment.stream_id)
-                    && self.finalized_attachments.get(&(
-                        topology.attachment.attachment_id,
-                        topology.attachment.stream_id,
-                    )) != Some(&topology.attachment)
-            })
-    }
-
-    /// Returns unresolved attachment mappings that recovery must process.
-    pub(crate) fn recovery_topologies(
-        &self,
-        owner: &golem_common::model::OwnedAgentId,
-        key: &StreamSessionKey,
-    ) -> Result<Vec<(StreamAttachmentKey, StreamSessionMappingRecord)>, String> {
-        if self.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
-        if let Some(error) = &self.topology_error {
-            return Err(error.clone());
-        }
-        Ok(self
-            .topologies
-            .values()
-            .filter(|topology| {
-                let local = key.callee_environment_id == owner.environment_id
-                    && key.callee == owner.agent_id
-                    && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
-                !(local && self.finished.is_some())
-                    && !self
-                        .cancel_intents
-                        .contains_key(&topology.attachment.stream_id)
-                    && !self
-                        .closed_consumer_streams
-                        .contains(&topology.attachment.stream_id)
-                    && (!local
-                        || self
-                            .topology_epoch
-                            .is_none_or(|epoch| epoch == topology.attachment.epoch))
-                    && self.finalized_attachments.get(&(
-                        topology.attachment.attachment_id,
-                        topology.attachment.stream_id,
-                    )) != Some(&topology.attachment)
-            })
-            .map(|topology| (topology.attachment.clone(), topology.mapping.clone()))
-            .collect())
-    }
-
-    /// Folds the exact attachment slot into its durable prepared or active phase.
-    pub(crate) fn topology_status(
-        &self,
-        attachment: &StreamAttachmentKey,
-        expected_mapping: Option<&StreamSessionMappingRecord>,
-    ) -> Result<ConsumerAttachmentStatus, String> {
-        if self.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
-        if let Some(error) = &self.topology_error {
-            return Err(error.clone());
-        }
-        let mut events = Vec::new();
-        for topology in self
-            .topologies
-            .values()
-            .filter(|topology| same_attachment_slot(&topology.attachment, attachment))
-        {
-            if topology.attachment.epoch < attachment.epoch {
-                continue;
-            }
-            if topology.attachment != *attachment {
-                return Ok(attachment_mismatch_status(&topology.attachment, attachment));
-            }
-            if expected_mapping.is_some_and(|mapping| mapping != &topology.mapping) {
-                continue;
-            }
-            events.extend(topology.prepared_index.map(|index| (index, false)));
-            events.extend(topology.activated_index.map(|index| (index, true)));
-            events.extend(
-                topology
-                    .repeated_activation_index
-                    .map(|index| (index, true)),
-            );
-        }
-        events.sort_unstable_by_key(|(index, _)| *index);
-        let mut state = ConsumerAttachmentStatus::Missing;
-        for (_, active) in events {
-            if !active {
-                if state == ConsumerAttachmentStatus::Missing {
-                    state = ConsumerAttachmentStatus::Prepared;
-                }
-            } else if !(expected_mapping.is_none() && state == ConsumerAttachmentStatus::Active) {
-                if state != ConsumerAttachmentStatus::Prepared {
-                    return Err("durable topology activation has no matching preparation".into());
-                }
-                state = ConsumerAttachmentStatus::Active;
-            }
-        }
-        Ok(state)
-    }
-
-    /// Applies one record in oplog order to reconstructed session state.
-    pub(crate) fn apply(
-        &mut self,
-        index: OplogIndex,
-        key: &StreamSessionKey,
-        record: &StreamSessionRecord,
-    ) {
-        self.malformed_record |= !record.has_supported_format();
-        if let StreamSessionRecord::ConsumerDeleting(record) = record {
-            self.consumer_deleting = Some(record.clone());
-        }
-        if let StreamSessionRecord::ConsumerCancelIntent(record) = record
-            && &record.session_key == key
-        {
-            self.cancel_intents
-                .entry(record.stream_id)
-                .or_insert_with(|| record.clone());
-        }
-        if let StreamSessionRecord::ConsumerCancelApplied(record) = record
-            && &record.intent.session_key == key
-            && self.cancel_intents.get(&record.intent.stream_id) == Some(&record.intent)
-        {
-            self.applied_cancel_intents.insert(record.intent.clone());
-        }
-        if let StreamSessionRecord::Tombstoned(record) = record
-            && &record.session_key == key
-        {
-            self.tombstoned_slots
-                .entry(record.slot.clone())
-                .or_insert(record.role);
-        }
-        if let StreamSessionRecord::CancelRequested(record) = record
-            && &record.session_key == key
-        {
-            self.cancellation_requested = true;
-        }
-        if let StreamSessionRecord::Prepared(record) = record
-            && &record.attempt.session_key == key
-        {
-            if self.prepared.is_some() {
-                self.topology_error.get_or_insert_with(|| {
-                    "durable Stream Session contains multiple Prepared records".into()
-                });
-            } else {
-                self.prepared = Some(index);
-            }
-        }
-        if let StreamSessionRecord::AttachmentFinalized(record) = record
-            && &record.key.session_key == key
-        {
-            let slot = (record.key.attachment_id, record.key.stream_id);
-            if self
-                .finalized_attachments
-                .get(&slot)
-                .is_none_or(|old| old.epoch <= record.key.epoch)
-            {
-                self.finalized_attachments.insert(slot, record.key.clone());
-            }
-        }
-        let consumer_stream = match record {
-            StreamSessionRecord::ConsumerItemValue(record) if &record.session_key == key => {
-                Some(record.stream_id)
-            }
-            StreamSessionRecord::ConsumerTerminal(record) if &record.session_key == key => {
-                Some(record.stream_id)
-            }
-            StreamSessionRecord::SourceUnavailable(record) if &record.key.session_key == key => {
-                Some(record.key.stream_id)
-            }
-            _ => None,
-        };
-        if let Some(stream) = consumer_stream {
-            *self.consumer_record_counts.entry(stream).or_default() += 1;
-            if matches!(
-                record,
-                StreamSessionRecord::ConsumerTerminal(_)
-                    | StreamSessionRecord::SourceUnavailable(_)
-            ) {
-                self.closed_consumer_streams.insert(stream);
-            }
-        }
-        match record {
-            StreamSessionRecord::Attached(record) if &record.session_key == key => {
-                if self.initial_attached.is_some() {
-                    self.topology_error.get_or_insert_with(|| {
-                        "durable Stream Session contains multiple Attached records".into()
-                    });
-                } else {
-                    self.initial_attached = Some(index);
-                }
-                self.topology_epoch = Some(record.epoch);
-            }
-            StreamSessionRecord::ResumeAttempt(record) if &record.attempt.session_key == key => {
-                self.topology_epoch = Some(record.accepted_epoch);
-            }
-            _ => {}
-        }
-        let topology = match record {
-            StreamSessionRecord::TopologyPrepared(record) if &record.session_key == key => {
-                Some((&record.attachment, &record.mapping, false))
-            }
-            StreamSessionRecord::TopologyActivated(record) if &record.session_key == key => {
-                Some((&record.attachment, &record.mapping, true))
-            }
-            _ => None,
-        };
-        if let Some((attachment, mapping, active)) = topology {
-            let slot = (
-                attachment.attachment_id,
-                attachment.stream_id,
-                mapping.transport_stream_id,
-                mapping.role,
-            );
-            match self.topologies.get_mut(&slot) {
-                Some(existing)
-                    if &existing.attachment != attachment || &existing.mapping != mapping =>
-                {
-                    if attachment.epoch > existing.attachment.epoch {
-                        if active {
-                            self.topology_error.get_or_insert_with(|| {
-                                "durable topology activation has no matching preparation".into()
-                            });
-                        }
-                        *existing = SessionTopologyMetadata {
-                            attachment: attachment.clone(),
-                            mapping: mapping.clone(),
-                            active,
-                            prepared_index: (!active).then_some(index),
-                            activated_index: active.then_some(index),
-                            repeated_activation_index: None,
-                        };
-                    } else {
-                        self.topology_error.get_or_insert_with(|| {
-                            "conflicting durable topology preparation or activation".into()
-                        });
-                    }
-                }
-                Some(existing) => {
-                    existing.active |= active;
-                    if active {
-                        if existing.activated_index.is_some() {
-                            existing.repeated_activation_index.get_or_insert(index);
-                        } else {
-                            existing.activated_index = Some(index);
-                        }
-                    } else {
-                        existing.prepared_index.get_or_insert(index);
-                    }
-                }
-                None => {
-                    if active {
-                        self.topology_error.get_or_insert_with(|| {
-                            "durable topology activation has no matching preparation".into()
-                        });
-                    }
-                    self.topologies.insert(
-                        slot,
-                        SessionTopologyMetadata {
-                            attachment: attachment.clone(),
-                            mapping: mapping.clone(),
-                            active,
-                            prepared_index: (!active).then_some(index),
-                            activated_index: active.then_some(index),
-                            repeated_activation_index: None,
-                        },
-                    );
-                }
-            }
-        }
-        let mappings: &[StreamSessionMappingRecord] = match record {
-            StreamSessionRecord::CallerAttempt(record) if &record.session_key == key => {
-                if self
-                    .caller_attempt
-                    .is_some_and(|attempt| attempt != record.attempt_id)
-                {
-                    self.caller_attempt_conflict = true;
-                }
-                self.caller_attempt.get_or_insert(record.attempt_id);
-                &[]
-            }
-            StreamSessionRecord::Mapping(record) if &record.session_key == key => {
-                self.explicit_mappings.insert((
-                    record.mapping.transport_stream_id,
-                    record.mapping.handle.clone(),
-                    record.mapping.role,
-                ));
-                std::slice::from_ref(&record.mapping)
-            }
-            StreamSessionRecord::Prepared(record) if &record.attempt.session_key == key => {
-                &record.stream_mappings
-            }
-            StreamSessionRecord::TopologyPrepared(record) if &record.session_key == key => {
-                std::slice::from_ref(&record.mapping)
-            }
-            StreamSessionRecord::TopologyActivated(record) if &record.session_key == key => {
-                std::slice::from_ref(&record.mapping)
-            }
-            StreamSessionRecord::ConsumerItemValue(record) if &record.session_key == key => {
-                &record.recursive_mappings
-            }
-            StreamSessionRecord::InvocationResult(record) if &record.session_key == key => {
-                self.invocation_result.get_or_insert(index);
-                for mapping in &record.stream_mappings {
-                    if mapping.role == SessionStreamRole::Output
-                        && !self.root_outputs.contains(&mapping.transport_stream_id)
-                    {
-                        self.root_outputs.push(mapping.transport_stream_id);
-                    }
-                }
-                &record.stream_mappings
-            }
-            StreamSessionRecord::Finished(record) if &record.session_key == key => {
-                self.finished.get_or_insert(index);
-                &[]
-            }
-            _ => &[],
-        };
-        for mapping in mappings {
-            if !self.acceptance_mappings.contains(mapping) {
-                self.acceptance_mappings.push(mapping.clone());
-            }
-        }
-        if matches!(
-            record,
-            StreamSessionRecord::Prepared(_)
-                | StreamSessionRecord::Mapping(_)
-                | StreamSessionRecord::InvocationResult(_)
-        ) {
-            self.visible_mappings.extend(mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }));
-        }
-        if matches!(
-            record,
-            StreamSessionRecord::Mapping(_) | StreamSessionRecord::InvocationResult(_)
-        ) {
-            for mapping in mappings {
-                if !self
-                    .recoverable_mappings
-                    .iter()
-                    .any(|(_, existing)| existing == mapping)
-                {
-                    self.recoverable_mappings.push((index, mapping.clone()));
-                }
-            }
-        }
-        self.persisted_mappings
-            .extend(mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }));
-        self.covered_through = index;
-    }
-}
-
 struct DurableInputSchema {
     graph: Arc<SchemaGraph>,
     component_revision: golem_common::model::component::ComponentRevision,
@@ -617,7 +121,7 @@ struct DurableInputSchema {
 }
 
 struct OutputDrainRegistration {
-    producer: Arc<DurableStreamProducer>,
+    producer: Arc<DurableStreamStore>,
     stream_id: golem_common::model::StreamId,
     registration_id: u64,
     lifecycle: Arc<SourceLifecycle>,
@@ -797,18 +301,18 @@ fn stream_cancel_reason_to_proto(
     }
 }
 
-impl DurableSessionStreams {
+impl StreamSession {
     /// Creates session runtime state from its durable identity and known mappings.
     pub(crate) fn new(
-        producer: Arc<DurableStreamProducer>,
+        producer: Arc<DurableStreamStore>,
         oplog: Arc<dyn Oplog>,
         session_key: StreamSessionKey,
-        mappings: impl IntoIterator<Item = (u64, DurableStreamHandle, SessionStreamRole)>,
+        mappings: impl IntoIterator<Item = StreamSessionMappingRecord>,
     ) -> Self {
         let session_lock = producer.session_lock(&session_key);
         let mappings = mappings
             .into_iter()
-            .map(|(transport_stream_id, handle, role)| (transport_stream_id, (handle, role)))
+            .map(|mapping| (mapping.transport_stream_id, mapping))
             .collect::<HashMap<_, _>>();
         let next_transport_stream_id = mappings
             .keys()
@@ -944,7 +448,7 @@ impl DurableSessionStreams {
             .read()
             .expect("durable stream mapping lock poisoned")
             .get(&transport_stream_id)
-            .map(|(handle, _)| handle.clone())
+            .map(|mapping| mapping.handle.clone())
     }
 
     fn mapping(&self, transport_stream_id: u64) -> Option<StreamSessionMappingRecord> {
@@ -952,11 +456,7 @@ impl DurableSessionStreams {
             .read()
             .expect("durable stream mapping lock poisoned")
             .get(&transport_stream_id)
-            .map(|(handle, role)| StreamSessionMappingRecord {
-                transport_stream_id,
-                handle: handle.clone(),
-                role: *role,
-            })
+            .cloned()
     }
 
     fn mapping_for_handle(
@@ -968,14 +468,8 @@ impl DurableSessionStreams {
             .read()
             .expect("durable stream mapping lock poisoned")
             .iter()
-            .find_map(|(transport_stream_id, (candidate, candidate_role))| {
-                (candidate == handle && *candidate_role == role).then(|| {
-                    StreamSessionMappingRecord {
-                        transport_stream_id: *transport_stream_id,
-                        handle: candidate.clone(),
-                        role,
-                    }
-                })
+            .find_map(|(_, mapping)| {
+                (&mapping.handle == handle && mapping.role == role).then(|| mapping.clone())
             })
     }
 
@@ -1008,16 +502,16 @@ impl DurableSessionStreams {
             .mappings
             .read()
             .expect("durable stream mapping lock poisoned");
-        let (handle, role) = mappings
+        let mapping = mappings
             .get(&transport_stream_id)
             .ok_or_else(|| format!("unknown durable transport stream ID {transport_stream_id}"))?;
-        if handle.stream_id.0 != durable_stream_id || *role != expected_role {
+        if mapping.handle.stream_id.0 != durable_stream_id || mapping.role != expected_role {
             return Err(
                 "transport stream mapping does not match the durable stream ID and role"
                     .to_string(),
             );
         }
-        Ok(handle.clone())
+        Ok(mapping.handle.clone())
     }
 
     /// Returns the attachment epoch represented by this runtime.
@@ -1177,19 +671,19 @@ impl DurableSessionStreams {
     }
 
     /// Adds a runtime mapping only when its durable stream identity and role agree.
-    pub(crate) fn insert_mapping(
-        &self,
-        transport_stream_id: u64,
-        handle: DurableStreamHandle,
-        role: SessionStreamRole,
-    ) -> Result<(), String> {
+    pub(crate) fn insert_mapping(&self, mapping: StreamSessionMappingRecord) -> Result<(), String> {
+        let StreamSessionMappingRecord {
+            transport_stream_id,
+            ref handle,
+            role,
+        } = mapping;
         let mut mappings = self
             .mappings
             .write()
             .expect("durable stream mapping lock poisoned");
         if let Some((existing_transport_stream_id, _)) = mappings
             .iter()
-            .find(|(_, existing)| existing == &&(handle.clone(), role))
+            .find(|(_, existing)| &existing.handle == handle && existing.role == role)
             && *existing_transport_stream_id != transport_stream_id
         {
             return Err(format!(
@@ -1197,14 +691,14 @@ impl DurableSessionStreams {
             ));
         }
         match mappings.get(&transport_stream_id) {
-            Some(existing) if existing == &(handle.clone(), role) => Ok(()),
+            Some(existing) if existing == &mapping => Ok(()),
             Some(_) => Err(format!(
                 "transport stream id {transport_stream_id} is already mapped to another durable stream"
             )),
             None => {
                 self.next_transport_stream_id
                     .fetch_max(transport_stream_id.saturating_add(1), Ordering::AcqRel);
-                mappings.insert(transport_stream_id, (handle, role));
+                mappings.insert(transport_stream_id, mapping);
                 Ok(())
             }
         }
@@ -1463,7 +957,7 @@ impl DurableSessionStreams {
             .map_err(|error| error.to_string())?;
         self.append_mapping_once(mapping.clone()).await?;
         self.commit_consumer_journal().await?;
-        self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)
+        self.insert_mapping(mapping)
     }
 
     /// Ensures an open local session is attached before producer output begins.
@@ -1615,7 +1109,7 @@ impl DurableSessionStreams {
         drop(metadata);
         for mapping in mappings {
             self.validate_recovered_mapping(&mapping).await?;
-            self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)?;
+            self.insert_mapping(mapping)?;
         }
         *covered = horizon;
         Ok(())
@@ -1718,13 +1212,10 @@ impl DurableSessionStreams {
                 .read()
                 .expect("durable stream mapping lock poisoned")
                 .iter()
-                .find_map(|(transport_stream_id, (handle, role))| {
-                    (handle.stream_id == cursor.stream_id && *role == SessionStreamRole::Output)
-                        .then_some(StreamSessionMappingRecord {
-                            transport_stream_id: *transport_stream_id,
-                            handle: handle.clone(),
-                            role: *role,
-                        })
+                .find_map(|(_, mapping)| {
+                    (mapping.handle.stream_id == cursor.stream_id
+                        && mapping.role == SessionStreamRole::Output)
+                        .then(|| mapping.clone())
                 })
                 .ok_or_else(|| {
                     format!(
@@ -1922,11 +1413,7 @@ impl DurableSessionStreams {
         };
         if self.producer.owns_handle_identity(&mapping.handle) {
             self.append_mapping_once(mapping.clone()).await?;
-            self.insert_mapping(
-                mapping.transport_stream_id,
-                mapping.handle.clone(),
-                mapping.role,
-            )?;
+            self.insert_mapping(mapping.clone())?;
         } else {
             let rpc = self.rpc.clone().ok_or_else(|| {
                 "foreign durable stream control routing is unavailable".to_string()
@@ -1985,7 +1472,7 @@ impl DurableSessionStreams {
         )>,
         String,
     > {
-        let memory = DurableStreamProducer::retained_payload_bytes(&payload)?;
+        let memory = DurableStreamStore::retained_payload_bytes(&payload)?;
         let session = self.clone();
         self.producer
             .run_owned(memory, move |_| async move {
@@ -2196,16 +1683,13 @@ impl DurableSessionStreams {
             for (transport_stream_id, handle) in
                 nested_transport_ids.into_iter().zip(nested_handles)
             {
-                self.insert_mapping(
+                let mapping = StreamSessionMappingRecord {
                     transport_stream_id,
-                    handle.clone(),
-                    SessionStreamRole::Input,
-                )?;
-                nested_mappings.push(StreamSessionMappingRecord {
-                    transport_stream_id,
-                    handle,
+                    handle: handle.clone(),
                     role: SessionStreamRole::Input,
-                });
+                };
+                self.insert_mapping(mapping.clone())?;
+                nested_mappings.push(mapping);
             }
             for mapping in &nested_mappings {
                 self.append_mapping_once(mapping.clone()).await?;
@@ -2677,7 +2161,7 @@ impl DurableSessionStreams {
                                     .cancel_stream(key, intent.role, intent.reason, intent.details),
                             )
                             .await
-                            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?
+                            .map_err(|_| StreamStoreError::RecoveryRequired)?
                             .map(|_| ())
                         });
                         Ok::<_, String>(())
@@ -2786,13 +2270,15 @@ impl DurableSessionStreams {
             .expect("durable stream mapping lock poisoned")
             .clone();
         let mut result = HashMap::new();
-        for (transport_stream_id, (handle, role)) in mappings {
-            if role != SessionStreamRole::Input || !self.producer.owns_handle_identity(&handle) {
+        for (transport_stream_id, mapping) in mappings {
+            if mapping.role != SessionStreamRole::Input
+                || !self.producer.owns_handle_identity(&mapping.handle)
+            {
                 continue;
             }
             if let Some(high_water) = self
                 .producer
-                .attached_input_high_water(&self.session_key, handle.stream_id)
+                .attached_input_high_water(&self.session_key, mapping.handle.stream_id)
                 .await
                 .map_err(|error| error.to_string())?
             {
@@ -2931,11 +2417,7 @@ impl DurableSessionStreams {
             if self.producer.owns_handle_identity(&handle) {
                 self.append_mapping_once(mapping.clone()).await?;
             }
-            self.insert_mapping(
-                transport_stream_id,
-                handle.clone(),
-                SessionStreamRole::Input,
-            )?;
+            self.insert_mapping(mapping.clone())?;
             mappings.push(mapping);
             if let Some(endpoint) = pending.endpoint {
                 drains.push(PendingOwnedStreamDrain {
@@ -3269,11 +2751,11 @@ impl DurableSessionStreams {
                     .next()
                     .expect("result registration returned too few durable handles")
             });
-            self.insert_mapping(
+            self.insert_mapping(StreamSessionMappingRecord {
                 transport_stream_id,
-                handle.clone(),
-                SessionStreamRole::Output,
-            )?;
+                handle: handle.clone(),
+                role: SessionStreamRole::Output,
+            })?;
             if let Some(endpoint) = pending.endpoint
                 && !pending.cancelled
             {
@@ -3451,11 +2933,7 @@ impl DurableSessionStreams {
                         handle: remote.handle,
                         role: SessionStreamRole::Output,
                     };
-                    self.insert_mapping(
-                        mapping.transport_stream_id,
-                        mapping.handle.clone(),
-                        mapping.role,
-                    )?;
+                    self.insert_mapping(mapping.clone())?;
                     mapping
                 }
             } else {
@@ -3792,18 +3270,13 @@ impl DurableSessionStreams {
                                                 .unwrap_or_else(|| {
                                                     session.allocate_transport_stream_id()
                                                 })?;
-                                            session.insert_mapping(
+                                            let mapping = StreamSessionMappingRecord {
                                                 transport_stream_id,
-                                                nested_handle.clone(),
+                                                handle: nested_handle.clone(),
                                                 role,
-                                            )?;
-                                            session
-                                                .append_mapping_once(StreamSessionMappingRecord {
-                                                    transport_stream_id,
-                                                    handle: nested_handle.clone(),
-                                                    role,
-                                                })
-                                                .await?;
+                                            };
+                                            session.insert_mapping(mapping.clone())?;
+                                            session.append_mapping_once(mapping).await?;
                                             if let Some(endpoint) = output.endpoint {
                                                 nested_tx
                                                     .send(PendingOwnedStreamDrain {
@@ -3945,7 +3418,7 @@ impl DurableSessionStreams {
             return Err(error.clone());
         }
         for topology in metadata.topologies.values() {
-            if !topology.active {
+            if !topology.is_active() {
                 return Err(
                     "durable session has prepared but inactive foreign topology".to_string()
                 );
@@ -4031,7 +3504,7 @@ impl DurableSessionStreams {
                 .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
                 .collect();
             for mapping in result.stream_mappings {
-                self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)?;
+                self.insert_mapping(mapping)?;
             }
             return Ok(Some((transport_value, proto_mappings)));
         }
@@ -4196,15 +3669,17 @@ impl DurableSessionStreams {
             .read()
             .expect("durable stream mapping lock poisoned")
             .iter()
-            .filter_map(|(transport_stream_id, (handle, role))| {
-                (*role == SessionStreamRole::Input
-                    && handle.producer_environment_id == self.session_key.callee_environment_id
-                    && handle.producer == self.session_key.callee
-                    && handle.expected_producer_fingerprint == self.session_key.callee_fingerprint
+            .filter_map(|(transport_stream_id, mapping)| {
+                (mapping.role == SessionStreamRole::Input
+                    && mapping.handle.producer_environment_id
+                        == self.session_key.callee_environment_id
+                    && mapping.handle.producer == self.session_key.callee
+                    && mapping.handle.expected_producer_fingerprint
+                        == self.session_key.callee_fingerprint
                     && !announced_high_waters
                         .get(transport_stream_id)
                         .is_some_and(|high_water| high_water.terminal))
-                .then_some((*transport_stream_id, handle.clone()))
+                .then_some((*transport_stream_id, mapping.handle.clone()))
             })
             .collect::<Vec<_>>();
         for (transport_stream_id, handle) in inputs {
@@ -4321,11 +3796,7 @@ impl DurableSessionStreams {
                                         handle: handle.clone(),
                                         role: SessionStreamRole::Output,
                                     };
-                                    session.insert_mapping(
-                                        transport_stream_id,
-                                        handle,
-                                        SessionStreamRole::Output,
-                                    )?;
+                                    session.insert_mapping(mapping.clone())?;
                                     session.append_mapping_once(mapping.clone()).await?;
                                     mapping
                                 }
@@ -4572,15 +4043,15 @@ impl DurableSessionStreams {
             .read()
             .expect("durable stream mapping lock poisoned")
             .values()
-            .filter_map(|(handle, role)| {
-                if *role != SessionStreamRole::Output {
+            .filter_map(|mapping| {
+                if mapping.role != SessionStreamRole::Output {
                     return None;
                 }
                 cursors
-                    .get(&handle.stream_id)
+                    .get(&mapping.handle.stream_id)
                     .copied()
                     .flatten()
-                    .map(|cursor| (handle.clone(), cursor))
+                    .map(|cursor| (mapping.handle.clone(), cursor))
             })
             .collect::<Vec<_>>();
         let mut terminal = HashSet::new();
@@ -4770,11 +4241,7 @@ impl DurableSessionStreams {
                     if record.session_key == self.session_key && record.stream_id == stream_id =>
                 {
                     for mapping in &record.recursive_mappings {
-                        self.insert_mapping(
-                            mapping.transport_stream_id,
-                            mapping.handle.clone(),
-                            mapping.role,
-                        )?;
+                        self.insert_mapping(mapping.clone())?;
                     }
                     if record.packed_u8 {
                         if !record.recursive_handles.is_empty() {
@@ -4897,35 +4364,15 @@ impl DurableSessionStreams {
     }
 }
 
-fn same_attachment_slot(left: &StreamAttachmentKey, right: &StreamAttachmentKey) -> bool {
-    left.attachment_id == right.attachment_id
-        && left.stream_id == right.stream_id
-        && left.consumer_environment_id == right.consumer_environment_id
-        && left.consumer == right.consumer
-}
-
-fn attachment_mismatch_status(
-    persisted: &StreamAttachmentKey,
-    supplied: &StreamAttachmentKey,
-) -> ConsumerAttachmentStatus {
-    let mut supplied_at_persisted_epoch = supplied.clone();
-    supplied_at_persisted_epoch.epoch = persisted.epoch;
-    if persisted == &supplied_at_persisted_epoch {
-        ConsumerAttachmentStatus::EpochMismatch
-    } else {
-        ConsumerAttachmentStatus::IncarnationMismatch
-    }
-}
-
 #[async_trait::async_trait]
-impl StreamAttachmentConsumerProbe for DurableSessionStreams {
+impl StreamAttachmentConsumerProbe for StreamSession {
     async fn status(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         self.topology_state(key, None)
             .await
-            .map_err(DurableStreamProducerError::Oplog)
+            .map_err(StreamStoreError::Oplog)
     }
 }
 
@@ -4933,7 +4380,7 @@ impl StreamAttachmentConsumerProbe for DurableSessionStreams {
 pub(crate) struct DurableInputEndpoint {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
-    streams: DurableSessionStreams,
+    streams: StreamSession,
     transport_stream_id: u64,
     handle: DurableStreamHandle,
     consumer_read_ordinal: u64,
@@ -5042,7 +4489,7 @@ fn validate_forwarded_durable_input_schemas(
 enum DurableStreamReader {
     Owned {
         reader: Box<DurableCatchUpReader>,
-        source: Arc<DurableStreamProducer>,
+        source: Arc<DurableStreamStore>,
         handle: Box<DurableStreamHandle>,
         next_journal_lag_sample: Instant,
     },
@@ -5063,7 +4510,7 @@ impl DurableStreamReader {
     async fn journal_lag_events(
         &self,
         after: Option<golem_common::model::durable_stream::StreamOffset>,
-    ) -> Result<usize, DurableStreamProducerError> {
+    ) -> Result<usize, StreamStoreError> {
         match self {
             Self::Owned { source, handle, .. } => source.journal_lag_events(handle, after).await,
             Self::Attached(reader) => {
@@ -5075,9 +4522,7 @@ impl DurableStreamReader {
         }
     }
 
-    async fn next(
-        &mut self,
-    ) -> Result<Option<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    async fn next(&mut self) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
         match self {
             Self::Owned { reader, .. } => reader.next().await,
             Self::Attached(reader) => reader.next().await,
@@ -5118,7 +4563,7 @@ struct AttachedDurableCatchUpReader {
     source: Arc<dyn AttachedStreamSegmentSource>,
     attachment: StreamAttachmentKey,
     handle: DurableStreamHandle,
-    consumer_producer: Option<Arc<DurableStreamProducer>>,
+    consumer_producer: Option<Arc<DurableStreamStore>>,
     after: Option<golem_common::model::durable_stream::StreamOffset>,
     buffered: VecDeque<CommittedProducerStreamEvent>,
     terminal: bool,
@@ -5128,7 +4573,7 @@ struct AttachedDurableCatchUpReader {
 impl AttachedDurableCatchUpReader {
     async fn source_unavailable_overlay(
         &self,
-    ) -> Result<Option<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
         let Some(producer) = &self.consumer_producer else {
             return Ok(None);
         };
@@ -5150,9 +4595,7 @@ impl AttachedDurableCatchUpReader {
         }))
     }
 
-    async fn next(
-        &mut self,
-    ) -> Result<Option<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    async fn next(&mut self) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
         loop {
             if let Some(event) = self.buffered.pop_front() {
                 self.after = Some(event.offset);
@@ -5217,7 +4660,7 @@ pub(crate) struct DurableInputProducer {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
     pending: Option<DurableReceiveFuture>,
-    streams: DurableSessionStreams,
+    streams: StreamSession,
     transport_stream_id: u64,
     handle: DurableStreamHandle,
     consumer_read_ordinal: u64,
@@ -5230,7 +4673,7 @@ pub(crate) struct DurableInputProducer {
 
 /// Deferred cleanup returned when a guest drops an unread durable input.
 pub struct DroppedDurableInput {
-    streams: DurableSessionStreams,
+    streams: StreamSession,
     transport_stream_id: u64,
     role: StreamCancelRole,
 }
@@ -5894,22 +5337,17 @@ pub(crate) fn strip_streams(value: SchemaValue) -> SchemaValue {
     }
 }
 
-fn discards_input_after_terminal(
-    error: &DurableStreamProducerError,
-    session_key: &StreamSessionKey,
-) -> bool {
+fn discards_input_after_terminal(error: &StreamStoreError, session_key: &StreamSessionKey) -> bool {
     matches!(
         error,
-        DurableStreamProducerError::SessionFinished(finished) if finished == session_key
+        StreamStoreError::SessionFinished(finished) if finished == session_key
     ) || matches!(
         error,
-        DurableStreamProducerError::ClosedByOtherProducer
-            | DurableStreamProducerError::FencedByTerminal(
-                CommittedProducerStreamEventPayload::Cancel {
-                    role: StreamCancelRole::InputConsumer,
-                    ..
-                }
-            )
+        StreamStoreError::ClosedByOtherProducer
+            | StreamStoreError::FencedByTerminal(CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputConsumer,
+                ..
+            })
     )
 }
 

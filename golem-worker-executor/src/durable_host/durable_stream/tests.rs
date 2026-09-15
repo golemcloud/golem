@@ -18,10 +18,10 @@ use super::{
     AgentError, AttachedStreamSegmentSource, CommittedProducerStreamEvent,
     CommittedProducerStreamEventPayload, ConsumerAttachmentStatus, ConsumerJournalSummary,
     DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
-    DurableStreamProducer, DurableStreamProducerError, ExternalAppendOutcome, ExternalProducer,
-    IndexedConsumerJournal, ProducerOutputRegistration, ProducerOutputSource,
-    ProducerRegistrationRequest, ProducerStreamIndex, StreamAttachmentConsumerProbe,
-    StreamAttachmentControl, StreamAttachmentState, StreamSegmentSource,
+    DurableStreamStore, ExternalAppendOutcome, ExternalProducer, IndexedConsumerJournal,
+    ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
+    ProducerStreamIndex, StreamAttachmentConsumerProbe, StreamAttachmentControl,
+    StreamAttachmentState, StreamSegmentSource, StreamStoreError,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
@@ -371,10 +371,10 @@ async fn mutation_queue_serializes_abandoned_requests_on_one_task() {
                 released.await.unwrap();
                 // Nested mutations execute inline rather than enqueueing behind themselves.
                 owner
-                    .run_lifecycle(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                    .run_lifecycle(0, |_| async { Ok::<(), StreamStoreError>(()) })
                     .await?;
                 first_finished.store(true, Ordering::Release);
-                Ok::<_, DurableStreamProducerError>(task)
+                Ok::<_, StreamStoreError>(task)
             })
             .await
         }
@@ -385,7 +385,7 @@ async fn mutation_queue_serializes_abandoned_requests_on_one_task() {
         assert!(first_finished.load(Ordering::Acquire));
         assert_eq!(tokio::task::id(), task);
         completed.send(()).unwrap();
-        Ok::<(), DurableStreamProducerError>(())
+        Ok::<(), StreamStoreError>(())
     }));
     assert!(futures::poll!(second.as_mut()).is_pending());
     drop(second);
@@ -410,7 +410,7 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
                 entered.send(()).unwrap();
                 released.await.unwrap();
                 owner.finish_durable_effect();
-                Ok::<(), DurableStreamProducerError>(())
+                Ok::<(), StreamStoreError>(())
             })
             .await
         }
@@ -420,7 +420,7 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
     let queued_executed = executed.clone();
     let mut queued = Box::pin(live.run_owned(0, move |_| async move {
         queued_executed.store(true, Ordering::Release);
-        Ok::<(), DurableStreamProducerError>(())
+        Ok::<(), StreamStoreError>(())
     }));
     assert!(futures::poll!(queued.as_mut()).is_pending());
     live.poison();
@@ -428,16 +428,13 @@ async fn mutation_queue_drains_active_work_and_rejects_queued_work_after_retirem
     assert!(futures::poll!(drained.as_mut()).is_pending());
     release.send(()).unwrap();
     first.await.unwrap().unwrap();
-    assert_eq!(
-        queued.await,
-        Err(DurableStreamProducerError::RecoveryRequired)
-    );
+    assert_eq!(queued.await, Err(StreamStoreError::RecoveryRequired));
     drained.await;
     assert!(!executed.load(Ordering::Acquire));
     assert_eq!(
-        live.run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+        live.run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
             .await,
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
 }
 
@@ -455,18 +452,18 @@ async fn mutation_queue_completion_can_route_back_to_the_same_producer() {
             entered.send(()).unwrap();
             released.await.unwrap();
             routed_owner
-                .run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                .run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
                 .await?;
             completed.send(()).unwrap();
             Ok(())
         });
-        Ok::<(), DurableStreamProducerError>(())
+        Ok::<(), StreamStoreError>(())
     }));
     assert!(futures::poll!(caller.as_mut()).is_pending());
     ready.await.unwrap();
     drop(caller);
     // A stalled completion does not hold the serial mutation lane.
-    live.run_lifecycle(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+    live.run_lifecycle(0, |_| async { Ok::<(), StreamStoreError>(()) })
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -481,7 +478,7 @@ async fn nested_mutation_preserves_unfinished_parent_effects() {
         for child_succeeds in [false, true] {
             for child_finishes in [false, true] {
                 let identity = identity();
-                let producer = DurableStreamProducer::load(
+                let producer = DurableStreamStore::load(
                     Arc::new(TestOplog::default()),
                     identity.environment_id,
                     identity.agent_id,
@@ -490,12 +487,12 @@ async fn nested_mutation_preserves_unfinished_parent_effects() {
                 )
                 .await
                 .unwrap();
-                let outcome: Result<(), DurableStreamProducerError> = producer
+                let outcome: Result<(), StreamStoreError> = producer
                     .run_owned(0, move |parent| async move {
                         if parent_pending {
                             parent.begin_durable_effect();
                         }
-                        let child_result: Result<(), DurableStreamProducerError> = parent
+                        let child_result: Result<(), StreamStoreError> = parent
                             .run_lifecycle(0, move |child| async move {
                                 child.begin_durable_effect();
                                 if child_finishes {
@@ -504,12 +501,12 @@ async fn nested_mutation_preserves_unfinished_parent_effects() {
                                 if child_succeeds {
                                     Ok(())
                                 } else {
-                                    Err(DurableStreamProducerError::ItemTooLarge)
+                                    Err(StreamStoreError::ItemTooLarge)
                                 }
                             })
                             .await;
                         assert_eq!(child_result.is_ok(), child_succeeds);
-                        Err(DurableStreamProducerError::ItemTooLarge)
+                        Err(StreamStoreError::ItemTooLarge)
                     })
                     .await;
                 assert!(outcome.is_err());
@@ -529,7 +526,7 @@ async fn nested_mutation_preserves_unfinished_parent_effects() {
 async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
     for cancel_child in [false, true] {
         let identity = identity();
-        let producer = DurableStreamProducer::load(
+        let producer = DurableStreamStore::load(
             Arc::new(TestOplog::default()),
             identity.environment_id,
             identity.agent_id,
@@ -544,14 +541,14 @@ async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
                 let mut child = Box::pin(parent.run_owned(0, move |child| async move {
                     child.begin_durable_effect();
                     released.await.unwrap();
-                    Err::<(), _>(DurableStreamProducerError::ItemTooLarge)
+                    Err::<(), _>(StreamStoreError::ItemTooLarge)
                 }));
                 assert!(futures::poll!(child.as_mut()).is_pending());
                 parent
                     .run_owned(0, |sibling| async move {
                         sibling.begin_durable_effect();
                         sibling.finish_durable_effect();
-                        Ok::<(), DurableStreamProducerError>(())
+                        Ok::<(), StreamStoreError>(())
                     })
                     .await?;
                 assert_eq!(parent.ensure_healthy(), Ok(()));
@@ -561,13 +558,13 @@ async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
                     release.send(()).unwrap();
                     assert!(child.await.is_err());
                 }
-                Ok::<(), DurableStreamProducerError>(())
+                Ok::<(), StreamStoreError>(())
             })
             .await
             .unwrap();
         assert_eq!(
             producer.ensure_healthy(),
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         );
     }
 }
@@ -575,7 +572,7 @@ async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
 #[test]
 async fn quiescent_retirement_rejects_storage_activity_without_poisoning_the_producer() {
     let identity = identity();
-    let producer = DurableStreamProducer::load(
+    let producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         identity.environment_id,
         identity.agent_id,
@@ -592,7 +589,7 @@ async fn quiescent_retirement_rejects_storage_activity_without_poisoning_the_pro
     assert!(producer.try_retire_quiescent());
     assert_eq!(
         producer.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
     assert!(producer.durable_activity.try_enter().is_none());
 }
@@ -602,7 +599,7 @@ async fn quiescent_retirement_rejects_storage_activity_without_poisoning_the_pro
 async fn metadata_lookup_tracks_detached_storage_after_caller_cancellation() {
     for cancel_caller in [false, true] {
         let identity = identity();
-        let producer = DurableStreamProducer::load(
+        let producer = DurableStreamStore::load(
             Arc::new(TestOplog::default()),
             identity.environment_id,
             identity.agent_id,
@@ -634,17 +631,14 @@ async fn metadata_lookup_tracks_detached_storage_after_caller_cancellation() {
         } else {
             assert!(futures::poll!(drain.as_mut()).is_pending());
             release.send(()).unwrap();
-            assert_eq!(
-                lookup.await,
-                Err(DurableStreamProducerError::RecoveryRequired)
-            );
+            assert_eq!(lookup.await, Err(StreamStoreError::RecoveryRequired));
         }
         drain.await;
         assert_eq!(
             producer
                 .with_metadata_activity(async { panic!("retired lookup ran") })
                 .await,
-            Err::<(), _>(DurableStreamProducerError::RecoveryRequired)
+            Err::<(), _>(StreamStoreError::RecoveryRequired)
         );
     }
 }
@@ -777,7 +771,7 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
     );
     assert!(matches!(
         index.apply_consumer_journal_record(&empty_packed),
-        Err(DurableStreamProducerError::CorruptHistory(_))
+        Err(StreamStoreError::CorruptHistory(_))
     ));
     assert!(!index.consumer_journals.contains_key(&key));
 
@@ -791,7 +785,7 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
     );
     assert!(matches!(
         index.apply_consumer_journal_record(&overflowing_range),
-        Err(DurableStreamProducerError::CorruptHistory(_))
+        Err(StreamStoreError::CorruptHistory(_))
     ));
     assert!(!index.consumer_journals.contains_key(&key));
 
@@ -812,7 +806,7 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
     );
     assert_eq!(
         index.apply_consumer_journal_record(&ordinal_overflow),
-        Err(DurableStreamProducerError::CounterOverflow)
+        Err(StreamStoreError::CounterOverflow)
     );
     assert_eq!(index.consumer_journals[&key].next_read_ordinal, u64::MAX);
     assert_eq!(index.consumer_journals[&key].last_source_offset, None);
@@ -842,13 +836,13 @@ fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
     record.consumer_read_ordinal = 1;
     assert!(matches!(
         index.apply_consumer_journal_record(&wrong_ordinal),
-        Err(DurableStreamProducerError::AttachmentConflict)
+        Err(StreamStoreError::AttachmentConflict)
     ));
 
     let item = consumer_item_record(attachment.session_key, stream_id, offset, 0, vec![1], false);
     assert_eq!(
         index.apply_consumer_journal_record(&item),
-        Err(DurableStreamProducerError::ConsumerJournalAdvanced)
+        Err(StreamStoreError::ConsumerJournalAdvanced)
     );
 }
 
@@ -858,7 +852,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
     let stream_id = StreamId(Uuid::from_u128(92));
     let key = attachment_key(&source_identity, stream_id);
     let oplog = Arc::new(TestOplog::default());
-    let consumer = DurableStreamProducer::load(
+    let consumer = DurableStreamStore::load(
         oplog.clone(),
         key.consumer_environment_id,
         key.consumer.clone(),
@@ -893,7 +887,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
     wrong_identity.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(999));
     assert!(matches!(
         consumer.consumer_source_unavailable(&wrong_identity).await,
-        Err(DurableStreamProducerError::InvalidAttachmentState)
+        Err(StreamStoreError::InvalidAttachmentState)
     ));
 }
 
@@ -904,7 +898,7 @@ impl StreamAttachmentConsumerProbe for FixedConsumerProbe {
     async fn status(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         Ok(self.0)
     }
 }
@@ -920,21 +914,21 @@ impl StreamAttachmentConsumerProbe for CascadeConsumerProbe {
     async fn status(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         Ok(self.status)
     }
 
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
         Ok(Some(self.inspection.lock().unwrap().clone()))
     }
 
     async fn journal_summary(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalSummary>, StreamStoreError> {
         let inspection = self.inspection.lock().unwrap();
         Ok(Some(ConsumerJournalSummary {
             event_count: inspection.source_offsets.len() as u64,
@@ -949,16 +943,16 @@ impl StreamAttachmentConsumerProbe for CascadeConsumerProbe {
         _key: &StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let mut inspection = self.inspection.lock().unwrap();
         if inspection.source_offsets.len() as u64 != consumer_read_ordinal {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "test overlay ordinal mismatch".to_string(),
             ));
         }
         match inspection.source_unavailable {
             Some(existing) if existing != source_offset => {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "test overlay conflict".to_string(),
                 ));
             }
@@ -979,9 +973,9 @@ impl StreamAttachmentConsumerProbe for FailingConsumerProbe {
     async fn status(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         if key.stream_id == self.failed_stream_id {
-            Err(DurableStreamProducerError::Oplog(
+            Err(StreamStoreError::Oplog(
                 "injected consumer probe failure".to_string(),
             ))
         } else {
@@ -1001,14 +995,14 @@ impl StreamAttachmentConsumerProbe for AdvancingCascadeProbe {
     async fn status(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         Ok(ConsumerAttachmentStatus::Active)
     }
 
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
         Ok(Some(self.inspection.lock().unwrap().clone()))
     }
 
@@ -1017,15 +1011,15 @@ impl StreamAttachmentConsumerProbe for AdvancingCascadeProbe {
         _key: &StreamAttachmentKey,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let attempt = self.commits.fetch_add(1, Ordering::Relaxed);
         let mut inspection = self.inspection.lock().unwrap();
         if attempt == 0 {
             inspection.source_offsets.push(self.advanced_offset);
-            return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
+            return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
         if inspection.source_offsets.len() as u64 != consumer_read_ordinal {
-            return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
+            return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
         inspection.source_unavailable = Some(source_offset);
         Ok(())
@@ -1042,14 +1036,14 @@ impl StreamAttachmentConsumerProbe for AmbiguousOverlayCommitProbe {
     async fn status(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+    ) -> Result<ConsumerAttachmentStatus, StreamStoreError> {
         Ok(ConsumerAttachmentStatus::Active)
     }
 
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
         Ok(Some(self.inspection.lock().unwrap().clone()))
     }
 
@@ -1058,11 +1052,11 @@ impl StreamAttachmentConsumerProbe for AmbiguousOverlayCommitProbe {
         _key: &StreamAttachmentKey,
         source_offset: StreamOffset,
         _consumer_read_ordinal: u64,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let attempt = self.commits.fetch_add(1, Ordering::Relaxed);
         self.inspection.lock().unwrap().source_unavailable = Some(source_offset);
         if attempt == 0 {
-            Err(DurableStreamProducerError::Oplog(
+            Err(StreamStoreError::Oplog(
                 "injected response loss after overlay commit".to_string(),
             ))
         } else {
@@ -1075,8 +1069,8 @@ async fn producer(
     oplog: Arc<TestOplog>,
     identity: &TestIdentity,
     capacity: Option<usize>,
-) -> Arc<DurableStreamProducer> {
-    DurableStreamProducer::load(
+) -> Arc<DurableStreamStore> {
+    DurableStreamStore::load(
         oplog,
         identity.environment_id,
         identity.agent_id.clone(),
@@ -1088,10 +1082,10 @@ async fn producer(
 }
 
 async fn reconcile(
-    producer: &DurableStreamProducer,
+    producer: &DurableStreamStore,
     now_millis: u64,
     probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
-) -> Result<usize, DurableStreamProducerError> {
+) -> Result<usize, StreamStoreError> {
     producer
         .reconcile_attachments_configured(
             now_millis,
@@ -1203,7 +1197,7 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
                 StreamItemsPayload::PackedU8(vec![8; 64])
             )
             .await,
-        Err(DurableStreamProducerError::EventConflict)
+        Err(StreamStoreError::EventConflict)
     ));
 }
 
@@ -1468,14 +1462,14 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
     assert_eq!(
         live.read_attached_segment(&key, &handle, 102, None, None)
             .await,
-        Err(DurableStreamProducerError::InvalidAttachmentState)
+        Err(StreamStoreError::InvalidAttachmentState)
     );
 
     let mut malformed = key.clone();
     malformed.epoch = 0;
     assert_eq!(
         live.activate_attachment(malformed, 110).await,
-        Err(DurableStreamProducerError::CorruptHistory(
+        Err(StreamStoreError::CorruptHistory(
             "unsupported or malformed durable attachment record".to_string()
         ))
     );
@@ -1483,7 +1477,7 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
     future.epoch = 2;
     assert_eq!(
         live.activate_attachment(future, 110).await,
-        Err(DurableStreamProducerError::InvalidEpoch {
+        Err(StreamStoreError::InvalidEpoch {
             current: 1,
             actual: 2,
         })
@@ -1519,7 +1513,7 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
             None,
         )
         .await,
-        Err(DurableStreamProducerError::LeaseExpired)
+        Err(StreamStoreError::LeaseExpired)
     );
     assert!(
         !live
@@ -1631,13 +1625,13 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
         invalid_identity.expected_consumer_fingerprint;
     assert_eq!(
         live.prepare_attachment(invalid_identity, 120).await,
-        Err(DurableStreamProducerError::InvalidAttachmentState)
+        Err(StreamStoreError::InvalidAttachmentState)
     );
     let mut invalid_epoch = second.clone();
     invalid_epoch.epoch = 2;
     assert_eq!(
         live.activate_attachment(invalid_epoch, 120).await,
-        Err(DurableStreamProducerError::InvalidEpoch {
+        Err(StreamStoreError::InvalidEpoch {
             current: 1,
             actual: 2,
         })
@@ -1802,7 +1796,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
     for altered in [altered_source, altered_revision, altered_schema] {
         assert_eq!(
             live.validate_handle(&altered).await,
-            Err(DurableStreamProducerError::InvalidHandle)
+            Err(StreamStoreError::InvalidHandle)
         );
     }
     assert_eq!(oplog.current_oplog_index().await, registration_length);
@@ -1823,7 +1817,7 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
     live.prepare_attachment(key.clone(), 100).await.unwrap();
     assert!(matches!(
         live.commit_deletion_barrier(1_000, true).await,
-        Err(DurableStreamProducerError::DeletionBlocked(ref dependents))
+        Err(StreamStoreError::DeletionBlocked(ref dependents))
             if dependents == std::slice::from_ref(&key)
     ));
     live.activate_attachment(key.clone(), 110).await.unwrap();
@@ -1836,11 +1830,11 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
             None,
         )
         .await,
-        Err(DurableStreamProducerError::LeaseExpired)
+        Err(StreamStoreError::LeaseExpired)
     );
     assert!(matches!(
         live.commit_deletion_barrier(1_000, true).await,
-        Err(DurableStreamProducerError::DeletionBlocked(ref dependents))
+        Err(StreamStoreError::DeletionBlocked(ref dependents))
             if dependents == std::slice::from_ref(&key)
     ));
     live.finalize_attachment(
@@ -1871,7 +1865,7 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
             entity_parent_start_index: None,
         })
         .await,
-        Err(DurableStreamProducerError::ProducerDeleting)
+        Err(StreamStoreError::ProducerDeleting)
     );
 }
 
@@ -1907,8 +1901,8 @@ async fn deletion_gate_and_attachment_prepare_have_one_linearization_order() {
         barrier.wait().await;
 
         match (deletion.await.unwrap(), prepare.await.unwrap()) {
-            (Ok(()), Err(DurableStreamProducerError::ProducerDeleting)) => {}
-            (Err(DurableStreamProducerError::DeletionBlocked(dependents)), Ok(prepared)) => {
+            (Ok(()), Err(StreamStoreError::ProducerDeleting)) => {}
+            (Err(StreamStoreError::DeletionBlocked(dependents)), Ok(prepared)) => {
                 assert_eq!(dependents, vec![key]);
                 assert_eq!(prepared.value.state, StreamAttachmentState::Prepared);
             }
@@ -2077,7 +2071,7 @@ async fn cascade_is_durable_idempotent_and_overlays_the_first_unjournaled_positi
     assert_eq!(
         live.write_items(handle.stream_id, 1, StreamItemsPayload::PackedU8(vec![8]))
             .await,
-        Err(DurableStreamProducerError::ProducerDeleting)
+        Err(StreamStoreError::ProducerDeleting)
     );
 
     let diagnostics = live.deletion_diagnostics().await.unwrap();
@@ -2129,7 +2123,7 @@ async fn cascade_retries_when_the_consumer_journal_advances_before_overlay_commi
 
     assert_eq!(
         live.cascade_deletion(200, &probe).await,
-        Err(DurableStreamProducerError::ConsumerJournalAdvanced)
+        Err(StreamStoreError::ConsumerJournalAdvanced)
     );
     assert!(
         live.deletion_diagnostics()
@@ -2182,7 +2176,7 @@ async fn cascade_retries_after_overlay_commit_before_outbox_commit() {
 
     assert!(matches!(
         live.cascade_deletion(200, &probe).await,
-        Err(DurableStreamProducerError::Oplog(_))
+        Err(StreamStoreError::Oplog(_))
     ));
     assert_eq!(
         probe.inspection.lock().unwrap().source_unavailable,
@@ -2271,7 +2265,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
     let item_result = item_task.await.unwrap();
 
     match (overlay_result, item_result) {
-        (Ok(false), Err(DurableStreamProducerError::ConsumerJournalAdvanced)) => {
+        (Ok(false), Err(StreamStoreError::ConsumerJournalAdvanced)) => {
             assert!(
                 consumer
                     .commit_source_unavailable_overlay(key.clone(), offsets[0], 0)
@@ -2279,7 +2273,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
                     .unwrap()
             );
         }
-        (Err(DurableStreamProducerError::ConsumerJournalAdvanced), Ok(())) => {
+        (Err(StreamStoreError::ConsumerJournalAdvanced), Ok(())) => {
             assert!(
                 !consumer
                     .commit_source_unavailable_overlay(key.clone(), offsets[1], 1)
@@ -2306,7 +2300,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
                 },
             ))
             .await,
-        Err(DurableStreamProducerError::ConsumerJournalAdvanced)
+        Err(StreamStoreError::ConsumerJournalAdvanced)
     );
 }
 
@@ -2356,7 +2350,7 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
                 },
             ))
             .await,
-        Err(DurableStreamProducerError::ConsumerDeleting)
+        Err(StreamStoreError::ConsumerDeleting)
     );
     assert_eq!(
         consumer
@@ -2369,7 +2363,7 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
                 },
             ))
             .await,
-        Err(DurableStreamProducerError::ConsumerDeleting)
+        Err(StreamStoreError::ConsumerDeleting)
     );
 }
 
@@ -2624,7 +2618,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
             }
         })
     });
-    let producer = DurableStreamProducer::load_with_commit(
+    let producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
         identity.agent_id.clone(),
@@ -3162,7 +3156,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
                 })
             }
         });
-        let live = DurableStreamProducer::load_with_commit(
+        let live = DurableStreamStore::load_with_commit(
             oplog.clone(),
             identity.environment_id,
             identity.agent_id.clone(),
@@ -3201,7 +3195,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
                 .is_err()
         );
 
-        let recovered = DurableStreamProducer::load(
+        let recovered = DurableStreamStore::load(
             oplog,
             identity.environment_id,
             identity.agent_id,
@@ -3265,7 +3259,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
             })
         }
     });
-    let live = DurableStreamProducer::load_with_commit(
+    let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
         identity.agent_id.clone(),
@@ -3346,7 +3340,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
             })
         }
     });
-    let live = DurableStreamProducer::load_with_commit(
+    let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
         identity.agent_id.clone(),
@@ -3443,7 +3437,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
             })
         }
     });
-    let live = DurableStreamProducer::load_with_commit(
+    let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
         identity.agent_id.clone(),
@@ -3614,11 +3608,11 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
             assert_eq!(
                 error,
                 if own_end {
-                    DurableStreamProducerError::FencedByTerminal(
-                        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok),
-                    )
+                    StreamStoreError::FencedByTerminal(CommittedProducerStreamEventPayload::End(
+                        StreamEndResult::Ok,
+                    ))
                 } else {
-                    DurableStreamProducerError::ClosedByOtherProducer
+                    StreamStoreError::ClosedByOtherProducer
                 }
             );
             if !own_end {
@@ -3633,7 +3627,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
                         )
                         .await
                         .unwrap_err(),
-                    DurableStreamProducerError::ClosedByOtherProducer,
+                    StreamStoreError::ClosedByOtherProducer,
                     "all frames already in flight must be discarded after a foreign close",
                 );
             }
@@ -3649,7 +3643,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
                         )
                         .await
                         .unwrap_err(),
-                    DurableStreamProducerError::EventConflict,
+                    StreamStoreError::EventConflict,
                 );
             }
             assert_eq!(oplog.current_oplog_index().await, tip);
@@ -3762,7 +3756,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
                 Vec::new(),
             )
             .await,
-        Err(DurableStreamProducerError::EventConflict)
+        Err(StreamStoreError::EventConflict)
     ));
     recovered
         .append_external_input(
@@ -3945,7 +3939,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
                 }),
             )
             .await,
-        Err(DurableStreamProducerError::EventConflict)
+        Err(StreamStoreError::EventConflict)
     ));
     recovered
         .append_external_input(&identity.invocation, handle.stream_id, None, true, None)
@@ -4314,7 +4308,7 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(DurableStreamProducerError::FencedByTerminal(
+        Err(StreamStoreError::FencedByTerminal(
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputConsumer,
                 reason: StreamCancelReason::GuestDrop,
@@ -4328,7 +4322,7 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
         producer
             .end(handle.stream_id, 64, StreamEndResult::Ok)
             .await,
-        Err(DurableStreamProducerError::FencedByTerminal(
+        Err(StreamStoreError::FencedByTerminal(
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputConsumer,
                 reason: StreamCancelReason::GuestDrop,
@@ -4360,7 +4354,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
             })
         }
     });
-    let live_producer = DurableStreamProducer::load_with_commit(
+    let live_producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
         identity.agent_id.clone(),
@@ -4563,7 +4557,7 @@ async fn empty_invocation_result_replays_exactly_and_rejects_conflicts() {
             .register_result_streams(identity.invocation.clone(), vec![2], Vec::new(), None)
             .await
             .unwrap_err(),
-        DurableStreamProducerError::RegistrationDivergence
+        StreamStoreError::RegistrationDivergence
     );
     assert_eq!(oplog.committed_length(), committed);
 }
@@ -4684,7 +4678,7 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             unreachable!()
         };
         let result_index = oplog.current_oplog_index().await;
-        let recovered = DurableStreamProducer::load(
+        let recovered = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
             identity.agent_id.clone(),
@@ -4745,7 +4739,7 @@ async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
         producer
             .register_result_streams(identity.invocation.clone(), vec![1], outputs, None)
             .await,
-        Err(DurableStreamProducerError::RegistrationDivergence)
+        Err(StreamStoreError::RegistrationDivergence)
     );
     assert_eq!(oplog.committed_length(), 0);
 }
@@ -4837,7 +4831,7 @@ async fn new_nested_registration_cannot_commit_without_its_enclosing_item() {
 
     assert_eq!(
         producer.register(nested).await,
-        Err(DurableStreamProducerError::RegistrationDivergence)
+        Err(StreamStoreError::RegistrationDivergence)
     );
     assert_eq!(
         oplog.committed_length(),
@@ -4961,7 +4955,7 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
     drop(producer);
 
     assert!(matches!(
-        DurableStreamProducer::load(
+        DurableStreamStore::load(
             oplog,
             identity.environment_id,
             identity.agent_id,
@@ -4969,7 +4963,7 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
             None,
         )
         .await,
-        Err(super::DurableStreamProducerError::SequenceGap {
+        Err(super::StreamStoreError::SequenceGap {
             expected: 0,
             actual: 1,
         })
@@ -5041,7 +5035,7 @@ async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index()
 
     assert_eq!(
         error,
-        DurableStreamProducerError::SequenceGap {
+        StreamStoreError::SequenceGap {
             expected: 0,
             actual: 1,
         }
@@ -5107,7 +5101,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
     drop(producer);
 
     assert!(
-        DurableStreamProducer::load(
+        DurableStreamStore::load(
             oplog,
             identity.environment_id,
             identity.agent_id,
@@ -5160,7 +5154,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
     drop(producer);
 
     assert!(matches!(
-        DurableStreamProducer::load(
+        DurableStreamStore::load(
             oplog,
             identity.environment_id,
             identity.agent_id,
@@ -5168,7 +5162,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
             None,
         )
         .await,
-        Err(DurableStreamProducerError::CorruptHistory(_))
+        Err(StreamStoreError::CorruptHistory(_))
     ));
 }
 
@@ -5191,7 +5185,7 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
                 StreamItemsPayload::Values(vec![vec![0; MAX_DURABLE_STREAM_ITEM_SIZE + 1]]),
             )
             .await,
-        Err(DurableStreamProducerError::ItemTooLarge)
+        Err(StreamStoreError::ItemTooLarge)
     );
     assert_eq!(oplog.committed_length(), 1);
     assert_eq!(
@@ -5202,7 +5196,7 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
                 StreamItemsPayload::PackedU8(vec![0; MAX_PACKED_U8_STREAM_ITEM_SIZE + 1]),
             )
             .await,
-        Err(DurableStreamProducerError::InvalidPackedU8Batch)
+        Err(StreamStoreError::InvalidPackedU8Batch)
     );
     assert_eq!(oplog.committed_length(), 1);
 
@@ -5235,7 +5229,7 @@ async fn root_registration_rejects_coordinate_beyond_traversal_depth_limit() {
 
     assert_eq!(
         producer.register(request).await,
-        Err(DurableStreamProducerError::TraversalDepthLimit)
+        Err(StreamStoreError::TraversalDepthLimit)
     );
     assert_eq!(
         oplog.committed_length(),
@@ -5250,7 +5244,7 @@ async fn rejects_out_of_range_join_capacity_before_registration() {
     for invalid_capacity in [0, MAX_LIVE_JOIN_BUFFER_SIZE + 1] {
         let oplog = Arc::new(TestOplog::default());
         assert!(matches!(
-            DurableStreamProducer::load(
+            DurableStreamStore::load(
                 oplog.clone(),
                 identity.environment_id,
                 identity.agent_id.clone(),
@@ -5258,7 +5252,7 @@ async fn rejects_out_of_range_join_capacity_before_registration() {
                 Some(invalid_capacity),
             )
             .await,
-            Err(DurableStreamProducerError::LiveBus(
+            Err(StreamStoreError::LiveBus(
                 DurableLiveStreamBusError::InvalidCapacity
             ))
         ));
@@ -5342,7 +5336,7 @@ async fn foreign_mappings_are_deduplicated_and_count_toward_the_session_limit() 
     );
     assert_eq!(
         index.apply_session_references(None, &record(mapping(MAX_DURABLE_STREAMS_PER_SESSION))),
-        Err(DurableStreamProducerError::StreamLimit)
+        Err(StreamStoreError::StreamLimit)
     );
 }
 
@@ -5380,7 +5374,7 @@ async fn session_control_batch_validates_before_appending_any_record() {
                     .await
             })
             .await,
-        Err(DurableStreamProducerError::CorruptHistory(_))
+        Err(StreamStoreError::CorruptHistory(_))
     ));
     assert_eq!(oplog.current_oplog_index().await, before);
 
@@ -5433,7 +5427,7 @@ async fn malformed_session_record_is_rejected_at_the_write_boundary() {
                 },
             ))
             .await,
-        Err(DurableStreamProducerError::CorruptHistory(_))
+        Err(StreamStoreError::CorruptHistory(_))
     ));
     assert_eq!(oplog.current_oplog_index().await, before);
 }
@@ -5471,7 +5465,7 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
                 nested,
             )
             .await,
-        Err(DurableStreamProducerError::ValueStreamLimit)
+        Err(StreamStoreError::ValueStreamLimit)
     );
     assert_eq!(oplog.committed_length(), 2);
     assert_eq!(producer.index.lock().await.registrations.len(), 1);
@@ -5495,7 +5489,7 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
         producer
             .write_items(stream_id, 0, StreamItemsPayload::Values(vec![vec![2]]),)
             .await,
-        Err(DurableStreamProducerError::FencedByTerminal(_))
+        Err(StreamStoreError::FencedByTerminal(_))
     ));
     assert_eq!(oplog.committed_length(), 2);
 }
@@ -5505,7 +5499,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
     async fn fresh() -> (
         TestIdentity,
         Arc<TestOplog>,
-        Arc<DurableStreamProducer>,
+        Arc<DurableStreamStore>,
         golem_common::base_model::durable_stream::DurableStreamHandle,
     ) {
         let identity = identity();
@@ -5530,7 +5524,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
                 MAX_STREAM_VALUE_TRAVERSAL_DEPTH + 1,
             )
             .await,
-        Err(DurableStreamProducerError::TraversalDepthLimit)
+        Err(StreamStoreError::TraversalDepthLimit)
     );
     assert_eq!(depth_oplog.committed_length(), 2);
 
@@ -5564,7 +5558,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
                 vec![nested],
             )
             .await,
-        Err(DurableStreamProducerError::StreamLimit)
+        Err(StreamStoreError::StreamLimit)
     );
     assert_eq!(stream_oplog.committed_length(), 2);
 
@@ -5585,7 +5579,7 @@ async fn traversal_session_and_counter_limits_terminalize_without_partial_items(
                 StreamItemsPayload::Values(vec![vec![1]]),
             )
             .await,
-        Err(DurableStreamProducerError::CounterOverflow)
+        Err(StreamStoreError::CounterOverflow)
     );
     assert_eq!(counter_oplog.committed_length(), 2);
     let mut reader = counter_producer
@@ -5620,7 +5614,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
             })
         }
     });
-    let live = DurableStreamProducer::load_with_commit(
+    let live = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
         identity.agent_id.clone(),
@@ -5679,15 +5673,13 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
                         released.await.unwrap();
                         assert_eq!(
                             routed_owner
-                                .run_owned(0, |_| async {
-                                    Ok::<(), DurableStreamProducerError>(())
-                                })
+                                .run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
                                 .await,
-                            Err(DurableStreamProducerError::RecoveryRequired)
+                            Err(StreamStoreError::RecoveryRequired)
                         );
-                        Err(DurableStreamProducerError::Oplog("remote failure".into()))
+                        Err(StreamStoreError::Oplog("remote failure".into()))
                     });
-                    Ok::<(), DurableStreamProducerError>(())
+                    Ok::<(), StreamStoreError>(())
                 })
                 .await
             }
@@ -5712,7 +5704,7 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
         } else {
             assert_eq!(
                 caller.await.unwrap(),
-                Err(DurableStreamProducerError::Oplog("remote failure".into()))
+                Err(StreamStoreError::Oplog("remote failure".into()))
             );
         }
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -5749,7 +5741,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
             })
         }
     });
-    let live = DurableStreamProducer::load_with_commit(
+    let live = DurableStreamStore::load_with_commit(
         Arc::new(TestOplog::default()),
         identity.environment_id,
         identity.agent_id,
@@ -5770,7 +5762,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
                 owner.finish_durable_effect();
                 owner.notify_session_records_changed();
                 requested.send(()).unwrap();
-                Ok::<(), DurableStreamProducerError>(())
+                Ok::<(), StreamStoreError>(())
             })
             .await
         }
@@ -5817,7 +5809,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
                 })
             }
         });
-        let live = DurableStreamProducer::load_with_commit(
+        let live = DurableStreamStore::load_with_commit(
             oplog,
             identity.environment_id,
             identity.agent_id.clone(),
@@ -5874,9 +5866,9 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
             .await
             .expect("durable activity retained a blocked publication");
         assert_eq!(
-            live.run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+            live.run_owned(0, |_| async { Ok::<(), StreamStoreError>(()) })
                 .await,
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         );
         if !lifecycle {
             assert_eq!(live.owned_operations.available_permits(), 15);
@@ -6207,7 +6199,7 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
     live.run_lifecycle(256 * 1024 * 1024 + 1, |owner| async move {
         assert_eq!(owner.lifecycle_operation_bytes.available_permits(), 0);
         owner
-            .run_lifecycle(1, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+            .run_lifecycle(1, |_| async { Ok::<(), StreamStoreError>(()) })
             .await
     })
     .await
@@ -6561,7 +6553,7 @@ async fn rejected_catch_up_cursor_does_not_consume_live_reader_capacity() {
             producer
                 .catch_up(registered.value.clone(), Some(unavailable_cursor))
                 .await,
-            Err(DurableStreamProducerError::CursorUnavailable)
+            Err(StreamStoreError::CursorUnavailable)
         ));
     }
 
@@ -6586,7 +6578,7 @@ async fn unavailable_cursor_is_rejected_for_an_empty_stream() {
         producer
             .catch_up(registered.value, Some(unavailable_cursor))
             .await,
-        Err(DurableStreamProducerError::CursorUnavailable)
+        Err(StreamStoreError::CursorUnavailable)
     ));
 }
 
@@ -6671,14 +6663,8 @@ async fn poisoned_producer_rejects_prefetched_history_without_advancing_cursor()
     let mut reader = producer.catch_up(registered.value, None).await.unwrap();
     assert!(!reader.history.is_empty());
     producer.poison();
-    assert_eq!(
-        reader.next().await,
-        Err(DurableStreamProducerError::RecoveryRequired)
-    );
-    assert_eq!(
-        reader.next().await,
-        Err(DurableStreamProducerError::RecoveryRequired)
-    );
+    assert_eq!(reader.next().await, Err(StreamStoreError::RecoveryRequired));
+    assert_eq!(reader.next().await, Err(StreamStoreError::RecoveryRequired));
     assert_eq!(reader.last_delivered, None);
     assert!(!reader.terminal_delivered);
 }
@@ -6765,7 +6751,7 @@ async fn nested_registration_must_match_its_enclosing_stream_coordinate() {
                 vec![nested_with_wrong_parent],
             )
             .await,
-        Err(DurableStreamProducerError::RegistrationDivergence)
+        Err(StreamStoreError::RegistrationDivergence)
     );
 }
 
@@ -6819,11 +6805,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
     let write_result = writing.await.unwrap();
     finishing.await.unwrap().unwrap();
     assert!(
-        write_result.is_ok()
-            || matches!(
-                &write_result,
-                Err(DurableStreamProducerError::SessionFinished(_))
-            )
+        write_result.is_ok() || matches!(&write_result, Err(StreamStoreError::SessionFinished(_)))
     );
     assert!(matches!(
         live_producer
@@ -6833,7 +6815,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(DurableStreamProducerError::SessionFinished(_))
+        Err(StreamStoreError::SessionFinished(_))
     ));
 
     let entries = oplog.entries();
@@ -6856,6 +6838,6 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(DurableStreamProducerError::SessionFinished(_))
+        Err(StreamStoreError::SessionFinished(_))
     ));
 }

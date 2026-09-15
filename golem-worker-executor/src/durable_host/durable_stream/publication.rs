@@ -119,11 +119,11 @@ pub(super) fn encoded_event_bytes(event: &CommittedProducerStreamEvent) -> usize
         .len()
 }
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Returns bytes retained only as a disposable live-publication optimization.
     pub(crate) fn retained_payload_bytes(
         payload: &StreamItemsPayload,
-    ) -> Result<usize, DurableStreamProducerError> {
+    ) -> Result<usize, StreamStoreError> {
         validate_items_payload(payload)?;
         Ok(match payload {
             StreamItemsPayload::Values(values) => values.iter().map(Vec::len).sum::<usize>() * 2,
@@ -370,7 +370,7 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEvent>,
         replayed: bool,
-    ) -> Result<PublicationReceipt, DurableStreamProducerError> {
+    ) -> Result<PublicationReceipt, StreamStoreError> {
         let bus = self.bus(stream_id)?;
         if !replayed {
             self.retain_committed_events(&events);
@@ -463,7 +463,7 @@ impl DurableStreamProducer {
                                     producer.queued_terminal(stream_id, offset),
                                 )?;
                             }
-                            Ok::<(), DurableStreamProducerError>(())
+                            Ok::<(), StreamStoreError>(())
                         }
                         .await;
                         if result.is_err() {
@@ -495,7 +495,7 @@ impl DurableStreamProducer {
     pub(super) async fn wait_for_publication(
         &self,
         publication: PublicationReceipt,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let scope = MUTATION_SCOPE
             .try_with(Arc::clone)
             .ok()
@@ -517,21 +517,19 @@ impl DurableStreamProducer {
     pub(super) fn bus(
         &self,
         stream_id: StreamId,
-    ) -> Result<Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>, DurableStreamProducerError>
-    {
+    ) -> Result<Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>, StreamStoreError> {
         self.buses
             .read()
             .expect("durable stream bus map lock poisoned")
             .get(&stream_id)
             .cloned()
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
+            .ok_or(StreamStoreError::UnknownStream(stream_id))
     }
 
     pub(super) async fn stream_bus(
         &self,
         stream: StreamId,
-    ) -> Result<Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>, DurableStreamProducerError>
-    {
+    ) -> Result<Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>, StreamStoreError> {
         let _index = self
             .index_for([ProducerMetadataKey::Stream(stream)])
             .await?;
@@ -542,7 +540,7 @@ impl DurableStreamProducer {
         &self,
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEvent>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;

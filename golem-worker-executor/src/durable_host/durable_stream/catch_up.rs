@@ -18,7 +18,7 @@ use super::publication::{
 };
 use super::*;
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     #[tracing::instrument(
         name = "durable_stream.catch_up",
         skip_all,
@@ -29,7 +29,7 @@ impl DurableStreamProducer {
         self: &Arc<Self>,
         handle: DurableStreamHandle,
         after: Option<StreamOffset>,
-    ) -> Result<DurableCatchUpReader, DurableStreamProducerError> {
+    ) -> Result<DurableCatchUpReader, StreamStoreError> {
         self.validate_handle(&handle).await?;
         let bus = self.stream_bus(handle.stream_id).await?;
         self.validate_cursor(handle.stream_id, after).await?;
@@ -69,7 +69,7 @@ impl DurableStreamProducer {
     pub(crate) async fn validate_handle(
         &self,
         handle: &DurableStreamHandle,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         validate_version(handle.format_version)?;
         let index = self
             .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
@@ -81,7 +81,7 @@ impl DurableStreamProducer {
         {
             Ok(())
         } else {
-            Err(DurableStreamProducerError::InvalidHandle)
+            Err(StreamStoreError::InvalidHandle)
         }
     }
 
@@ -96,7 +96,7 @@ impl DurableStreamProducer {
         &self,
         stream_id: StreamId,
         after: Option<StreamOffset>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let Some(after) = after else {
             return Ok(());
         };
@@ -113,7 +113,7 @@ impl DurableStreamProducer {
         if high_water.is_none_or(|high_water| after > high_water)
             || !after.producer_oplog_index().is_defined()
         {
-            return Err(DurableStreamProducerError::CursorUnavailable);
+            return Err(StreamStoreError::CursorUnavailable);
         }
         if index.streams[&stream_id].terminal && high_water == Some(after) {
             return Ok(());
@@ -125,31 +125,31 @@ impl DurableStreamProducer {
         if valid {
             Ok(())
         } else {
-            Err(DurableStreamProducerError::CursorUnavailable)
+            Err(StreamStoreError::CursorUnavailable)
         }
     }
 }
 
 #[async_trait]
-impl StreamSegmentSource for DurableStreamProducer {
+impl StreamSegmentSource for DurableStreamStore {
     #[tracing::instrument(name = "durable_stream.read_segment", level = "debug", skip_all)]
     async fn read_segment(
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         self.validate_handle(handle).await?;
         for offset in [after, through].into_iter().flatten() {
             StreamOffset::from_bytes(*offset.as_bytes())
-                .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
+                .map_err(|error| StreamStoreError::InvalidOffset(error.to_string()))?;
             self.validate_cursor(handle.stream_id, Some(offset)).await?;
         }
         if after
             .zip(through)
             .is_some_and(|(after, through)| after > through)
         {
-            return Err(DurableStreamProducerError::InvalidOffset(
+            return Err(StreamStoreError::InvalidOffset(
                 "catch-up end precedes its cursor".into(),
             ));
         }
@@ -186,19 +186,19 @@ impl StreamSegmentSource for DurableStreamProducer {
                 .batch_positions
                 .get(&(handle.stream_id, after.producer_oplog_index()))
                 .copied()
-                .ok_or(DurableStreamProducerError::CursorUnavailable)?;
+                .ok_or(StreamStoreError::CursorUnavailable)?;
             let cursor_sequence = first
                 .checked_add(u64::from(after.sub_index()))
-                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                .ok_or(StreamStoreError::CounterOverflow)?;
             if u64::from(after.sub_index()) >= count {
-                return Err(DurableStreamProducerError::CursorUnavailable);
+                return Err(StreamStoreError::CursorUnavailable);
             }
             let batch_end = first
                 .checked_add(count)
-                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                .ok_or(StreamStoreError::CounterOverflow)?;
             sequence = cursor_sequence
                 .checked_add(1)
-                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                .ok_or(StreamStoreError::CounterOverflow)?;
             enclosing_batch =
                 (sequence < batch_end).then_some((after.producer_oplog_index(), first));
         }
@@ -268,7 +268,7 @@ impl StreamSegmentSource for DurableStreamProducer {
                     let stream = index
                         .streams
                         .get(&handle.stream_id)
-                        .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
+                        .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
                     locators.extend(
                         stream
                             .batches
@@ -277,7 +277,7 @@ impl StreamSegmentSource for DurableStreamProducer {
                     );
                 }
                 let oplog_index = locators.remove(&sequence).ok_or_else(|| {
-                    DurableStreamProducerError::CorruptHistory(
+                    StreamStoreError::CorruptHistory(
                         "stream metadata is missing a batch locator".into(),
                     )
                 })?;
@@ -285,7 +285,7 @@ impl StreamSegmentSource for DurableStreamProducer {
             };
             let record = self.read_item_batch(oplog_index).await?;
             if record.stream_id != handle.stream_id || record.first_sequence != batch_first {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream batch locator identifies a different batch".into(),
                 ));
             }
@@ -302,14 +302,14 @@ impl StreamSegmentSource for DurableStreamProducer {
                         .first_sequence
                         .saturating_add(record.offsets.len() as u64)
             {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream batch does not contain the requested sequence".into(),
                 ));
             }
             let mut advanced = false;
             for event in events {
                 if event.producer_sequence != sequence {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "stream batch event sequence is not contiguous".into(),
                     ));
                 }
@@ -335,7 +335,7 @@ impl StreamSegmentSource for DurableStreamProducer {
                 }
             }
             if !advanced {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "stream batch locator did not advance the requested sequence".into(),
                 ));
             }
@@ -344,13 +344,13 @@ impl StreamSegmentSource for DurableStreamProducer {
 }
 
 #[async_trait]
-impl AttachedStreamSegmentSource for DurableStreamProducer {
+impl AttachedStreamSegmentSource for DurableStreamStore {
     async fn journal_lag_events(
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
-    ) -> Result<usize, DurableStreamProducerError> {
-        DurableStreamProducer::journal_lag_events(self, handle, after).await
+    ) -> Result<usize, StreamStoreError> {
+        DurableStreamStore::journal_lag_events(self, handle, after).await
     }
 
     async fn read_attached_segment(
@@ -360,9 +360,9 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         if attachment.stream_id != handle.stream_id {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let index = self
             .index_for([ProducerMetadataKey::Attachment(
@@ -381,10 +381,10 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         let indexed_attachment = index
             .attachments
             .get(&attachment_slot(attachment))
-            .ok_or(DurableStreamProducerError::InvalidAttachmentState)?;
+            .ok_or(StreamStoreError::InvalidAttachmentState)?;
         validate_attachment_epoch(indexed_attachment, attachment)?;
         if indexed_attachment.key != *attachment {
-            return Err(DurableStreamProducerError::AttachmentConflict);
+            return Err(StreamStoreError::AttachmentConflict);
         }
         match indexed_attachment.state {
             IndexedStreamAttachmentState::Active {
@@ -392,9 +392,9 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
                 ..
             } if now_millis < lease_expires_at_millis => {}
             IndexedStreamAttachmentState::Active { .. } => {
-                return Err(DurableStreamProducerError::LeaseExpired);
+                return Err(StreamStoreError::LeaseExpired);
             }
-            _ => return Err(DurableStreamProducerError::InvalidAttachmentState),
+            _ => return Err(StreamStoreError::InvalidAttachmentState),
         }
         drop(index);
         self.read_segment(handle, after, through).await
@@ -406,7 +406,7 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         handle: &DurableStreamHandle,
         now_millis: u64,
         after: Option<StreamOffset>,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         let started = std::time::Instant::now();
         let events = self
             .read_attached_segment(attachment, handle, now_millis, after, None)
@@ -449,7 +449,7 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
 pub(crate) struct DurableCatchUpReader {
     pub(super) bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>,
     pub(super) subscription: Option<DurableLiveStreamSubscription<CommittedProducerStreamEvent>>,
-    pub(super) history_source: Option<(Arc<DurableStreamProducer>, DurableStreamHandle)>,
+    pub(super) history_source: Option<(Arc<DurableStreamStore>, DurableStreamHandle)>,
     pub(super) history: VecDeque<CommittedProducerStreamEvent>,
     pub(super) join_high_water: Option<StreamOffset>,
     pub(super) last_delivered: Option<StreamOffset>,
@@ -460,7 +460,7 @@ impl DurableCatchUpReader {
     /// Returns the next ordered event, advancing by durable offset rather than connection state.
     pub(crate) async fn next(
         &mut self,
-    ) -> Result<Option<CommittedProducerStreamEvent>, DurableStreamProducerError> {
+    ) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
         if self.terminal_delivered {
             return Ok(None);
         }
@@ -475,7 +475,7 @@ impl DurableCatchUpReader {
                     .await?
                     .into();
                 if self.history.is_empty() {
-                    return Err(DurableStreamProducerError::CorruptHistory(
+                    return Err(StreamStoreError::CorruptHistory(
                         "stream replay ended before its captured high-water mark".into(),
                     ));
                 }
@@ -531,12 +531,12 @@ impl DurableCatchUpReader {
     fn deliver(
         &mut self,
         event: CommittedProducerStreamEvent,
-    ) -> Result<CommittedProducerStreamEvent, DurableStreamProducerError> {
+    ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         if self
             .last_delivered
             .is_some_and(|last_delivered| event.offset <= last_delivered)
         {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "catch-up reader observed a non-increasing offset".to_string(),
             ));
         }

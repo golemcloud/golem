@@ -2532,7 +2532,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
 #[test]
 async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: &Tracing) {
     use crate::durable_host::durable_stream::{
-        CommittedProducerStreamEventPayload, DurableStreamProducer, ProducerRegistrationRequest,
+        CommittedProducerStreamEventPayload, DurableStreamStore, ProducerRegistrationRequest,
     };
     use golem_common::base_model::durable_stream::{
         StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
@@ -2601,7 +2601,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             default_execution_status(AgentMode::Durable),
         )
         .await;
-    let producer = DurableStreamProducer::load(
+    let producer = DurableStreamStore::load(
         oplog,
         environment_id,
         agent_id.clone(),
@@ -2647,7 +2647,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             default_execution_status(AgentMode::Durable),
         )
         .await;
-    let restarted = DurableStreamProducer::load(
+    let restarted = DurableStreamStore::load(
         restarted_oplog.clone(),
         environment_id,
         agent_id,

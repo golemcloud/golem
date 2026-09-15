@@ -870,7 +870,7 @@ pub(crate) async fn project_producer_metadata(
         .collect()
 }
 
-impl DurableStreamProducer {
+impl DurableStreamStore {
     /// Loads a producer index from durable metadata, falling back to committed oplog records.
     pub(crate) async fn load_indexed_with_commit(
         oplog: Arc<dyn Oplog>,
@@ -880,7 +880,7 @@ impl DurableStreamProducer {
         commit: DurableStreamCommit,
         service: Arc<dyn WorkerService>,
         mode: AgentMode,
-    ) -> Result<Arc<Self>, DurableStreamProducerError> {
+    ) -> Result<Arc<Self>, StreamStoreError> {
         let live_join_capacity = live_join_capacity.unwrap_or(DEFAULT_LIVE_JOIN_BUFFER_SIZE);
         DurableLiveStreamBus::<CommittedProducerStreamEvent>::new(live_join_capacity)?;
         let (_, mut rows) = service
@@ -890,9 +890,9 @@ impl DurableStreamProducer {
                 vec![ProducerMetadataKey::Global],
             )
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         if rows.len() != 1 {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "producer metadata lookup returned an incorrect row count".into(),
             ));
         }
@@ -900,7 +900,7 @@ impl DurableStreamProducer {
         if let Some(row) = rows.pop().flatten() {
             index
                 .hydrate_metadata_row(ProducerMetadataKey::Global, row)
-                .map_err(DurableStreamProducerError::CorruptHistory)?;
+                .map_err(StreamStoreError::CorruptHistory)?;
         }
         index.loaded_metadata.insert(ProducerMetadataKey::Global);
         let producer = Self::from_index(
@@ -919,7 +919,7 @@ impl DurableStreamProducer {
     pub(super) async fn index_for(
         &self,
         keys: impl IntoIterator<Item = ProducerMetadataKey> + Send,
-    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, DurableStreamProducerError> {
+    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, StreamStoreError> {
         self.index_for_query(keys.into_iter().collect(), None, None)
             .await
     }
@@ -928,7 +928,7 @@ impl DurableStreamProducer {
         &self,
         keys: impl IntoIterator<Item = ProducerMetadataKey> + Send,
         stream: StreamId,
-    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, DurableStreamProducerError> {
+    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, StreamStoreError> {
         let mut keys = keys.into_iter().collect::<Vec<_>>();
         keys.push(ProducerMetadataKey::Stream(stream));
         self.index_for_query(keys, Some(stream), None).await
@@ -937,7 +937,7 @@ impl DurableStreamProducer {
     pub(super) async fn index_for_session_streams(
         &self,
         session: &StreamSessionKey,
-    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, DurableStreamProducerError> {
+    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, StreamStoreError> {
         self.index_for_query(
             vec![ProducerMetadataKey::Session(session.clone())],
             None,
@@ -1057,7 +1057,7 @@ impl DurableStreamProducer {
         keys: Vec<ProducerMetadataKey>,
         terminal: Option<StreamId>,
         session: Option<StreamSessionKey>,
-    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, DurableStreamProducerError> {
+    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, StreamStoreError> {
         loop {
             self.ensure_healthy()?;
             if let Ok(index) = self.index.try_lock() {
@@ -1095,7 +1095,7 @@ impl DurableStreamProducer {
             let activity = self
                 .durable_activity
                 .inherit_or_enter()
-                .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+                .ok_or(StreamStoreError::RecoveryRequired)?;
             // Never return a guard in the task result: a suspended store may stop polling
             // its JoinHandle indefinitely. The task owns and releases all hydration locks.
             tokio::spawn(activity.scope(async move {
@@ -1122,16 +1122,16 @@ impl DurableStreamProducer {
                 if let Some(stream) = terminal {
                     producer.load_terminal(&mut index, stream).await?;
                 }
-                Ok::<(), DurableStreamProducerError>(())
+                Ok::<(), StreamStoreError>(())
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))??;
+            .map_err(|error| StreamStoreError::Oplog(error.to_string()))??;
         }
     }
 
     pub(super) async fn index_for_cleanup(
         &self,
-    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, DurableStreamProducerError> {
+    ) -> Result<MutexGuard<'_, ProducerStreamIndex>, StreamStoreError> {
         let mut index = self.index.lock().await;
         self.ensure_healthy()?;
         if self.control_metadata_provider.get().is_some() && !index.complete_for_deletion {
@@ -1162,7 +1162,7 @@ impl DurableStreamProducer {
         &self,
         index: &mut ProducerStreamIndex,
         keys: impl IntoIterator<Item = ProducerMetadataKey> + Send,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         if index.complete_for_deletion {
             return Ok(());
         }
@@ -1181,7 +1181,7 @@ impl DurableStreamProducer {
         &self,
         index: &mut ProducerStreamIndex,
         keys: impl IntoIterator<Item = ProducerMetadataKey> + Send,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(());
         };
@@ -1248,9 +1248,9 @@ impl DurableStreamProducer {
             let (_, rows) = service
                 .lookup_durable_stream_producer_metadata(&owner, *mode, batch.clone())
                 .await
-                .map_err(DurableStreamProducerError::Oplog)?;
+                .map_err(StreamStoreError::Oplog)?;
             if rows.len() != batch.len() {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "producer metadata lookup returned an incorrect row count".into(),
                 ));
             }
@@ -1277,7 +1277,7 @@ impl DurableStreamProducer {
                     }
                     index
                         .hydrate_metadata_row(key.clone(), row)
-                        .map_err(DurableStreamProducerError::CorruptHistory)?;
+                        .map_err(StreamStoreError::CorruptHistory)?;
                 }
                 index.loaded_metadata.insert(key);
             }
@@ -1290,7 +1290,7 @@ impl DurableStreamProducer {
         batch_size: usize,
     ) -> Result<
         Option<(bool, Vec<(IndexedStreamAttachment, ProducerJournalSummary)>)>,
-        DurableStreamProducerError,
+        StreamStoreError,
     > {
         let producer = self
             .self_weak
@@ -1299,14 +1299,14 @@ impl DurableStreamProducer {
         let activity = self
             .durable_activity
             .inherit_or_enter()
-            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+            .ok_or(StreamStoreError::RecoveryRequired)?;
         tokio::spawn(activity.scope(async move {
             producer
                 .indexed_attachment_candidates_inner(batch_size)
                 .await
         }))
         .await
-        .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?
+        .map_err(|error| StreamStoreError::Oplog(error.to_string()))?
     }
 
     async fn indexed_attachment_candidates_inner(
@@ -1314,7 +1314,7 @@ impl DurableStreamProducer {
         batch_size: usize,
     ) -> Result<
         Option<(bool, Vec<(IndexedStreamAttachment, ProducerJournalSummary)>)>,
-        DurableStreamProducerError,
+        StreamStoreError,
     > {
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(None);
@@ -1328,7 +1328,7 @@ impl DurableStreamProducer {
                 vec![ProducerMetadataKey::Global],
             )
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let Some(ProducerMetadataRow::Global {
             active_attachments: count,
             deleting,
@@ -1361,11 +1361,11 @@ impl DurableStreamProducer {
                     .collect(),
             )
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let mut catalogue = HashMap::new();
         for (page, row) in pages.into_iter().zip(rows) {
             let Some(ProducerMetadataRow::AttachmentPage(slots)) = row else {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "active attachment catalogue page is missing".into(),
                 ));
             };
@@ -1377,7 +1377,7 @@ impl DurableStreamProducer {
                 .get(&(position / ATTACHMENT_PAGE_SIZE))
                 .and_then(|page| page.get((position % ATTACHMENT_PAGE_SIZE) as usize))
                 .ok_or_else(|| {
-                    DurableStreamProducerError::CorruptHistory(
+                    StreamStoreError::CorruptHistory(
                         "active attachment catalogue slot is missing".into(),
                     )
                 })?;
@@ -1392,7 +1392,7 @@ impl DurableStreamProducer {
         let (_, rows) = service
             .lookup_durable_stream_producer_metadata(&owner, *mode, keys)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(StreamStoreError::Oplog)?;
         let mut candidates = Vec::new();
         for pair in rows.as_chunks::<2>().0 {
             let [
@@ -1400,7 +1400,7 @@ impl DurableStreamProducer {
                 Some(ProducerMetadataRow::Stream(stream)),
             ] = pair
             else {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "active attachment catalogue refers to missing metadata".into(),
                 ));
             };
@@ -1421,7 +1421,7 @@ impl DurableStreamProducer {
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
-    ) -> Result<usize, DurableStreamProducerError> {
+    ) -> Result<usize, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Stream(handle.stream_id)];
         if let Some(after) = after {
             keys.push(ProducerMetadataKey::Position(
@@ -1434,7 +1434,7 @@ impl DurableStreamProducer {
             let Some(ProducerMetadataRow::Stream(stream)) =
                 index.metadata_row(&ProducerMetadataKey::Stream(handle.stream_id))
             else {
-                return Err(DurableStreamProducerError::InvalidHandle);
+                return Err(StreamStoreError::InvalidHandle);
             };
             let position = after.and_then(|after| {
                 index
@@ -1445,21 +1445,21 @@ impl DurableStreamProducer {
             (stream, position)
         } else {
             let (service, _) = self.control_metadata_provider.get().ok_or_else(|| {
-                DurableStreamProducerError::Oplog("producer metadata service is unavailable".into())
+                StreamStoreError::Oplog("producer metadata service is unavailable".into())
             })?;
             let owner = OwnedAgentId::new(handle.producer_environment_id, &handle.producer);
             let mode = service
                 .get_agent_mode(&owner)
                 .await
-                .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
-                .ok_or(DurableStreamProducerError::InvalidHandle)?;
+                .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
+                .ok_or(StreamStoreError::InvalidHandle)?;
             let (_, rows) = service
                 .lookup_durable_stream_producer_metadata(&owner, mode, keys)
                 .await
-                .map_err(DurableStreamProducerError::Oplog)?;
+                .map_err(StreamStoreError::Oplog)?;
             let mut rows = rows.into_iter();
             let Some(Some(ProducerMetadataRow::Stream(stream))) = rows.next() else {
-                return Err(DurableStreamProducerError::InvalidHandle);
+                return Err(StreamStoreError::InvalidHandle);
             };
             let position = match rows.next().flatten() {
                 Some(ProducerMetadataRow::Position(first, count)) => Some((first, count)),
@@ -1468,41 +1468,40 @@ impl DurableStreamProducer {
             (stream, position)
         };
         if stream.registration.handle != *handle {
-            return Err(DurableStreamProducerError::InvalidHandle);
+            return Err(StreamStoreError::InvalidHandle);
         }
         let total = stream
             .next_sequence
             .checked_add(u64::from(stream.terminal))
-            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            .ok_or(StreamStoreError::CounterOverflow)?;
         let consumed = match after {
             None => 0,
             Some(after) if stream.terminal && stream.last_offset == Some(after) => total,
             Some(after) => {
-                let (first, count) =
-                    position.ok_or(DurableStreamProducerError::CursorUnavailable)?;
+                let (first, count) = position.ok_or(StreamStoreError::CursorUnavailable)?;
                 if u64::from(after.sub_index()) >= count
                     || stream.last_offset.is_none_or(|last| after > last)
                 {
-                    return Err(DurableStreamProducerError::CursorUnavailable);
+                    return Err(StreamStoreError::CursorUnavailable);
                 }
                 first
                     .checked_add(u64::from(after.sub_index()) + 1)
-                    .ok_or(DurableStreamProducerError::CounterOverflow)?
+                    .ok_or(StreamStoreError::CounterOverflow)?
             }
         };
         usize::try_from(
             total
                 .checked_sub(consumed)
-                .ok_or(DurableStreamProducerError::CursorUnavailable)?,
+                .ok_or(StreamStoreError::CursorUnavailable)?,
         )
-        .map_err(|_| DurableStreamProducerError::CounterOverflow)
+        .map_err(|_| StreamStoreError::CounterOverflow)
     }
 
     pub(super) async fn load_terminal(
         &self,
         index: &mut ProducerStreamIndex,
         stream_id: StreamId,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<(), StreamStoreError> {
         for (id, stream) in &mut index.streams {
             if *id != stream_id {
                 stream.terminal_event = None;
@@ -1511,18 +1510,18 @@ impl DurableStreamProducer {
         let stream = index
             .streams
             .get_mut(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if !stream.terminal || stream.terminal_event.is_some() {
             return Ok(());
         }
         let offset = stream.last_offset.ok_or_else(|| {
-            DurableStreamProducerError::CorruptHistory(
+            StreamStoreError::CorruptHistory(
                 "terminal stream metadata has no durable offset".into(),
             )
         })?;
         let event = read_terminal_event(self.oplog.as_ref(), stream_id, offset).await?;
         if event.producer_sequence != stream.next_sequence {
-            return Err(DurableStreamProducerError::CorruptHistory(
+            return Err(StreamStoreError::CorruptHistory(
                 "terminal metadata does not match its durable record".into(),
             ));
         }
@@ -1535,14 +1534,14 @@ pub(super) async fn read_terminal_event(
     oplog: &dyn Oplog,
     stream_id: StreamId,
     offset: StreamOffset,
-) -> Result<CommittedProducerStreamEvent, DurableStreamProducerError> {
+) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
     let (id, sequence, recorded_offset, author, payload) =
         match oplog.read(offset.producer_oplog_index()).await {
             OplogEntry::StreamEnd { record, .. } => {
                 let record = oplog
                     .download_payload(record)
                     .await
-                    .map_err(DurableStreamProducerError::Oplog)?;
+                    .map_err(StreamStoreError::Oplog)?;
                 (
                     record.stream_id,
                     record.sequence,
@@ -1555,7 +1554,7 @@ pub(super) async fn read_terminal_event(
                 let record = oplog
                     .download_payload(record)
                     .await
-                    .map_err(DurableStreamProducerError::Oplog)?;
+                    .map_err(StreamStoreError::Oplog)?;
                 (
                     record.stream_id,
                     record.sequence,
@@ -1569,13 +1568,13 @@ pub(super) async fn read_terminal_event(
                 )
             }
             _ => {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                return Err(StreamStoreError::CorruptHistory(
                     "terminal metadata points at a non-terminal record".into(),
                 ));
             }
         };
     if id != stream_id || recorded_offset != offset {
-        return Err(DurableStreamProducerError::CorruptHistory(
+        return Err(StreamStoreError::CorruptHistory(
             "terminal metadata does not match its durable record".into(),
         ));
     }
@@ -1718,7 +1717,7 @@ mod tests {
             }
         }
 
-        async fn producer(&self) -> Arc<DurableStreamProducer> {
+        async fn producer(&self) -> Arc<DurableStreamStore> {
             let oplog = self.oplog.clone();
             let commit: DurableStreamCommit = Arc::new(move |published| {
                 let oplog = oplog.clone();
@@ -1729,7 +1728,7 @@ mod tests {
                     }
                 })
             });
-            DurableStreamProducer::load_indexed_with_commit(
+            DurableStreamStore::load_indexed_with_commit(
                 self.oplog.clone(),
                 OwnedAgentId::new(self.identity.environment_id, &self.identity.agent_id),
                 self.identity.fingerprint,
@@ -2204,13 +2203,13 @@ mod tests {
         let tip = fixture.oplog.current_oplog_index().await;
         assert_eq!(
             cold.ensure_session_accepts_new_events(&session).await,
-            Err(DurableStreamProducerError::SessionFinished(session.clone()))
+            Err(StreamStoreError::SessionFinished(session.clone()))
         );
         let reads = fixture.indexed.reads();
         for _ in 0..3 {
             assert_eq!(
                 cold.ensure_session_accepts_new_events(&session).await,
-                Err(DurableStreamProducerError::SessionFinished(session.clone()))
+                Err(StreamStoreError::SessionFinished(session.clone()))
             );
         }
         assert_eq!(fixture.indexed.reads(), reads, "warm checks perform no IO");
@@ -2226,7 +2225,7 @@ mod tests {
         assert!(!cold.index.lock().await.finished_sessions.contains(&session));
         assert_eq!(
             cold.ensure_session_accepts_new_events(&session).await,
-            Err(DurableStreamProducerError::SessionFinished(session))
+            Err(StreamStoreError::SessionFinished(session))
         );
         assert_eq!(fixture.oplog.current_oplog_index().await, tip);
         assert_eq!(
@@ -2573,7 +2572,7 @@ mod tests {
     #[timeout("60s")]
     async fn archived_projection_extends_nested_chunk_and_replays_lazily() {
         let fixture = Fixture::with_archive(true).await;
-        let producer = DurableStreamProducer::load(
+        let producer = DurableStreamStore::load(
             fixture.oplog.clone(),
             fixture.identity.environment_id,
             fixture.identity.agent_id.clone(),
