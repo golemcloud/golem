@@ -148,6 +148,11 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
