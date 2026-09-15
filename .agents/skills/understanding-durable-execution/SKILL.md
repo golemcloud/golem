@@ -148,6 +148,11 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
@@ -192,6 +197,14 @@ satisfy a claim. `Jump`/`Revert` do not relocate entries: they mark a region as 
 and the atomic-region logical counter is rebuilt from them (see RPC section).
 
 ## Durable host call lifecycle
+
+Two-step callers use `DurableCallSession::begin` (returning `BegunCall`) → `BegunCall::resolve` →
+`ResolvedCall::{Live, Replay}` (`concurrent/call.rs`). Only the `Live` branch performs
+live-only authorization and request preparation before `start_live`; `BegunCall::is_live`
+is private so callers cannot choose a branch before resolution. `Replay` consumes the recorded
+result or repairs an admitted incomplete call without re-authorizing. Resolution may finish a
+guarded replay-tail transition and refresh authority capture. Snapshot calls remain unpersisted;
+resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Every nondeterministic host function goes through `begin_durable_function` /
 `end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls run inside a
@@ -252,6 +265,15 @@ unmatched entries") hides the first real bug and must not be added.
 
 ## Replay-to-live
 
+Positional operations (`NoOp`, `BeginAtomicRegion`, spans and retry-policy entries) use
+`get_oplog_entry_or_continue_live` and `prepare_live_continuation_at_replay_tail` in
+`durable_host/mod.rs`. The positional read waits out reserved completion-delivery gates and
+distinguishes an entry from `ReplayEnded`. Continuation is allowed only for the primary agent
+at `ReplayEnded` or an incomplete entity (including its deleted-region local continuation);
+a `ReplayingCompleted` entity is rejected. The helper returns `None` when already live or after
+the guarded transition finishes, and retries replay on `ReplayResumed`. A wrong recorded entry
+is still a mismatch. `EndAtomicRegion` and transaction-protocol reads remain strict.
+
 Three different facts are involved, each with its own owner:
 
 1. **Cursor exhaustion** — the recorded history has been consumed. An observation only.
@@ -298,6 +320,13 @@ Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_rest
 executor restart, an old key returns the recorded result without re-running the guest.
 
 ## Durable RPC exactly-once
+
+`RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
+Deferred durable activation records or replays its own decision (`Recorded`). Non-deferred
+targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check runs only in
+`ResolvedCall::Live`, after resolution, preserving operator authorization and decision telemetry.
+Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
+one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
 
 1. The caller opens a durable call; its `Start` index `begin_index` is the call identity.
 2. `derive_idempotency_key(begin_index)` (`durable_host/mod.rs`) yields
