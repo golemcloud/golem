@@ -28,7 +28,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::time::Instant;
 use tokio_stream::StreamExt;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -360,7 +359,7 @@ async fn live_file_inspection_corpus_byte_selections(
             .read_file(
                 CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
                 selection,
-                admission.reserve(owned, Instant::now())?,
+                admission.reserve(owned)?,
             )
             .await?;
         let FileReadHead::File(metadata) = &response.head else {
@@ -413,7 +412,7 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
         .read_file(
             target.clone(),
             FileByteSelection::Full,
-            admission.reserve(owned.clone(), Instant::now())?,
+            admission.reserve(owned.clone())?,
         )
         .await?;
     let FileReadHead::File(metadata) = &response.head else {
@@ -439,29 +438,35 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
             .is_err(),
         "{id}: write escaped read guard"
     );
-    let deadline_case = case("lifecycle-read-deadline-includes-queue");
-    assert_eq!(deadline_case["input"]["events"][3], "time:60001");
-    let queued = admission.reserve(
-        owned.clone(),
-        Instant::now() - Duration::from_millis(59_900),
-    )?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker
+            .get_attached_last_known_status()
+            .await
+            .pending_invocations
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let queued = admission.reserve(owned.clone())?;
+    let mut queued_read =
+        Box::pin(worker.read_file(target.clone(), FileByteSelection::Full, queued));
     assert!(
-        matches!(
-            worker
-                .read_file(target.clone(), FileByteSelection::Full, queued)
-                .await,
-            Err(golem_common::model::filesystem::FileReadError::DeadlineExceeded)
-        ),
-        "lifecycle-read-deadline-includes-queue"
+        tokio::time::timeout(Duration::from_millis(100), &mut queued_read)
+            .await
+            .is_err()
     );
     assert!(response.body.next().await.is_none(), "{id}");
+    let queued_response = tokio::time::timeout(Duration::from_secs(10), queued_read).await??;
+    assert_eq!(
+        body(queued_response).await?,
+        bytes(vector["expect"]["response_bodies_hex"][1].as_str().unwrap()),
+        "{id}"
+    );
     tokio::time::timeout(Duration::from_secs(10), write).await??;
     let next = worker
-        .read_file(
-            target,
-            FileByteSelection::Full,
-            admission.reserve(owned, Instant::now())?,
-        )
+        .read_file(target, FileByteSelection::Full, admission.reserve(owned)?)
         .await?;
     let FileReadHead::File(metadata) = &next.head else {
         panic!("{id}")
@@ -508,7 +513,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
         .read_file(
             target.clone(),
             FileByteSelection::Full,
-            admission.reserve(owned.clone(), Instant::now())?,
+            admission.reserve(owned.clone())?,
         )
         .await?;
     let updated = executor
@@ -543,7 +548,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
         .read_file(
             target.clone(),
             FileByteSelection::Full,
-            admission.reserve(owned.clone(), Instant::now())?,
+            admission.reserve(owned.clone())?,
         )
         .await?;
     assert_eq!(body(next).await?, b"foo\n", "{id}");
@@ -569,11 +574,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
         .auto_update_worker(&agent, moved.revision, false)
         .await?;
     let missing = worker
-        .read_file(
-            target,
-            FileByteSelection::Full,
-            admission.reserve(owned, Instant::now())?,
-        )
+        .read_file(target, FileByteSelection::Full, admission.reserve(owned)?)
         .await?;
     assert_eq!(missing.head, FileReadHead::Absent);
     assert!(body(missing).await?.is_empty());
@@ -642,37 +643,10 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     })
     .await?;
     let admission = Arc::new(FileReadAdmission::default());
-    let deadline_id = "lifecycle-read-deadline-includes-queue";
-    let deadline_case = case(deadline_id);
-    assert_eq!(
-        deadline_case["input"]["events"][2],
-        "agent-invocation-blocks-read"
-    );
-    let expiring = admission.reserve(
-        owned.clone(),
-        Instant::now() - Duration::from_millis(59_900),
-    )?;
-    assert!(
-        matches!(
-            worker
-                .read_file(
-                    CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
-                    FileByteSelection::Full,
-                    expiring
-                )
-                .await,
-            Err(golem_common::model::filesystem::FileReadError::DeadlineExceeded)
-        ),
-        "{deadline_id}"
-    );
-    assert!(
-        !write.is_finished(),
-        "{deadline_id}: earlier invocation must still block inspection"
-    );
     let mut read = Box::pin(worker.read_file(
         CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
         FileByteSelection::Full,
-        admission.reserve(owned.clone(), Instant::now())?,
+        admission.reserve(owned.clone())?,
     ));
     assert!(
         tokio::time::timeout(Duration::from_millis(50), &mut read)
@@ -712,7 +686,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
 
 #[test]
 #[timeout("2m")]
-async fn configured_read_deadline_reaches_grpc_admission(
+async fn grpc_read_waits_for_blocking_invocation_and_completes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
@@ -721,34 +695,23 @@ async fn configured_read_deadline_reaches_grpc_admission(
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         GetFileContentsRequest, get_file_contents_response,
     };
-    use golem_common::model::filesystem::FileReadError;
-    use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
+    use golem_worker_executor_test_utils::start;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.file_read.timeout = Duration::from_secs(1)
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
     let parsed = agent_id!(
         "Inspection",
-        "configured-deadline",
+        "queued-read-completion",
         "/a.txt",
         b"before".to_vec(),
         false
     );
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
-    // Warm initialization independently of the short inspection deadline.
+    // Complete initialization before starting the invocation that blocks inspection.
     executor
         .invoke_and_await_agent(
             &component,
@@ -786,40 +749,44 @@ async fn configured_read_deadline_reaches_grpc_admission(
         }
     })
     .await?;
-    let mut stream = executor
-        .client
-        .clone()
-        .get_file_contents(GetFileContentsRequest {
-            agent_id: Some(agent.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(context.default_environment_id.into()),
-            file_path: "/a.txt".into(),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
-            selection: Some(FileByteSelection::Full.into()),
-        })
-        .await?
-        .into_inner();
-    let first = tokio::time::timeout(Duration::from_secs(3), stream.message())
-        .await??
-        .unwrap();
-    let Some(get_file_contents_response::Result::ReadFailure(error)) = first.result else {
-        panic!("expected typed deadline error before a metadata head: {first:?}");
-    };
-    assert_eq!(
-        FileReadError::try_from(error)?,
-        FileReadError::DeadlineExceeded
+    let mut client = executor.client.clone();
+    let mut read = Box::pin(client.get_file_contents(GetFileContentsRequest {
+        agent_id: Some(agent.clone().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(context.default_environment_id.into()),
+        file_path: "/a.txt".into(),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        principal: None,
+        selection: Some(FileByteSelection::Full.into()),
+    }));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), &mut read)
+            .await
+            .is_err()
     );
-    assert!(stream.message().await?.is_none());
     assert!(
         !write.is_finished(),
-        "inspection must time out while the write is still pending"
+        "inspection must remain pending while the write is still pending"
     );
     write.await??;
-    assert_eq!(
-        executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
-        b"after"
-    );
+    let mut stream = tokio::time::timeout(Duration::from_secs(10), read)
+        .await??
+        .into_inner();
+    let first = tokio::time::timeout(Duration::from_secs(10), stream.message())
+        .await??
+        .unwrap();
+    assert!(matches!(
+        first.result,
+        Some(get_file_contents_response::Result::Header(_))
+    ));
+    let mut actual = Vec::new();
+    while let Some(frame) = stream.message().await? {
+        let Some(get_file_contents_response::Result::Success(bytes)) = frame.result else {
+            panic!("expected file bytes, got {:?}", frame.result);
+        };
+        actual.extend_from_slice(&bytes);
+    }
+    assert_eq!(actual, b"after");
     Ok(())
 }
 

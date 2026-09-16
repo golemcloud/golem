@@ -4560,7 +4560,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
     let mappings = |pairs: &[(&str, &str)]| {
         FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
     };
-    let mount = |static_bindings, filesystem_bindings, openapi_provider| HttpMountDetails {
+    let mount = |static_bindings, filesystem_bindings, openapi_provider_method| HttpMountDetails {
         path_prefix: vec![PathSegment::Literal(LiteralSegment {
             value: "assets".to_string(),
         })],
@@ -4572,7 +4572,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         webhook_suffix: vec![],
         static_bindings,
         filesystem_bindings,
-        openapi_provider,
+        openapi_provider_method,
     };
     let endpoint = |http_method| HttpEndpointDetails {
         http_method,
@@ -7645,7 +7645,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                         input_schema: InputSchema::Parameters(vec![]),
                     },
                     handler: None,
-                    openapi_provider: None,
+                    openapi_provider_method: None,
                     static_bindings: if protected {
                         vec![]
                     } else {
@@ -7664,7 +7664,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                                 blake3::hash(b"gol556-router-blob"),
                             )),
                             size: 556,
-                            sha256: [0x56; 32],
                         }]
                     },
                 }),
@@ -7753,7 +7752,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(router.file_index.len(), 1);
     assert_eq!(router.file_index[0].path, "/public/index.html");
     assert_eq!(router.file_index[0].size, 556);
-    assert_eq!(router.file_index[0].sha256, [0x56; 32]);
     assert_eq!(
         router.file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
@@ -7777,7 +7775,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(router.file_index.len(), 1);
     assert_eq!(router.file_index[0].path, "/public/index.html");
     assert_eq!(router.file_index[0].size, 556);
-    assert_eq!(router.file_index[0].sha256, [0x56; 32]);
     assert_eq!(
         router.file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(

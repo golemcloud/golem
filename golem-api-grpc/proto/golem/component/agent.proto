@@ -43,7 +43,8 @@ message HttpMountDetails {
   repeated PathSegment webhook_suffix = 5;
   repeated FileMapping static_bindings = 6;
   repeated FileMapping filesystem_bindings = 7;
-  optional string openapi_provider = 8;
+  // The name of a parameterless router method that returns the OpenAPI document as a string.
+  optional string openapi_provider_method = 8;
 }
 
 message FileMapping {

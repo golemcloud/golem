@@ -430,9 +430,6 @@ pub struct FileReadConfig {
     pub max_queued_per_agent: usize,
     /// Total active and queued reads across this executor.
     pub max_outstanding: usize,
-    /// Covers validation, activation, initialization, queueing and streaming from executor arrival.
-    #[serde(with = "humantime_serde")]
-    pub timeout: Duration,
 }
 
 impl Default for FileReadConfig {
@@ -440,7 +437,6 @@ impl Default for FileReadConfig {
         Self {
             max_queued_per_agent: 16,
             max_outstanding: 128,
-            timeout: Duration::from_secs(60),
         }
     }
 }
@@ -451,16 +447,6 @@ impl FileReadConfig {
             self.max_outstanding > 0,
             "file read max_outstanding must be positive"
         );
-        anyhow::ensure!(
-            !self.timeout.is_zero(),
-            "file read timeout must be positive"
-        );
-        anyhow::ensure!(
-            std::time::Instant::now()
-                .checked_add(self.timeout)
-                .is_some(),
-            "file read timeout exceeds supported deadline range"
-        );
         Ok(())
     }
 }
@@ -468,8 +454,8 @@ impl FileReadConfig {
 impl SafeDisplay for FileReadConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "max queued per agent: {}\nmax outstanding: {}\ntimeout: {:?}\n",
-            self.max_queued_per_agent, self.max_outstanding, self.timeout
+            "max queued per agent: {}\nmax outstanding: {}\n",
+            self.max_queued_per_agent, self.max_outstanding
         )
     }
 }
@@ -2619,30 +2605,22 @@ mod tests {
         let mut config = FileReadConfig::default();
         assert_eq!(config.max_queued_per_agent, 16);
         assert_eq!(config.max_outstanding, 128);
-        assert_eq!(config.timeout, std::time::Duration::from_secs(60));
         assert!(config.validate().is_ok());
         config.max_queued_per_agent = 0;
         assert!(config.validate().is_ok());
         config.max_outstanding = 0;
-        assert!(config.validate().is_err());
-        config.max_outstanding = 1;
-        config.timeout = std::time::Duration::ZERO;
-        assert!(config.validate().is_err());
-        config.timeout = std::time::Duration::MAX;
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn file_read_config_serialization_and_safe_display() {
         let config: FileReadConfig = serde_json::from_value(serde_json::json!({
-            "max_queued_per_agent": 3, "max_outstanding": 7, "timeout": "250ms"
+            "max_queued_per_agent": 3, "max_outstanding": 7
         }))
         .unwrap();
-        assert_eq!(config.timeout, std::time::Duration::from_millis(250));
-        assert_eq!(serde_json::to_value(&config).unwrap()["timeout"], "250ms");
         assert_eq!(
             config.to_safe_string(),
-            "max queued per agent: 3\nmax outstanding: 7\ntimeout: 250ms\n"
+            "max queued per agent: 3\nmax outstanding: 7\n"
         );
     }
 

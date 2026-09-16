@@ -37,7 +37,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
       assertTrue(
         mount.staticBindings.map(_.productPrefix) == List("Subtree", "Exact"),
         mount.filesystemBindings.map(_.productPrefix) == List("Exact"),
-        mount.openapiProvider.contains("provider-text"),
+        mount.openapiProviderMethod.contains("provider-text"),
         HttpMethod.Any != HttpMethod.Custom("ANY"),
         HttpMethod.fromString("ANY") == Right(HttpMethod.Custom("ANY")),
         HttpMethod.fromString("any") == Right(HttpMethod.Custom("any"))
@@ -181,7 +181,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           webhookSuffix = Nil,
           staticBindings = Nil,
           filesystemBindings = Nil,
-          openapiProvider = None
+          openapiProviderMethod = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
         assertTrue(
@@ -198,7 +198,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           webhookSuffix = Nil,
           staticBindings = Nil,
           filesystemBindings = Nil,
-          openapiProvider = None
+          openapiProviderMethod = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
         assertTrue(result.isRight)
@@ -212,7 +212,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           webhookSuffix = Nil,
           staticBindings = Nil,
           filesystemBindings = Nil,
-          openapiProvider = None
+          openapiProviderMethod = None
         )
         val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, Set.empty)
         assertTrue(result.isRight)

@@ -1634,7 +1634,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_file_contents_internal(
         &self,
         request: GetFileContentsRequest,
-        arrival: tokio::time::Instant,
     ) -> Result<Result<FileReadResponse, FileReadError>, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
         let path = validate_file_read_path(&request.file_path).and_then(|()| {
@@ -1645,27 +1644,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .selection
             .ok_or(FileReadError::InvalidSelection)
             .and_then(FileByteSelection::try_from);
-        let (path, selection, deadline) = match (path, selection, self.file_reads.deadline(arrival))
-        {
-            (Ok(path), Ok(selection), Ok(deadline)) => (path, selection, deadline),
-            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+        let (path, selection) = match (path, selection) {
+            (Ok(path), Ok(selection)) => (path, selection),
+            (Err(error), _) | (_, Err(error)) => {
                 return Ok(Err(error));
             }
         };
-        tokio::time::timeout_at(deadline, async {
-            let owned_agent_id =
-                extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-            let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
-            self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-            let reservation = match self.file_reads.reserve(owned_agent_id, arrival) {
-                Ok(reservation) => reservation,
-                Err(error) => return Ok(Err(error)),
-            };
-            let worker = self.get_or_create(&request).await?;
-            Ok(worker.read_file(path, selection, reservation).await)
-        })
-        .await
-        .unwrap_or(Ok(Err(FileReadError::DeadlineExceeded)))
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let reservation = match self.file_reads.reserve(owned_agent_id) {
+            Ok(reservation) => reservation,
+            Err(error) => return Ok(Err(error)),
+        };
+        let worker = self.get_or_create(&request).await?;
+        Ok(worker.read_file(path, selection, reservation).await)
     }
 
     async fn activate_plugin_internal(
@@ -2724,7 +2718,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: Request<GetFileContentsRequest>,
     ) -> ResponseResult<Self::GetFileContentsStream> {
-        let arrival = tokio::time::Instant::now();
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
@@ -2732,7 +2725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         let result = self
-            .get_file_contents_internal(request, arrival)
+            .get_file_contents_internal(request)
             .instrument(record.span.clone())
             .await;
 

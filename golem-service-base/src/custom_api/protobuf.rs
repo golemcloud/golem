@@ -316,7 +316,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .ok_or("Missing constructor_input")?
                     .try_into()?,
                 handler: value.handler.map(TryInto::try_into).transpose()?,
-                openapi_provider: value.openapi_provider.map(TryInto::try_into).transpose()?,
+                openapi_provider_method: value
+                    .openapi_provider_method
+                    .map(TryInto::try_into)
+                    .transpose()?,
                 static_bindings: value
                     .static_bindings
                     .into_iter()
@@ -391,17 +394,12 @@ fn decode_file_index(
                 .blob_key
                 .try_into()
                 .map_err(|_| "Router file blob_key must be exactly 32 bytes")?;
-            let sha256 = value
-                .sha256
-                .try_into()
-                .map_err(|_| "Router file sha256 must be exactly 32 bytes")?;
             Ok(RouterFileIndexEntry {
                 path: value.path,
                 blob_key: golem_common::model::agent::AgentFileContentHash(
                     golem_common::model::diff::Hash::from(blake3::Hash::from_bytes(blob_key)),
                 ),
                 size: value.size,
-                sha256,
             })
         })
         .collect()
@@ -499,10 +497,10 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 proto::golem::customapi::route_behaviour::HttpRouter {
                     component_id: Some(value.component_id.into()), component_revision: value.component_revision.into(),
                     agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
-                    handler: value.handler.map(Into::into), openapi_provider: value.openapi_provider.map(Into::into),
+                    handler: value.handler.map(Into::into), openapi_provider_method: value.openapi_provider_method.map(Into::into),
                     static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
                     file_index: value.file_index.into_iter().map(|entry| proto::golem::customapi::route_behaviour::RouterFileIndexEntry {
-                        path: entry.path, blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(), size: entry.size, sha256: entry.sha256.to_vec()
+                        path: entry.path, blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(), size: entry.size
                     }).collect(),
                 })) },
             RouteBehaviour::AgentFilesystem(value) => Self { kind: Some(Kind::AgentFilesystem(
@@ -1085,7 +1083,7 @@ mod tests {
             agent_type: AgentTypeName("site".into()),
             constructor_input: input(),
             handler: None,
-            openapi_provider: Some(RouterMethod {
+            openapi_provider_method: Some(RouterMethod {
                 method_name: "schema".into(),
                 input: input(),
                 output: CompiledOutputSchema {
@@ -1104,7 +1102,6 @@ mod tests {
                     blake3::hash(b"blob"),
                 )),
                 size: 4_294_967_301,
-                sha256: [37; 32],
             }],
         })
     }
@@ -1271,18 +1268,14 @@ mod tests {
             }
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
-        for hash in [true, false] {
+        for length in [31, 33] {
             let mut invalid = valid.clone();
             let Some(proto::golem::customapi::route_behaviour::Kind::HttpRouter(router)) =
                 invalid.behavior.as_mut().unwrap().kind.as_mut()
             else {
                 unreachable!()
             };
-            if hash {
-                router.file_index[0].sha256.pop();
-            } else {
-                router.file_index[0].blob_key.push(0);
-            }
+            router.file_index[0].blob_key.resize(length, 0);
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
         let any: proto::golem::customapi::RouteMatch =
@@ -1341,7 +1334,7 @@ mod tests {
             let RouteBehaviour::HttpRouter(router) = &mut invalid else {
                 unreachable!()
             };
-            let method = router.openapi_provider.as_mut().unwrap();
+            let method = router.openapi_provider_method.as_mut().unwrap();
             if corrupt_input {
                 method.input.graph = SchemaGraph::anonymous(SchemaType::string());
             } else {

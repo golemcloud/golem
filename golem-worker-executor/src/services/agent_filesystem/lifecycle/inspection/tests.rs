@@ -1,43 +1,13 @@
+use super::super::tests::{
+    native_resident, resident, sandbox_attributes, sandbox_error, unsupported_allocation,
+};
+use super::super::{delete, resident_generation_handle, seal};
 use super::*;
+use crate::sandbox_filesystem::{SandboxObjectKind, SandboxOpened};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
 };
 use test_r::{test, timeout};
-
-pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
-    let id = agent_id();
-    let root = parent
-        .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
-        .join(id.agent_id.agent_name_encoded());
-    let created = create_fresh(
-        sandbox_provisioning(&FilesystemStorageConfig {
-            deterministic_root_dir: Some(parent.to_path_buf()),
-            ..FilesystemStorageConfig::default()
-        })
-        .unwrap(),
-        id,
-        ResolvedStorageLimits::Unlimited,
-    )
-    .await
-    .unwrap();
-    let (account, _) = account();
-    let reconstructing = bind_configured_resource_usage_metering(
-        created,
-        account,
-        ResourceUsageMeteringConfig {
-            compute: false,
-            memory: false,
-            filesystem: false,
-        },
-    )
-    .unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
-    let reconstructing = finish_replay(reconstructing).await.unwrap();
-    (finish_reconstruction(reconstructing).await.unwrap(), root)
-}
 
 #[test]
 #[timeout("30s")]

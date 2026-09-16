@@ -2688,7 +2688,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 webhook_suffix,
                 static_bindings,
                 filesystem_bindings,
-                openapi_provider,
+                openapi_provider_method,
             )| {
                 golem_common::model::agent::HttpMountDetails {
                     path_prefix,
@@ -2698,7 +2698,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     webhook_suffix,
                     static_bindings,
                     filesystem_bindings,
-                    openapi_provider,
+                    openapi_provider_method,
                 }
             },
         )

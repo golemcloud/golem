@@ -27,7 +27,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
-use tokio::time::{Instant, sleep_until};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -80,7 +82,6 @@ impl Completion {
 struct ReadBody {
     receiver: mpsc::Receiver<Bytes>,
     completion: Arc<Completion>,
-    deadline: Instant,
     done: bool,
 }
 
@@ -102,10 +103,6 @@ impl Stream for ReadBody {
         let completion = self.completion.clone();
         completion.consumer.register(cx.waker());
         let mut state = completion.state.lock().unwrap();
-        if Instant::now() >= self.deadline && matches!(*state, State::Streaming | State::AllQueued)
-        {
-            *state = State::Aborted(FileReadError::DeadlineExceeded);
-        }
         // Serialize delivery with abort and AllQueued publication, including the EOF poll.
         if let State::Aborted(error) = *state {
             self.done = true;
@@ -144,29 +141,19 @@ impl Drop for ReadBody {
 
 /// The invocation loop awaits this while holding the resident Store and exclusive OwnerLane.
 /// The future does not finish on last-byte enqueue: it keeps that serialization scope until
-/// the consumer polls EOF, drops the body, or the arrival deadline or an I/O failure wins.
+/// the consumer polls EOF, drops the body, or an I/O failure wins.
 /// No producer task is spawned, and file length is never converted to a host-sized allocation.
 pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
     handle: &FilesystemGenerationHandle<Adapter>,
     path: &str,
     selection: FileByteSelection,
-    deadline: Instant,
     mut response: oneshot::Sender<Result<FileReadResponse, FileReadError>>,
 ) {
-    if Instant::now() >= deadline {
-        let _ = response.send(Err(FileReadError::DeadlineExceeded));
-        return;
-    }
     let inspection = tokio::select! {
         biased;
-        _ = sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
         _ = response.closed() => return,
         result = open_file_for_inspection(handle, path, selection) => result,
     };
-    if Instant::now() >= deadline {
-        let _ = response.send(Err(FileReadError::DeadlineExceeded));
-        return;
-    }
     let (mut file, metadata) = match inspection {
         Err(error) => {
             let _ = response.send(Err(error));
@@ -198,7 +185,6 @@ pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
     let body = ReadBody {
         receiver,
         completion: completion.clone(),
-        deadline,
         done: false,
     };
     if response
@@ -220,9 +206,6 @@ pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
                     .reserve()
                     .await
                     .map_err(|_| FileReadError::Lifecycle)?;
-                if Instant::now() >= deadline {
-                    return Err(FileReadError::DeadlineExceeded);
-                }
                 let length = remaining.min(FILE_READ_CHUNK_SIZE as u64) as usize;
                 let bytes = read_file(handle, file, ReadRange { offset, length })
                     .map_err(|_| FileReadError::Lifecycle)?
@@ -256,8 +239,6 @@ pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
         producer_completion.wait_for_consumer().await;
     };
     tokio::select! {
-        biased;
-        _ = sleep_until(deadline) => completion.finish(State::Aborted(FileReadError::DeadlineExceeded)),
         _ = completion.wait_for_consumer() => {},
         _ = produce => {},
     }

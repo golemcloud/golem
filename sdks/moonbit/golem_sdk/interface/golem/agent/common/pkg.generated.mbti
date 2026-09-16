@@ -164,7 +164,7 @@ pub(all) struct HttpMountDetails {
   webhook_suffix : Array[PathSegment]
   static_bindings : Array[FileMapping]
   filesystem_bindings : Array[FileMapping]
-  openapi_provider : String?
+  openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum InputSchema {

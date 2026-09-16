@@ -463,7 +463,7 @@ pub(super) mod tests {
                 agent_type,
                 constructor_input: input(),
                 handler: None,
-                openapi_provider: None,
+                openapi_provider_method: None,
                 static_bindings: vec![],
                 file_index: vec![],
             }),

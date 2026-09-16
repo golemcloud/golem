@@ -3615,56 +3615,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<FileReadResponse, FileReadError> {
         validate_file_read_path(path.as_abs_str())?;
         selection.validate()?;
-        let deadline = reservation.deadline();
-        if tokio::time::Instant::now() >= deadline {
-            return Err(FileReadError::DeadlineExceeded);
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(FileReadError::Lifecycle);
+        };
+
+        if instance_guard.startup_failure().is_some() {
+            return Err(FileReadError::Lifecycle);
         }
-        tokio::time::timeout_at(deadline, async {
-            let instance_guard = self.lock_non_stopping_worker().await;
 
-            if instance_guard.is_deleting() {
-                return Err(FileReadError::Lifecycle);
-            };
+        let status = self.get_attached_last_known_status().await;
+        self.ensure_inspection_not_failed(&status)
+            .await
+            .map_err(|_| FileReadError::Lifecycle)?;
+        let order = InspectionOrder::new(&status);
+        let _queued = QueuedInspectionGuard::new(self.queue.clone(), &order);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
 
-            if instance_guard.startup_failure().is_some() {
-                return Err(FileReadError::Lifecycle);
-            }
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(QueuedWorkerInvocation::ReadFile {
+                path,
+                selection,
+                reservation,
+                order,
+                sender,
+            });
 
-            let status = self.get_attached_last_known_status().await;
-            self.ensure_inspection_not_failed(&status)
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+        };
+
+        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
+        drop(instance_guard);
+        if needs_start {
+            Self::start_if_needed(self.clone())
                 .await
                 .map_err(|_| FileReadError::Lifecycle)?;
-            let order = InspectionOrder::new(&status);
-            let _queued = QueuedInspectionGuard::new(self.queue.clone(), &order);
-            let (sender, receiver) = tokio::sync::oneshot::channel();
+        }
 
-            self.queue
-                .lock()
-                .unwrap()
-                .push_back(QueuedWorkerInvocation::ReadFile {
-                    path,
-                    selection,
-                    reservation,
-                    order,
-                    sender,
-                });
-
-            if let WorkerInstance::Running(running) = &*instance_guard {
-                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
-            };
-
-            let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
-            drop(instance_guard);
-            if needs_start {
-                Self::start_if_needed(self.clone())
-                    .await
-                    .map_err(|_| FileReadError::Lifecycle)?;
-            }
-
-            receiver.await.map_err(|_| FileReadError::Lifecycle)?
-        })
-        .await
-        .map_err(|_| FileReadError::DeadlineExceeded)?
+        receiver.await.map_err(|_| FileReadError::Lifecycle)?
     }
 
     async fn ensure_inspection_not_failed(

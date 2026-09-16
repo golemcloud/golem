@@ -13828,7 +13828,7 @@ fn __wit_bindgen_lower_t393(ptr : Int, value : @common.HttpMountDetails) -> Unit
       mbt_ffi_store32((ptr) + 40, ((value).filesystem_bindings).length())
       mbt_ffi_store32((ptr) + 36, address5)
 
-      match ((value).openapi_provider) {
+      match ((value).openapi_provider_method) {
             None => {
                   mbt_ffi_store8((ptr) + 44, (0))
 

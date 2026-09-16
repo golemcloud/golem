@@ -113,7 +113,7 @@ private[autowire] object AgentRequestBuilder {
       webhookSuffix = encodePathSegments(mount.webhookSuffix),
       staticBindings = encodeFileMappings(mount.staticBindings),
       filesystemBindings = encodeFileMappings(mount.filesystemBindings),
-      openapiProvider = mount.openapiProvider.orUndefined,
+      openapiProviderMethod = mount.openapiProviderMethod.orUndefined,
       authDetails = if (mount.authRequired) JsAuthDetails(required = true) else js.undefined
     )
 

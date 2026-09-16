@@ -521,7 +521,7 @@ mod tests {
             webhook_suffix: vec![],
             static_bindings: vec![],
             filesystem_bindings: vec![],
-            openapi_provider: None,
+            openapi_provider_method: None,
         }
     }
 

@@ -58,8 +58,6 @@ pub enum FileReadError {
     InvalidSelection,
     #[error("Filesystem read admission exhausted")]
     ResourceExhausted,
-    #[error("Filesystem read deadline exceeded")]
-    DeadlineExceeded,
     #[error("Agent lifecycle operation failed")]
     Lifecycle,
     #[error("Filesystem storage operation failed")]
@@ -74,7 +72,6 @@ impl crate::metrics::api::ApiErrorDetails for FileReadError {
             Self::InvalidTarget => "InvalidTarget",
             Self::InvalidSelection => "InvalidSelection",
             Self::ResourceExhausted => "ResourceExhausted",
-            Self::DeadlineExceeded => "DeadlineExceeded",
             Self::Lifecycle => "Lifecycle",
             Self::Storage => "Storage",
             Self::InvalidResponse => "InvalidResponse",
@@ -84,10 +81,7 @@ impl crate::metrics::api::ApiErrorDetails for FileReadError {
     fn is_expected(&self) -> bool {
         matches!(
             self,
-            Self::InvalidTarget
-                | Self::InvalidSelection
-                | Self::ResourceExhausted
-                | Self::DeadlineExceeded
+            Self::InvalidTarget | Self::InvalidSelection | Self::ResourceExhausted
         )
     }
 
@@ -102,7 +96,6 @@ impl From<FileReadError> for proto::FileReadError {
             FileReadError::InvalidTarget => Self::InvalidTarget,
             FileReadError::InvalidSelection => Self::InvalidSelection,
             FileReadError::ResourceExhausted => Self::ResourceExhausted,
-            FileReadError::DeadlineExceeded => Self::DeadlineExceeded,
             FileReadError::Lifecycle => Self::Lifecycle,
             FileReadError::Storage => Self::Storage,
             FileReadError::InvalidResponse => Self::InvalidResponse,
@@ -118,7 +111,6 @@ impl TryFrom<i32> for FileReadError {
             Ok(proto::FileReadError::InvalidTarget) => Ok(Self::InvalidTarget),
             Ok(proto::FileReadError::InvalidSelection) => Ok(Self::InvalidSelection),
             Ok(proto::FileReadError::ResourceExhausted) => Ok(Self::ResourceExhausted),
-            Ok(proto::FileReadError::DeadlineExceeded) => Ok(Self::DeadlineExceeded),
             Ok(proto::FileReadError::Lifecycle) => Ok(Self::Lifecycle),
             Ok(proto::FileReadError::Storage) => Ok(Self::Storage),
             Ok(proto::FileReadError::InvalidResponse) => Ok(Self::InvalidResponse),

@@ -159,7 +159,7 @@ mod tests {
             .unwrap(),
         );
         let reservation = Arc::new(FileReadAdmission::default())
-            .reserve(agent, tokio::time::Instant::now())
+            .reserve(agent)
             .unwrap();
         (
             QueuedWorkerInvocation::ReadFile {

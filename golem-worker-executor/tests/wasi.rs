@@ -2358,7 +2358,7 @@ async fn initial_file_reading_through_api(
                 worker.read_file(
                     CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     golem_common::model::filesystem::FileByteSelection::Full,
-                    admission.reserve(owned_agent_id.clone(), Instant::now())?,
+                    admission.reserve(owned_agent_id.clone())?,
                 ),
             )
             .await

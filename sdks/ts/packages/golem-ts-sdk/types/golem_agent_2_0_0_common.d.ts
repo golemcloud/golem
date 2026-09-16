@@ -158,7 +158,8 @@ declare module 'golem:agent/common@2.0.0' {
     webhookSuffix: PathSegment[];
     staticBindings: FileMapping[];
     filesystemBindings: FileMapping[];
-    openapiProvider?: string;
+    /** The name of a parameterless router method that returns the OpenAPI document as a string. */
+    openapiProviderMethod?: string;
   };
   export type HttpEndpointDetails = {
     httpMethod: HttpMethod;

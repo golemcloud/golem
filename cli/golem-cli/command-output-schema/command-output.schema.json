@@ -5841,7 +5841,7 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "openapiProvider"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
@@ -5850,7 +5850,7 @@
         "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
         "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
-        "openapiProvider": { "type": ["string", "null"] }
+        "openapiProviderMethod": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

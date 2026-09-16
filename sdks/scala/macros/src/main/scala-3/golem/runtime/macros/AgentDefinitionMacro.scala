@@ -744,7 +744,7 @@ object AgentDefinitionMacro {
           webhookSuffix = webhookSuffix,
           staticBindings = Nil,
           filesystemBindings = Nil,
-          openapiProvider = None
+          openapiProviderMethod = None
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)
@@ -761,7 +761,7 @@ object AgentDefinitionMacro {
               webhookSuffix = $webhookExpr,
               staticBindings = Nil,
               filesystemBindings = Nil,
-              openapiProvider = None
+              openapiProviderMethod = None
             )
           )
         }

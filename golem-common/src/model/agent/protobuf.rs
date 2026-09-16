@@ -222,7 +222,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
-            openapi_provider: value.openapi_provider,
+            openapi_provider_method: value.openapi_provider_method,
         })
     }
 }
@@ -241,7 +241,7 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            openapi_provider: value.openapi_provider,
+            openapi_provider_method: value.openapi_provider_method,
         }
     }
 }

@@ -3134,7 +3134,6 @@ mod file_read_tests {
         }
         for error in [
             FileReadError::ResourceExhausted,
-            FileReadError::DeadlineExceeded,
             FileReadError::Storage,
             FileReadError::Lifecycle,
         ] {

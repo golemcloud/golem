@@ -2752,10 +2752,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         reservation: FileReadReservation,
         mut sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     ) {
-        let deadline = reservation.deadline();
         let permit = tokio::select! {
             biased;
-            _ = tokio::time::sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
             _ = sender.closed() => return,
             result = reservation.acquire() => result,
         };
@@ -2766,10 +2764,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 return;
             }
         };
-        let deadline = _permit.deadline();
         let access = tokio::select! {
             biased;
-            _ = tokio::time::sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
             _ = sender.closed() => return,
             result = self.store.data().durable_ctx().acquire_owner_filesystem_inspection() => {
                 result.map_err(|_| FileReadError::Lifecycle)
@@ -2791,7 +2787,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &generation,
             path.as_abs_str(),
             selection,
-            deadline,
             sender,
         )
         .await;

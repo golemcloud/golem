@@ -358,7 +358,7 @@ mod tests {
                 webhook_suffix: vec![],
                 static_bindings,
                 filesystem_bindings,
-                openapi_provider: Some("openapi".to_string()),
+                openapi_provider_method: Some("openapi".to_string()),
             }),
             snapshotting: Snapshotting::Disabled,
             config: vec![],
@@ -391,6 +391,6 @@ mod tests {
                     && exact.public_path == ["config.json"]
                     && exact.file_path == "/config/config.json"
         ));
-        assert_eq!(mount.openapi_provider.as_deref(), Some("openapi"));
+        assert_eq!(mount.openapi_provider_method.as_deref(), Some("openapi"));
     }
 }

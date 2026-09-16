@@ -5,6 +5,11 @@ or worker lifecycle interactions. This is an executor observation protocol, not 
 or a durable stream. Initialization/reconstruction can execute guest code; inspection itself
 does not invoke an exported method or append an invocation to the oplog.
 
+The CLI's existing file-contents command already reaches this executor operation through REST.
+The metadata-first stream replaces that operation's full-buffer implementation; it is not a
+second filesystem API. HTTP filesystem bindings reuse it, while static initial-file serving
+reads blob storage without activating an agent. Directory listing remains a separate operation.
+
 ## Ownership and wire boundary
 
 - `golem-common/src/model/filesystem.rs` owns raw read-path validation, `FileByteSelection`, metadata,
@@ -27,12 +32,12 @@ does not invoke an exported method or append an invocation to the oplog.
 
 ## Admission through consumer termination
 
-1. `grpc/mod.rs::get_file_contents` captures executor arrival before metadata lookup, computes
-   one absolute deadline and reserves capacity before activation. `FileReadAdmission` tracks
+1. `grpc/mod.rs::get_file_contents` reserves capacity before activation. `FileReadAdmission` tracks
    active plus queued requests, including absent agents. Defaults are one active read per
-   agent, 16 additional queued per agent, 128 outstanding per executor and 60 seconds total.
-   `GolemConfig.file_read` configures queue/total capacity and timeout; one active turn is fixed.
-   Full capacity fails immediately, without spawning a waiter. No file-size limit is implied.
+   agent, 16 additional queued per agent and 128 outstanding per executor.
+   `GolemConfig.file_read` configures queue/total capacity; one active turn is fixed.
+   Full capacity fails immediately, without spawning a waiter. The executor imposes neither a
+   read deadline nor a file-size limit. A connected request waits for completion or an error.
 2. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Abandoning
    inspection removes its reservation, not initialization or its durable effects. Existing
    failed/interrupted/ephemeral lifecycle rules still apply.
@@ -42,19 +47,19 @@ does not invoke an exported method or append an invocation to the oplog.
    block inspection. `QueuedInspectionGuard` removes a cancelled read synchronously rather
    than waiting for the invocation loop to reach it.
 4. `Invocation::read_file` acquires the per-agent read turn and the exclusive `OwnerLane`, then
-   calls `services/agent_filesystem/lifecycle/inspection.rs::open_file_for_inspection`. It walks
+   calls `services/agent_filesystem/lifecycle/inspection/mod.rs::open_file_for_inspection`. It walks
    descriptor-relative components with no-follow semantics through the final target. Any symlink
    is forbidden. Only a regular file can be opened; directories, special files and permission
    failures are forbidden.
    Missing targets are absent. There is no implicit index or directory listing in this protocol.
 5. Metadata comes from that open descriptor, and Full/Bounded/OpenEnded/Suffix selection is
-   resolved against its length. `inspection_stream.rs::produce_file_read` runs in the invocation
+   resolved against its length. `inspection_stream/mod.rs::produce_file_read` runs in the invocation
    loop, not a detached task. It holds the resident Store, generation, descriptor, owner lane
    and admission through the response. A capacity-one channel carries at most 64 KiB per chunk;
    only the bounded chunk length is converted to usize, never whole-file length.
-6. Enqueueing the final chunk is **not** completion. The producer waits for consumer EOF, drop,
-   deadline or failure. A metadata-only, empty or unsatisfiable response releases after its head.
-   Drop and timeout reclaim every read guard and reservation, including when a body is not
+6. Enqueueing the final chunk is **not** completion. The producer waits for consumer EOF, drop
+   or failure. A metadata-only, empty or unsatisfiable response releases after its head.
+   Drop reclaims every read guard and reservation, including when a body is not
    polled. Premature EOF and post-head errors abort instead of silently truncating a response.
 
 ## Policy, lifecycle and generation are different
@@ -71,7 +76,7 @@ the response either finishes coherently or aborts. Later reads on a retained Wor
 after unload rather than assuming that finding a cached Worker means a live instance exists.
 
 Pending inspections are disposable observations, not durable invocations. Ordinary Suspend
-preserves the queued request within this process, with its original arrival deadline. It waits
+preserves the queued request within this process. It waits
 for normal resume; do not add an inspection-specific restart loop that defeats timed waits,
 fuel admission or quota suspension. Terminal lifecycle stops fail pending inspection. Executor
 loss aborts the external stream; there is no durable read reattachment contract.
@@ -82,12 +87,12 @@ loss aborts the external stream; there is no durable read reattachment contract.
   `golem-service-base/tests/fixtures/http-handlers/corpus.json`, with IDs in assertion failures.
   It exercises actual guest initialization, concurrent first reads, replay after unload,
   initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
-- `services/agent_filesystem/lifecycle/{inspection,inspection_stream}.rs` tests descriptor
-  safety, range boundaries, bounded chunks, early EOF, unpolled deadlines and consumer cleanup.
-- `services/file_read_admission.rs` tests full queues and deadline accounting before activation;
+- `services/agent_filesystem/lifecycle/{inspection,inspection_stream}/tests.rs` tests descriptor
+  safety, range boundaries, bounded chunks, early EOF, backpressure without expiry and consumer cleanup.
+- `services/file_read_admission.rs` tests full queues and waiting without expiry before activation;
   `worker/inspection_queue.rs` tests durable cutoff ordering, pending updates and cancellation.
-- `configured_read_deadline_reaches_grpc_admission` proves nondefault configuration reaches real
-  gRPC requests blocked behind guest work. The Suspend runtime test proves a queued read survives
+- `grpc_read_waits_for_blocking_invocation_and_completes` proves a real gRPC read waits behind
+  guest work and returns its final bytes. The Suspend runtime test proves a queued read survives
   actual unload and completes after normal resume with the earlier invocation's final bytes.
 
 Use the testing skill for fixture builds and test-r filters. Bun corpus checks only verify fixture

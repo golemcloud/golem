@@ -73,7 +73,6 @@ secs = 300
 [file_read]
 max_outstanding = 128
 max_queued_per_agent = 16
-timeout = "1m"
 
 [filesystem_storage.cleanup_retry]
 max_attempts = 4
@@ -501,7 +500,6 @@ without_time = false
 # [file_read]
 # max_outstanding = 128
 # max_queued_per_agent = 16
-# timeout = "1m"
 #
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
@@ -902,7 +900,6 @@ without_time = false
 # [file_read]
 # max_outstanding = 128
 # max_queued_per_agent = 16
-# timeout = "1m"
 #
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4

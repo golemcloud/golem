@@ -270,7 +270,8 @@ message RouteBehaviour {
     string agent_type = 3;
     CompiledInputSchema constructor_input = 4;
     optional RouterMethod handler = 5;
-    optional RouterMethod openapi_provider = 6;
+    // The compiled parameterless router method that returns the OpenAPI document as a string.
+    optional RouterMethod openapi_provider_method = 6;
     repeated golem.component.FileMapping static_bindings = 7;
     repeated RouterFileIndexEntry file_index = 8;
   }
@@ -285,7 +286,6 @@ message RouteBehaviour {
     string path = 1;
     bytes blob_key = 2;
     uint64 size = 3;
-    bytes sha256 = 4;
   }
 
   message AgentFilesystem {

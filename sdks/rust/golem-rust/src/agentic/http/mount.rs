@@ -51,6 +51,6 @@ pub fn get_http_mount_details(
         webhook_suffix: web_suffix,
         static_bindings: vec![],
         filesystem_bindings: vec![],
-        openapi_provider: None,
+        openapi_provider_method: None,
     })
 }

@@ -53,7 +53,7 @@ describe('agent HTTP routing (Phase 6)', () => {
     expect(at.httpMount!.webhookSuffix).toEqual([]);
     expect(at.httpMount!.staticBindings).toEqual([]);
     expect(at.httpMount!.filesystemBindings).toEqual([]);
-    expect(at.httpMount!.openapiProvider).toBeUndefined();
+    expect(at.httpMount!.openapiProviderMethod).toBeUndefined();
 
     const methods = Object.fromEntries(at.methods.map((m) => [m.name, m]));
 

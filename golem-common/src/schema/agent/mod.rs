@@ -558,7 +558,7 @@ impl AgentTypeSchema {
     /// Validates semantic constraints of the agent type, including stream
     /// placement and definitions that are not reachable from an allowed use.
     pub fn validate(&self) -> Result<(), String> {
-        http::validate(self)?;
+        http::validate(self).map_err(|error| error.to_string())?;
         if self.mode == AgentMode::Ephemeral {
             for method in &self.methods {
                 if method.read_only.is_some() {

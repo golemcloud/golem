@@ -22,7 +22,7 @@ use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AutoInjectedKind,
     InputSchema, NamedField, OutputSchema,
 };
-use crate::schema::{SchemaTypeDef, TypeId};
+use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
 use serde_json::Value;
 use test_r::test;
 
@@ -260,7 +260,7 @@ fn agent(input: &Value) -> AgentTypeSchema {
             webhook_suffix: vec![],
             static_bindings: mappings(&input["static_bindings"]),
             filesystem_bindings: mappings(&input["filesystem_bindings"]),
-            openapi_provider: input["provider"].as_str().map(str::to_string),
+            openapi_provider_method: input["provider"].as_str().map(str::to_string),
         }),
     }
 }
@@ -269,13 +269,34 @@ fn from_case(id: &str) -> AgentTypeSchema {
     agent(&corpus().into_iter().find(|case| case["id"] == id).unwrap()["input"])
 }
 
+fn corpus_category(error: &HttpAgentValidationError) -> &'static str {
+    match error {
+        HttpAgentValidationError::DuplicateMethod(_) => "duplicate-method",
+        HttpAgentValidationError::InvalidFileMapping(_) => "file-mapping",
+        HttpAgentValidationError::RouterMethodOnRegularAgent(_)
+        | HttpAgentValidationError::RouterMethodRole(_) => "router-method-role",
+        HttpAgentValidationError::StaticBindingsOnRegularAgent => "static-owner",
+        HttpAgentValidationError::OpenApiProviderOnRegularAgent => "provider-owner",
+        HttpAgentValidationError::RouterMode => "router-mode",
+        HttpAgentValidationError::RouterConstructor => "router-constructor",
+        HttpAgentValidationError::RouterSnapshot => "router-snapshot",
+        HttpAgentValidationError::RouterMount => "router-mount",
+        HttpAgentValidationError::FilesystemOwner => "filesystem-owner",
+        HttpAgentValidationError::ProviderSchema(_) => "provider-schema",
+        HttpAgentValidationError::HandlerEndpointPolicy(_) => "handler-endpoint-policy",
+        HttpAgentValidationError::HandlerSchema(_) => "handler-schema",
+        HttpAgentValidationError::UnboundConstructor(_) => "unbound-constructor",
+    }
+}
+
 #[test]
 fn shared_metadata_corpus() {
     for case in corpus() {
         let agent = agent(&case["input"]);
-        let result = agent.validate();
+        let result = validate(&agent);
         if let Some(error) = case["expect"]["error"].as_str() {
-            assert_eq!(result.unwrap_err(), error, "{}", case["id"]);
+            let actual = result.unwrap_err();
+            assert_eq!(corpus_category(&actual), error, "{}: {actual}", case["id"]);
         } else {
             assert!(result.is_ok(), "{}: {result:?}", case["id"]);
             if let Some(expected) = case["expect"].get("handler") {
@@ -293,8 +314,10 @@ fn shared_metadata_corpus() {
             }
             if let Some(expected) = case["expect"].get("provider") {
                 assert_eq!(
-                    serde_json::to_value(&agent.http_mount.as_ref().unwrap().openapi_provider)
-                        .unwrap(),
+                    serde_json::to_value(
+                        &agent.http_mount.as_ref().unwrap().openapi_provider_method
+                    )
+                    .unwrap(),
                     *expected,
                     "{}",
                     case["id"]
@@ -310,9 +333,9 @@ fn router_roles_are_distinct_and_closed() {
     let mut both = router.clone();
     let provider = from_case("metadata-provider-only");
     both.methods.extend(provider.methods);
-    both.http_mount.as_mut().unwrap().openapi_provider = Some("describe".into());
+    both.http_mount.as_mut().unwrap().openapi_provider_method = Some("describe".into());
     both.validate().unwrap();
-    both.http_mount.as_mut().unwrap().openapi_provider = Some("serveWhatever".into());
+    both.http_mount.as_mut().unwrap().openapi_provider_method = Some("serveWhatever".into());
     assert!(both.validate().is_err());
     let mut duplicate = router.clone();
     duplicate.methods.push(duplicate.methods[0].clone());

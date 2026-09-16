@@ -75,7 +75,7 @@ final case class HttpMountDetails(
   webhookSuffix: List[PathSegment],
   staticBindings: List[FileMapping],
   filesystemBindings: List[FileMapping],
-  openapiProvider: Option[String]
+  openapiProviderMethod: Option[String]
 )
 
 final case class HttpEndpointDetails(

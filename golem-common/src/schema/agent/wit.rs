@@ -637,7 +637,7 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            openapi_provider: value.openapi_provider,
+            openapi_provider_method: value.openapi_provider_method,
         }
     }
 }
@@ -656,7 +656,7 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            openapi_provider: value.openapi_provider,
+            openapi_provider_method: value.openapi_provider_method,
         }
     }
 }
@@ -1189,7 +1189,7 @@ mod tests {
                     public_path: vec!["report".into()],
                     file_path: "/data/report.txt".into(),
                 })],
-                openapi_provider: Some("describe-site".into()),
+                openapi_provider_method: Some("describe-site".into()),
             });
             // Transport round trips preserve metadata independently of role validation.
             let wire = encode_agent_type(&original).unwrap();

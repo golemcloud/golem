@@ -121,7 +121,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
             FileMapping.Exact(List("favicon.ico"), "/srv/favicon.ico")
           ),
           filesystemBindings = List(FileMapping.Exact(List("data"), "/var/data.json")),
-          openapiProvider = Some("provider-text")
+          openapiProviderMethod = Some("provider-text")
         )
         val endpoint = HttpEndpointDetails(
           HttpMethod.Any,
@@ -148,7 +148,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           static(0).selectDynamic("tag").asInstanceOf[String] == "subtree",
           static(1).selectDynamic("tag").asInstanceOf[String] == "exact",
           filesystem(0).selectDynamic("tag").asInstanceOf[String] == "exact",
-          encodedMount.selectDynamic("openapiProvider").asInstanceOf[String] == "provider-text",
+          encodedMount.selectDynamic("openapiProviderMethod").asInstanceOf[String] == "provider-text",
           endpoints(0).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "any",
           endpoints(1).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "custom",
           endpoints(1).selectDynamic("httpMethod").selectDynamic("val").asInstanceOf[String] == "ANY"

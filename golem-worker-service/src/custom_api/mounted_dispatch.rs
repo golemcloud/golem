@@ -243,7 +243,6 @@ mod tests {
             path: path.into(),
             blob_key: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
             size: 3,
-            sha256: [7; 32],
         }
     }
 

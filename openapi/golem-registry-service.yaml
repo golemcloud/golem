@@ -14231,8 +14231,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileMapping'
-        openapiProvider:
+        openapiProviderMethod:
           type: string
+          description: The name of a parameterless router method that returns the OpenAPI document as a string.
     ImpliesC:
       type: object
       required:

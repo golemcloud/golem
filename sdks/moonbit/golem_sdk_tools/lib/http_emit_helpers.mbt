@@ -138,7 +138,7 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           path_segments_str(s)
         }
       }
-      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: [], filesystem_bindings: [], openapi_provider: None })"
+      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: [], filesystem_bindings: [], openapi_provider_method: None })"
     }
   }
 }

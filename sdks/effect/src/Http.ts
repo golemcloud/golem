@@ -1338,7 +1338,7 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
   staticBindings: [],
   filesystemBindings: [],
-  openapiProvider: undefined,
+  openapiProviderMethod: undefined,
 })
 
 /**

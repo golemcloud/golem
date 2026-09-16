@@ -18,6 +18,9 @@ use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, FileReadMetadata, validate_file_read_path,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) enum FileInspection {
     Opened {
         file: File,

@@ -488,7 +488,8 @@ pub struct HttpMountDetails {
     pub webhook_suffix: Vec<PathSegment>,
     pub static_bindings: Vec<FileMapping>,
     pub filesystem_bindings: Vec<FileMapping>,
-    pub openapi_provider: Option<String>,
+    /// The name of a parameterless router method that returns the OpenAPI document as a string.
+    pub openapi_provider_method: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]

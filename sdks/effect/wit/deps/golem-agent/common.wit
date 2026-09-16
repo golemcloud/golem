@@ -110,7 +110,8 @@ interface common {
     webhook-suffix: list<path-segment>,
     static-bindings: list<file-mapping>,
     filesystem-bindings: list<file-mapping>,
-    openapi-provider: option<string>,
+    /// The name of a parameterless router method that returns the OpenAPI document as a string.
+    openapi-provider-method: option<string>,
   }
 
   variant file-mapping {

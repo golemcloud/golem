@@ -1,42 +1,23 @@
-use super::inspection::native_resident;
+use super::super::tests::{native_resident, resident, sandbox_attributes, unsupported_allocation};
+use super::super::{delete, resident_generation_handle, seal};
 use super::*;
+use crate::sandbox_filesystem::{SandboxObjectKind, SandboxOpened};
 use futures::StreamExt;
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
 };
 use golem_service_base::model::FileReadResponse;
 use test_r::{test, timeout};
-use tokio::time::Instant as Deadline;
 
 #[test]
 #[timeout("30s")]
-async fn expired_or_abandoned_read_does_not_begin_filesystem_io() {
+async fn abandoned_read_does_not_begin_filesystem_io() {
     let (resident, control, _) = resident(Err(unsupported_allocation())).await;
     let before = control.calls();
     let handle = resident_generation_handle(&resident);
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    produce_file_read(
-        &handle,
-        "/file",
-        FileByteSelection::Full,
-        Deadline::now(),
-        sender,
-    )
-    .await;
-    assert!(matches!(
-        receiver.await.unwrap(),
-        Err(FileReadError::DeadlineExceeded)
-    ));
-    let (sender, receiver) = tokio::sync::oneshot::channel();
     drop(receiver);
-    produce_file_read(
-        &handle,
-        "/file",
-        FileByteSelection::Full,
-        Deadline::now() + Duration::from_secs(20),
-        sender,
-    )
-    .await;
+    produce_file_read(&handle, "/file", FileByteSelection::Full, sender).await;
     assert_eq!(control.calls(), before);
     control.push_delete_and_verify(Ok(()));
     delete(seal(resident)).await.unwrap();
@@ -45,11 +26,10 @@ async fn expired_or_abandoned_read_does_not_begin_filesystem_io() {
 async fn start_read<Adapter: SandboxFilesystemAdapter>(
     handle: FilesystemGenerationHandle<Adapter>,
     selection: FileByteSelection,
-    deadline: Deadline,
 ) -> (tokio::task::JoinHandle<()>, FileReadResponse) {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        produce_file_read(&handle, "/file", selection, deadline, sender).await;
+        produce_file_read(&handle, "/file", selection, sender).await;
     });
     (task, receiver.await.unwrap().unwrap())
 }
@@ -74,12 +54,8 @@ async fn stream_selects_exact_bytes_in_bounded_chunks_and_finishes_on_eof() {
         (FileByteSelection::OpenEnded { start: 65531 }, 65531, 131089),
         (FileByteSelection::Suffix { length: 65539 }, 65550, 131089),
     ] {
-        let (producer, mut response) = start_read(
-            resident_generation_handle(&resident),
-            selection,
-            Deadline::now() + Duration::from_secs(20),
-        )
-        .await;
+        let (producer, mut response) =
+            start_read(resident_generation_handle(&resident), selection).await;
         let FileReadHead::File(metadata) = response.head else {
             panic!("regular file head")
         };
@@ -107,15 +83,13 @@ async fn stream_selects_exact_bytes_in_bounded_chunks_and_finishes_on_eof() {
 
 #[test]
 #[timeout("30s")]
-async fn last_chunk_does_not_release_turn_and_unpolled_eof_still_times_out() {
+async fn last_chunk_does_not_release_turn_until_eof_is_polled() {
     let parent = tempfile::tempdir().unwrap();
     let (resident, root) = native_resident(parent.path()).await;
     std::fs::write(root.join("file"), b"abcdef").unwrap();
-    let deadline = Deadline::now() + Duration::from_millis(300);
     let (producer, mut response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Full,
-        deadline,
     )
     .await;
     assert_eq!(
@@ -127,14 +101,42 @@ async fn last_chunk_does_not_release_turn_and_unpolled_eof_still_times_out() {
         !producer.is_finished(),
         "last chunk must not release the read turn"
     );
-    tokio::time::sleep_until(deadline).await;
+    assert!(response.body.next().await.is_none());
     producer.await.unwrap();
-    assert_eq!(
-        response.body.next().await,
-        Some(Err(FileReadError::DeadlineExceeded))
-    );
     assert!(response.body.next().await.is_none());
     delete(seal(resident)).await.unwrap();
+}
+
+#[test]
+fn backpressured_read_waits_for_consumer_without_expiring() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::pause();
+            let parent = tempfile::tempdir().unwrap();
+            let (resident, root) = native_resident(parent.path()).await;
+            let content: Vec<u8> = (0..3 * 65536).map(|i| (i % 251) as u8).collect();
+            std::fs::write(root.join("file"), &content).unwrap();
+            let (producer, mut response) = start_read(
+                resident_generation_handle(&resident),
+                FileByteSelection::Full,
+            )
+            .await;
+            let mut actual = response.body.next().await.unwrap().unwrap().to_vec();
+            tokio::time::advance(std::time::Duration::from_secs(61)).await;
+            assert!(
+                !producer.is_finished(),
+                "backpressure must retain the read turn"
+            );
+            while let Some(chunk) = response.body.next().await {
+                actual.extend_from_slice(&chunk.unwrap());
+            }
+            assert_eq!(actual, content);
+            producer.await.unwrap();
+            delete(seal(resident)).await.unwrap();
+        });
 }
 
 #[test]
@@ -166,12 +168,8 @@ async fn head_only_empty_and_unsatisfiable_reads_release_without_body_poll() {
         ),
     ] {
         std::fs::write(root.join("file"), bytes).unwrap();
-        let (producer, mut response) = start_read(
-            resident_generation_handle(&resident),
-            selection,
-            Deadline::now() + Duration::from_secs(20),
-        )
-        .await;
+        let (producer, mut response) =
+            start_read(resident_generation_handle(&resident), selection).await;
         producer.await.unwrap();
         let FileReadHead::File(metadata) = response.head else {
             panic!("regular file head")
@@ -192,7 +190,6 @@ async fn dropping_body_releases_backpressured_producer_and_aborting_producer_dis
     let (producer, response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Full,
-        Deadline::now() + Duration::from_secs(20),
     )
     .await;
     drop(response);
@@ -201,7 +198,6 @@ async fn dropping_body_releases_backpressured_producer_and_aborting_producer_dis
     let (producer, mut response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Full,
-        Deadline::now() + Duration::from_secs(20),
     )
     .await;
     producer.abort();
@@ -228,7 +224,6 @@ async fn u64_suffix_cursor_handles_short_reads_without_allocating_total_size() {
     let (producer, mut response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Suffix { length: 5 },
-        Deadline::now() + Duration::from_secs(20),
     )
     .await;
     assert_eq!(response.body.next().await.unwrap().unwrap().as_ref(), b"ab");
@@ -263,7 +258,6 @@ async fn premature_storage_eof_is_an_error_not_a_short_success() {
     let (producer, mut response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Full,
-        Deadline::now() + Duration::from_secs(20),
     )
     .await;
     assert_eq!(

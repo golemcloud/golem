@@ -390,7 +390,6 @@ mod tests {
                             golem_common::model::diff::Hash::empty(),
                         ),
                         size: 3,
-                        sha256: [1; 32],
                     });
                 }
             }

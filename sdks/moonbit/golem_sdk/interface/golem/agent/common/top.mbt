@@ -163,7 +163,7 @@ pub(all) struct AuthDetails {
 } derive(Debug, Eq)
 ///|
 pub(all) struct HttpMountDetails {
-      path_prefix : Array[PathSegment]; auth_details : AuthDetails?; phantom_agent : Bool; cors_options : CorsOptions; webhook_suffix : Array[PathSegment]; static_bindings : Array[FileMapping]; filesystem_bindings : Array[FileMapping]; openapi_provider : String?
+      path_prefix : Array[PathSegment]; auth_details : AuthDetails?; phantom_agent : Bool; cors_options : CorsOptions; webhook_suffix : Array[PathSegment]; static_bindings : Array[FileMapping]; filesystem_bindings : Array[FileMapping]; openapi_provider_method : String?
 } derive(Debug, Eq)
 ///|
 pub(all) struct HttpEndpointDetails {

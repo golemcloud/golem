@@ -269,7 +269,7 @@ sealed trait JsHttpMountDetails extends js.Object {
   def webhookSuffix: js.Array[JsPathSegment]      = js.native
   def staticBindings: js.Array[JsFileMapping]     = js.native
   def filesystemBindings: js.Array[JsFileMapping] = js.native
-  def openapiProvider: js.UndefOr[String]         = js.native
+  def openapiProviderMethod: js.UndefOr[String]   = js.native
 }
 
 object JsHttpMountDetails {
@@ -280,7 +280,7 @@ object JsHttpMountDetails {
     webhookSuffix: js.Array[JsPathSegment],
     staticBindings: js.Array[JsFileMapping],
     filesystemBindings: js.Array[JsFileMapping],
-    openapiProvider: js.UndefOr[String],
+    openapiProviderMethod: js.UndefOr[String],
     authDetails: js.UndefOr[JsAuthDetails] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
@@ -292,7 +292,7 @@ object JsHttpMountDetails {
       "filesystemBindings" -> filesystemBindings
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
-    openapiProvider.foreach(p => obj.updateDynamic("openapiProvider")(p))
+    openapiProviderMethod.foreach(p => obj.updateDynamic("openapiProviderMethod")(p))
     obj.asInstanceOf[JsHttpMountDetails]
   }
 }

@@ -4256,7 +4256,7 @@ pub fn get_all_agent_types() -> Array[@common.RegisteredAgentType] {
                               _ => panic()
                         }
 
-                        Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((iter_base) + 126) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider : lifted593})
+                        Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((iter_base) + 126) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider_method : lifted593})
                   }
                   _ => panic()
             }
@@ -8482,7 +8482,7 @@ pub fn get_agent_type(agent_type_name : String) -> @common.RegisteredAgentType? 
                                     _ => panic()
                               }
 
-                              Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((return_area) + 134) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider : lifted593})
+                              Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((return_area) + 134) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider_method : lifted593})
                         }
                         _ => panic()
                   }
@@ -12710,7 +12710,7 @@ pub fn get_agent_type_by_agent_id(agent_id : String) -> @common.RegisteredAgentT
                                     _ => panic()
                               }
 
-                              Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((return_area) + 134) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider : lifted593})
+                              Option::Some(@common.HttpMountDetails::{path_prefix : array558, auth_details : lifted560, phantom_agent : (mbt_ffi_load8_u((return_area) + 134) != 0), cors_options : @common.CorsOptions::{allowed_patterns : array562}, webhook_suffix : array568, static_bindings : array579, filesystem_bindings : array590, openapi_provider_method : lifted593})
                         }
                         _ => panic()
                   }

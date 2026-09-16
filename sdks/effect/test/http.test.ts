@@ -311,7 +311,7 @@ describe("Http compileMount / compileEndpoint", () => {
     ])
     expect(w.staticBindings).toEqual([])
     expect(w.filesystemBindings).toEqual([])
-    expect(w.openapiProvider).toBeUndefined()
+    expect(w.openapiProviderMethod).toBeUndefined()
   })
 
   it("omits authDetails when auth is not requested", () => {

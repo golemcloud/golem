@@ -787,6 +787,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let origin = TraceOrigin::capture_current();
         let active_agent = self
             .agents
+            // Initialization is spawned so cancellation of one waiter cannot leave the shared
+            // cache entry permanently incomplete for concurrent or subsequent callers.
             .get_or_insert_simple_spawned(&cache_key, move || {
                 let span = related_span!(
                     origin,

@@ -32,7 +32,7 @@ fn assert_valid_regular_agent_types(agent_types: &[AgentTypeSchema]) {
         if let Some(mount) = &agent_type.http_mount {
             assert!(mount.static_bindings.is_empty());
             assert!(mount.filesystem_bindings.is_empty());
-            assert!(mount.openapi_provider.is_none());
+            assert!(mount.openapi_provider_method.is_none());
         }
     }
 }
@@ -85,7 +85,7 @@ async fn can_extract_http_mounts_from_rust_and_typescript_components() -> anyhow
         assert!(mount.path_prefix.len() == 2);
         assert!(mount.static_bindings.is_empty());
         assert!(mount.filesystem_bindings.is_empty());
-        assert!(mount.openapi_provider.is_none());
+        assert!(mount.openapi_provider_method.is_none());
     }
     Ok(())
 }

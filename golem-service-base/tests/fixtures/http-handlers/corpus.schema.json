@@ -94,6 +94,7 @@
             "operation_security": {"type": "object", "additionalProperties": {"$ref": "#/$defs/security"}},
             "path": {"type": "string"},
             "paths": {"$ref": "#/$defs/strings"},
+            "pending_before_release": {"type": "boolean"},
             "producer_polls_before_grant": {"$ref": "#/$defs/count"},
             "producer_releases": {"$ref": "#/$defs/count"},
             "provider": {"type": ["string", "null"]},

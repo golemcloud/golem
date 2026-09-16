@@ -2016,7 +2016,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   assert_true(output.contains("allowed_patterns: [\"https://app.acme.com\"]"))
   assert_true(output.contains("static_bindings: []"))
   assert_true(output.contains("filesystem_bindings: []"))
-  assert_true(output.contains("openapi_provider: None"))
+  assert_true(output.contains("openapi_provider_method: None"))
 }
 
 ///|

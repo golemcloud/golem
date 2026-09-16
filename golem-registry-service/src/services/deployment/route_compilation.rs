@@ -122,8 +122,8 @@ pub fn compile_fallback_mount(
                 .iter()
                 .find(|method| !method.http_endpoint.is_empty())
                 .map(compile_method),
-            openapi_provider: mount
-                .openapi_provider
+            openapi_provider_method: mount
+                .openapi_provider_method
                 .as_ref()
                 .and_then(|name| agent.methods.iter().find(|method| &method.name == name))
                 .map(compile_method),
@@ -953,7 +953,7 @@ mod tests {
                 webhook_suffix: vec![],
                 static_bindings: vec![],
                 filesystem_bindings: vec![],
-                openapi_provider: None,
+                openapi_provider_method: None,
             }),
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],

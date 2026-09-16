@@ -379,7 +379,6 @@ fn file_read_errors_roundtrip_and_unknown_codes_fail_closed() {
         FileReadError::InvalidTarget,
         FileReadError::InvalidSelection,
         FileReadError::ResourceExhausted,
-        FileReadError::DeadlineExceeded,
         FileReadError::Lifecycle,
         FileReadError::Storage,
         FileReadError::InvalidResponse,

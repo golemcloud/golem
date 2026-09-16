@@ -441,7 +441,7 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     webhookSuffix: spec.webhookSuffix ? resolvePath(spec.webhookSuffix, 'webhook suffix') : [],
     staticBindings: [],
     filesystemBindings: [],
-    openapiProvider: undefined,
+    openapiProviderMethod: undefined,
   };
 }
 

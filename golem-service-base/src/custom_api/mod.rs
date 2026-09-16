@@ -421,7 +421,11 @@ impl RouteMatch {
         match behavior {
             RouteBehaviour::HttpRouter(router) => {
                 router.constructor_input.validate()?;
-                for method in router.handler.iter().chain(router.openapi_provider.iter()) {
+                for method in router
+                    .handler
+                    .iter()
+                    .chain(router.openapi_provider_method.iter())
+                {
                     method.input.validate()?;
                     method.output.validate()?;
                 }
@@ -434,12 +438,13 @@ impl RouteMatch {
                 if router
                     .handler
                     .iter()
-                    .chain(router.openapi_provider.iter())
+                    .chain(router.openapi_provider_method.iter())
                     .any(|method| method.method_name.is_empty())
                 {
                     return Err("Router method name must not be empty".into());
                 }
-                if let (Some(handler), Some(provider)) = (&router.handler, &router.openapi_provider)
+                if let (Some(handler), Some(provider)) =
+                    (&router.handler, &router.openapi_provider_method)
                     && handler.method_name == provider.method_name
                 {
                     return Err("Router handler and provider must be distinct methods".into());
@@ -510,7 +515,7 @@ pub struct HttpRouterBehaviour {
     pub agent_type: AgentTypeName,
     pub constructor_input: CompiledInputSchema,
     pub handler: Option<RouterMethod>,
-    pub openapi_provider: Option<RouterMethod>,
+    pub openapi_provider_method: Option<RouterMethod>,
     pub static_bindings: Vec<FileMapping>,
     pub file_index: Vec<RouterFileIndexEntry>,
 }
@@ -527,9 +532,9 @@ pub struct RouterMethod {
 #[desert(evolution())]
 pub struct RouterFileIndexEntry {
     pub path: String,
+    /// BLAKE3 digest computed during upload, used for blob lookup and the immutable HTTP ETag.
     pub blob_key: AgentFileContentHash,
     pub size: u64,
-    pub sha256: [u8; 32],
 }
 
 #[derive(Debug, BinaryCodec)]

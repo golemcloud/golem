@@ -201,7 +201,7 @@ test "router metadata is preserved exactly" {
       Subtree({ public_prefix: ["files"], filesystem_root: "/data", }),
       Exact({ public_path: ["health"], file_path: "/data/health", }),
     ],
-    openapi_provider: Some("provider text"),
+    openapi_provider_method: Some("provider text"),
   }
   let def : AgentTypeDef = {
     type_name: "Router",
