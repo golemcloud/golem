@@ -240,6 +240,73 @@ fn echo_underlying(calls: Rc<Cell<u32>>, fail_first_retry: bool) -> UnderlyingTo
     }))
 }
 
+#[test]
+async fn generated_typed_methods_overlap_on_one_shared_underlying_proxy() {
+    let admitted = Rc::new(Cell::new(0));
+    let release_first = Rc::new(Cell::new(false));
+    let admitted_for_fake = Rc::clone(&admitted);
+    let release_first_for_fake = Rc::clone(&release_first);
+    let raw = UnderlyingTool::from_fake(Box::new(move |_, input, _| {
+        admitted_for_fake.set(admitted_for_fake.get() + 1);
+        let admitted = Rc::clone(&admitted_for_fake);
+        let release_first = Rc::clone(&release_first_for_fake);
+        Box::pin(async move {
+            let input = decode_typed_schema_value_owned(input).unwrap();
+            let SchemaValue::Record { fields } = input.value() else {
+                panic!("echo input is a record")
+            };
+            let value = String::from_value(&fields[0]).unwrap();
+            if value == "first" {
+                std::future::poll_fn(|cx| {
+                    if release_first.get() {
+                        Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                })
+                .await;
+            } else {
+                assert_eq!(admitted.get(), 2);
+                release_first.set(true);
+            }
+            Ok(typed_result(value))
+        })
+    }));
+    let underlying = AcceptanceEchoUnderlying::__golem_from_underlying(raw);
+    let first = underlying.echo("first".to_string());
+    let second = underlying.echo("second".to_string());
+    let mut first = std::pin::pin!(first);
+    let mut second = std::pin::pin!(second);
+    let mut first_result = None;
+    let mut second_result = None;
+    let (first, second) = std::future::poll_fn(|cx| {
+        if first_result.is_none() {
+            if let Poll::Ready(result) = first.as_mut().poll(cx) {
+                first_result = Some(result);
+            }
+        }
+        if second_result.is_none() {
+            if let Poll::Ready(result) = second.as_mut().poll(cx) {
+                assert!(first_result.is_none());
+                second_result = Some(result);
+            }
+        }
+        match (first_result.take(), second_result.take()) {
+            (Some(first), Some(second)) => Poll::Ready((first, second)),
+            (first, second) => {
+                first_result = first;
+                second_result = second;
+                Poll::Pending
+            }
+        }
+    })
+    .await;
+    assert_eq!(admitted.get(), 2);
+    assert_eq!(second.unwrap(), "second");
+    assert_eq!(first.unwrap(), "first");
+}
+
 async fn invoke_echo(
     value: &str,
     stdin: Option<InputStream>,
@@ -668,7 +735,7 @@ async fn universal_acceptance(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     principal: Principal,
-    mut underlying: UnderlyingTool,
+    underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     UNIVERSAL_OBSERVATION.with(|observation| {
         *observation.borrow_mut() = Some(UniversalObservation {

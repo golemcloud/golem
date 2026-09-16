@@ -7,6 +7,20 @@ use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
 const MARKER: &[u8] = b"marker:";
 
+#[tool_definition(version = "1.0.0")]
+pub trait MiddlewareProbe {
+    async fn apply(&self, value: String) -> String;
+}
+
+struct MiddlewareProbeImpl;
+
+#[tool_implementation]
+impl MiddlewareProbe for MiddlewareProbeImpl {
+    async fn apply(&self, value: String) -> String {
+        format!("leaf({value})")
+    }
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub struct StreamSummary {
     pub chunks_read: u32,

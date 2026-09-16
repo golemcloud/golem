@@ -776,7 +776,7 @@ fn emit_underlying_method(
     let decode = decode_underlying_result(&input.output, input.stdout, &result_ident, sdk);
 
     Ok(quote! {
-        pub async fn #method_ident(&mut self #(, #args)*) -> #result_ty {
+        pub async fn #method_ident(&self #(, #args)*) -> #result_ty {
             let mut #param_values_ident: ::std::vec::Vec<(&'static str, #sdk::SchemaValue)> =
                 ::std::vec::Vec::new();
             #(#values)*
@@ -1161,6 +1161,8 @@ mod tests {
 
         assert!(tokens.contains("sdk_alias :: agentic :: ToolBuildCtx"));
         assert!(tokens.contains("sdk_alias :: tool :: ToolInvokeError"));
+        assert!(tokens.contains("& self"));
+        assert!(!tokens.contains("& mut self"));
         assert!(!tokens.contains("principal :"));
         assert!(!tokens.contains("golem_rust"));
     }

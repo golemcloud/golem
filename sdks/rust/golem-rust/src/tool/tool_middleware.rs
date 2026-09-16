@@ -111,7 +111,8 @@ impl<E: Error + 'static> Error for ToolInvokeError<E> {
 /// Invocation-scoped access to exactly the next inner tool-middleware layer.
 ///
 /// The runtime is the only producer of this handle. It is intentionally not
-/// cloneable, and mutable invocation prevents overlapping calls through safe Rust.
+/// cloneable. Shared invocation permits a middleware to overlap calls to the
+/// same runtime-minted capability.
 pub struct UnderlyingTool {
     inner: UnderlyingToolInner,
 }
@@ -124,7 +125,7 @@ enum UnderlyingToolInner {
 
 #[cfg(test)]
 pub(crate) type FakeInvoke = Box<
-    dyn FnMut(
+    dyn Fn(
         Vec<String>,
         crate::schema::wit::wire::TypedSchemaValue,
         Option<InputStream>,
@@ -149,7 +150,7 @@ impl UnderlyingTool {
     }
 
     pub async fn invoke(
-        &mut self,
+        &self,
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
@@ -162,7 +163,7 @@ impl UnderlyingTool {
 
     #[doc(hidden)]
     pub async fn invoke_with<E>(
-        &mut self,
+        &self,
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
@@ -170,7 +171,7 @@ impl UnderlyingTool {
     ) -> Result<InvocationResult, ToolInvokeError<E>> {
         let input = encode_typed_schema_value_owned(input)
             .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))?;
-        let result = match &mut self.inner {
+        let result = match &self.inner {
             UnderlyingToolInner::Raw(raw) => raw.invoke(command_path, input, stdin).await,
             #[cfg(test)]
             UnderlyingToolInner::Fake(invoke) => invoke(command_path, input, stdin).await,
@@ -380,10 +381,10 @@ mod tests {
     }
 
     #[test]
-    async fn one_mutable_handle_allows_sequential_owned_invocations() {
+    async fn one_handle_allows_sequential_owned_invocations() {
         let calls = Rc::new(Cell::new(0));
         let calls_for_fake = Rc::clone(&calls);
-        let mut underlying = UnderlyingTool::from_fake(Box::new(move |path, input, stdin| {
+        let underlying = UnderlyingTool::from_fake(Box::new(move |path, input, stdin| {
             assert!(stdin.is_none());
             assert_eq!(path, ["run"]);
             calls_for_fake.set(calls_for_fake.get() + 1);
@@ -408,6 +409,90 @@ mod tests {
             assert_eq!(decoded, value);
         }
         assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    async fn one_shared_handle_allows_overlapping_invocations_to_complete_in_reverse_order() {
+        let admitted = Rc::new(Cell::new(0));
+        let release_first = Rc::new(Cell::new(false));
+        let admitted_for_fake = Rc::clone(&admitted);
+        let release_first_for_fake = Rc::clone(&release_first);
+        let underlying = UnderlyingTool::from_fake(Box::new(move |_, input, _| {
+            admitted_for_fake.set(admitted_for_fake.get() + 1);
+            let admitted = Rc::clone(&admitted_for_fake);
+            let release_first = Rc::clone(&release_first_for_fake);
+            Box::pin(async move {
+                let value = decode_typed_schema_value_owned(input).unwrap();
+                let value = String::from_value(value.value()).unwrap();
+                if value == "first" {
+                    std::future::poll_fn(|cx| {
+                        if release_first.get() {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                } else {
+                    assert_eq!(admitted.get(), 2);
+                    release_first.set(true);
+                }
+                Ok(wire::InvocationResult {
+                    result: Some(
+                        encode_typed_schema_value_owned(value.into_typed_schema_value().unwrap())
+                            .unwrap(),
+                    ),
+                    stdout: None,
+                })
+            })
+        }));
+
+        let first = underlying.invoke(
+            vec!["run".to_string()],
+            "first".to_string().into_typed_schema_value().unwrap(),
+            None,
+        );
+        let second = underlying.invoke(
+            vec!["run".to_string()],
+            "second".to_string().into_typed_schema_value().unwrap(),
+            None,
+        );
+        let mut first = std::pin::pin!(first);
+        let mut second = std::pin::pin!(second);
+        let mut first_result = None;
+        let mut second_result = None;
+        let (first, second) = std::future::poll_fn(|cx| {
+            if first_result.is_none() {
+                if let std::task::Poll::Ready(result) = first.as_mut().poll(cx) {
+                    first_result = Some(result);
+                }
+            }
+            if second_result.is_none() {
+                if let std::task::Poll::Ready(result) = second.as_mut().poll(cx) {
+                    assert!(first_result.is_none());
+                    second_result = Some(result);
+                }
+            }
+            match (first_result.take(), second_result.take()) {
+                (Some(first), Some(second)) => std::task::Poll::Ready((first, second)),
+                (first, second) => {
+                    first_result = first;
+                    second_result = second;
+                    std::task::Poll::Pending
+                }
+            }
+        })
+        .await;
+        assert_eq!(admitted.get(), 2);
+        assert_eq!(
+            String::from_value(second.unwrap().result.unwrap().value()).unwrap(),
+            "second"
+        );
+        assert_eq!(
+            String::from_value(first.unwrap().result.unwrap().value()).unwrap(),
+            "first"
+        );
     }
 
     #[test]

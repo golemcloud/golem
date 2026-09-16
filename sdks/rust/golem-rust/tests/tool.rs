@@ -819,7 +819,7 @@ async fn audit(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     _principal: Principal,
-    mut underlying: UnderlyingTool,
+    underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying.invoke(command_path, input, stdin).await
 }

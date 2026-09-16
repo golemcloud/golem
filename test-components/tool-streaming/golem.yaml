@@ -21,6 +21,9 @@ components:
       tools:
       - golem-it:tool-streaming-rust-provider/streaming
       - golem-it:tool-streaming-rust-provider/capable-streaming
+  golem-it:tool-streaming-rust-middleware:
+    dir: rust-middleware
+    templates: rust, rust-test-component
 
 tools:
   streaming: {}
