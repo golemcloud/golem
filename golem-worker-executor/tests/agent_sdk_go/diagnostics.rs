@@ -54,6 +54,14 @@ fn render(entries: &[PublicOplogEntryWithIndex]) -> String {
                 p.function_name,
                 if p.request.is_some() { "some" } else { "none" }
             ),
+            // random responses are the runtime's PRNG seed: show their payload so
+            // seed stability across runs can be checked by eye.
+            PublicOplogEntry::End(p) if p.response.as_ref().is_some_and(|_| {
+                entries.iter().any(|s| {
+                    s.oplog_index == p.start_index
+                        && matches!(&s.entry, PublicOplogEntry::Start(sp) if sp.function_name.contains("random"))
+                })
+            }) => format!("End   start={} response={:?}", p.start_index, p.response),
             PublicOplogEntry::End(p) => format!("End   start={}", p.start_index),
             PublicOplogEntry::Cancelled(p) => format!("Cancelled start={}", p.start_index),
             other => {
@@ -215,5 +223,103 @@ async fn diag_snapshot_recovery(
             Err(_) => "HANG (timed out after 25s)".to_string(),
         }
     );
+    Ok(())
+}
+
+/// Scheduling attribution: goroutine spawns, running->X transitions and clock
+/// reads during 10 bumps (instrumented fork + temporary `sched-trace` method).
+/// Also dumps the oplog so per-invocation clock counts can be aligned with the
+/// scheduler sequence.
+#[test]
+#[ignore = "diagnostic: needs the instrumented go fork"]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn diag_sched_trace(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapAgent", "go-diag-sched-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    for _ in 0..10 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "bump", data_value!())
+            .await?;
+    }
+    let report = executor
+        .invoke_and_await_agent(&component, &agent_id, "sched-trace", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let run = std::env::var("DIAG_RUN").unwrap_or_default();
+    write_dump(&format!("sched{run}.txt"), &format!("{report}=== oplog ===\n{}", render(&oplog)));
+    drop(executor);
+    Ok(())
+}
+
+/// Replay attribution: run 10 bumps, restart, then read the scheduler trace of
+/// the REPLAYED instance (its spawns/transitions/clock reads while replaying
+/// the same 10 bumps) and compare with the live trace of the same run. If the
+/// recorded seed is replayed, the two traces must be identical.
+#[test]
+#[ignore = "diagnostic: needs the instrumented go fork"]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn diag_sched_trace_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = std::env::var("DIAG_RUN").unwrap_or_default();
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapAgent", "go-diag-sched-replay-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    for _ in 0..10 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "bump", data_value!())
+            .await?;
+    }
+    let live = executor
+        .invoke_and_await_agent(&component, &agent_id, "sched-trace", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    let live_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    write_dump(&format!("replay{run}-live.txt"), &format!("{live}=== oplog ===\n{}", render(&live_oplog)));
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    // The replayed instance re-runs the 10 bumps AND the recorded sched-trace
+    // invocation (whose recorded result is returned, not recomputed), then this
+    // new sched-trace runs live and reports the replay-phase events.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(40),
+        executor.invoke_and_await_agent(&component, &agent_id, "sched-trace", data_value!()),
+    )
+    .await;
+    let after_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let replay = match &result {
+        Ok(Ok(v)) => v.clone().into_typed::<String>().unwrap_or_default(),
+        Ok(Err(e)) => format!("ERR: {e}\n"),
+        Err(_) => "HANG\n".to_string(),
+    };
+    write_dump(&format!("replay{run}-replay.txt"), &format!("{replay}=== oplog ===\n{}", render(&after_oplog)));
+    drop(executor);
     Ok(())
 }
