@@ -52,7 +52,7 @@ use colored::Colorize;
 use crate::agent_id_display::SourceLanguage;
 use crate::model::agent::{
     AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
-    AgentsMetadataResponseView, RawAgentId,
+    AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId, RedeployAgentError,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -85,7 +85,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -96,22 +96,6 @@ use terminal_size::terminal_size;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
-
-/// Outcome of a best-effort bulk agent action: what succeeded, and the error for each agent it
-/// failed on, keyed by the (environment-unique) agent id.
-pub struct BulkAgentActionResult<T> {
-    pub succeeded: Vec<T>,
-    pub errors: BTreeMap<String, String>,
-}
-
-impl<T> Default for BulkAgentActionResult<T> {
-    fn default() -> Self {
-        Self {
-            succeeded: Vec::new(),
-            errors: BTreeMap::new(),
-        }
-    }
-}
 
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
@@ -2194,7 +2178,7 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut result = BulkAgentActionResult::default();
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
             let agent_id = agent.agent_id.agent_id.clone();
             let from_revision = agent.component_revision;
@@ -2206,12 +2190,12 @@ impl AgentCommandHandler {
                     log_error_action(
                         "Failed",
                         format!(
-                            "redeploying agent {}/{}: {error:#}",
+                            "redeploying agent {}/{}: {error}",
                             component_name.0.bold().blue(),
                             agent_id.bold().green(),
                         ),
                     );
-                    result.errors.insert(agent_id, format!("{error:#}"));
+                    result.errors.insert(agent_id, error.to_string());
                 }
             }
         }
@@ -2259,7 +2243,7 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut result = BulkAgentActionResult::default();
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
             let agent_id = &agent.agent_id.agent_id;
             match self.delete_agent(component_name, agent).await {
@@ -2287,7 +2271,7 @@ impl AgentCommandHandler {
         &self,
         component_name: &ComponentName,
         agent_metadata: AgentMetadata,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), RedeployAgentError> {
         log_warn_action(
             "Redeploying",
             format!(
@@ -2300,7 +2284,7 @@ impl AgentCommandHandler {
 
         self.delete_agent(component_name, &agent_metadata)
             .await
-            .context("failed to delete the agent")?;
+            .map_err(RedeployAgentError::Delete)?;
 
         log_action(
             "Recreating",
@@ -2317,7 +2301,7 @@ impl AgentCommandHandler {
             agent_metadata.config,
         )
         .await
-        .context("the agent was deleted, but failed to recreate it")?;
+        .map_err(RedeployAgentError::Recreate)?;
         log_action("Recreated", "agent");
 
         Ok(())

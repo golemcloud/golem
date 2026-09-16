@@ -15,10 +15,11 @@
 //! Lightweight structured result views for commands whose human-readable
 //! output is mostly progress text printed during the run.
 //!
-//! Each view implements `NoTextOutput`: when `--format text` is used
+//! Most views implement `NoTextOutput`: when `--format text` is used
 //! (the default), the user has already seen the progress lines on stdout
 //! and adding another rendering of the same information would just be
-//! noise. When `--format json/yaml/toon` is used, the progress text is routed
+//! noise (the bulk views only add a summary of failures). When
+//! `--format json/yaml/toon` is used, the progress text is routed
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
@@ -160,8 +161,16 @@ pub struct AgentRedeployResult {
     pub errors: BTreeMap<String, String>,
 }
 
-impl NoTextOutput for AgentRedeployResult {}
-impl TextOutput for AgentRedeployResult {}
+impl TextOutput for AgentRedeployResult {
+    /// Successful redeploys are already visible as progress lines; only failures get a summary.
+    fn log(&self) {
+        if !self.errors.is_empty() {
+            logln("");
+            logln(format!("Failed to redeploy {} agent(s)", self.errors.len()));
+            log_table(agent_errors_table(&self.errors));
+        }
+    }
+}
 
 impl StructuredOutput for AgentRedeployResult {
     const KIND: &'static str = "agent.redeploy";
@@ -209,17 +218,17 @@ impl TextOutput for AgentDeleteAllView {
         if !self.errors.is_empty() {
             logln("");
             logln(format!("Failed to delete {} agent(s)", self.errors.len()));
-
-            let mut table =
-                new_table_full_condensed(vec![Column::new("Agent ID"), Column::new("Error")]);
-
-            for (agent_id, error) in &self.errors {
-                table.add_row(vec![agent_id.to_string(), error.to_string()]);
-            }
-
-            log_table(table);
+            log_table(agent_errors_table(&self.errors));
         }
     }
+}
+
+fn agent_errors_table(errors: &BTreeMap<String, String>) -> ComfyTable {
+    let mut table = new_table_full_condensed(vec![Column::new("Agent ID"), Column::new("Error")]);
+    for (agent_id, error) in errors {
+        table.add_row(vec![agent_id.to_string(), error.to_string()]);
+    }
+    table
 }
 
 impl StructuredOutput for AgentDeleteAllView {

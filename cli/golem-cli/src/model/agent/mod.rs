@@ -68,6 +68,49 @@ impl Display for RawAgentId {
     }
 }
 
+/// Outcome of a best-effort bulk agent action (redeploy, delete-all): what succeeded, and the
+/// error for each agent it failed on, keyed by the (environment-unique) agent id.
+pub struct BulkAgentActionResult<T> {
+    pub succeeded: Vec<T>,
+    pub errors: BTreeMap<String, String>,
+}
+
+impl<T> BulkAgentActionResult<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            succeeded: Vec::with_capacity(capacity),
+            errors: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> Default for BulkAgentActionResult<T> {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+/// Why redeploying a single agent failed. Redeploying deletes and then recreates the agent, so
+/// the two phases are told apart: after a failed recreation the agent no longer exists.
+pub enum RedeployAgentError {
+    Delete(anyhow::Error),
+    Recreate(anyhow::Error),
+}
+
+impl Display for RedeployAgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Delete(error) => write!(f, "failed to delete the agent: {error:#}"),
+            Self::Recreate(error) => {
+                write!(
+                    f,
+                    "the agent was deleted, but failed to recreate it: {error:#}"
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {
