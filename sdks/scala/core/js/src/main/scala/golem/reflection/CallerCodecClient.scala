@@ -72,6 +72,15 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
   def bind(agentId: ParsedAgentId)(implicit
     canBind: CanBindAgentClient[Capability]
   ): Either[GolemReflectError, CallerCodecAgentClient] =
+    bindWithOverrides(agentId, Nil)
+
+  /**
+   * Overrides are used only if binding creates a worker; an existing worker
+   * keeps its initial config.
+   */
+  def bindWithOverrides(agentId: ParsedAgentId, overrides: List[ConfigOverride])(implicit
+    canBind: CanBindAgentClient[Capability]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
     for {
       parts <- agentId.parts
       _     <- contractName match {
@@ -96,8 +105,15 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
              case None        => Right(())
              case Some(codec) => ReflectionInternals.validate(SchemaRef(codec.graph), parts.constructorValue)
            }
-      transport <- Transport.create(parts.typeName, parts.constructorValue, parts.phantomId)
+      transport <- Transport.create(parts.typeName, parts.constructorValue, parts.phantomId, overrides)
     } yield new CallerCodecAgentClient(transport)
+
+  def bindWithConfig(agentId: ParsedAgentId, config: Config)(implicit
+    complete: Capability <:< Complete,
+    canBind: CanBindAgentClient[Capability]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    try bindWithOverrides(agentId, configCodec.fold(List.empty[ConfigOverride])(_.overrides(config)))
+    catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 }
 
 object AgentClientDefinition {
@@ -160,17 +176,13 @@ final case class CallerCodecPhantomClient(
 final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
   definition: AgentClientDefinition[Complete, Constructor, Config]
 ) {
-  def get(input: Constructor)(implicit
-    noConfig: Config =:= NoConfig
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
+  def get(input: Constructor): Either[GolemReflectError, CallerCodecAgentClient] =
     getWithOverrides(input, Nil)
 
   def get(input: Constructor, config: Config): Either[GolemReflectError, CallerCodecAgentClient] =
     getWithOverrides(input, encodeConfig(config))
 
-  def getPhantom(input: Constructor, phantomId: Uuid)(implicit
-    noConfig: Config =:= NoConfig
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
+  def getPhantom(input: Constructor, phantomId: Uuid): Either[GolemReflectError, CallerCodecAgentClient] =
     create(input, Some(phantomId), Nil)
 
   def getPhantom(
@@ -182,8 +194,6 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
 
   def newPhantom(
     input: Constructor
-  )(implicit
-    noConfig: Config =:= NoConfig
   ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
     newPhantomWithOverrides(input, Nil)
 

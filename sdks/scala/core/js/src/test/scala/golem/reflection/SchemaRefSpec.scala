@@ -157,12 +157,41 @@ object SchemaRefSpec extends ZIOSpecDefault {
         SchemaRef(complete.constructorCodec.get.graph),
         RecordValue(List(U32Value(1)))
       )
+      val configured = AgentClientDefinition.complete[String, String](
+        name = "ConfiguredCounterAgent",
+        mode = AgentMode.Durable,
+        constructor = InputRecordCodec.single[String]("name"),
+        config = AgentConfigCodec[String](_ => Nil)
+      )
+      val optionalConfig: String => Either[GolemReflectError, CallerCodecAgentClient] = configured.client.get
 
       assertTrue(
         binding.contractName.isEmpty,
         complete.contractName.contains("CounterAgent"),
-        wrongShape.isLeft
+        wrongShape.isLeft,
+        optionalConfig != null
       )
+    },
+    test("reflected config validates declared local paths before RPC creation") {
+      val stringSchema = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      val agentType    = new AgentType(
+        "ConfiguredCounterAgent",
+        "",
+        "scala",
+        AgentMode.Durable,
+        ComponentId(golem.Uuid(BigInt(0), BigInt(1))),
+        SchemaRef(graph),
+        Nil,
+        List(
+          ReflectedConfigDeclaration(List("greeting"), "local", stringSchema),
+          ReflectedConfigDeclaration(List("apiKey"), "secret", stringSchema)
+        )
+      )
+      val good    = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.String("hello"))))
+      val unknown = agentType.packConfigJson(List(ReflectedConfigJson(List("unknown"), Json.String("x"))))
+      val secret  = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
+      val invalid = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
+      assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft)
     }
   )
 }

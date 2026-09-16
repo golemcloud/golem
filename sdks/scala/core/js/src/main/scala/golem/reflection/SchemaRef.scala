@@ -98,9 +98,9 @@ private object CanonicalJson {
       case StringType               => typed("string")
       case RecordType(recordFields) =>
         Json.Object(
-          "type"       -> Json.String("object"),
-          "properties" -> Json.Object(recordFields.map(field => field.name -> schemaJson(graph, field.body)): _*),
-          "required"   -> Json.Array(recordFields.map(field => Json.String(field.name)): _*),
+          "type"                 -> Json.String("object"),
+          "properties"           -> Json.Object(recordFields.map(field => field.name -> schemaJson(graph, field.body)): _*),
+          "required"             -> Json.Array(recordFields.map(field => Json.String(field.name)): _*),
           "additionalProperties" -> Json.Boolean(false)
         )
       case VariantType(cases) =>
@@ -267,7 +267,7 @@ private object CanonicalJson {
         val value = decimal(json).toDouble
         if (!java.lang.Double.isFinite(value)) fail("number is outside the f64 range")
         F64Value(value)
-      case CharType   =>
+      case CharType =>
         val text = string(json)
         if (text.codePointCount(0, text.length) != 1) fail("expected one Unicode scalar")
         CharValue(text.codePointAt(0))

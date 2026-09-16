@@ -26,6 +26,7 @@ import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
 import golem.schema.validation.ValueValidation
 import golem.schema.wire.SchemaWire
+import golem.config.ConfigOverride
 import golem.{Datetime, FutureInterop, Uuid}
 import zio.blocks.schema.json.Json
 
@@ -125,7 +126,8 @@ final class AgentType private[reflection] (
   val mode: AgentMode,
   val implementedBy: ComponentId,
   val constructorInput: SchemaRef,
-  val methods: List[AgentMethod]
+  val methods: List[AgentMethod],
+  val config: List[ReflectedConfigDeclaration]
 ) {
   val client: ReflectedAgentClientFactory = new ReflectedAgentClientFactory(this)
 
@@ -141,7 +143,10 @@ final class AgentType private[reflection] (
   def agentIdValue(input: SchemaValue, phantomId: Option[Uuid] = None): Either[GolemReflectError, ParsedAgentId] =
     validate(constructorInput, input).flatMap(_ => ParsedAgentId.create(name, input, phantomId))
 
-  def bind(agentId: ParsedAgentId): Either[GolemReflectError, ReflectedAgentClient] =
+  def bind(
+    agentId: ParsedAgentId,
+    overrides: List[ConfigOverride] = Nil
+  ): Either[GolemReflectError, ReflectedAgentClient] =
     for {
       parts <- agentId.parts
       _     <- Either.cond(
@@ -154,9 +159,39 @@ final class AgentType private[reflection] (
              (),
              GolemReflectError.Identity(s"Cannot bind an existing identity to ephemeral agent type '$name'")
            )
-      client <- client.createValue(parts.constructorValue, parts.phantomId)
+      client <- client.createValue(parts.constructorValue, parts.phantomId, overrides)
     } yield client
+
+  def packConfigJson(entries: List[ReflectedConfigJson]): Either[GolemReflectError, List[ConfigOverride]] =
+    ReflectionInternals.sequence(entries.map { entry =>
+      configDeclaration(entry.path).flatMap { declaration =>
+        declaration.schema.packJson(entry.value).left.map(error => GolemReflectError.Validation(error.message)).map {
+          value =>
+            ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, value))
+        }
+      }
+    })
+
+  def validateConfig(overrides: List[ConfigOverride]): Either[GolemReflectError, List[ConfigOverride]] =
+    ReflectionInternals.sequence(overrides.map { entry =>
+      configDeclaration(entry.path).flatMap { declaration =>
+        validate(declaration.schema, entry.value.value).map { _ =>
+          ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, entry.value.value))
+        }
+      }
+    })
+
+  private def configDeclaration(path: List[String]): Either[GolemReflectError, ReflectedConfigDeclaration] =
+    config.find(_.path == path) match {
+      case None                                                => Left(GolemReflectError.Validation(s"Unknown config path '${path.mkString(".")}'"))
+      case Some(declaration) if declaration.source == "secret" =>
+        Left(GolemReflectError.Validation(s"Cannot override secret config field '${path.mkString(".")}' over RPC"))
+      case Some(declaration) => Right(declaration)
+    }
 }
+
+final case class ReflectedConfigDeclaration(path: List[String], source: String, schema: SchemaRef)
+final case class ReflectedConfigJson(path: List[String], value: Json)
 
 object Reflection {
   def getAllAgentTypes(): Either[GolemReflectError, List[AgentType]] =
@@ -206,7 +241,13 @@ object Reflection {
           mode,
           ComponentId.fromJs(registered.implementedBy),
           inputRef(graph, decoded, raw.constructor.inputSchema),
-          methods
+          methods,
+          raw.config.toList.map { declaration =>
+            val root = SchemaWire
+              .schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = declaration.valueType))
+              .root
+            ReflectedConfigDeclaration(declaration.path.toList, declaration.source, SchemaRef(decoded, root))
+          }
         )
       )
     } catch { case NonFatal(error) => Left(GolemReflectError.SchemaDecode(error.getMessage)) }
@@ -236,39 +277,69 @@ object Reflection {
 final case class ReflectedPhantomClient(agentId: ParsedAgentId, phantomId: Uuid, client: ReflectedAgentClient)
 
 final class ReflectedAgentClientFactory private[reflection] (agentType: AgentType) {
-  def get(input: Json): Either[GolemReflectError, ReflectedAgentClient] =
-    requireDurable("get").flatMap(_ => pack(input)).flatMap(createValue(_, None))
+  def get(input: Json, config: List[ReflectedConfigJson] = Nil): Either[GolemReflectError, ReflectedAgentClient] =
+    for {
+      _           <- requireDurable("get")
+      constructor <- pack(input)
+      overrides   <- agentType.packConfigJson(config)
+      client      <- createValue(constructor, None, overrides)
+    } yield client
 
-  def getValue(input: SchemaValue): Either[GolemReflectError, ReflectedAgentClient] =
-    requireDurable("getValue").flatMap(_ => createValue(input, None))
+  def getValue(
+    input: SchemaValue,
+    config: List[ConfigOverride] = Nil
+  ): Either[GolemReflectError, ReflectedAgentClient] =
+    requireDurable("getValue").flatMap(_ => createValue(input, None, config))
 
-  def getPhantom(input: Json, phantomId: Uuid): Either[GolemReflectError, ReflectedAgentClient] =
-    pack(input).flatMap(createValue(_, Some(phantomId)))
+  def getPhantom(
+    input: Json,
+    phantomId: Uuid,
+    config: List[ReflectedConfigJson] = Nil
+  ): Either[GolemReflectError, ReflectedAgentClient] =
+    for {
+      constructor <- pack(input)
+      overrides   <- agentType.packConfigJson(config)
+      client      <- createValue(constructor, Some(phantomId), overrides)
+    } yield client
 
-  def getPhantomValue(input: SchemaValue, phantomId: Uuid): Either[GolemReflectError, ReflectedAgentClient] =
-    createValue(input, Some(phantomId))
+  def getPhantomValue(
+    input: SchemaValue,
+    phantomId: Uuid,
+    config: List[ConfigOverride] = Nil
+  ): Either[GolemReflectError, ReflectedAgentClient] =
+    createValue(input, Some(phantomId), config)
 
-  def newPhantom(input: Json): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
-    pack(input).flatMap(newPhantomValue)
+  def newPhantom(
+    input: Json,
+    config: List[ReflectedConfigJson] = Nil
+  ): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
+    for {
+      constructor <- pack(input)
+      overrides   <- agentType.packConfigJson(config)
+      result      <- newPhantomValue(constructor, overrides)
+    } yield result
 
   def newPhantomValue(
-    input: SchemaValue
+    input: SchemaValue,
+    config: List[ConfigOverride] = Nil
   ): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
-    if (agentType.mode == AgentMode.Ephemeral) createValue(input, None).map(Left(_))
+    if (agentType.mode == AgentMode.Ephemeral) createValue(input, None, config).map(Left(_))
     else {
       val phantom = Uuid.random()
       for {
         id     <- agentType.agentIdValue(input, Some(phantom))
-        client <- createValue(input, Some(phantom))
+        client <- createValue(input, Some(phantom), config)
       } yield Right(ReflectedPhantomClient(id, phantom, client))
     }
 
   private[reflection] def createValue(
     input: SchemaValue,
-    phantomId: Option[Uuid]
+    phantomId: Option[Uuid],
+    config: List[ConfigOverride] = Nil
   ): Either[GolemReflectError, ReflectedAgentClient] =
     validate(agentType.constructorInput, input)
-      .flatMap(_ => Transport.create(agentType.name, input, phantomId))
+      .flatMap(_ => agentType.validateConfig(config))
+      .flatMap(overrides => Transport.create(agentType.name, input, phantomId, overrides))
       .map(new ReflectedAgentClient(agentType, _))
 
   private def pack(input: Json): Either[GolemReflectError, SchemaValue] =
