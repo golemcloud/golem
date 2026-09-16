@@ -53,7 +53,8 @@ use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
 };
 use crate::model::oplog::payload::types::{
-    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+    SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -66,16 +67,16 @@ use crate::model::oplog::public_oplog_entry::{
     ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
     InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    PublicQueuedCardEventCard, ReadOnlyViolationError,
+    OplogErrorKind, PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -860,6 +861,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
+                kind: oplog_error_kind_from_proto(error.kind)?,
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
                 inside_atomic_region: error.inside_atomic_region,
@@ -868,6 +870,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .map(TryInto::try_into)
                     .transpose()?,
             })),
+            oplog_entry::Entry::RecoverySucceeded(recovery_succeeded) => Ok(
+                PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
+                    timestamp: recovery_succeeded
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                }),
+            ),
             oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -998,6 +1008,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::Restart(restart) => Ok(PublicOplogEntry::Restart(RestartParams {
                 timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
+            oplog_entry::Entry::Resumed(resumed) => Ok(PublicOplogEntry::Resumed(ResumedParams {
+                timestamp: resumed.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
             oplog_entry::Entry::ActivatePlugin(activate) => {
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
@@ -1487,6 +1500,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 entry: Some(oplog_entry::Entry::Error(
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
+                        kind: oplog_error_kind_to_proto(error.kind) as i32,
                         error: error.error,
                         retry_from: error.retry_from.0,
                         inside_atomic_region: error.inside_atomic_region,
@@ -1494,6 +1508,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
+            PublicOplogEntry::RecoverySucceeded(recovery_succeeded) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::RecoverySucceeded(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(recovery_succeeded.timestamp.into()),
+                        },
+                    )),
+                }
+            }
             PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::NoOp(
                     golem_api_grpc::proto::golem::worker::TimestampParameter {
@@ -1645,6 +1668,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::Restart(
                         golem_api_grpc::proto::golem::worker::TimestampParameter {
                             timestamp: Some(restart.timestamp.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::Resumed(resumed) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Resumed(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(resumed.timestamp.into()),
                         },
                     )),
                 }
@@ -2721,7 +2753,13 @@ fn tool_rpc_error_from_proto(
                 }
                 ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
                 ToolError::CustomError(value) => {
-                    SerializableToolError::CustomError(Box::new(value.try_into()?))
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: value.name,
+                        payload: value
+                            .payload
+                            .ok_or("Missing custom tool error payload")?
+                            .try_into()?,
+                    }))
                 }
             },
         )),
@@ -2755,9 +2793,12 @@ fn tool_rpc_error_to_proto(
                     ToolError::ConstraintViolation(value)
                 }
                 SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
-                SerializableToolError::CustomError(value) => {
-                    ToolError::CustomError((*value).try_into()?)
-                }
+                SerializableToolError::CustomError(value) => ToolError::CustomError(
+                    golem_api_grpc::proto::golem::worker::PublicCustomToolError {
+                        name: value.name,
+                        payload: Some(value.payload.try_into()?),
+                    },
+                ),
             };
             RpcError::RemoteToolError(golem_api_grpc::proto::golem::worker::PublicToolError {
                 error: Some(error),
@@ -3380,10 +3421,14 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
                 timestamp: error.timestamp,
                 entity_parent_start_index: None,
+                kind: error.kind,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
+            }),
+            PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
+                timestamp: p.timestamp,
             }),
             PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
                 timestamp: p.timestamp,
@@ -3469,6 +3514,9 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 message: p.message,
             }),
             PublicOplogEntry::Restart(p) => Ok(OplogEntry::Restart {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::Resumed(p) => Ok(OplogEntry::Resumed {
                 timestamp: p.timestamp,
             }),
             PublicOplogEntry::ActivatePlugin(p) => Ok(OplogEntry::ActivatePlugin {
@@ -4231,6 +4279,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
@@ -4238,12 +4287,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
+                kind: oplog_error_kind_to_proto(kind) as i32,
                 retry_from: retry_from.into(),
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
             }),
+            OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
             OplogEntry::NoOp { .. } => Entry::NoOp(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
                 jump: Some(RawOplogRegion {
@@ -4341,6 +4392,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
             OplogEntry::Restart { .. } => Entry::Restart(RawTimestampOnly {}),
+            OplogEntry::Resumed { .. } => Entry::Resumed(RawTimestampOnly {}),
             OplogEntry::ActivatePlugin {
                 plugin_grant_id, ..
             } => Entry::ActivatePlugin(RawActivatePluginParameters {
@@ -4817,12 +4869,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Error {
                     timestamp,
                     entity_parent_start_index,
+                    kind: oplog_error_kind_from_proto(p.kind)?,
                     error,
                     retry_from,
                     inside_atomic_region: p.inside_atomic_region,
                     retry_policy_state,
                 })
             }
+            Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
             Entry::NoOp(_) => Ok(OplogEntry::NoOp {
                 timestamp,
                 entity_parent_start_index,
@@ -4943,6 +4997,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 })
             }
             Entry::Restart(_) => Ok(OplogEntry::Restart { timestamp }),
+            Entry::Resumed(_) => Ok(OplogEntry::Resumed { timestamp }),
             Entry::ActivatePlugin(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id
@@ -5254,6 +5309,29 @@ fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
     }
 }
 
+fn oplog_error_kind_to_proto(
+    kind: OplogErrorKind,
+) -> golem_api_grpc::proto::golem::worker::OplogErrorKind {
+    match kind {
+        OplogErrorKind::Invocation => {
+            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation
+        }
+        OplogErrorKind::Recovery => golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery,
+    }
+}
+
+fn oplog_error_kind_from_proto(kind: i32) -> Result<OplogErrorKind, String> {
+    match golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind) {
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation) => {
+            Ok(OplogErrorKind::Invocation)
+        }
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery) => {
+            Ok(OplogErrorKind::Recovery)
+        }
+        Err(_) => Err(format!("Unknown oplog error kind: {kind}")),
+    }
+}
+
 #[cfg(test)]
 mod observational_start_proto_tests {
     use crate::model::OplogIndex;
@@ -5313,7 +5391,8 @@ mod public_tool_result_proto_tests {
         ExternalToolResultParameters, PublicAgentInvocationResult, PublicExternalToolResult,
     };
     use crate::base_model::tool::{
-        SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+        SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+        SerializableToolRpcError,
     };
     use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
     use test_r::test;
@@ -5364,7 +5443,10 @@ mod public_tool_result_proto_tests {
                 SerializableToolError::InvalidResult("result".into()),
             )),
             SerializableToolRpcError::RemoteToolError(Box::new(
-                SerializableToolError::CustomError(Box::new(typed("custom"))),
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: "custom".into(),
+                    payload: typed("custom"),
+                })),
             )),
         ] {
             assert_roundtrip(PublicExternalToolResult::Failure(error));

@@ -537,6 +537,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                                 WHERE component_id = $1
                                 UNION ALL
                                 SELECT component_id
+                                FROM tool_middleware_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
                                 FROM deployment_component_revisions
                                 WHERE component_id = $1
                                 UNION ALL
@@ -692,6 +696,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM components c
@@ -764,6 +769,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM current_deployments cd
@@ -862,6 +868,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM distinct_revs dr
@@ -910,6 +917,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM components c

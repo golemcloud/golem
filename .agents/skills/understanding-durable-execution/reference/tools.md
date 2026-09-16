@@ -38,7 +38,7 @@ MCP authenticates before dispatch and grants only Invoke on the exact fresh owne
 authority. Its finite stream adapter buffers at most 16 MiB per direction while draining stdout
 concurrently with stdin.
 
-`worker/invocation.rs` drives `invoke_native_tool` through a registered `NativeToolTask` under
+`worker/invocation.rs` drives `invoke_external_tool` through a registered `NativeToolTask` under
 the same invocation start, deadline, principal/scope, tail settlement and committed completion as
 methods. Registering the task lets Wasmtime account for pending host I/O rather than reporting an
 idle-store deadlock. Native dispatch uses the same entity boundary without an outer call-tool
@@ -91,6 +91,21 @@ with `parent_start_index` pointing at its enclosing scope — normally that enti
 belonging to one owner": entity Stores clone the primary's `ReplayState`, which shares the cursor
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
+
+### Native bodies
+
+Native tools use the same owner-oplog entity boundary with a retained worker context instead of
+a guest Store. Their implementations call the existing durable host helpers. After the body,
+`invoke_native_tool` attempts parent settlement and checks pending attachment admission rejection
+before encoding a terminal: catching the host error cannot turn a rejected admission into success.
+Otherwise an infrastructure/body error takes precedence over a simultaneous settlement error;
+settlement errors replace only successfully executed bodies, including declared tool-error results.
+
+The native authoring macro injects `golem_native_tool::NativeToolCancellation` separately from
+command input. `NativeToolAdapter` forwards the caller's cancellation signal through an
+observation-only handle (`is_cancelled`, `cancelled`). It cannot cancel the caller or siblings,
+does not undo effects, and does not guarantee cleanup will run. Completed replay has no live
+cancellation source: the handle reports false and its cancellation future stays pending.
 
 ### Why completed bodies re-execute
 

@@ -17,6 +17,11 @@ steps:
         In the test-app project, modify the CounterAgent's increment method to print the
         current counter value to stdout each time it is called, using console.log. For example,
         print "counter value: {value}" where {value} is the counter value after incrementing.
+      effect: >
+        In the Effect-based test-app project, modify the existing `Counter` agent's Effect-based
+        `increment` handler to log `counter value: {value}` to stdout after incrementing. Use
+        Effect logging primitives, preserve the `Counter` runtime name, and import the
+        implementation from `src/main.ts`.
       scala: >
         In the test-app project, modify the CounterAgent's increment method to print the
         current counter value to stdout each time it is called, using println. For example,
@@ -41,6 +46,10 @@ steps:
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
         output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
         to a file called no-stream-output.txt in the test-app directory.
+      effect: >
+        Invoke the Counter agent named "c1" method `increment` through the CLI with log streaming
+        disabled (`--no-stream`). Redirect all stdout and stderr to `no-stream-output.txt` in the
+        test-app directory.
       scala: >
         I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
@@ -70,6 +79,10 @@ steps:
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
         stdout and stderr) to a file called stream-output.txt in the test-app directory.
+      effect: >
+        Invoke the Counter agent named "c1" method `increment` again through the CLI with default
+        streaming enabled. Redirect all stdout and stderr to `stream-output.txt` in the test-app
+        directory.
       scala: >
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
@@ -100,6 +113,10 @@ steps:
         --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
         CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
         test-app directory.
+      effect: >
+        Invoke the Counter agent named "c1" method `increment` again through the CLI with
+        `--logs-only`, `--stream-no-timestamp`, and `--stream-no-log-level`. Redirect all stdout
+        and stderr to `logs-only-output.txt` in the test-app directory.
       scala: >
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
@@ -122,7 +139,12 @@ steps:
 
   - id: "verify-counter"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:

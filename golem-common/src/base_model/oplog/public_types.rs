@@ -75,7 +75,7 @@ impl PublicAgentInvocationResult {
                     if let crate::base_model::tool::SerializableToolError::CustomError(value) =
                         error.as_mut()
                     {
-                        redact_typed_value(value);
+                        redact_typed_value(&mut value.payload);
                     }
                 }
                 PublicExternalToolResult::Failure(_) => {}
@@ -131,7 +131,9 @@ mod host_managed_redaction_tests {
     use crate::base_model::oplog::public_oplog_entry::{
         AgentInvocationFinishedParams, HostStreamFrameParams,
     };
-    use crate::base_model::tool::{SerializableToolError, SerializableToolRpcError};
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
     use crate::schema::{
         SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
     };
@@ -183,7 +185,10 @@ mod host_managed_redaction_tests {
             result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
                 result: PublicExternalToolResult::Failure(
                     SerializableToolRpcError::RemoteToolError(Box::new(
-                        SerializableToolError::CustomError(Box::new(secret())),
+                        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                            name: "secret-error".to_string(),
+                            payload: secret(),
+                        })),
                     )),
                 ),
             }),
@@ -208,7 +213,8 @@ mod host_managed_redaction_tests {
         let SerializableToolError::CustomError(value) = *error else {
             unreachable!()
         };
-        assert!(find_host_managed_value(value.value()).is_none());
+        assert_eq!(value.name, "secret-error");
+        assert!(find_host_managed_value(value.payload.value()).is_none());
     }
 }
 
@@ -706,6 +712,15 @@ pub enum LogLevel {
     Error,
     #[cfg_attr(feature = "full", desert(transparent))]
     Critical,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum OplogErrorKind {
+    Invocation,
+    Recovery,
 }
 
 /// Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs

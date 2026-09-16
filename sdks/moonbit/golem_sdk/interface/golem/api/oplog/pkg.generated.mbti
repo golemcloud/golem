@@ -14,6 +14,13 @@ import {
 pub fn enrich_oplog_entries(@host.EnvironmentId, @types.AgentId, Array[(UInt64, OplogEntry)], UInt64) -> Result[Array[PublicOplogEntry], String]
 
 // Errors
+pub(all) suberror OplogErrorKind {
+  INVOCATION
+  RECOVERY
+} derive(Eq, @debug.Debug)
+pub fn OplogErrorKind::from(Int) -> Self
+pub fn OplogErrorKind::ordinal(Self) -> Int
+
 pub(all) suberror OplogReadError {
   PermissionDenied
   InternalError(String)
@@ -25,7 +32,7 @@ pub(all) suberror ToolError {
   InvalidInput(String)
   ConstraintViolation(String)
   InvalidResult(String)
-  CustomError(@types.TypedSchemaValue)
+  CustomError(CustomToolError)
 } derive(Eq, @debug.Debug)
 
 pub(all) suberror ToolRpcError {
@@ -230,6 +237,11 @@ pub(all) struct CreateResourceParameters {
   owner : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct CustomToolError {
+  name : String
+  payload : @types.TypedSchemaValue
+} derive(Eq, @debug.Debug)
+
 pub(all) struct DeactivatePluginParameters {
   timestamp : @system-clock.Instant
   plugin : PluginInstallationDescription
@@ -278,6 +290,7 @@ pub(all) struct EphemeralSleepTooLong {
 
 pub(all) struct ErrorParameters {
   timestamp : @system-clock.Instant
+  kind : OplogErrorKind
   error : String
   retry_from : UInt64
   inside_atomic_region : Bool
@@ -396,6 +409,7 @@ pub(all) enum OplogEntry {
   AgentInvocationFinished(RawAgentInvocationFinishedParameters)
   Suspend(Timestamp)
   Error(RawErrorParameters)
+  RecoverySucceeded(Timestamp)
   NoOp(Timestamp)
   Jump(JumpParameters)
   Interrupted(Timestamp)
@@ -411,6 +425,7 @@ pub(all) enum OplogEntry {
   DropResource(RawDropResourceParameters)
   Log(LogParameters)
   Restart(Timestamp)
+  Resumed(Timestamp)
   ActivatePlugin(RawActivatePluginParameters)
   DeactivatePlugin(RawDeactivatePluginParameters)
   Revert(RevertParameters)
@@ -510,6 +525,7 @@ pub(all) enum PublicOplogEntry {
   AgentInvocationFinished(AgentInvocationFinishedParameters)
   Suspend(Timestamp)
   Error(ErrorParameters)
+  RecoverySucceeded(Timestamp)
   NoOp(Timestamp)
   Jump(JumpParameters)
   Interrupted(Timestamp)
@@ -525,6 +541,7 @@ pub(all) enum PublicOplogEntry {
   DropResource(DropResourceParameters)
   Log(LogParameters)
   Restart(Timestamp)
+  Resumed(Timestamp)
   ActivatePlugin(ActivatePluginParameters)
   DeactivatePlugin(DeactivatePluginParameters)
   Revert(RevertParameters)
@@ -668,6 +685,7 @@ pub(all) struct RawEndParameters {
 
 pub(all) struct RawErrorParameters {
   timestamp : @system-clock.Instant
+  kind : OplogErrorKind
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool

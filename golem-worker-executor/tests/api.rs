@@ -25,7 +25,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -1785,7 +1785,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
@@ -1832,6 +1832,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     let revoked = client
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
+            revision: 1,
         })
         .await?
         .into_inner();
@@ -1861,7 +1862,12 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     );
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
         })
         .await?
         .into_inner();
@@ -1879,7 +1885,12 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     faults.clear();
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 3,
         })
         .await?
         .into_inner();
@@ -4047,14 +4058,25 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
         .await?;
 
-    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    // Running can describe initialization before the poll invocation starts.
     tokio::time::timeout(Duration::from_secs(30), async {
-        while let Some(Some(event)) = rx.recv().await {
-            if stdout_event_matching(&event, "Received initial\n") {
-                return Ok(());
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
             }
         }
-        Err(anyhow!("Log stream ended before the first poll completed"))
+        Ok(())
     })
     .await
     .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
@@ -4546,14 +4568,25 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
-    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    // Running can describe initialization before the poll invocation starts.
     tokio::time::timeout(Duration::from_secs(30), async {
-        while let Some(Some(event)) = rx.recv().await {
-            if stdout_event_matching(&event, "Received initial\n") {
-                return Ok(());
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
             }
         }
-        Err(anyhow!("Log stream ended before the first poll completed"))
+        Ok(())
     })
     .await
     .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
@@ -4957,6 +4990,7 @@ async fn stderr_returned_for_failed_component(
 
     assert_eq!(metadata.status, AgentStatus::Failed);
     assert!(metadata.last_error.is_some());
+    assert_eq!(metadata.last_error_kind, Some(OplogErrorKind::Invocation));
     let last_error = metadata.last_error.unwrap();
     assert!(
         last_error.contains("error log message"),
@@ -4970,6 +5004,7 @@ async fn stderr_returned_for_failed_component(
     assert!(next.is_none());
     assert_eq!(all.len(), 1);
     assert!(all[0].last_error.is_some());
+    assert_eq!(all[0].last_error_kind, Some(OplogErrorKind::Invocation));
     let all_last_error = all[0].last_error.clone().unwrap();
     assert!(
         all_last_error.contains("error log message"),
@@ -6160,6 +6195,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .clone()
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
         })
         .await?;
     Ok(())
@@ -6167,14 +6203,19 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
 
 /// Hands shard 0 back, so the agents on it are this executor's again.
 async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
 
     executor
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![ShardId { value: 0 }],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
         })
         .await?;
     Ok(())

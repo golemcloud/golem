@@ -14,7 +14,8 @@
 
 use crate::base_model::TransactionId;
 pub use crate::base_model::tool::{
-    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+    SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
 };
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;

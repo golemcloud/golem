@@ -11,7 +11,6 @@ import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
-import "golem/worker/worker_metadata.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
@@ -84,6 +83,8 @@ message OplogEntry {
     DurableStreamRecordParameters StreamEnd = 62;
     DurableStreamRecordParameters StreamCancel = 63;
     DurableStreamRecordParameters StreamSession = 64;
+    TimestampParameter Resumed = 65;
+    TimestampParameter RecoverySucceeded = 66;
   }
 }
 
@@ -288,8 +289,13 @@ message PublicToolError {
     string invalid_input = 3;
     string constraint_violation = 4;
     string invalid_result = 5;
-    golem.schema.TypedSchemaValue custom_error = 6;
+    PublicCustomToolError custom_error = 6;
   }
+}
+
+message PublicCustomToolError {
+  string name = 1;
+  golem.schema.TypedSchemaValue payload = 2;
 }
 
 message StringList {
@@ -348,12 +354,18 @@ message RetryPolicyStatePair {
   RetryPolicyState second = 2;
 }
 
+enum OplogErrorKind {
+  INVOCATION = 0;
+  RECOVERY = 1;
+}
+
 message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
   bool inside_atomic_region = 4;
   optional RetryPolicyState retry_policy_state = 5;
+  OplogErrorKind kind = 6;
 }
 
 message JumpParameters {

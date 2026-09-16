@@ -6199,7 +6199,8 @@ mod tests {
     #[test]
     async fn native_tool_results_survive_session_reconstruction_and_reject_changed_results() {
         use golem_common::model::tool::{
-            SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+            SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+            SerializableToolRpcError,
         };
         use golem_common::schema::TypedSchemaValue;
 
@@ -6214,7 +6215,10 @@ mod tests {
             Ok(SerializableToolInvocationResult { result: None }),
             Err(SerializableToolRpcError::Denied("denied tool".to_string())),
             Err(SerializableToolRpcError::RemoteToolError(Box::new(
-                SerializableToolError::CustomError(Box::new(value)),
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: "quota-exceeded".to_string(),
+                    payload: value,
+                })),
             ))),
         ] {
             let identity = identity();

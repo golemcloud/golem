@@ -23,6 +23,7 @@ tags:
 - name: Environment
 - name: EnvironmentPluginGrants
 - name: EnvironmentToolGrants
+- name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
@@ -36,6 +37,7 @@ tags:
 - name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: ToolMiddlewareReleases
 - name: ToolReleases
 - name: Worker
 paths:
@@ -2677,6 +2679,8 @@ components:
           format: date-time
         lastError:
           type: string
+        lastErrorKind:
+          $ref: '#/components/schemas/OplogErrorKind'
         componentSize:
           type: integer
           format: uint64
@@ -4963,6 +4967,11 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+    OplogErrorKind:
+      type: string
+      enum:
+      - invocation
+      - recovery
     OplogRegion:
       type: object
       title: OplogRegion
@@ -5617,6 +5626,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -5632,6 +5642,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -5677,6 +5688,7 @@ components:
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+          RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
           NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -5692,6 +5704,7 @@ components:
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
           Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+          Resumed: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -6267,6 +6280,18 @@ components:
             - PreRollbackRemoteTransaction
             example: PreRollbackRemoteTransaction
       - $ref: '#/components/schemas/r#PreRollbackRemoteTransactionParams'
+    PublicOplogEntry_r#RecoverySucceededParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RecoverySucceeded
+            example: RecoverySucceeded
+      - $ref: '#/components/schemas/r#RecoverySucceededParams'
     PublicOplogEntry_r#RemoveRetryPolicyParams:
       allOf:
       - type: object
@@ -6291,6 +6316,18 @@ components:
             - Restart
             example: Restart
       - $ref: '#/components/schemas/r#RestartParams'
+    PublicOplogEntry_r#ResumedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Resumed
+            example: Resumed
+      - $ref: '#/components/schemas/r#ResumedParams'
     PublicOplogEntry_r#RevertParams:
       allOf:
       - type: object
@@ -8327,6 +8364,16 @@ components:
         category:
           type: string
           nullable: true
+    SerializableCustomToolError:
+      type: object
+      required:
+      - name
+      - payload
+      properties:
+        name:
+          type: string
+        payload:
+          $ref: '#/components/schemas/TypedSchemaValue'
     SerializableToolError:
       type: object
       oneOf:
@@ -8397,7 +8444,7 @@ components:
             enum:
             - CustomError
           value:
-            $ref: '#/components/schemas/TypedSchemaValue'
+            $ref: '#/components/schemas/SerializableCustomToolError'
     SerializableToolInvocationResult:
       type: object
       properties:
@@ -9332,6 +9379,7 @@ components:
       title: r#ErrorParams
       required:
       - timestamp
+      - kind
       - error
       - retryFrom
       - insideAtomicRegion
@@ -9339,6 +9387,8 @@ components:
         timestamp:
           type: string
           format: date-time
+        kind:
+          $ref: '#/components/schemas/OplogErrorKind'
         error:
           type: string
         retryFrom:
@@ -9545,6 +9595,15 @@ components:
         beginIndex:
           type: integer
           format: uint64
+    r#RecoverySucceededParams:
+      type: object
+      title: r#RecoverySucceededParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
     r#RemoveRetryPolicyParams:
       type: object
       title: r#RemoveRetryPolicyParams
@@ -9560,6 +9619,15 @@ components:
     r#RestartParams:
       type: object
       title: r#RestartParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#ResumedParams:
+      type: object
+      title: r#ResumedParams
       required:
       - timestamp
       properties:

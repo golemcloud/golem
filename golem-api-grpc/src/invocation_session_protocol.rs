@@ -2037,7 +2037,10 @@ fn external_tool_result_stream_references(
         Some(public_external_tool_result::Result::Error(error)) => match error.error.as_ref() {
             Some(public_tool_rpc_error::Error::RemoteToolError(error)) => {
                 match error.error.as_ref() {
-                    Some(public_tool_error::Error::CustomError(typed)) => typed.value.as_ref(),
+                    Some(public_tool_error::Error::CustomError(error)) => error
+                        .payload
+                        .as_ref()
+                        .and_then(|typed| typed.value.as_ref()),
                     Some(_) => None,
                     None => return Err("external-tool error has no value".to_string()),
                 }

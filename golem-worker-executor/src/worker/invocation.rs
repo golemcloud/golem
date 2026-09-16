@@ -521,7 +521,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(Ok(()))) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::AgentInitialization,
+                    result: Box::new(AgentInvocationResult::AgentInitialization),
                 }),
                 Ok(Ok(Err(wire_err))) => {
                     invoke_result_from_agent_error(store, consumed_fuel, wire_err)
@@ -529,7 +529,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -570,7 +570,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
-                        result: AgentInvocationResult::AgentMethod { output },
+                        result: Box::new(AgentInvocationResult::AgentMethod { output }),
                     })
                 }
                 Ok(Ok(Err(wire_err))) => {
@@ -579,7 +579,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -595,14 +595,14 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(snapshot)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::SaveSnapshot {
+                    result: Box::new(AgentInvocationResult::SaveSnapshot {
                         snapshot: snapshot.into(),
-                    },
+                    }),
                 }),
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -619,12 +619,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::LoadSnapshot { error: inner.err() },
+                    result: Box::new(AgentInvocationResult::LoadSnapshot { error: inner.err() }),
                 }),
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -660,12 +660,14 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::ProcessOplogEntries { error: inner.err() },
+                    result: Box::new(AgentInvocationResult::ProcessOplogEntries {
+                        error: inner.err(),
+                    }),
                 }),
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -680,12 +682,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             principal,
         } => {
             prepare_guest_call(store, display_name).await;
-            let result = crate::durable_host::tool::invoke_native_tool(
+            let result = crate::durable_host::tool::invoke_external_tool(
                 store,
                 activation,
                 tool_name,
                 command_path,
-                input,
+                *input,
                 stdin,
                 stdout,
                 principal,
@@ -696,7 +698,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(result)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::ExternalTool { result },
+                    result: Box::new(AgentInvocationResult::ExternalTool { result }),
                 }),
                 Ok(Err(error)) => {
                     let retry_from = store.data().get_current_retry_point().await;
@@ -714,7 +716,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 }
                 Err(GuestCallSettlementError::Interrupted(error))
                 | Err(GuestCallSettlementError::Trap(error)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, error).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, error).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -751,20 +753,38 @@ async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     err: wasmtime::Error,
-) -> InvokeResult {
+) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
     let in_atomic_region = store.data().current_in_atomic_region();
     let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
-    InvokeResult::from_error::<Ctx>(
+    if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
+        return Err(error);
+    }
+    Ok(InvokeResult::from_error::<Ctx>(
         consumed_fuel,
         &err,
         retry_from,
         in_atomic_region,
         atomic_region_had_side_effects,
         agent_mode,
-    )
+    ))
+}
+
+fn replay_divergence_from_trap(
+    error: &anyhow::Error,
+    is_live: bool,
+) -> Option<WorkerExecutorError> {
+    (!is_live)
+        .then(|| {
+            error
+                .chain()
+                .find_map(|error| error.downcast_ref::<WorkerExecutorError>())
+        })
+        .flatten()
+        .filter(|error| matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. }))
+        .cloned()
 }
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
@@ -1021,7 +1041,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: u64,
-        result: AgentInvocationResult,
+        result: Box<AgentInvocationResult>,
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -1198,7 +1218,7 @@ enum LoweredCall {
         activation: Box<ToolActivationSnapshot>,
         tool_name: ToolName,
         command_path: Vec<String>,
-        input: TypedSchemaValue,
+        input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
         principal: golem_common::model::agent::Principal,
@@ -1239,7 +1259,7 @@ enum PreparedCall {
         activation: std::sync::Arc<ToolActivationSnapshot>,
         tool_name: ToolName,
         command_path: Vec<String>,
-        input: TypedSchemaValue,
+        input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
         principal: golem_common::model::agent::Principal,
@@ -1442,7 +1462,7 @@ pub fn lower_invocation(
                 activation,
                 tool_name,
                 command_path,
-                input,
+                input: Box::new(input),
                 stdin,
                 stdout,
                 principal,
@@ -1691,6 +1711,15 @@ mod tests {
             }
             .is_snapshot_replay_divergence()
         );
+    }
+
+    #[test]
+    fn unexpected_oplog_trap_is_propagated_during_replay_only() {
+        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "NoOp");
+        let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
+
+        assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
+        assert_eq!(replay_divergence_from_trap(&error, true), None);
     }
 
     #[test]

@@ -318,7 +318,7 @@ pub enum NativeToolInvocationMode {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NativeToolSuccess {
-    pub result: Option<ExternalTypedSchemaValue>,
+    pub result: Option<Box<ExternalTypedSchemaValue>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

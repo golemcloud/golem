@@ -34,8 +34,8 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingOwner, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
+    ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -57,7 +57,8 @@ use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
+    start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -65,6 +66,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
+
+mod moonbit_exports;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -133,6 +136,13 @@ struct ScalaCleanupEvidence {
     stdout_terminal: String,
 }
 
+#[derive(Debug, FromSchema)]
+struct ScalaOutputEvidence {
+    bytes: Vec<i32>,
+    terminal: String,
+    result: String,
+}
+
 fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
@@ -199,6 +209,7 @@ fn deployment_state(
                     account_id: owner_account_id,
                     account_email: account_email.clone(),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    config_keys_readable: Default::default(),
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
@@ -215,7 +226,111 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         tool_bindings: BTreeMap::from([(owner, bindings)]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
+}
+
+fn native_deployment_state(
+    owner_account_id: AccountId,
+    caller_agent_type: &str,
+    mut definition: golem_common::schema::tool::Tool,
+    helper_definition: golem_common::schema::tool::Tool,
+) -> ToolDeploymentState {
+    definition.commands.nodes[0].name = "native-streaming".to_string();
+    let definition_digest =
+        golem_common::model::tool_release::tool_metadata_digest("0.1.0", &definition).unwrap();
+    let helper_digest =
+        golem_common::model::tool_release::tool_metadata_digest("0.1.0", &helper_definition)
+            .unwrap();
+    let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
+    let account_email = AccountEmail::new("test@golem");
+    let tool_name = ToolName::try_from("native-streaming").unwrap();
+    let source = ToolSource::Host {
+        host_tool_id: HostToolId::try_from("executor-native-test".to_string()).unwrap(),
+        implementation_version: "1.0.0".to_string(),
+    };
+    let registered = RegisteredTool {
+        deployment_revision,
+        release_id: None,
+        definition,
+        provision: ToolProvisionConfig::default(),
+        source: source.clone(),
+        owner_account_id,
+        owner_account_email: account_email.clone(),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: definition_digest,
+        component_bindings: BTreeMap::new(),
+    };
+    let agent_type = AgentTypeName(caller_agent_type.to_string());
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
+    let binding = CompiledToolBinding {
+        deployment_revision,
+        release_id: None,
+        owner: owner.clone(),
+        tool_name: tool_name.clone(),
+        version: registered.definition.version.clone(),
+        metadata_version: registered.metadata_version.clone(),
+        metadata_digest: registered.metadata_digest,
+        account_id: owner_account_id,
+        account_email,
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
+        secret_keys_readable: SecretKeyScope::All,
+        secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: ToolFilesystemAccess::Unset,
+        source,
+    };
+    let mut state = ToolDeploymentState {
+        deployment_revision,
+        registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
+        tool_bindings: BTreeMap::from([(owner.clone(), BTreeMap::from([(tool_name, binding)]))]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
+    };
+    let helper_name = ToolName::try_from("native-durable-helper").unwrap();
+    let helper_source = ToolSource::Host {
+        host_tool_id: HostToolId::try_from("executor-native-helper".to_string()).unwrap(),
+        implementation_version: "1.0.0".to_string(),
+    };
+    state.registered_tools.insert(
+        helper_name.clone(),
+        RegisteredTool {
+            deployment_revision,
+            release_id: None,
+            definition: helper_definition,
+            provision: ToolProvisionConfig::default(),
+            source: helper_source.clone(),
+            owner_account_id,
+            owner_account_email: AccountEmail::new("test@golem"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: helper_digest,
+            component_bindings: BTreeMap::new(),
+        },
+    );
+    state.tool_bindings.get_mut(&owner).unwrap().insert(
+        helper_name.clone(),
+        CompiledToolBinding {
+            deployment_revision,
+            release_id: None,
+            owner,
+            tool_name: helper_name,
+            version: "1.0.0".to_string(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: helper_digest,
+            account_id: owner_account_id,
+            account_email: AccountEmail::new("test@golem"),
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: Default::default(),
+            secret_keys_readable: SecretKeyScope::All,
+            secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: ToolFilesystemAccess::Unset,
+            source: helper_source,
+        },
+    );
+    state
 }
 
 struct ReorderedToolActivationService {
@@ -833,6 +948,133 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
     executor.delete_worker(&worker_id).await?;
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming.clone(),
+            native_test_tool_metadata(),
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "native-runtime");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let helper_effects_before = executor.native_test_helper_effect_count();
+    let evidence: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "native_modes_stream_cancel_overlap",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        &evidence[..6],
+        [
+            "sync",
+            "fire-and-forget",
+            "async",
+            "stream",
+            "cancel",
+            "overlap"
+        ]
+    );
+    assert_eq!(evidence[6], "5");
+    let helper_effects = executor.native_test_helper_effect_count();
+    assert_eq!(helper_effects, helper_effects_before + 1);
+
+    let isolated_context = TestContext::new(last_unique_id);
+    let isolated_environment_state = Arc::new(TestEnvironmentStateService::default());
+    let isolated_executor = start_with_overrides(
+        deps,
+        &isolated_context,
+        TestExecutorOverrides {
+            environment_state_service: Some(isolated_environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(isolated_executor.native_test_helper_effect_count(), 0);
+    let isolated_caller_component = isolated_executor
+        .component_dep(&isolated_context.default_environment_id, caller)
+        .store()
+        .await?;
+    isolated_environment_state.set_tool_deployment(
+        isolated_context.default_environment_id,
+        isolated_caller_component.id,
+        isolated_caller_component.revision,
+        Some(native_deployment_state(
+            isolated_context.account_id,
+            "ToolStreamingCaller",
+            streaming,
+            native_test_tool_metadata(),
+        )),
+    );
+    isolated_executor
+        .invoke_and_await_agent(
+            &isolated_caller_component,
+            &agent_id!("ToolStreamingCaller", "isolated-native-runtime"),
+            "native_modes_stream_cancel_overlap",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(isolated_executor.native_test_helper_effect_count(), 1);
+    assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
+
+    executor.simulated_crash(&worker_id).await?;
+    executor.resume(&worker_id, true).await?;
+    let count: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "native_effect_count",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        count, "5",
+        "completed replay must not repeat native effects"
+    );
+    assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
+    assert!(environment_state.tool_activation_calls() >= 5);
     Ok(())
 }
 
@@ -5258,6 +5500,34 @@ async fn scala_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, "scala-marker:scala-live");
     assert_eq!(evidence.bytes_read, 10);
+
+    for (mode, terminal, result) in [
+        ("finish", "finished", "done"),
+        ("fail", "failed:stream producer failed", "done"),
+        ("unit", "finished", "unit"),
+        ("plain", "none", "plain"),
+    ] {
+        let output: ScalaOutputEvidence = executor
+            .invoke_and_await_agent(
+                &stored_component,
+                &agent_id,
+                "outputEvidence",
+                data_value!(mode),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(
+            output.bytes,
+            if mode == "plain" {
+                vec![]
+            } else {
+                vec![0, 127, 128, 255]
+            },
+            "{mode}"
+        );
+        assert_eq!(output.terminal, terminal, "{mode}");
+        assert_eq!(output.result, result, "{mode}");
+    }
 
     let cleanup: ScalaCleanupEvidence = executor
         .invoke_and_await_agent(

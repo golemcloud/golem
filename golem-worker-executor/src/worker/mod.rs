@@ -81,9 +81,9 @@ use crate::services::{
     All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
-    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
+    HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
@@ -91,9 +91,10 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, run_invocation_loop_task,
 };
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
+    calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
+    fold_invocation_result_entries, update_status_with_new_entries,
 };
-use crate::workerctx::{WorkerCtx, WorkerFilesystemContext};
+use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::durable_stream::{
@@ -123,8 +124,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
+    TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -134,7 +135,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -732,6 +733,65 @@ fn into_pending_invocation_parts(
     )
 }
 
+fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_agent_error(reason),
+        WorkerExecutorError::InvalidRequest { details }
+        | WorkerExecutorError::ParamTypeMismatch { details }
+        | WorkerExecutorError::ValueMismatch { details } => {
+            AgentError::InvalidRequest(details.clone())
+        }
+        WorkerExecutorError::PermissionDenied { details } => {
+            AgentError::PermissionDenied(details.clone())
+        }
+        WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        } => AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+            method: method.clone(),
+            host_function: host_function.clone(),
+        }),
+        WorkerExecutorError::InvocationFailed { error, .. }
+        | WorkerExecutorError::PreviousInvocationFailed { error, .. } => error.clone(),
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => AgentError::InternalError(
+            format!("Unexpected oplog entry during replay: expected {expected}, got {got}"),
+        ),
+        WorkerExecutorError::ComponentParseFailed { .. } => {
+            AgentError::InternalError(error.to_string())
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => AgentError::Unknown(error.to_string()),
+        _ => AgentError::InternalError(error.to_string()),
+    }
+}
+
+fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_infrastructure_recovery_error(reason)
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => true,
+        _ => false,
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
@@ -1252,8 +1312,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         runtime: OwnerRuntime,
         execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
-        executable_component: golem_service_base::model::component::Component,
-        activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
+        executable: WorkerCtxExecutable,
+        activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
@@ -1278,7 +1338,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )?
             }
         };
-        let executable_revision = executable_component.revision;
+        use golem_common::model::entity::EntityActivationSource;
+        let executable_revision = match (&executable, activation.source()) {
+            (
+                WorkerCtxExecutable::Component(component),
+                EntityActivationSource::Component { executable },
+            ) if component.id == executable.component_id
+                && component.revision == executable.component_revision =>
+            {
+                component.revision
+            }
+            (
+                WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                },
+            ) if host_tool_id == expected_id && implementation_version == expected_version => {
+                owner_component_metadata.revision
+            }
+            (WorkerCtxExecutable::Component(_), _) | (WorkerCtxExecutable::Native { .. }, _) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Entity context executable does not match its validated activation source",
+                ));
+            }
+        };
         let initial_agent_config = match &self.owner_context {
             ResolvedOwnerContext::Agent(agent_id) => {
                 let component_config = owner_component_metadata
@@ -1306,10 +1393,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let filesystem_generation = self
             .owner_runtime_resources
             .filesystem_generation_handle()?;
-        if let Some(files) = activation
-            .as_ref()
-            .map(|activation| &activation.policy().provision().files)
-            .filter(|files| !files.is_empty())
+        if let Some(files) =
+            Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {
             provision_initial_files(
                 &filesystem_generation,
@@ -1322,7 +1407,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         }
         let filesystem_context = create_filesystem_context(filesystem_generation).await?;
-        let initial_linear_memory = executable_component.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = match &executable {
+            WorkerCtxExecutable::Component(component) => {
+                component.metadata.initial_linear_memory_bytes()
+            }
+            WorkerCtxExecutable::Native { .. } => 0,
+        };
         if initial_linear_memory > self.resource_entry.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 self.agent_id(),
@@ -1384,6 +1474,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.card_service(),
             self.card_interest_index.clone(),
             self.component_service(),
+            self.native_tool_catalog(),
             self.extra_deps(),
             self.config(),
             filesystem_context,
@@ -1417,8 +1508,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
-            executable_component,
-            activation,
+            executable,
+            Some(activation),
         )
         .await
     }
@@ -1475,6 +1566,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(error);
                     }
                 };
+                let status = this.state_actor.attached_status().await;
+                if this.agent_mode() == AgentMode::Durable
+                    && status.status == AgentStatus::Interrupted
+                    && status.current_idempotency_key.is_some()
+                {
+                    this.add_and_commit_oplog_internal(
+                        &instance_guard,
+                        OplogEntry::resumed(),
+                        None,
+                    )
+                    .await;
+                }
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();
@@ -1824,18 +1927,65 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
+        if is_active
+            && self
+                .get_non_detached_last_known_status()
+                .await
+                .last_error_kind
+                == Some(OplogErrorKind::Recovery)
+        {
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::recovery_succeeded(),
+                None,
+            )
+            .await;
+        }
+
         let completed = match &result {
             Ok(()) => self
                 .startup_attempt
                 .complete_success_if_active(start_attempt, active_attempt),
             Err(_) => self.startup_attempt.complete(start_attempt, &result),
         };
-        drop(instance_guard);
 
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
+        drop(instance_guard);
         is_active
+    }
+
+    pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
+        let latest_status = self.get_non_detached_last_known_status().await;
+        let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
+            Ctx::get_last_error_and_retry_count(
+                self.all(),
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &latest_status,
+            )
+            .await
+        } else {
+            None
+        };
+        let retry_from = previous_error
+            .as_ref()
+            .map(|error| error.retry_from)
+            .unwrap_or(self.oplog.current_oplog_index().await);
+        let infrastructure_failure = is_infrastructure_recovery_error(error);
+        let error = recovery_agent_error(error);
+        let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
+            .then_some(RetryPolicyState::Terminal);
+        self.add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Recovery,
+            error,
+            retry_from,
+            false,
+            retry_policy_state,
+        ))
+        .await;
     }
 
     pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
@@ -2201,7 +2351,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         _ => None,
                     })
                     .await;
-                if let Ok(Ok(output)) = wait_result
+                if let Ok(result) = wait_result
+                    && let Ok(output) = *result
                     && matches!(output.result, AgentInvocationResult::AgentMethod { .. })
                 {
                     populate_read_only_cache(&cache, &read_only_cache_epoch, &ro, epoch, output)
@@ -2324,7 +2475,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_id: component.id,
                 },
             };
-            let activation = match self
+            match self
                 .environment_state_service()
                 .get_tool_activation(
                     self.owned_agent_id.environment_id,
@@ -2349,8 +2500,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         "tool '{tool_name}' is not registered"
                     )));
                 }
-            };
-            activation
+            }
         };
         require_expected_tool_deployment_revision(
             expected_deployment_revision,
@@ -2846,7 +2996,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
             idempotency_key: key.clone(),
-            result,
+            result: Box::new(result),
         });
     }
 
@@ -5729,16 +5879,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let region_start = last_oplog_index.next();
         let last_known_status = self.get_latest_worker_metadata().await.last_known_status;
+        let dropped_region = OplogRegion {
+            start: region_start,
+            end: region_end,
+        };
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await;
 
-        if last_known_status
-            .skipped_regions
-            .is_in_deleted_region(region_start)
-        {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
-            )))
-        } else if let Some(stream_index) = cut_point::find_stream_history_in_range(
-            |idx| self.oplog.read(idx),
+        if let Some(stream_index) = cut_point::find_stream_history_in_range(
+            |idx| {
+                std::future::ready(
+                    entries
+                        .get(&idx)
+                        .expect("read_exact must return every requested oplog entry")
+                        .clone(),
+                )
+            },
             OplogIndex::INITIAL,
             region_end,
         )
@@ -5747,30 +5905,89 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot revert worker to oplog index {last_oplog_index}: durable stream history exists at oplog index {stream_index}"
             )))
-        } else if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
-            |idx| self.oplog.read(idx),
-            last_oplog_index,
-            region_end,
-            &last_known_status.skipped_regions,
-        )
-        .await
-        {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
-            )))
         } else {
-            let region = OplogRegion {
-                start: region_start,
-                end: region_end,
+            cut_point::validate_snapshot_update_boundaries(
+                &entries,
+                last_oplog_index,
+                &last_known_status.deleted_regions,
+            )
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: {error}"
+                ))
+            })?;
+
+            let validation_regions = calculate_revert_validation_regions(&entries, &dropped_region);
+
+            if validation_regions.is_in_deleted_region(region_start) {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+                )));
+            }
+
+            if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
+                |idx| {
+                    std::future::ready(
+                        entries
+                            .get(&idx)
+                            .expect("read_exact must return every requested oplog entry")
+                            .clone(),
+                    )
+                },
+                last_oplog_index,
+                region_end,
+                &validation_regions,
+            )
+            .await
+            {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
+                )));
+            }
+
+            let mut prospective_entries = entries;
+            prospective_entries.insert(
+                region_end.next(),
+                OplogEntry::revert(dropped_region.clone()),
+            );
+            let retained_status = AgentStatusRecord {
+                invocation_results: self.config().invocation_results.membership(),
+                ..Default::default()
             };
+            let retained_status = update_status_with_new_entries(
+                self.agent_mode(),
+                retained_status,
+                prospective_entries,
+                &self.config().retry,
+            )
+            .map_err(WorkerExecutorError::runtime)?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to reconstruct worker status at oplog index {last_oplog_index}"
+                ))
+            })?;
+
+            let restored_component = self.preflight_revert_restoration(&retained_status).await?;
+
+            let validated_oplog_index = self.oplog.current_oplog_index().await;
+            if validated_oplog_index != region_end {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Oplog changed while validating revert: expected oplog index {region_end}, found {validated_oplog_index}"
+                )));
+            }
 
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
 
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
-            self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region), None)
-                .await;
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::revert(dropped_region),
+                None,
+            )
+            .await;
             self.reattach_worker_status().await;
+            self.current_component.store(Arc::new(restored_component));
 
             if let WorkerInstance::Running(running) = &*instance_guard {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -5778,6 +5995,106 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             drop(instance_guard);
             Ok(())
         }
+    }
+
+    async fn preflight_revert_restoration(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        let pending_update = status.pending_updates.front();
+        let active_revision = pending_update
+            .map(|update| update.target_revision)
+            .unwrap_or(status.component_revision);
+        let (_, active_component) = self
+            .component_service()
+            .get(
+                &self.engine(),
+                self.owned_agent_id.component_id(),
+                active_revision,
+            )
+            .await?;
+
+        if let Some(rejected) = self
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            self.rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
+        let replay_revision = component_revision_for_replay(
+            status,
+            pending_update.is_some(),
+            self.rejected_periodic_snapshot_through
+                .load(Ordering::Acquire),
+        );
+        let replay_component = if active_component.revision == replay_revision {
+            active_component.clone()
+        } else {
+            self.component_service()
+                .get_metadata(self.owned_agent_id.component_id(), Some(replay_revision))
+                .await?
+        };
+
+        if let Some(snapshot_index) = status.last_manual_update_snapshot_index {
+            self.preflight_snapshot_update_payload(snapshot_index)
+                .await?;
+        }
+        if let Some(pending_update) = pending_update
+            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
+        {
+            self.preflight_snapshot_update_payload(pending_update.oplog_index)
+                .await?;
+        }
+
+        let initial_files = self
+            .parsed_agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                replay_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+            })
+            .map(|config| config.files.clone())
+            .unwrap_or_default();
+        prepare_initial_files(
+            &self.file_loader(),
+            self.owned_agent_id.environment_id,
+            &initial_files,
+        )
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+
+        Ok(active_component)
+    }
+
+    async fn preflight_snapshot_update_payload(
+        &self,
+        snapshot_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self.oplog.read(snapshot_index).await {
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { payload, .. },
+                ..
+            } => {
+                self.oplog
+                    .download_payload(payload)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
+            _ => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn wait_for_invocation_result(
@@ -5808,7 +6125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         } if *agent_id == self.owned_agent_id.agent_id
                             && idempotency_key == key =>
                         {
-                            Some(LookupResult::Complete(result.clone()))
+                            Some(LookupResult::Complete(*result.clone()))
                         }
                         _ => None,
                     });
@@ -7614,47 +7931,23 @@ impl RunningWorker {
                 .fetch_max(rejected.into(), Ordering::AcqRel);
         }
 
-        let automatic_snapshot = worker_metadata
-            .last_known_status
-            .last_automatic_snapshot_index
-            .zip(
-                worker_metadata
-                    .last_known_status
-                    .last_automatic_snapshot_component_revision,
-            )
-            .filter(|(_, snapshot_revision)| {
-                *snapshot_revision == worker_metadata.last_known_status.component_revision
-            })
-            .filter(|(index, _)| {
-                pending_update.is_none()
-                    && u64::from(*index)
-                        > parent
-                            .rejected_periodic_snapshot_through
-                            .load(Ordering::Acquire)
-                            .max(
-                                parent
-                                    .unavailable_periodic_snapshot_through
-                                    .load(Ordering::Acquire),
-                            )
-            });
-
-        let component_version_for_replay = automatic_snapshot.map_or_else(
-            || {
-                worker_metadata
-                    .last_known_status
-                    .pending_updates
-                    .front()
-                    .and_then(|update| match update.kind {
-                        PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                        PendingUpdateKind::Automatic => None,
-                    })
-                    .unwrap_or(
-                        worker_metadata
-                            .last_known_status
-                            .component_revision_for_replay,
-                    )
-            },
-            |(_, snapshot_revision)| snapshot_revision,
+        let rejected_or_unavailable_snapshot_through = parent
+            .rejected_periodic_snapshot_through
+            .load(Ordering::Acquire)
+            .max(
+                parent
+                    .unavailable_periodic_snapshot_through
+                    .load(Ordering::Acquire),
+            );
+        let automatic_snapshot = automatic_snapshot_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
+        );
+        let component_version_for_replay = component_revision_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
         );
 
         let component_metadata_for_replay =
@@ -7870,6 +8163,7 @@ impl RunningWorker {
             parent.card_service(),
             parent.card_interest_index.clone(),
             parent.component_service(),
+            parent.native_tool_catalog(),
             parent.extra_deps(),
             parent.config(),
             filesystem_context,
@@ -7903,7 +8197,7 @@ impl RunningWorker {
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
-            component_metadata_for_replay,
+            WorkerCtxExecutable::Component(Box::new(component_metadata_for_replay)),
             None,
         )
         .await
@@ -8532,13 +8826,16 @@ fn lookup_result_from_cached_result(
                 Err(FailedInvocationResult {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
-                    // and the worker has not entered a terminal state, report it as
-                    // pending so lookup callers can observe the eventual terminal result.
+                    // and there is no terminal invocation outcome, report it as pending
+                    // so lookup callers can observe the eventual result. A recovery
+                    // failure makes the agent unavailable but does not finish this invocation.
                     trap_type: TrapType::Error { .. },
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && (status.status != AgentStatus::Failed
+                || status.last_error_kind == Some(OplogErrorKind::Recovery))
+            && status.status != AgentStatus::Exited =>
         {
             LookupResult::Pending
         }
@@ -8592,6 +8889,45 @@ fn lookup_result_from_cached_result(
     }
 }
 
+fn automatic_snapshot_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_through: u64,
+) -> Option<(OplogIndex, ComponentRevision)> {
+    status
+        .last_automatic_snapshot_index
+        .zip(status.last_automatic_snapshot_component_revision)
+        .filter(|(_, snapshot_revision)| *snapshot_revision == status.component_revision)
+        .filter(|(index, _)| {
+            !has_pending_update && u64::from(*index) > rejected_or_unavailable_through
+        })
+}
+
+fn component_revision_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_snapshot_through: u64,
+) -> ComponentRevision {
+    automatic_snapshot_for_replay(
+        status,
+        has_pending_update,
+        rejected_or_unavailable_snapshot_through,
+    )
+    .map_or_else(
+        || {
+            status
+                .pending_updates
+                .front()
+                .and_then(|update| match update.kind {
+                    PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                    PendingUpdateKind::Automatic => None,
+                })
+                .unwrap_or(status.component_revision_for_replay)
+        },
+        |(_, snapshot_revision)| snapshot_revision,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8614,6 +8950,67 @@ mod tests {
     }
 
     #[test]
+    fn recovery_error_classification_keeps_only_transient_failures_retryable() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::runtime("temporary outage")),
+            AgentError::Unknown(message) if message.contains("temporary outage")
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::invalid_request("invalid export")),
+            AgentError::InvalidRequest(message) if message == "invalid export"
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ComponentParseFailed {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }),
+            AgentError::InternalError(message) if message.contains("invalid wasm")
+        ));
+        let component_id = ComponentId::new();
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(!is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentParseFailed {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }
+        ));
+    }
+
+    #[test]
+    fn recovery_error_classification_unwraps_failed_resume() {
+        let error = WorkerExecutorError::failed_to_resume_worker(
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "agent".to_string(),
+            },
+            WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError("retry me".to_string()),
+                stderr: String::new(),
+            },
+        );
+
+        assert_eq!(
+            recovery_agent_error(&error),
+            AgentError::TransientError("retry me".to_string())
+        );
+    }
+
+    #[test]
+    fn recovery_error_classification_preserves_read_only_violation() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ReadOnlyViolation {
+                method: "get-state".to_string(),
+                host_function: "filesystem.write".to_string(),
+            }),
+            AgentError::ReadOnlyViolation(_)
+        ));
+    }
+
+    #[test]
     fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
         let target_revision = ComponentRevision::new(2).unwrap();
         let (semantic_key, storage_key, payload, _) =
@@ -8627,6 +9024,29 @@ mod tests {
                 target_revision: actual
             } if actual == target_revision
         ));
+    }
+
+    #[test]
+    fn rejected_automatic_snapshot_uses_manual_replay_revision() {
+        let active_revision = ComponentRevision::new(3).unwrap();
+        let replay_revision = ComponentRevision::new(2).unwrap();
+        let snapshot_index = OplogIndex::from_u64(10);
+        let status = AgentStatusRecord {
+            component_revision: active_revision,
+            component_revision_for_replay: replay_revision,
+            last_automatic_snapshot_index: Some(snapshot_index),
+            last_automatic_snapshot_component_revision: Some(active_revision),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index)),
+            replay_revision
+        );
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index) - 1),
+            active_revision
+        );
     }
 
     #[test]
@@ -9186,6 +9606,31 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
+        let key = IdempotencyKey::fresh();
+        let mut status = status_with_current_key(AgentStatus::Failed, &key);
+        status.last_error_kind = Some(OplogErrorKind::Recovery);
+        let lookup = lookup_result_from_cached_result(
+            &status,
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("prior retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
     }
 
     #[test]

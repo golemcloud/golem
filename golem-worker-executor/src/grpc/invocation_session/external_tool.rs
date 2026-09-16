@@ -159,7 +159,10 @@ where
                 "live streams require an attached Await invocation session",
             ));
         }
-        if tool.fresh_owner && mode == Mode::Schedule && request.schedule_at.is_some() {
+        if tool.fresh_owner
+            && mode == Mode::Schedule
+            && let Some(timestamp) = request.schedule_at.as_ref()
+        {
             let component = self
                 .component_service()
                 .get_metadata(owned.component_id(), None)
@@ -210,7 +213,6 @@ where
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
             )?;
-            let timestamp = request.schedule_at.as_ref().unwrap();
             let at = DateTime::from_timestamp(
                 timestamp.seconds,
                 timestamp.nanos.try_into().map_err(|_| {

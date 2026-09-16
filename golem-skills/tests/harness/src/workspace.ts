@@ -69,7 +69,17 @@ export async function findGolemAppDir(workspace: string): Promise<string> {
  * Prefers `target/release` if a `golem` executable exists there, otherwise
  * falls back to `target/debug`. Throws if neither contains the binary.
  */
-export function resolveGolemTargetDir(golemPath: string): string {
+export function resolveGolemTargetDir(golemPath: string, override?: string): string {
+  if (override) {
+    const targetDir = path.resolve(override);
+    try {
+      accessSync(path.join(targetDir, "golem"), constants.X_OK);
+      return targetDir;
+    } catch {
+      throw new Error(`No executable golem binary found in GOLEM_TARGET_DIR (${targetDir})`);
+    }
+  }
+
   const releaseDir = path.join(golemPath, "target", "release");
   const debugDir = path.join(golemPath, "target", "debug");
 
@@ -94,6 +104,48 @@ export function resolveGolemTargetDir(golemPath: string): string {
       `  - ${path.join(debugDir, "golem")}\n` +
       `Build golem first with: cargo build -p golem`,
   );
+}
+
+export function golemServerArgs(
+  port: number,
+  dataDir: string,
+  env: NodeJS.ProcessEnv = {},
+): string[] {
+  const args = [
+    "server",
+    "run",
+    "--yes",
+    "--router-port",
+    String(port),
+    "--data-dir",
+    dataDir,
+    "--clean",
+  ];
+  if (env.GOLEM_CUSTOM_REQUEST_PORT !== undefined) {
+    args.push("--custom-request-port", env.GOLEM_CUSTOM_REQUEST_PORT);
+  }
+  if (env.GOLEM_MCP_PORT !== undefined) {
+    args.push("--mcp-port", env.GOLEM_MCP_PORT);
+  }
+  return args;
+}
+
+export function resolveRunRouterPort(
+  override: string | undefined,
+  scenarioPorts: Array<number | undefined>,
+): number {
+  const configured = [
+    ...new Set(scenarioPorts.filter((port): port is number => port !== undefined)),
+  ];
+  if (!override && configured.length > 1) {
+    throw new Error(`Scenarios require conflicting router ports: ${configured.join(", ")}`);
+  }
+  const value = override ?? String(configured[0] ?? 9881);
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid GOLEM_ROUTER_PORT: ${value}`);
+  }
+  return port;
 }
 
 /**
@@ -142,7 +194,7 @@ export class GolemServer {
 
     await fs.mkdir(dataDir, { recursive: true });
 
-    this.serverProcess = spawn("golem", ["server", "run", "--data-dir", dataDir, "--clean"], {
+    this.serverProcess = spawn("golem", golemServerArgs(port, dataDir, process.env), {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
       env: { ...process.env, RUST_BACKTRACE: "1" },

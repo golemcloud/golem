@@ -36,11 +36,10 @@ jobs:
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        working-directory: sdks/rust
         run: |
           export VERSION_FULL="${{ steps.get_version.outputs.version }}"
           export VERSION="${VERSION_FULL#golem-rust-v}"
-          sed -i "s/0.0.0/$VERSION/g" golem-rust-macro/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-rust/Cargo.toml
+          git ls-files -z '*Cargo.toml' | xargs -0 sed -i "s/0\.0\.0/$VERSION/g"
+          cargo publish -p golem-tool-metadata --all-features --allow-dirty
           cargo publish -p golem-rust-macro --all-features --allow-dirty
-          cargo publish -p golem-rust --all-features --allow-dirty
+          cargo publish --manifest-path sdks/rust/golem-rust/Cargo.toml --all-features --allow-dirty

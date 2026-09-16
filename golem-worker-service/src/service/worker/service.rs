@@ -2887,7 +2887,7 @@ impl WorkerService {
                     Ok(success) => NativeToolResult::Success(NativeToolSuccess {
                         result: success
                             .result
-                            .map(TryInto::try_into)
+                            .map(|value| value.try_into().map(Box::new))
                             .transpose()
                             .map_err(|error| {
                                 WorkerServiceError::Internal(format!(
@@ -2899,7 +2899,7 @@ impl WorkerService {
                         if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) = &error
                             && let golem_common::model::tool::SerializableToolError::CustomError(value) = tool_error.as_ref()
                         {
-                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.as_ref().clone())
+                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
                                 .map_err(|error| WorkerServiceError::Internal(format!(
                                     "external tool error cannot cross the external JSON boundary: {error}"
                                 )))?;
@@ -3947,6 +3947,7 @@ mod tests {
                     updates: Vec::new(),
                     created_at: Timestamp::now_utc(),
                     last_error: None,
+                    last_error_kind: None,
                     component_size: 0,
                     total_linear_memory_size: 0,
                     exported_resource_instances: Vec::new(),

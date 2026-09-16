@@ -59,6 +59,7 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
+use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::schema::SchemaValue;
@@ -66,7 +67,8 @@ use golem_common::schema::agent::{
     AgentTypeSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
 };
 use golem_common::schema::tool::Tool;
-use golem_common::schema::tool::validation::validate_tool;
+use golem_common::schema::tool::ToolMiddleware;
+use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -259,6 +261,12 @@ impl ComponentWriteService {
                             .flat_map(|config| config.provision.files.keys().cloned()),
                     ),
             )
+            .chain(
+                component_creation
+                    .tool_middleware_provision_configs
+                    .values()
+                    .flat_map(|config| config.files.keys().cloned()),
+            )
             .collect();
         let uploaded_files = match files_archive {
             Some(archive) => {
@@ -307,6 +315,17 @@ impl ComponentWriteService {
                                     .map(|plugin| plugin.environment_plugin_grant_id)
                             }),
                     ),
+            )
+            .chain(
+                component_creation
+                    .tool_middleware_provision_configs
+                    .values()
+                    .flat_map(|config| {
+                        config
+                            .plugin_installations
+                            .iter()
+                            .map(|plugin| plugin.environment_plugin_grant_id)
+                    }),
             )
             .collect();
         let resolved_grants = self
@@ -394,6 +413,13 @@ impl ComponentWriteService {
             &uploaded_files,
             &resolved_grants,
         )?;
+        let tool_middleware_deployment_metadata =
+            resolve_tool_middleware_deployment_metadata_for_creation(
+                component_creation.tool_middlewares,
+                component_creation.tool_middleware_provision_configs,
+                &uploaded_files,
+                &resolved_grants,
+            )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
             component_creation.config_schema,
@@ -402,6 +428,7 @@ impl ComponentWriteService {
             wasm.clone(),
             provision_configs,
             tool_deployment_metadata,
+            tool_middleware_deployment_metadata,
         )
         .await?;
         validate_component_metadata_invariants(&component_metadata)?;
@@ -485,6 +512,8 @@ impl ComponentWriteService {
             agent_type_provision_config_updates,
             tools: tool_update,
             tool_deployment_config_updates,
+            tool_middlewares: tool_middleware_update,
+            tool_middleware_provision_config_updates,
             allow_incompatible_config,
         } = component_update;
 
@@ -507,6 +536,7 @@ impl ComponentWriteService {
 
         let agent_types_changed = agent_type_update.is_some();
         let tools_changed = tool_update.is_some();
+        let tool_middlewares_changed = tool_middleware_update.is_some();
 
         // When no agent type update is supplied, fall back to the schema-native
         // agent types already stored on the existing component metadata.
@@ -523,6 +553,11 @@ impl ComponentWriteService {
 
         let (tool_definitions, mut final_tool_deployment_metadata) =
             tool_state_for_update(component.metadata.tools(), tool_update)?;
+        let (tool_middleware_definitions, mut final_tool_middleware_deployment_metadata) =
+            tool_middleware_state_for_update(
+                component.metadata.tool_middlewares(),
+                tool_middleware_update,
+            )?;
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
         let mut cards_to_create = Vec::new();
@@ -546,6 +581,12 @@ impl ComponentWriteService {
                             .filter_map(|update| update.provision.as_ref())
                             .flat_map(|update| update.files_to_add_or_update.keys().cloned()),
                     ),
+            )
+            .chain(
+                tool_middleware_provision_config_updates
+                    .iter()
+                    .flat_map(|updates| updates.values())
+                    .flat_map(|update| update.files_to_add_or_update.keys().cloned()),
             )
             .collect();
         let uploaded_files = match new_files_archive {
@@ -676,6 +717,42 @@ impl ComponentWriteService {
             }
         }
 
+        let mut tool_middleware_provision_configs_changed = false;
+        if let Some(updates) = tool_middleware_provision_config_updates {
+            tool_middleware_provision_configs_changed = true;
+            for (name, update) in updates {
+                let definition = tool_middleware_definitions.get(&name).ok_or_else(|| {
+                    ComponentError::UndeclaredToolMiddlewareInProvisionConfig(name.clone())
+                })?;
+                let existing = final_tool_middleware_deployment_metadata.remove(&name);
+                let tool_name = ToolName::try_from(name.as_str()).expect("same identifier syntax");
+                let provision = self
+                    .apply_tool_provision_config_update(
+                        &tool_name,
+                        existing.map(|metadata| metadata.provision),
+                        update,
+                        &uploaded_files,
+                        &environment,
+                        auth,
+                    )
+                    .await?;
+                final_tool_middleware_deployment_metadata.insert(
+                    name,
+                    ToolMiddlewareDeploymentMetadata {
+                        definition: definition.clone(),
+                        provision,
+                    },
+                );
+            }
+        }
+        for name in tool_middleware_definitions.keys() {
+            if !final_tool_middleware_deployment_metadata.contains_key(name) {
+                return Err(ComponentError::MissingToolMiddlewareProvisionConfig(
+                    name.clone(),
+                ));
+            }
+        }
+
         if agent_types_changed && !allow_incompatible_config {
             for (agent_type_name, config) in &final_provision_configs {
                 let agent_type = agent_types
@@ -718,10 +795,11 @@ impl ComponentWriteService {
                 new_wasm.clone(),
                 final_provision_configs,
                 final_tool_deployment_metadata,
+                final_tool_middleware_deployment_metadata,
             )
             .await?;
             component.metadata = metadata;
-        } else if agent_types_changed || tools_changed {
+        } else if agent_types_changed || tools_changed || tool_middlewares_changed {
             // TODO: skip the download here
             let old_data = self
                 .object_store
@@ -735,6 +813,7 @@ impl ComponentWriteService {
                 Arc::from(old_data),
                 final_provision_configs,
                 final_tool_deployment_metadata,
+                final_tool_middleware_deployment_metadata,
             )
             .await?;
             component.metadata = metadata;
@@ -751,6 +830,11 @@ impl ComponentWriteService {
                 component.metadata = component
                     .metadata
                     .with_tools(final_tool_deployment_metadata);
+            }
+            if tool_middleware_provision_configs_changed {
+                component.metadata = component
+                    .metadata
+                    .with_tool_middlewares(final_tool_middleware_deployment_metadata);
             }
         }
 
@@ -1149,60 +1233,22 @@ impl ComponentWriteService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<ToolDeploymentMetadata, ComponentError> {
-        let existing_provision = existing.as_ref().map(|metadata| metadata.provision.clone());
-        let provision = match (existing_provision, update.provision) {
-            (Some(existing), Some(update)) => {
-                let files = resolve_tool_files_for_update(
+        let provision = match update.provision {
+            Some(update) => {
+                self.apply_tool_provision_config_update(
                     tool_name,
-                    existing.files,
-                    &update,
+                    existing.as_ref().map(|metadata| metadata.provision.clone()),
+                    update,
                     uploaded_files,
-                )?;
-                let config = update.config.unwrap_or(existing.config);
-                let env = update.env.unwrap_or(existing.env);
-                let plugins = self
-                    .update_plugin_installations(
-                        environment,
-                        existing.plugins,
-                        update.plugin_updates,
-                        auth,
-                    )
-                    .await?;
-                ToolProvisionConfig {
-                    config,
-                    env,
-                    plugins,
-                    files,
-                }
+                    environment,
+                    auth,
+                )
+                .await?
             }
-            (Some(existing), None) => existing,
-            (None, Some(update)) => {
-                let files =
-                    resolve_tool_files_for_update(tool_name, Vec::new(), &update, uploaded_files)?;
-                let plugins = self
-                    .update_plugin_installations(
-                        environment,
-                        Vec::new(),
-                        update.plugin_updates,
-                        auth,
-                    )
-                    .await?;
-                ToolProvisionConfig {
-                    config: update.config.unwrap_or_else(|| {
-                        golem_common::base_model::json::NormalizedJsonValue::new(serde_json::json!(
-                            {}
-                        ))
-                    }),
-                    env: update.env.unwrap_or_default(),
-                    plugins,
-                    files,
-                }
-            }
-            (None, None) => {
-                return Err(ComponentError::MissingToolDeploymentConfig(
-                    tool_name.clone(),
-                ));
-            }
+            None => existing
+                .as_ref()
+                .map(|metadata| metadata.provision.clone())
+                .ok_or_else(|| ComponentError::MissingToolDeploymentConfig(tool_name.clone()))?,
         };
 
         let old_environment_binding = existing
@@ -1225,6 +1271,65 @@ impl ComponentWriteService {
             component_bindings: update.component_bindings.unwrap_or(old_component_bindings),
             agent_bindings: update.agent_bindings.unwrap_or(old_agent_bindings),
         })
+    }
+
+    async fn apply_tool_provision_config_update(
+        &self,
+        tool_name: &ToolName,
+        existing: Option<ToolProvisionConfig>,
+        update: ToolProvisionConfigUpdate,
+        uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<ToolProvisionConfig, ComponentError> {
+        match existing {
+            Some(existing) => {
+                let files = resolve_tool_files_for_update(
+                    tool_name,
+                    existing.files,
+                    &update,
+                    uploaded_files,
+                )?;
+                let config = update.config.unwrap_or(existing.config);
+                let env = update.env.unwrap_or(existing.env);
+                let plugins = self
+                    .update_plugin_installations(
+                        environment,
+                        existing.plugins,
+                        update.plugin_updates,
+                        auth,
+                    )
+                    .await?;
+                Ok(ToolProvisionConfig {
+                    config,
+                    env,
+                    plugins,
+                    files,
+                })
+            }
+            None => {
+                let files =
+                    resolve_tool_files_for_update(tool_name, Vec::new(), &update, uploaded_files)?;
+                let plugins = self
+                    .update_plugin_installations(
+                        environment,
+                        Vec::new(),
+                        update.plugin_updates,
+                        auth,
+                    )
+                    .await?;
+                Ok(ToolProvisionConfig {
+                    config: update.config.unwrap_or_else(|| {
+                        golem_common::base_model::json::NormalizedJsonValue::new(serde_json::json!(
+                            {}
+                        ))
+                    }),
+                    env: update.env.unwrap_or_default(),
+                    plugins,
+                    files,
+                })
+            }
+        }
     }
 }
 
@@ -1282,6 +1387,103 @@ fn tool_state_for_update(
             Ok((definitions, metadata))
         }
     }
+}
+
+fn tool_middleware_definitions_by_name(
+    definitions: Vec<ToolMiddleware>,
+) -> Result<BTreeMap<ToolMiddlewareName, ToolMiddleware>, ComponentError> {
+    let mut result = BTreeMap::new();
+    for definition in definitions {
+        let name = ToolMiddlewareName::try_from(definition.name.as_str()).map_err(|message| {
+            ComponentError::InvalidToolMiddlewareName {
+                name: definition.name.clone(),
+                message,
+            }
+        })?;
+        if let Err(errors) = validate_tool_middleware(&definition) {
+            return Err(ComponentError::InvalidToolMiddleware {
+                middleware: name.to_string(),
+                errors: errors.into_iter().map(|error| error.to_string()).collect(),
+            });
+        }
+        if result.insert(name.clone(), definition).is_some() {
+            return Err(ComponentError::DuplicateToolMiddlewareName(name));
+        }
+    }
+    Ok(result)
+}
+
+type ToolMiddlewareState = (
+    BTreeMap<ToolMiddlewareName, ToolMiddleware>,
+    BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+);
+
+fn tool_middleware_state_for_update(
+    existing: &BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    replacement: Option<Vec<ToolMiddleware>>,
+) -> Result<ToolMiddlewareState, ComponentError> {
+    match replacement {
+        None => Ok((
+            existing
+                .iter()
+                .map(|(name, metadata)| (name.clone(), metadata.definition.clone()))
+                .collect(),
+            existing.clone(),
+        )),
+        Some(definitions) => {
+            let definitions = tool_middleware_definitions_by_name(definitions)?;
+            let metadata = existing
+                .iter()
+                .filter_map(|(name, metadata)| {
+                    definitions.get(name).map(|definition| {
+                        (
+                            name.clone(),
+                            ToolMiddlewareDeploymentMetadata {
+                                definition: definition.clone(),
+                                provision: metadata.provision.clone(),
+                            },
+                        )
+                    })
+                })
+                .collect();
+            Ok((definitions, metadata))
+        }
+    }
+}
+
+fn resolve_tool_middleware_deployment_metadata_for_creation(
+    definitions: Vec<ToolMiddleware>,
+    mut configs: BTreeMap<ToolMiddlewareName, ToolProvisionConfigCreation>,
+    uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
+    resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+) -> Result<BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>, ComponentError> {
+    let definitions = tool_middleware_definitions_by_name(definitions)?;
+    let mut result = BTreeMap::new();
+    for (name, definition) in definitions {
+        let config = configs
+            .remove(&name)
+            .ok_or_else(|| ComponentError::MissingToolMiddlewareProvisionConfig(name.clone()))?;
+        let tool_name = ToolName::try_from(name.as_str()).expect("same identifier syntax");
+        let provision = resolve_tool_provision_config_for_creation(
+            &tool_name,
+            config,
+            uploaded_files,
+            resolved_grants,
+        )?;
+        result.insert(
+            name,
+            ToolMiddlewareDeploymentMetadata {
+                definition,
+                provision,
+            },
+        );
+    }
+    if let Some((name, _)) = configs.into_iter().next() {
+        return Err(ComponentError::UndeclaredToolMiddlewareInProvisionConfig(
+            name,
+        ));
+    }
+    Ok(result)
 }
 
 fn resolve_tool_deployment_metadata_for_creation(
@@ -1466,14 +1668,12 @@ fn prepare_initial_card_for_minting(
     delegation_surface: &DelegationSurface,
 ) -> Result<PolymorphicCard, String> {
     let mut card = initial_permissions.to_polymorphic_card();
-    let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)
-        .map_err(|message| message)?;
-    let lower_negative = negative_permission_envelopes_for_recipient_patterns(&card.lower_negative)
-        .map_err(|message| message)?;
-    let upper_positive = permission_envelopes_for_recipient_patterns(&card.upper_positive)
-        .map_err(|message| message)?;
-    let upper_negative = negative_permission_envelopes_for_recipient_patterns(&card.upper_negative)
-        .map_err(|message| message)?;
+    let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)?;
+    let lower_negative =
+        negative_permission_envelopes_for_recipient_patterns(&card.lower_negative)?;
+    let upper_positive = permission_envelopes_for_recipient_patterns(&card.upper_positive)?;
+    let upper_negative =
+        negative_permission_envelopes_for_recipient_patterns(&card.upper_negative)?;
     delegation_surface
         .validate_attenuation(
             &lower_positive,
@@ -1835,6 +2035,10 @@ async fn analyze_and_validate_component_wasm(
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     tool_deployment_metadata: BTreeMap<ToolName, ToolDeploymentMetadata>,
+    tool_middleware_deployment_metadata: BTreeMap<
+        ToolMiddlewareName,
+        ToolMiddlewareDeploymentMetadata,
+    >,
 ) -> Result<ComponentMetadata, ComponentError> {
     for agent_type in &agent_types {
         agent_type
@@ -1851,6 +2055,7 @@ async fn analyze_and_validate_component_wasm(
             agent_types,
             agent_type_provision_configs,
             tool_deployment_metadata,
+            tool_middleware_deployment_metadata,
         )
     })
     .await?;
@@ -1928,6 +2133,38 @@ fn validate_component_metadata_invariants(
         if let Err(errors) = validate_tool(&tool_metadata.definition) {
             return Err(ComponentError::InvalidTool {
                 tool: name.to_string(),
+                errors: errors.into_iter().map(|error| error.to_string()).collect(),
+            });
+        }
+    }
+
+    if !metadata.tool_middlewares().is_empty()
+        && metadata
+            .known_exports()
+            .tool_middleware_guest_interface
+            .as_deref()
+            != Some("golem:tool/tool-middleware-guest@0.1.0")
+    {
+        return Err(ComponentError::ToolMiddlewaresRequireSupportedGuestExport {
+            found: metadata
+                .known_exports()
+                .tool_middleware_guest_interface
+                .clone(),
+        });
+    }
+    for (name, middleware_metadata) in metadata.tool_middlewares() {
+        if middleware_metadata.definition.name != name.as_str() {
+            return Err(ComponentError::InvalidToolMiddleware {
+                middleware: name.to_string(),
+                errors: vec![format!(
+                    "metadata key does not match definition name {:?}",
+                    middleware_metadata.definition.name
+                )],
+            });
+        }
+        if let Err(errors) = validate_tool_middleware(&middleware_metadata.definition) {
+            return Err(ComponentError::InvalidToolMiddleware {
+                middleware: name.to_string(),
                 errors: errors.into_iter().map(|error| error.to_string()).collect(),
             });
         }
@@ -2028,6 +2265,7 @@ mod initial_agent_file_tests {
             name: EnvironmentName::try_from(name).unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),
@@ -2125,9 +2363,10 @@ mod tests {
     use super::{
         prepare_agent_initial_card_for_minting, prepare_initial_card_for_minting,
         resolve_tool_deployment_metadata_for_creation, resolve_tool_files_for_update,
-        tool_definitions_by_name, tool_state_for_update,
-        validate_and_transform_component_config_entries, validate_component_config_schema,
-        validate_component_metadata_invariants,
+        resolve_tool_middleware_deployment_metadata_for_creation, tool_definitions_by_name,
+        tool_middleware_definitions_by_name, tool_middleware_state_for_update,
+        tool_state_for_update, validate_and_transform_component_config_entries,
+        validate_component_config_schema, validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
     use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
@@ -2143,8 +2382,13 @@ mod tests {
     use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
+    use golem_common::model::tool_middleware::{
+        ToolMiddlewareDeploymentMetadata, ToolMiddlewareName,
+    };
     use golem_common::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
-    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_common::schema::tool::{
+        CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    };
     use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType};
     use std::collections::{BTreeMap, HashMap};
     use test_r::test;
@@ -2295,6 +2539,23 @@ mod tests {
             environment_binding: None,
             component_bindings: BTreeMap::new(),
             agent_bindings: BTreeMap::new(),
+        }
+    }
+
+    fn middleware(name: &str, version: &str) -> ToolMiddleware {
+        ToolMiddleware {
+            name: name.to_string(),
+            version: version.to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+        }
+    }
+
+    fn middleware_metadata(definition: ToolMiddleware) -> ToolMiddlewareDeploymentMetadata {
+        ToolMiddlewareDeploymentMetadata {
+            definition,
+            provision: ToolProvisionConfig::default(),
         }
     }
 
@@ -2455,6 +2716,83 @@ mod tests {
             replaced_metadata[&name].provision,
             ToolProvisionConfig::default()
         );
+    }
+
+    #[test]
+    fn tool_middleware_creation_persists_exact_descriptors_and_rejects_duplicates() {
+        let definition = middleware("audit", "1.0.0");
+        let name = ToolMiddlewareName::try_from("audit").unwrap();
+        let metadata = resolve_tool_middleware_deployment_metadata_for_creation(
+            vec![definition.clone()],
+            BTreeMap::from([(
+                name.clone(),
+                ToolProvisionConfigCreation {
+                    config: NormalizedJsonValue::new(serde_json::json!({})),
+                    env: BTreeMap::new(),
+                    plugin_installations: Vec::new(),
+                    files: BTreeMap::new(),
+                },
+            )]),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(metadata[&name].definition, definition);
+
+        assert!(matches!(
+            tool_middleware_definitions_by_name(vec![
+                middleware("audit", "1"),
+                middleware("audit", "2"),
+            ]),
+            Err(ComponentError::DuplicateToolMiddlewareName(_))
+        ));
+    }
+
+    #[test]
+    fn tool_middleware_update_distinguishes_omitted_and_explicit_empty_replacement() {
+        let name = ToolMiddlewareName::try_from("audit").unwrap();
+        let existing =
+            BTreeMap::from([(name.clone(), middleware_metadata(middleware("audit", "1")))]);
+        assert_eq!(
+            tool_middleware_state_for_update(&existing, None).unwrap().1,
+            existing
+        );
+        let cleared = tool_middleware_state_for_update(&existing, Some(Vec::new())).unwrap();
+        assert!(cleared.0.is_empty() && cleared.1.is_empty());
+        let replaced =
+            tool_middleware_state_for_update(&existing, Some(vec![middleware("audit", "2")]))
+                .unwrap();
+        assert_eq!(replaced.1[&name].definition.version, "2");
+    }
+
+    #[test]
+    fn middleware_metadata_requires_guest_export_but_pure_components_do_not() {
+        let name = ToolMiddlewareName::try_from("audit").unwrap();
+        let middlewares = BTreeMap::from([(name, middleware_metadata(middleware("audit", "1")))]);
+        let missing_guest = ComponentMetadata::from_parts_with_tools_and_middlewares(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            middlewares,
+        );
+        assert!(matches!(
+            validate_component_metadata_invariants(&missing_guest),
+            Err(ComponentError::ToolMiddlewaresRequireSupportedGuestExport { .. })
+        ));
+
+        let pure = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        validate_component_metadata_invariants(&pure).unwrap();
     }
 
     #[test]

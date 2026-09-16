@@ -303,11 +303,14 @@ fn project_result(
         PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(error)) => {
             return match *error {
                 SerializableToolError::CustomError(value) => {
-                    let value =
-                        to_json_value_redacted(value.graph(), &value.graph().root, value.value())
-                            .map_err(|e| invalid(e.to_string()))?;
+                    let payload = to_json_value_redacted(
+                        value.payload.graph(),
+                        &value.payload.graph().root,
+                        value.payload.value(),
+                    )
+                    .map_err(|e| invalid(e.to_string()))?;
                     Ok(CallToolResult::error(vec![Content::text(
-                        value.to_string(),
+                        serde_json::json!({"name": value.name, "payload": payload}).to_string(),
                     )]))
                 }
                 error => Err(invalid(format!("{error:?}"))),
@@ -788,15 +791,25 @@ mod tests {
         let custom = project_result(
             &export,
             PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(Box::new(
-                SerializableToolError::CustomError(Box::new(value)),
+                SerializableToolError::CustomError(Box::new(
+                    golem_common::model::tool::SerializableCustomToolError {
+                        name: "example-error".to_string(),
+                        payload: value,
+                    },
+                )),
             ))),
             vec![],
         )
         .unwrap();
         assert_eq!(custom.is_error, Some(true));
         assert_eq!(
-            serde_json::to_value(custom.content).unwrap()[0]["text"],
-            "\"hello\""
+            serde_json::from_str::<serde_json::Value>(
+                serde_json::to_value(custom.content).unwrap()[0]["text"]
+                    .as_str()
+                    .unwrap()
+            )
+            .unwrap(),
+            json!({"name": "example-error", "payload": "hello"})
         );
         assert_eq!(
             project_result(

@@ -77,6 +77,7 @@ message CompiledToolBinding {
     string agent_type_name = 16;
     golem.component.ComponentId component_baseline_id = 17;
   }
+  golem.component.ConfigKeyScope config_keys_readable = 18;
 }
 
 enum ToolFilesystemAccess {
@@ -89,4 +90,8 @@ message ToolDeploymentState {
   uint64 deployment_revision = 1;
   repeated RegisteredTool registered_tools = 2;
   repeated CompiledToolBinding tool_bindings = 3;
+  // BinaryCodec snapshots preserve the complete pinned middleware descriptor, executable source,
+  // per-occurrence policy, compatibility projection, and occurrence order.
+  repeated bytes registered_tool_middlewares = 4;
+  repeated bytes tool_middleware_chains = 5;
 }

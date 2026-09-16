@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::{AccountEmail, AccountId};
+use crate::base_model::agent_config::CanonicalAgentConfigPath;
 use crate::base_model::agent_secret::CanonicalAgentSecretPath;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::diff::Hash;
@@ -101,6 +102,37 @@ pub enum SecretKeyScope {
     Keys(BTreeSet<CanonicalAgentSecretPath>),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "keys", rename_all = "camelCase")]
+pub enum ConfigKeyScope {
+    #[default]
+    All,
+    Keys(BTreeSet<CanonicalAgentConfigPath>),
+}
+
+impl ConfigKeyScope {
+    pub fn contains(&self, key: &CanonicalAgentConfigPath) -> bool {
+        match self {
+            Self::All => true,
+            Self::Keys(keys) => keys.contains(key),
+        }
+    }
+
+    pub fn intersection(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::All, value) | (value, Self::All) => value.clone(),
+            (Self::Keys(left), Self::Keys(right)) => {
+                Self::Keys(left.intersection(right).cloned().collect())
+            }
+        }
+    }
+}
+
 impl SecretKeyScope {
     pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
         match self {
@@ -139,8 +171,20 @@ pub struct ToolBindingInput {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub filesystem_access: ToolFilesystemAccess,
+    /// `None` means no middleware list was authored; `Some([])` explicitly clears the
+    /// per-tool list when combined with `Replace`.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub middleware: Option<Vec<crate::base_model::tool_middleware::ToolMiddlewareInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub middleware_merge_mode: Option<crate::base_model::tool_middleware::ToolMiddlewareMergeMode>,
 }
 
 impl Default for ToolBindingInput {
@@ -149,8 +193,12 @@ impl Default for ToolBindingInput {
             version: None,
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             account: None,
+            config_keys_readable: ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: ToolFilesystemAccess::Unset,
+            middleware: None,
+            middleware_merge_mode: None,
         }
     }
 }
@@ -346,6 +394,7 @@ pub struct CompiledToolBinding {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub parameters: NormalizedJsonValue,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     #[serde(default)]
@@ -366,6 +415,7 @@ pub struct ToolActivationSnapshot {
     pub registered_tool: RegisteredTool,
     pub binding: CompiledToolBinding,
     pub filesystem: FilesystemCapability,
+    pub middleware_chain: Option<crate::model::tool_middleware::CompiledToolMiddlewareChain>,
 }
 
 #[cfg(feature = "full")]
@@ -394,6 +444,19 @@ impl ToolActivationSnapshot {
 
     pub fn filesystem(&self) -> FilesystemCapability {
         self.filesystem
+    }
+
+    pub fn middleware_chain(
+        &self,
+    ) -> Option<&crate::model::tool_middleware::CompiledToolMiddlewareChain> {
+        self.middleware_chain.as_ref()
+    }
+
+    pub fn effective_definition(&self) -> &Tool {
+        self.middleware_chain
+            .as_ref()
+            .map(|chain| &chain.effective_definition)
+            .unwrap_or(&self.registered_tool.definition)
     }
 
     pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, String> {
@@ -448,7 +511,26 @@ pub enum SerializableToolError {
     InvalidInput(String),
     ConstraintViolation(String),
     InvalidResult(String),
-    CustomError(Box<crate::schema::TypedSchemaValue>),
+    CustomError(Box<SerializableCustomToolError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct SerializableCustomToolError {
+    pub name: String,
+    pub payload: crate::schema::TypedSchemaValue,
 }
 
 #[derive(
@@ -541,11 +623,20 @@ pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub registered_tool_middlewares: BTreeMap<
+        crate::model::tool_middleware::ToolMiddlewareName,
+        crate::model::tool_middleware::RegisteredToolMiddleware,
+    >,
+    pub tool_middleware_chains: BTreeMap<
+        ToolBindingOwner,
+        BTreeMap<ToolName, crate::model::tool_middleware::CompiledToolMiddlewareChain>,
+    >,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SecretKeyScope, ToolName};
+    use super::{ConfigKeyScope, SecretKeyScope, ToolName};
+    use crate::model::agent_config::CanonicalAgentConfigPath;
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -579,5 +670,18 @@ mod tests {
         assert!(left.contains(&a));
         assert!(!right.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
         assert!(SecretKeyScope::All.contains(&CanonicalAgentSecretPath(vec!["c".to_string()])));
+    }
+
+    #[test]
+    fn config_key_scope_intersection_allows_only_shared_keys() {
+        let a = CanonicalAgentConfigPath(vec!["a".to_string()]);
+        let b = CanonicalAgentConfigPath(vec!["b".to_string()]);
+        let environment = ConfigKeyScope::Keys(BTreeSet::from([a.clone(), b]));
+        let agent = ConfigKeyScope::Keys(BTreeSet::from([a.clone()]));
+
+        let effective = environment.intersection(&agent);
+        assert!(effective.contains(&a));
+        assert!(!effective.contains(&CanonicalAgentConfigPath(vec!["b".to_string()])));
+        assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
     }
 }

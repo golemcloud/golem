@@ -2232,10 +2232,18 @@ fn translate_result(
                             match error.error.ok_or_else(|| {
                                 AdapterError::protocol("private remote tool error has no payload")
                             })? {
-                                public_tool_error::Error::CustomError(typed) => (
+                                public_tool_error::Error::CustomError(error) => (
                                     "custom-error",
-                                    None,
-                                    Some(decode_typed(typed, state, &mut mappings)?),
+                                    Some(error.name),
+                                    Some(decode_typed(
+                                        error.payload.ok_or_else(|| {
+                                            AdapterError::protocol(
+                                                "private custom tool error has no payload",
+                                            )
+                                        })?,
+                                        state,
+                                        &mut mappings,
+                                    )?),
                                 ),
                                 public_tool_error::Error::InvalidToolName(message) => {
                                     ("invalid-tool-name", Some(message), None)

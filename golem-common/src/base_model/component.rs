@@ -151,6 +151,12 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub tool_deployment_configs: BTreeMap<ToolName, ToolDeploymentConfigCreation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Vec<crate::schema::tool::ToolMiddleware>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_configs: BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigCreation>,
     }
 
     pub struct ComponentUpdate {
@@ -167,6 +173,12 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub tool_deployment_config_updates: Option<BTreeMap<ToolName, ToolDeploymentConfigUpdate>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Option<Vec<crate::schema::tool::ToolMiddleware>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_config_updates: Option<BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigUpdate>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub allow_incompatible_config: bool,
@@ -504,6 +516,8 @@ mod tests {
             )]),
             tools: Vec::new(),
             tool_deployment_configs: BTreeMap::new(),
+            tool_middlewares: Vec::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
         };
         let value = serde_json::to_value(&creation).unwrap();
 

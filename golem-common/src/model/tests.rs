@@ -938,17 +938,22 @@ fn external_tool_results_round_trip_and_treat_nan_as_replay_equivalent() {
 
 #[test]
 fn external_tool_custom_error_nan_is_replay_equivalent_after_round_trip() {
-    use crate::base_model::tool::{SerializableToolError, SerializableToolRpcError};
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
     use crate::model::AgentInvocationResult;
     use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
     use crate::serialization::{deserialize, serialize};
 
     let result = AgentInvocationResult::ExternalTool {
         result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
-            SerializableToolError::CustomError(Box::new(TypedSchemaValue::new(
-                SchemaGraph::anonymous(SchemaType::f64()),
-                SchemaValue::F64(f64::NAN),
-            ))),
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "nan".to_string(),
+                payload: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::f64()),
+                    SchemaValue::F64(f64::NAN),
+                ),
+            })),
         ))),
     };
     let decoded: AgentInvocationResult = deserialize(&serialize(&result).unwrap()).unwrap();

@@ -20,6 +20,7 @@ impl Environment {
     pub fn to_diffable(&self) -> diff::Environment {
         diff::Environment {
             compatibility_check: self.compatibility_check,
+            tool_compatibility_mode: self.tool_compatibility_mode,
             version_check: self.version_check,
             security_overrides: self.security_overrides,
         }
