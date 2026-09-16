@@ -4332,16 +4332,17 @@ mod tests {
             let Message::Text(text) = &frames[0].message else {
                 panic!("expected text result")
             };
-            let PublicServerMessage::InvocationResult {
-                result:
-                    PublicInvocationResult::ToolFailure {
-                        code,
-                        message,
-                        custom_error,
-                    },
-                ..
-            } = golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
-                .unwrap()
+            let PublicServerMessage::InvocationResult { result, .. } =
+                golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                    .unwrap()
+            else {
+                panic!("expected invocation result")
+            };
+            let PublicInvocationResult::ToolFailure {
+                code,
+                message,
+                custom_error,
+            } = *result
             else {
                 panic!("expected tool failure")
             };
