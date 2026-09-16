@@ -183,37 +183,9 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
 
-      - name: Enable worker crash diagnostics
-        if: matrix.group.name == 'group3'
-        run: |
-          if ! command -v gdb >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y gdb
-          fi
-          mkdir -p "$RUNNER_TEMP/golem-cores"
-          sudo sysctl -w "kernel.core_pattern=$RUNNER_TEMP/golem-cores/core.%p"
       - name: Worker Executor integration tests
-        shell: bash
-        run: |
-          if [[ '${{ matrix.group.name }}' == 'group3' ]]; then
-            ulimit -c unlimited
-          fi
-          cargo make --profile ci worker-executor-tests-${{ matrix.group.name }} 2>&1 | tee "$RUNNER_TEMP/worker-tests.log"
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 20
-      - name: Inspect worker crash stacks
-        if: failure() && matrix.group.name == 'group3'
-        timeout-minutes: 5
-        run: |
-          shopt -s nullglob
-          cores=("$RUNNER_TEMP"/golem-cores/core.*)
-          if (( ${#cores[@]} == 0 )); then
-            exit 0
-          fi
-          binary=$(sed -n 's/.*binary_path: "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/worker-tests.log" | head -n 1)
-          test -x "$binary"
-          for core in "${cores[@]}"; do
-            gdb --batch "$binary" "$core" -ex 'set pagination off' -ex 'thread apply all bt 40'
-          done
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
