@@ -27,8 +27,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, log_action, log_error,
-    log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    message_for_output,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -1413,7 +1414,7 @@ impl AgentCommandHandler {
             Err(error) => {
                 update_results
                     .errors
-                    .insert(agent_id.0.clone(), error.to_string());
+                    .insert(agent_id.0.clone(), error_message_for_output(&error));
                 self.ctx.log_handler().log_output(update_results)?;
                 return Err(error);
             }
@@ -1943,9 +1944,10 @@ impl AgentCommandHandler {
                 .await;
 
             if let Err(error) = &result {
-                update_results
-                    .errors
-                    .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                update_results.errors.insert(
+                    agent.agent_id.agent_id.clone(),
+                    error_message_for_output(error),
+                );
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -1971,9 +1973,10 @@ impl AgentCommandHandler {
                     )
                     .await
                 {
-                    update_results
-                        .errors
-                        .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                    update_results.errors.insert(
+                        agent.agent_id.agent_id.clone(),
+                        error_message_for_output(&error),
+                    );
                 }
             }
         }
@@ -2195,7 +2198,7 @@ impl AgentCommandHandler {
                             agent_id.bold().green(),
                         ),
                     );
-                    result.errors.insert(agent_id, error.to_string());
+                    result.errors.insert(agent_id, message_for_output(&error));
                 }
             }
         }
@@ -2257,7 +2260,9 @@ impl AgentCommandHandler {
                             agent_id.bold().green(),
                         ),
                     );
-                    result.errors.insert(agent_id.clone(), format!("{error:#}"));
+                    result
+                        .errors
+                        .insert(agent_id.clone(), error_message_for_output(&error));
                 }
             }
         }
