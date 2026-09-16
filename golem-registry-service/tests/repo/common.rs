@@ -6466,6 +6466,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6501,6 +6502,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6538,6 +6540,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6563,6 +6566,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6590,6 +6594,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };

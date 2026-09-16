@@ -893,6 +893,8 @@ pub struct McpDeployment {
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tools: IndexMap<golem_common::model::tool::ToolName, McpDeploymentToolOptions>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -900,6 +902,18 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -2508,7 +2522,7 @@ mod test {
                     arb_opt(arb_ident())
                         .prop_map(|security_scheme| McpDeploymentAgentOptions { security_scheme }),
                 ),
-                0..=3,
+                1..=3,
             )
             .prop_map(IndexMap::from_iter),
         )
@@ -2516,6 +2530,7 @@ mod test {
                 domain: Some(Domain(format!("{domain}.example.com")).into()),
                 subdomain: None,
                 agents,
+                tools: IndexMap::new(),
             })
             .boxed()
     }
@@ -2933,6 +2948,28 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn schema_and_serde_require_explicit_mcp_tool_owner_component() {
+        let mut value = serde_json::json!({"mcp":{"deployments":{"local":[{
+            "subdomain":"mcp", "agents":{"Counter":{}},
+            "tools":{"files":{"ownerComponent":"app:owner","include":["read **"],"securityScheme":"oauth"}}
+        }]}}});
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+        let parsed = serde_json::from_value::<Application>(value.clone()).unwrap();
+        let mcp = parsed.mcp.unwrap();
+        let options = &mcp.deployments.values().next().unwrap()[0].tools;
+        assert_eq!(
+            options.values().next().unwrap().owner_component.0,
+            "app:owner"
+        );
+        value["mcp"]["deployments"]["local"][0]["tools"]["files"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ownerComponent");
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+        assert!(serde_json::from_value::<Application>(value).is_err());
     }
 
     #[test]

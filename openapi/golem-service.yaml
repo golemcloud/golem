@@ -22781,6 +22781,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
         createdAt:
           type: string
           format: date-time
@@ -22791,6 +22795,7 @@ components:
       - domain
       - hash
       - agents
+      - tools
       - createdAt
     McpDeploymentAgentOptions:
       title: McpDeploymentAgentOptions
@@ -22808,9 +22813,32 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - domain
       - agents
+      - tools
+    McpDeploymentToolOptions:
+      title: McpDeploymentToolOptions
+      type: object
+      properties:
+        ownerComponent:
+          type: string
+        securityScheme:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+      required:
+      - ownerComponent
     McpDeploymentUpdate:
       title: McpDeploymentUpdate
       type: object
@@ -22822,6 +22850,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - currentRevision
     MemoryLimit:

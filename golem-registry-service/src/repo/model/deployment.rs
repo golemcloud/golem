@@ -38,13 +38,14 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
@@ -1089,6 +1090,9 @@ pub struct CompiledMcpData {
     #[desert(default)]
     pub security_scheme_name: Option<SecuritySchemeName>,
     pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub tools: Vec<golem_service_base::mcp::CompiledMcpToolExport>,
 }
 
 #[derive(FromRow)]
@@ -1112,6 +1116,9 @@ impl DeploymentCompiledMcpRecord {
             mcp_data: Blob::new(CompiledMcpData {
                 security_scheme_name: compiled_mcp.security_scheme_name.clone(),
                 registered_agent_types: compiled_mcp.registered_agent_types,
+                application_name: compiled_mcp.application_name,
+                environment_name: compiled_mcp.environment_name,
+                tools: compiled_mcp.tools,
             }),
         }
     }
@@ -1127,11 +1134,14 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             account_id: AccountId(value.account_id),
             account_email: AccountEmail::new(value.account_email),
             environment_id: EnvironmentId(value.environment_id),
+            application_name: mcp_data.application_name,
+            environment_name: mcp_data.environment_name,
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
             security_scheme_name: mcp_data.security_scheme_name,
             security_scheme: None, // Will be resolved at runtime
             registered_agent_types: mcp_data.registered_agent_types,
+            tools: mcp_data.tools,
         })
     }
 }

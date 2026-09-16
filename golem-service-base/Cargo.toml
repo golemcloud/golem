@@ -21,6 +21,7 @@ worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

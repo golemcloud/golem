@@ -14410,6 +14410,7 @@ components:
       - domain
       - hash
       - agents
+      - tools
       - createdAt
       properties:
         id:
@@ -14430,6 +14431,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
         createdAt:
           type: string
           format: date-time
@@ -14445,6 +14450,7 @@ components:
       required:
       - domain
       - agents
+      - tools
       properties:
         domain:
           type: string
@@ -14452,6 +14458,28 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
+    McpDeploymentToolOptions:
+      type: object
+      title: McpDeploymentToolOptions
+      required:
+      - ownerComponent
+      properties:
+        ownerComponent:
+          type: string
+        securityScheme:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
     McpDeploymentUpdate:
       type: object
       title: McpDeploymentUpdate
@@ -14465,6 +14493,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
     MemoryLimit:
       type: object
       title: MemoryLimit

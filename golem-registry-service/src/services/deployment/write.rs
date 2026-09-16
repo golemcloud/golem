@@ -309,18 +309,19 @@ impl DeploymentWriteService {
             })
             .collect();
 
-        let compiled_mcps = deployment_context.compile_mcp_deployments(
-            account_id,
-            next_deployment_revision,
-            &security_schemes_map,
-            &mut errors,
-        );
-
         let mut compiled_tools = deployment_context.compile_tools_with_remote(
             next_deployment_revision,
             &remote_tools,
             &mut errors,
             &mut warnings,
+        );
+
+        let compiled_mcps = deployment_context.compile_mcp_deployments(
+            account_id,
+            next_deployment_revision,
+            &security_schemes_map,
+            &compiled_tools,
+            &mut errors,
         );
 
         let registered_tools_by_name = compiled_tools

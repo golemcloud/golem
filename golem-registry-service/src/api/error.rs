@@ -153,6 +153,11 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
+        DeployValidationError::McpDeploymentEmpty { .. }
+        | DeployValidationError::McpDeploymentInvalidTool { .. }
+        | DeployValidationError::McpDeploymentToolNameCollision { .. } => {
+            api::error_code::deployment_validation::MCP_INVALID_TOOL
+        }
         DeployValidationError::SecurityOverrideDisabled => {
             api::error_code::deployment_validation::SECURITY_OVERRIDE_DISABLED
         }

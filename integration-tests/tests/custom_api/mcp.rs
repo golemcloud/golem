@@ -248,6 +248,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
 
     let mcp_deployment_creation = McpDeploymentCreation {
         domain: domain.clone(),
+        tools: BTreeMap::new(),
         agents: BTreeMap::from_iter(vec![
             (
                 AgentTypeName("WeatherAgent".to_string()),

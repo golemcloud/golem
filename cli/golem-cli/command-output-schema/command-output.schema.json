@@ -5716,7 +5716,27 @@
         "agentsChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/McpDeploymentAgentOptionsDiffPayload" }
+        },
+        "toolsChanges": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "enum": ["create", "delete"] },
+              { "$ref": "#/definitions/McpDeploymentToolOptionsDiffPayload" }
+            ]
+          }
         }
+      },
+      "additionalProperties": false
+    },
+    "McpDeploymentToolOptionsDiffPayload": {
+      "type": "object",
+      "required": ["ownerComponentChanged", "securitySchemeChanged", "includeChanged", "excludeChanged"],
+      "properties": {
+        "ownerComponentChanged": { "type": "boolean" },
+        "securitySchemeChanged": { "type": "boolean" },
+        "includeChanged": { "type": "boolean" },
+        "excludeChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },

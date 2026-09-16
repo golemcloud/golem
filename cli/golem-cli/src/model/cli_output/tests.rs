@@ -5103,6 +5103,14 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     mcp_key.clone(),
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::McpDeployment {
+                            tools: BTreeMap::from_iter([
+                                ("removed".to_string(), golem_common::model::diff::McpDeploymentToolOptions::default()),
+                                ("changed".to_string(), golem_common::model::diff::McpDeploymentToolOptions {
+                                    owner_component: "old-owner".to_string(),
+                                    include: Some(vec!["old".to_string()]),
+                                    ..Default::default()
+                                }),
+                            ]),
                             agents: BTreeMap::from_iter([(
                                 "agent".to_string(),
                                 golem_common::model::diff::McpDeploymentAgentOptions {
@@ -5116,6 +5124,15 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     mcp_key,
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::McpDeployment {
+                            tools: BTreeMap::from_iter([
+                                ("added".to_string(), golem_common::model::diff::McpDeploymentToolOptions::default()),
+                                ("changed".to_string(), golem_common::model::diff::McpDeploymentToolOptions {
+                                    owner_component: "new-owner".to_string(),
+                                    security_scheme: Some("scheme".to_string()),
+                                    exclude: Some(vec!["new".to_string()]),
+                                    ..Default::default()
+                                }),
+                            ]),
                             agents: BTreeMap::from_iter([(
                                 "agent".to_string(),
                                 golem_common::model::diff::McpDeploymentAgentOptions {

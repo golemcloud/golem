@@ -4126,6 +4126,14 @@ mod app_builder {
                                     continue;
                                 };
 
+                                if mcp_deployment.agents.is_empty() && mcp_deployment.tools.is_empty() {
+                                    validation.add_error(format!("MCP deployment in {} must contain at least one agent or tool", app.source.display()));
+                                    continue;
+                                }
+                                if mcp_deployment.tools.values().any(|options| options.include.is_some() && options.exclude.is_some()) {
+                                    validation.add_error(format!("MCP tool include and exclude are mutually exclusive in {}", app.source.display()));
+                                    continue;
+                                }
                                 let mcp_deployments =
                                     self.mcp_deployments.entry(environment.clone()).or_default();
 
@@ -4135,10 +4143,16 @@ mod app_builder {
                                         security_scheme: v.security_scheme,
                                     }))
                                     .collect();
+                                let tools = mcp_deployment.tools.into_iter().map(|(k, v)| (k, crate::model::mcp::McpDeploymentToolOptions {
+                                    owner_component: v.owner_component,
+                                    security_scheme: v.security_scheme,
+                                    include: v.include,
+                                    exclude: v.exclude,
+                                })).collect();
 
                                 mcp_deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
-                                    McpDeploymentDeployProperties { agents },
+                                    McpDeploymentDeployProperties { agents, tools },
                                 ));
                             }
                         }

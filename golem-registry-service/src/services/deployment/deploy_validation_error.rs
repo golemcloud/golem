@@ -59,6 +59,19 @@ pub enum DeployValidationError {
         mcp_deployment_domain: Domain,
         security_scheme: SecuritySchemeName,
     },
+    #[error("MCP deployment {mcp_deployment_domain} is empty")]
+    McpDeploymentEmpty { mcp_deployment_domain: Domain },
+    #[error("MCP deployment {mcp_deployment_domain} tool {tool_name}: {error}")]
+    McpDeploymentInvalidTool {
+        mcp_deployment_domain: Domain,
+        tool_name: ToolName,
+        error: String,
+    },
+    #[error("MCP deployment {mcp_deployment_domain} exports duplicate tool name {name}")]
+    McpDeploymentToolNameCollision {
+        mcp_deployment_domain: Domain,
+        name: String,
+    },
     #[error(
         "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
     )]
