@@ -1,6 +1,6 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use golem_cli::{fs, versions};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
@@ -10,6 +10,7 @@ use golem_common::model::account_usage::{
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
+use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -72,15 +73,8 @@ fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
     }
 }
 
-async fn seed_account_usage(
-    ctx: &TestContext,
-) -> (
-    Uuid,
-    AccountUsagePeriod,
-    AccountUsagePeriod,
-    AccountUsagePeriod,
-) {
-    let pool = SqlitePoolOptions::new()
+async fn registry_pool(ctx: &TestContext) -> SqlitePool {
+    SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
             SqliteConnectOptions::new()
@@ -89,7 +83,35 @@ async fn seed_account_usage(
                 .foreign_keys(true),
         )
         .await
-        .expect("failed to open registry database");
+        .expect("failed to open registry database")
+}
+
+async fn insert_monthly_compute_admin_grant(
+    pool: &SqlitePool,
+    account_id: Uuid,
+    granted_at: DateTime<Utc>,
+) {
+    sqlx::query(
+        "INSERT INTO account_resource_overrides \
+         (account_id, dimension, source, override_value, reason, expires_at, created_by, created_at) \
+         VALUES ($1, 'monthly_compute_gcu', 'admin_grant', 9, 'support', NULL, $1, $2)",
+    )
+    .bind(account_id)
+    .bind(granted_at)
+    .execute(pool)
+    .await
+    .expect("failed to seed monthly compute admin grant");
+}
+
+async fn seed_account_usage(
+    ctx: &TestContext,
+) -> (
+    Uuid,
+    AccountUsagePeriod,
+    AccountUsagePeriod,
+    AccountUsagePeriod,
+) {
+    let pool = registry_pool(ctx).await;
     let account_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT account_id FROM accounts WHERE email = 'initial@user'",
     )
@@ -338,6 +360,96 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     assert!(output.stdout_contains("9 GB-month"));
     assert!(output.stdout_contains("Max storage per agent:"));
     assert!(output.stdout_contains("disabled"));
+    assert_eq!(
+        output.stdout_count_lines_containing("Active admin grant:"),
+        1
+    );
+    assert!(
+        output
+            .stdout()
+            .any(|line| line.contains("Active admin grant:") && line.contains("(none)"))
+    );
+
+    let granted_at = Utc.with_ymd_and_hms(2026, 4, 1, 2, 3, 4).single().unwrap();
+    let pool = registry_pool(&ctx).await;
+    insert_monthly_compute_admin_grant(&pool, account_id, granted_at).await;
+    let expected_grant = format!(
+        "Monthly compute: 9 GCU; reason: support; actor: {account_id}; granted at: 2026-04-01T02:03:04Z; no expiry"
+    );
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert_eq!(
+        output.stdout_count_lines_containing("Active admin grant:"),
+        1
+    );
+    assert!(output.stdout_contains(&expected_grant));
+
+    let expired_at = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).single().unwrap();
+    let result = sqlx::query(
+        "UPDATE account_resource_overrides SET expires_at = $2 \
+         WHERE account_id = $1 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'",
+    )
+    .bind(account_id)
+    .bind(expired_at)
+    .execute(&pool)
+    .await
+    .expect("failed to expire monthly compute admin grant");
+    assert_eq!(result.rows_affected(), 1);
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert_eq!(
+        output.stdout_count_lines_containing("Active admin grant:"),
+        1
+    );
+    assert!(
+        output
+            .stdout()
+            .any(|line| line.contains("Active admin grant:") && line.contains("(none)"))
+    );
+    assert!(!output.stdout_contains(&expected_grant));
+
+    sqlx::query(
+        "DELETE FROM account_resource_overrides \
+         WHERE account_id = $1 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("failed to remove expired monthly compute admin grant");
+    insert_monthly_compute_admin_grant(&pool, account_id, granted_at).await;
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert_eq!(
+        output.stdout_count_lines_containing("Active admin grant:"),
+        1
+    );
+    assert!(output.stdout_contains(&expected_grant));
+
+    let result = sqlx::query(
+        "DELETE FROM account_resource_overrides \
+         WHERE account_id = $1 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("failed to clear monthly compute admin grant");
+    assert_eq!(result.rows_affected(), 1);
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert_eq!(
+        output.stdout_count_lines_containing("Active admin grant:"),
+        1
+    );
+    assert!(
+        output
+            .stdout()
+            .any(|line| line.contains("Active admin grant:") && line.contains("(none)"))
+    );
+    assert!(!output.stdout_contains(&expected_grant));
 
     let output = ctx
         .cli([
