@@ -23,10 +23,12 @@ pub use crate::bindings::golem::agent::common::Principal;
 ))]
 pub use crate::golem_agentic::golem::agent::common::Principal;
 pub use crate::schema::tool::Tool;
+pub use crate::schema::tool::{
+    MonomorphicToolMiddlewareScope, ToolMiddleware, ToolMiddlewareScope,
+};
 pub use tool_middleware::{
-    InputStream, InvocationResult, MonomorphicToolMiddlewareScope, ToolInvokeError, ToolMiddleware,
-    ToolMiddlewareScope, UnderlyingTool, decode_result_empty, decode_result_stdout_only,
-    decode_result_value, decode_result_with_stdout,
+    InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, UnderlyingTool,
+    decode_result_empty, decode_result_stdout_only, decode_result_value, decode_result_with_stdout,
 };
 #[doc(hidden)]
 pub use tool_middleware::{ToolMiddlewareInvokeFuture, ToolMiddlewareInvokeFutureFor};
