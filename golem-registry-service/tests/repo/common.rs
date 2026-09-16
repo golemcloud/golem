@@ -5223,6 +5223,7 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
         .unwrap();
     plan.plan_id = new_repo_uuid();
     plan.name = format!("GRANT_PLAN_UPDATE_{}", plan.plan_id);
+    plan.monthly_compute_gcu = 2.into();
     plan.max_memory_per_worker = 100.into();
     plan.max_memory_per_worker_ceiling = 1000.into();
     plan.max_memory_per_worker_user_configurable = true;
@@ -5882,8 +5883,15 @@ pub async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(
 }
 
 pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
-    let plan_id = deps.test_plan_id();
-    let mut plan = deps.plan_repo.get_by_id(plan_id).await.unwrap().unwrap();
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let plan_id = new_repo_uuid();
+    plan.plan_id = plan_id;
+    plan.name = format!("MONTHLY_AMOUNTS_{plan_id}");
     plan.monthly_compute_gcu = 2.into();
     plan.monthly_memory_gb_seconds = 3.into();
     plan.monthly_durable_storage_gb_month = 5.into();
@@ -5896,6 +5904,17 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
     assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
     assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
     let account_id = deps.create_account().await.revision.account_id;
+    deps.account_service()
+        .set_plan(
+            AccountId(account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
     let mut usage = deps
         .account_usage_repo
         .get(account_id, &SqlDateTime::now())
@@ -7114,6 +7133,7 @@ pub async fn test_plan_eligibility_downgrade_serializes_with_account_assignment(
     let mut destination_plan = source_plan;
     destination_plan.plan_id = destination_plan_id;
     destination_plan.name = format!("OVERAGE_PLAN_{destination_plan_id}");
+    destination_plan.monthly_compute_gcu = 2.into();
     deps.plan_repo
         .create_or_update(destination_plan.clone())
         .await
@@ -7406,10 +7426,25 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
+    let plan_id = new_repo_uuid();
+    plan.plan_id = plan_id;
+    plan.name = format!("USAGE_ATTRIBUTION_{plan_id}");
+    plan.monthly_compute_gcu = 2.into();
     plan.overage_eligible = true;
     deps.plan_repo.create_or_update(plan).await.unwrap();
 
     let account_id = deps.create_account().await.revision.account_id;
+    deps.account_service()
+        .set_plan(
+            AccountId(account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
     assert_eq!(register_current_monthly_policy(deps, account_id).await, 0);
     let mut zero_usage = deps
         .account_usage_repo
