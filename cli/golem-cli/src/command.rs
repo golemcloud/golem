@@ -2317,7 +2317,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <NAME> for interactive setup
         #[command(after_help = crate::command_examples::PROFILE_NEW)]
         New {
             /// Name of the newly created profile
