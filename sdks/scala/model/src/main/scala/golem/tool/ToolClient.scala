@@ -46,6 +46,7 @@ object RpcError {
 sealed trait ToolError[+E] extends Product with Serializable
 object ToolError {
   final case class Rpc(error: RpcError)                                      extends ToolError[Nothing]
+  final case class RemoteTool(error: ToolInvokeError[TypedSchemaValue])      extends ToolError[Nothing]
   final case class Tool[E](error: E)                                         extends ToolError[E]
   final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolError[Nothing]
 }
@@ -177,8 +178,7 @@ object ToolClientRuntime {
       case ToolRpcFailure.RemoteInternalError(m) => ToolError.Rpc(RpcError.RemoteInternal(m))
       case ToolRpcFailure.Cancelled              => ToolError.Rpc(RpcError.Cancelled)
       case ToolRpcFailure.ResourceExhausted(m)   => ToolError.Rpc(RpcError.ResourceExhausted(m))
-      case ToolRpcFailure.RemoteToolError(error) =>
-        ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(error)}"))
+      case ToolRpcFailure.RemoteToolError(error) => ToolError.RemoteTool(error)
     }
 
   private[tool] def mapRemoteToolError[E](
@@ -193,25 +193,13 @@ object ToolClientRuntime {
         }
       case ToolInvokeError.Tool(_) =>
         ToolError.Rpc(RpcError.Protocol("remote custom error was missing its declared case name"))
-      case other =>
-        ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(other)}"))
+      case other => ToolError.RemoteTool(other)
     }
 
   private[tool] def decodeCustomToolError[E](
     value: TypedSchemaValue
   )(implicit from: FromSchema[E]): Either[String, E] =
     from.fromValue(value.value).left.map(e => s"failed to decode remote tool error: ${e.message}")
-
-  private def remoteToolErrorLabel(error: ToolInvokeError[TypedSchemaValue]): String =
-    error match {
-      case ToolInvokeError.InvalidToolName(name)        => s"invalid tool name `$name`"
-      case ToolInvokeError.InvalidCommandPath(path)     => s"invalid command path `${path.mkString(" ")}`"
-      case ToolInvokeError.InvalidInput(message)        => s"invalid input: $message"
-      case ToolInvokeError.ConstraintViolation(message) => s"constraint violation: $message"
-      case ToolInvokeError.InvalidResult(message)       => s"invalid result: $message"
-      case ToolInvokeError.Tool(_)                      => "custom error"
-      case ToolInvokeError.UnknownToolError(name, _)    => s"custom error `$name`"
-    }
 
   // -------------------------------------------------------------------------
   // Generated-client helpers: parameter encoding
