@@ -179,7 +179,7 @@ fn deployment_state(
     let bindings = registered_tools
         .iter()
         .map(|(name, tool)| {
-            let filesystem_access = if matches!(name.as_str(), "capable-streaming" | "streaming") {
+            let filesystem_access = if name.as_str() == "capable-streaming" {
                 ToolFilesystemAccess::Allowed
             } else {
                 ToolFilesystemAccess::Unset
@@ -5367,6 +5367,261 @@ async fn moonbit_generated_client_streams_live(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
+async fn native_external_tool_session_delivers_stdout_before_input_eof(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest,
+        InvocationStart, input_stream_item, invocation_request, invocation_response,
+        invocation_session_completion, invocation_session_result,
+    };
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        bindings
+            .get_mut(&ToolName::try_from("streaming").unwrap())
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_id!("ToolStreamingCaller", "native-session"),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let key = IdempotencyKey::fresh();
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "mode".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("marker-echo".to_string())],
+        },
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(key.clone().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    })
+                    .into(),
+                ),
+                environment_id: Some(context.default_environment_id.into()),
+                component_owner_account_id: Some(context.account_id.into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: "streaming".to_string(),
+                    command_path: vec!["run".to_string()],
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    stdin: true,
+                    stdout: true,
+                    fresh_owner: false,
+                    expected_deployment_revision: None,
+                }),
+                ..Default::default()
+            })),
+        })
+        .await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let acceptance = responses
+        .message()
+        .await?
+        .expect("native session acceptance");
+    let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response else {
+        anyhow::bail!("native session was not accepted: {acceptance:?}");
+    };
+    let stdin_id = accepted.tool_stdin_stream_id.expect("stdin role");
+    let stdout_id = accepted.tool_stdout_stream_id.expect("stdout role");
+    assert_ne!(stdin_id, stdout_id);
+    let stdin_mapping = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.transport_stream_id == stdin_id)
+        .expect("stdin mapping");
+    let stdin_stream_id = stdin_mapping.handle.as_ref().unwrap().stream_id;
+    let mut output = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while output.len() < b"marker:".len() {
+            match responses
+                .message()
+                .await?
+                .expect("stdout before EOF")
+                .response
+            {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    assert_eq!(item.transport_stream_id, stdout_id);
+                    output.extend(item.packed_u8);
+                }
+                other => anyhow::bail!("expected stdout before submitting stdin, got {other:?}"),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    assert_eq!(output, b"marker:");
+    let bytes = vec![0, 255, 17, 128, 9];
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                transport_stream_id: stdin_id,
+                sequence: 0,
+                payload: Some(input_stream_item::Payload::PackedU8(bytes.clone())),
+                durable_stream_id: stdin_stream_id,
+                epoch: accepted.epoch,
+            })),
+        })
+        .await?;
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id: stdin_id,
+                sequence: bytes.len() as u64,
+                durable_stream_id: stdin_stream_id,
+                epoch: accepted.epoch,
+            })),
+        })
+        .await?;
+    let mut result_seen = false;
+    let mut ended = false;
+    let mut finished = false;
+    while let Some(response) = responses.message().await? {
+        match response.response {
+            Some(invocation_response::Response::OutputItem(item)) => {
+                assert_eq!(item.transport_stream_id, stdout_id);
+                output.extend(item.packed_u8);
+            }
+            Some(invocation_response::Response::OutputEnd(end)) => {
+                assert_eq!(end.transport_stream_id, stdout_id);
+                assert!(!ended);
+                ended = true;
+            }
+            Some(invocation_response::Response::Result(result)) => {
+                let Some(invocation_session_result::Result::ToolResult(result)) = result.result
+                else {
+                    anyhow::bail!("native session returned a non-tool result");
+                };
+                let result: golem_common::model::oplog::PublicExternalToolResult =
+                    result.try_into().map_err(anyhow::Error::msg)?;
+                let golem_common::model::oplog::PublicExternalToolResult::Success(result) = result
+                else {
+                    anyhow::bail!("tool failed: {result:?}");
+                };
+                let value = result.result.expect("stream summary");
+                let SchemaValue::Record { fields } = value.value() else {
+                    panic!("summary must be a record")
+                };
+                assert_eq!(fields[1], SchemaValue::U64(bytes.len() as u64));
+                assert_eq!(fields[2], SchemaValue::Bool(false));
+                result_seen = true;
+            }
+            Some(invocation_response::Response::InputAck(_)) => {}
+            Some(invocation_response::Response::Finished(completion)) => {
+                assert!(matches!(
+                    completion.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ));
+                finished = true;
+            }
+            other => anyhow::bail!("unexpected native session response: {other:?}"),
+        }
+    }
+    assert_eq!(output, [b"marker:".as_slice(), bytes.as_slice()].concat());
+    assert!(result_seen && ended && finished);
+    drop(sender);
+    drop(responses);
+    drop(executor);
+
+    // Replay must reconstruct the capable body from journals with no client socket.
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        None,
+    );
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let after: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id!("ToolStreamingCaller", "native-session"),
+            "record_native_order",
+            data_value!("R"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(after, "R");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
 async fn native_external_tool_scalar_admission(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -5395,7 +5650,7 @@ async fn native_external_tool_scalar_admission(
         .component_directory
         .join(format!("{}.wasm", provider.wasm_name));
     let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let deployment = deployment_state(
+    let mut deployment = deployment_state(
         context.account_id,
         provider_component.id,
         provider_component.revision,
@@ -5403,6 +5658,12 @@ async fn native_external_tool_scalar_admission(
         "ToolStreamingCaller",
         metadata.tools,
     );
+    for bindings in deployment.tool_bindings.values_mut() {
+        bindings
+            .get_mut(&ToolName::try_from("streaming").unwrap())
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -5885,6 +6146,10 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     for binding in bindings.values_mut() {
         binding.owner = baseline_owner.clone();
     }
+    bindings
+        .get_mut(&ToolName::try_from("streaming").unwrap())
+        .unwrap()
+        .filesystem_access = ToolFilesystemAccess::Allowed;
     deployment.tool_bindings.insert(baseline_owner, bindings);
     environment_state.set_tool_deployment(
         context.default_environment_id,

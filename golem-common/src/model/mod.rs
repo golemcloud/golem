@@ -101,7 +101,9 @@ use url::Url;
 use uuid::Uuid;
 
 /// Status of an idempotency key lookup on a worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub enum InvocationStatus {
     /// The idempotency key is not known (never seen or expired).
     Unknown,
@@ -1580,6 +1582,8 @@ pub enum AgentInvocation {
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
         activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -1623,6 +1627,8 @@ pub enum AgentInvocationPayload {
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
         activation: Box<ToolActivationSnapshot>,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -1890,6 +1896,8 @@ impl AgentInvocation {
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 activation,
                 principal,
                 scope_card,
@@ -1898,6 +1906,8 @@ impl AgentInvocation {
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 activation,
                 invocation_context,
                 principal,
@@ -1970,6 +1980,8 @@ impl AgentInvocation {
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 activation,
                 invocation_context,
                 principal,
@@ -1981,6 +1993,8 @@ impl AgentInvocation {
                     tool_name,
                     command_path,
                     input,
+                    stdin,
+                    stdout,
                     activation,
                     principal,
                     scope_card,

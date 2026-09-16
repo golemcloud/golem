@@ -173,7 +173,9 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
                 format_version: 1,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
-                method_name: "test".into(),
+                target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                    method_name: "test".into(),
+                },
                 invocation_value: vec![],
                 stream_handles: vec![],
                 execution_config: vec![],
@@ -183,6 +185,8 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
             live_join_buffer_events: 1,
         },
         stream_mappings: vec![],
+        tool_stdin: None,
+        tool_stdout: None,
     })
 }
 

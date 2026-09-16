@@ -41,6 +41,7 @@ use crate::durable_host::entity::{
     ToolInvocationReplayOutcome, encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
+use crate::durable_host::stream_transport::{LiveStreamEndpoint, byte_output_stream_pair};
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
@@ -1279,11 +1280,18 @@ enum ToolCallPreparation {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolAttachmentCounterparty {
+    Guest,
+    SessionJournal,
+}
+
 struct AcceptedToolCall {
     durability: EntityInvocationDurability,
     operation: operation::OwnerToolOperation,
     stdin: Option<Resource<ToolStdinEntry>>,
     deferred_admission_inserted: bool,
+    attachment_counterparty: ToolAttachmentCounterparty,
 }
 
 enum ToolCallDispatch {
@@ -2649,6 +2657,7 @@ where
         operation,
         stdin,
         deferred_admission_inserted,
+        attachment_counterparty,
     } = accepted;
     let parent = durability.parent().clone();
     let start = durability.scope().invocation_id().start_index();
@@ -2745,6 +2754,11 @@ where
     let stdout_completion_only = stdout
         .as_ref()
         .is_some_and(ToolStdoutWriterEntry::completion_only);
+    // Guest counterparties need the same owner lane as a capable body. Session journals
+    // progress independently, so their streams stay live while the body owns the lane.
+    let stage_attachments = filesystem
+        == golem_common::model::entity::FilesystemCapability::Capable
+        && attachment_counterparty == ToolAttachmentCounterparty::Guest;
     if !operation.attach(stdin_controller.clone(), stdout_controller.clone()) {
         return Err(anyhow!("owner generation fenced tool invocation"));
     }
@@ -2866,18 +2880,22 @@ where
         }
     }
 
+    if let Some(stdin) = &stdin_controller {
+        if stage_attachments {
+            stdin.configure_completion();
+        } else {
+            stdin.configure_live();
+        }
+    }
+    if let Some(stdout) = &stdout_controller {
+        if stage_attachments || stdout_completion_only {
+            stdout.configure_completion();
+        } else {
+            stdout.configure_live();
+        }
+    }
     match filesystem {
         golem_common::model::entity::FilesystemCapability::Incapable => {
-            if let Some(stdin) = &stdin_controller {
-                stdin.configure_live();
-            }
-            if let Some(stdout) = &stdout_controller {
-                if stdout_completion_only {
-                    stdout.configure_completion();
-                } else {
-                    stdout.configure_live();
-                }
-            }
             if !operation.transition_admission(
                 operation::BodyAdmissionState::Staging,
                 operation::BodyAdmissionState::Running,
@@ -2886,12 +2904,6 @@ where
             }
         }
         golem_common::model::entity::FilesystemCapability::Capable => {
-            if let Some(stdin) = &stdin_controller {
-                stdin.configure_completion();
-            }
-            if let Some(stdout) = &stdout_controller {
-                stdout.configure_completion();
-            }
             if execution.is_some_and(ToolExecution::is_cancelled) {
                 return cancel_tool_before_body(
                     accessor,
@@ -2907,7 +2919,7 @@ where
                 )
                 .await;
             }
-            if let Some(stdin) = &stdin_controller {
+            if stage_attachments && let Some(stdin) = &stdin_controller {
                 let stdin_observer = stdin.observer();
                 let terminal = match execution {
                     Some(execution) => {
@@ -3263,8 +3275,7 @@ where
                 resources.settle_after_parent_end().await?;
             }
             operation.settle().await;
-            if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
-                || stdout_completion_only)
+            if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
                 stdout.publish_completion();
@@ -3310,8 +3321,7 @@ where
             operation.settle().await;
             if no_body {
                 publish_no_body_terminals(stdin_controller.as_ref(), stdout_controller.as_ref());
-            } else if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
-                || stdout_completion_only)
+            } else if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
                 stdout.publish_completion();
@@ -3343,6 +3353,7 @@ async fn dispatch_tool_attempt<U, Ctx>(
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
     principal: Option<Principal>,
+    attachment_counterparty: ToolAttachmentCounterparty,
 ) -> anyhow::Result<ToolCallDispatch>
 where
     U: Send + 'static,
@@ -3391,6 +3402,7 @@ where
                     operation,
                     stdin,
                     deferred_admission_inserted: false,
+                    attachment_counterparty,
                 })));
             }
             ToolInvocationReplayOutcome::ReplayEnded => {}
@@ -3443,6 +3455,7 @@ where
                 operation,
                 stdin: prepared.stdin,
                 deferred_admission_inserted: false,
+                attachment_counterparty,
             })))
         }
     }
@@ -3471,6 +3484,7 @@ where
         call_mode,
         None,
         None,
+        ToolAttachmentCounterparty::Guest,
     )
     .await
 }
@@ -3598,15 +3612,16 @@ where
 
 /// Invokes a component-backed tool directly from the owner invocation driver.
 ///
-/// The activation is already resolved and pinned by the caller. This entry point intentionally
-/// has no attachment parameters: native invocation currently supports scalar inputs and outputs
-/// only.
+/// The activation and optional byte stream mappings are pinned at queue admission. Stream
+/// readers are reconstructed from the owner's session journal, not from the client connection.
 pub(crate) async fn invoke_native_tool<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     activation: Arc<ToolActivationSnapshot>,
     tool_name: ToolName,
     command_path: Vec<String>,
     input: ModelTypedSchemaValue,
+    stdin: bool,
+    stdout: bool,
     principal: Principal,
 ) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
     run_guest_call_settled(
@@ -3620,6 +3635,8 @@ pub(crate) async fn invoke_native_tool<Ctx: WorkerCtx>(
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 principal,
                 result,
             });
@@ -3636,25 +3653,100 @@ struct NativeToolTask {
     tool_name: ToolName,
     command_path: Vec<String>,
     input: ModelTypedSchemaValue,
+    stdin: bool,
+    stdout: bool,
     principal: Principal,
     result: oneshot::Sender<ToolInvokeResponse>,
 }
 
-impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for NativeToolTask
-{
+impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for NativeToolTask {
     async fn run(
         self,
-        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        accessor: &Accessor<Ctx, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
         let Self {
             activation,
             tool_name,
             command_path,
             input,
+            stdin: has_stdin,
+            stdout: has_stdout,
             principal,
             result,
         } = self;
+        let (worker, key) = accessor.with(|mut access| {
+            let ctx = access.get();
+            (
+                ctx.public_state.worker(),
+                ctx.state.get_current_idempotency_key(),
+            )
+        });
+        let key = key.ok_or_else(|| wasmtime::Error::msg("native tool has no invocation key"))?;
+        let session = worker
+            .native_tool_session(&key)
+            .await
+            .map_err(|error| wasmtime::Error::from_anyhow(error.into()))?;
+        if session
+            .as_ref()
+            .and_then(|(prepared, _)| prepared.tool_stdin)
+            .is_some()
+            != has_stdin
+            || session
+                .as_ref()
+                .and_then(|(prepared, _)| prepared.tool_stdout)
+                .is_some()
+                != has_stdout
+        {
+            return Err(wasmtime::Error::msg(
+                "native tool byte streams disagree with its accepted session",
+            ));
+        }
+        let stdin = if let Some((prepared, streams)) = &session
+            && let Some(id) = prepared.tool_stdin
+        {
+            let handle = prepared
+                .stream_mappings
+                .iter()
+                .find(|mapping| mapping.transport_stream_id == id)
+                .ok_or_else(|| wasmtime::Error::msg("native tool stdin mapping is missing"))?
+                .handle
+                .clone();
+            let producer = streams
+                .tool_stdin(handle)
+                .await
+                .map_err(wasmtime::Error::msg)?;
+            let reader = accessor.with(|mut access| StreamReader::new(&mut access, producer))?;
+            Some(create_underlying_stdin(accessor, reader).map_err(wasmtime::Error::from_anyhow)?)
+        } else {
+            None
+        };
+        let (stdout, drain) = if let Some((prepared, streams)) = &session
+            && let Some(id) = prepared.tool_stdout
+        {
+            let handle = prepared
+                .stream_mappings
+                .iter()
+                .find(|mapping| mapping.transport_stream_id == id)
+                .ok_or_else(|| wasmtime::Error::msg("native tool stdout mapping is missing"))?
+                .handle
+                .clone();
+            let (stdout, consumer) =
+                create_stdout_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
+            let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
+                let capacity = access.get().live_stream_event_capacity();
+                let runtime_teardown = access.get().stream_runtime_teardown_probe();
+                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
+                    .map_err(wasmtime::Error::msg)?;
+                let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
+                reader.pipe(&mut access, sink)?;
+                stream
+                    .take_host_endpoint::<LiveStreamEndpoint>()
+                    .map_err(wasmtime::Error::msg)
+            })?;
+            (Some(stdout), Some((streams.clone(), handle, endpoint)))
+        } else {
+            (None, None)
+        };
         let (rpc, parent, attempt_ordinal) = accessor
             .with(|mut access| {
                 let ctx = access.get();
@@ -3672,37 +3764,61 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 Ok::<_, anyhow::Error>((rpc, parent, attempt_ordinal))
             })
             .map_err(wasmtime::Error::from_anyhow)?;
-        let dispatch = dispatch_tool_attempt(
-            accessor,
-            ToolInvocationAttempt {
-                rpc,
-                input: Ok(input),
-                parent,
-                attempt_ordinal,
-            },
-            command_path,
-            None,
-            false,
-            EntityCallMode::Synchronous,
-            Some(activation),
-            Some(principal),
-        )
-        .await
-        .map_err(wasmtime::Error::from_anyhow)?;
-        let response = match dispatch {
-            ToolCallDispatch::Rejected { response, stdin } => {
-                debug_assert!(stdin.is_none());
-                *response
-            }
-            ToolCallDispatch::Accepted(accepted) => {
-                execute_accepted_tool_call(accessor, *accepted, None, None, None)
-                    .await
-                    .map_err(wasmtime::Error::from_anyhow)?
-            }
+        let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let stdout_rep = stdout.as_ref().map(Resource::rep);
+        let execute = async {
+            let dispatch = dispatch_tool_attempt(
+                accessor,
+                ToolInvocationAttempt {
+                    rpc,
+                    input: Ok(input),
+                    parent,
+                    attempt_ordinal,
+                },
+                command_path,
+                stdin,
+                has_stdout,
+                EntityCallMode::Synchronous,
+                Some(activation),
+                Some(principal),
+                ToolAttachmentCounterparty::SessionJournal,
+            )
+            .await
+            .map_err(|error| {
+                cleanup_failed_tool_dispatch(accessor, stdin_rep, stdout_rep, error)
+            })?;
+            let response = match dispatch {
+                ToolCallDispatch::Rejected { response, stdin } => {
+                    close_stdin(accessor, stdin)?;
+                    reject_stdout(accessor, stdout)?;
+                    *response
+                }
+                ToolCallDispatch::Accepted(accepted) => {
+                    execute_accepted_tool_call(accessor, *accepted, stdout, None, None).await?
+                }
+            };
+            Ok::<_, anyhow::Error>(response)
         };
+        let drain = async {
+            if let Some((streams, handle, endpoint)) = drain {
+                streams
+                    .drain_tool_stdout(handle, endpoint)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (response, ()) =
+            tokio::try_join!(execute, drain).map_err(wasmtime::Error::from_anyhow)?;
         let response = admit_tool_response_secret_holds(accessor, response)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
+        if let Some((_, streams)) = &session {
+            streams
+                .materialize_tool_result(response.clone())
+                .await
+                .map_err(wasmtime::Error::msg)?;
+        }
         result
             .send(response)
             .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))?;
@@ -3931,8 +4047,9 @@ where
     })
 }
 
-fn create_underlying_stdout<U, Ctx>(
+fn create_stdout_attachment<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    completion_only: bool,
 ) -> anyhow::Result<(Resource<ToolStdoutEntry>, AttachmentConsumer)>
 where
     U: Send + 'static,
@@ -3948,7 +4065,7 @@ where
             attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
         let target = ctx.table().push(ToolStdoutEntry {
             producer: Some(producer),
-            completion_only: true,
+            completion_only,
         })?;
         Ok((target, consumer))
     })
@@ -4487,7 +4604,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             .transpose()?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let (stdout, stdout_consumer) = if underlying.has_stdout {
-            let (stdout, consumer) = match create_underlying_stdout(accessor) {
+            let (stdout, consumer) = match create_stdout_attachment(accessor, true) {
                 Ok(stdout) => stdout,
                 Err(error) => {
                     return Err(cleanup_failed_tool_dispatch(

@@ -20,7 +20,9 @@ use golem_common::base_model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
@@ -68,6 +70,20 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError>;
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 pub struct LazyWorkerActivator<Ctx: WorkerCtx> {
@@ -203,6 +219,46 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
             )),
         }
     }
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        let activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking instance")
+            })?;
+        activator
+            .enqueue_exact_existing(owned_agent_id, expected_fingerprint, invocation)
+            .await
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        let activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking instance")
+            })?;
+        activator
+            .enqueue_ephemeral_external_tool(owned_agent_id, component_revision, invocation)
+            .await
+    }
 }
 
 #[derive(Clone)]
@@ -317,5 +373,74 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             principal,
         )
         .await
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        let context = invocation.invocation_context();
+        let principal = invocation.principal().cloned().ok_or_else(|| {
+            WorkerExecutorError::invalid_request("external tool invocation has no principal")
+        })?;
+        let worker = match Worker::get_exact_existing_suspended(
+            &self.all,
+            owned_agent_id,
+            &context,
+            principal,
+        )
+        .await
+        {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
+            return Ok(false);
+        }
+        worker.clone().invoke(invocation).await?;
+        Worker::start_if_needed(worker).await?;
+        Ok(true)
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        let idempotency_key: IdempotencyKey =
+            invocation.idempotency_key().cloned().ok_or_else(|| {
+                WorkerExecutorError::invalid_request(
+                    "external tool invocation has no idempotency key",
+                )
+            })?;
+        let context = invocation.invocation_context();
+        let principal = invocation.principal().cloned().ok_or_else(|| {
+            WorkerExecutorError::invalid_request("external tool invocation has no principal")
+        })?;
+        let worker = self
+            .all
+            .active_agents()
+            .get_or_add_ephemeral_external_tool_pinned(
+                &self.all,
+                owned_agent_id.agent_id.component_id,
+                owned_agent_id.environment_id,
+                &idempotency_key,
+                component_revision,
+                &context,
+                principal,
+            )
+            .await?;
+        if worker.owned_agent_id() != owned_agent_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "scheduled external tool owner does not match its reserved identity",
+            ));
+        }
+        worker.clone().invoke(invocation).await?;
+        Worker::start_if_needed(worker).await?;
+        Ok(())
     }
 }

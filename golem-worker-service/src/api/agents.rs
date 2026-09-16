@@ -5,13 +5,17 @@ use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_SUBPROTOCOL, PublicErrorCode,
 };
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
@@ -25,7 +29,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::registry::{MetaParamIn, MetaSchemaRef, Registry};
 use poem_openapi::types::Type;
 use poem_openapi::{ApiExtractor, ApiExtractorType, ExtractParamOptions};
-use poem_openapi_derive::{Enum, Object, OpenApi};
+use poem_openapi_derive::{Enum, Object, OpenApi, Union};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::Instrument;
@@ -131,6 +135,37 @@ impl AgentsApi {
             .await
             .map_err(Into::into);
 
+        record.result(response).map(Json)
+    }
+
+    /// Invoke a tool on an existing agent or a fresh ephemeral component owner
+    ///
+    /// Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+    /// require an attached invocation session rather than this scalar endpoint.
+    #[oai(path = "/invoke-tool", method = "post", operation_id = "invoke_tool")]
+    async fn invoke_tool(
+        &self,
+        mut request: Json<NativeToolInvocationRequest>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<NativeToolInvocationResponse>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        if request.idempotency_key.is_none() {
+            request.idempotency_key = idempotency_key.0;
+        }
+        let record = recorded_http_api_request!(
+            "invoke_tool",
+            app = %request.app_name,
+            env = %request.env_name,
+            tool_name = %request.tool_name,
+            idempotency_key = request.idempotency_key.as_ref().map(|key| key.value.clone())
+        );
+        let response = self
+            .worker_service
+            .invoke_tool_rest(request.0, auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(Into::into);
         record.result(response).map(Json)
     }
 
@@ -251,6 +286,67 @@ pub struct AgentInvocationResult {
     pub component_revision: Option<ComponentRevision>,
 }
 
+/// Select exactly one target: `agentId` for an existing real owner, or `componentId`
+/// for a fresh host-only ephemeral owner using that deployed component's baseline.
+/// Input is required for await and schedule, and forbidden for lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolInvocationRequest {
+    pub app_name: ApplicationName,
+    pub env_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    pub tool_name: String,
+    pub command_path: Vec<String>,
+    pub input: Option<ExternalTypedSchemaValue>,
+    pub mode: NativeToolInvocationMode,
+    pub schedule_at: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<IdempotencyKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub enum NativeToolInvocationMode {
+    Await,
+    Schedule,
+    Lookup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolSuccess {
+    pub result: Option<ExternalTypedSchemaValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct NativeToolFailure {
+    pub error: SerializableToolRpcError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum NativeToolResult {
+    Success(NativeToolSuccess),
+    Failure(NativeToolFailure),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolInvocationResponse {
+    pub agent_id: AgentId,
+    pub idempotency_key: IdempotencyKey,
+    pub result: Option<NativeToolResult>,
+    pub status: Option<golem_common::model::InvocationStatus>,
+    pub component_revision: Option<ComponentRevision>,
+    pub agent_fingerprint: Option<AgentFingerprint>,
+    pub oplog_index: Option<OplogIndex>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -288,6 +384,26 @@ mod tests {
 
     fn empty_parameter_record() -> Value {
         json!({ "kind": "record", "value": { "fields": [] } })
+    }
+
+    #[test]
+    fn native_tool_failure_preserves_error_discriminator_in_rest_json() {
+        use super::{NativeToolFailure, NativeToolResult};
+        use golem_common::model::tool::SerializableToolRpcError;
+
+        for error in [
+            SerializableToolRpcError::Denied("not allowed".to_string()),
+            SerializableToolRpcError::Cancelled,
+        ] {
+            let expected = serde_json::to_value(&error).unwrap();
+            let result = NativeToolResult::Failure(NativeToolFailure { error });
+            let wire = result.to_json().unwrap();
+            assert_eq!(wire["type"], "Failure");
+            assert_eq!(wire["error"], expected);
+            let decoded: NativeToolResult = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(decoded.to_json(), Some(wire.clone()));
+            assert!(NativeToolResult::parse_from_json(Some(wire)).is_ok());
+        }
     }
 
     #[test]

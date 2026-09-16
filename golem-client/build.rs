@@ -469,6 +469,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentUpdateMode",
                 "golem_common::model::worker::AgentUpdateMode",
             ),
+            (
+                "SerializableToolRpcError",
+                "golem_common::model::tool::SerializableToolRpcError",
+            ),
+            (
+                "SerializableToolError",
+                "golem_common::model::tool::SerializableToolError",
+            ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
             (

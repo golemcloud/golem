@@ -675,6 +675,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             tool_name,
             command_path,
             input,
+            stdin,
+            stdout,
             principal,
         } => {
             prepare_guest_call(store, display_name).await;
@@ -684,6 +686,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 principal,
             )
             .await;
@@ -1195,6 +1199,8 @@ enum LoweredCall {
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1234,6 +1240,8 @@ enum PreparedCall {
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1328,12 +1336,16 @@ fn materialize_call<Ctx: WorkerCtx>(
             tool_name,
             command_path,
             input,
+            stdin,
+            stdout,
             principal,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
             tool_name,
             command_path,
             input,
+            stdin,
+            stdout,
             principal,
         },
     })
@@ -1418,6 +1430,8 @@ pub fn lower_invocation(
             tool_name,
             command_path,
             input,
+            stdin,
+            stdout,
             activation,
             principal,
             ..
@@ -1429,6 +1443,8 @@ pub fn lower_invocation(
                 tool_name,
                 command_path,
                 input,
+                stdin,
+                stdout,
                 principal,
             },
         }),
@@ -1517,6 +1533,9 @@ pub(crate) fn invocation_uses_streams(
     component_metadata: &ComponentMetadata,
     agent_id: Option<&ParsedAgentId>,
 ) -> bool {
+    if matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+        return true;
+    }
     let AgentInvocation::AgentMethod { method_name, .. } = invocation else {
         return false;
     };

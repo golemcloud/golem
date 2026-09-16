@@ -44,6 +44,14 @@ Only these are authoritative:
 All of these entries are hints (`is_hint()`): they take part in no `Start`/terminal pairing and
 never satisfy a claim, so a stream-only change cannot desynchronize `Start`/`End` pairing.
 
+Native external tools reuse these journals but deliberately expose a narrower shape. Their typed
+input and structured success/custom-error result are fully materialized scalar schema values; they
+cannot contain recursive typed streams. Optional `stdin` and `stdout` are separate root streams of
+bytes. `tool_stdin` reconstructs stdin from committed producer records, while
+`drain_tool_stdout` records live bytes and terminals or compares replayed output against the
+historical sequence. `materialize_tool_result` records or validates the structured terminal result
+in the consumer session journal.
+
 ### RPC result versus stream draining
 
 On the synchronous streaming path the caller calls `handle.complete(...)` with the result
@@ -62,6 +70,11 @@ are still being produced and consumed. Three crash windows follow:
 Provider reconstruction drains terminal outputs against their committed records without waiting
 for a consumer attachment; the consumer may already have finished and detached permanently.
 For agent RPC, open outputs still require an active attachment before production.
+
+For a native tool, body execution and stdout draining are joined before the structured result is
+materialized. This ordering prevents a result from becoming durable while stdout is still
+unvalidated. Historical stdout is never published a second time: every byte and the terminal must
+match the producer journal before live output may continue.
 
 ### Exactly-once item delivery
 

@@ -117,6 +117,7 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
     ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -160,6 +161,19 @@ use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
+pub(crate) fn require_expected_tool_deployment_revision(
+    expected: Option<DeploymentRevision>,
+    actual: DeploymentRevision,
+) -> Result<(), WorkerExecutorError> {
+    if expected.is_some_and(|expected| expected != actual) {
+        Err(WorkerExecutorError::invalid_request(
+            "external tool deployment revision does not match",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
     "permission card transfer payload conflict";
 pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
@@ -187,6 +201,8 @@ pub(crate) struct DurableStreamingInvocationRequest {
     pub(crate) attempt: StartAttemptDescriptorV1,
     pub(crate) registrations: Vec<(u64, ProducerRegistrationRequestV1)>,
     pub(crate) foreign_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub(crate) tool_stdin: Option<u64>,
+    pub(crate) tool_stdout: Option<u64>,
     pub(crate) input_schema: Arc<golem_schema::schema::SchemaGraph>,
     pub(crate) input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
     pub(crate) invocation: AgentInvocation,
@@ -2226,63 +2242,132 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return self.await_enqueued_invocation(idempotency_key).await;
         }
 
+        let invocation = self
+            .prepare_external_tool_invocation(
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                false,
+                false,
+                None,
+                invocation_context,
+                principal,
+                scope_card,
+            )
+            .await?;
+        self.invoke_and_await(invocation).await
+    }
+
+    pub(crate) async fn prepare_external_tool_invocation(
+        &self,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
+        expected_deployment_revision: Option<DeploymentRevision>,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocation, WorkerExecutorError> {
         if let Some(scope_card) = &scope_card {
             crate::services::card::validate_scope_card(self.card_service().as_ref(), scope_card)
                 .await?;
         }
-        // The resident component snapshot starts at the CREATE revision and is only refreshed by
-        // instance startup. Admission can happen while the owner is cold, so resolve against the
-        // revision folded from the authoritative oplog status instead.
-        let component_revision = self.last_known_status.load().component_revision;
-        let component = self
-            .component_service()
-            .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
-            .await?;
-        let owner = match &self.owner_context {
-            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
-                agent_type_name: agent.agent_type.clone(),
-            },
-            ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
-                component_id: component.id,
-            },
+        let accepted_index = self
+            .durable_stream_session_status(&idempotency_key)
+            .await?
+            .and_then(|status| status.initial_pending_invocation_oplog_index);
+        let activation = if let Some(index) = accepted_index {
+            let OplogEntry::PendingAgentInvocation {
+                idempotency_key: accepted_key,
+                payload,
+                ..
+            } = self.oplog.read(index).await
+            else {
+                return Err(WorkerExecutorError::runtime(
+                    "native session does not reference a pending invocation",
+                ));
+            };
+            if accepted_key != idempotency_key {
+                return Err(WorkerExecutorError::runtime(
+                    "native session references a different invocation key",
+                ));
+            }
+            let payload: AgentInvocationPayload = self
+                .oplog
+                .download_payload(payload)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invocation key is already bound to an agent method",
+                ));
+            };
+            activation
+        } else {
+            // The resident component snapshot starts at the CREATE revision and is only refreshed by
+            // instance startup. Admission can happen while the owner is cold, so resolve against the
+            // revision folded from the authoritative oplog status instead.
+            let component_revision = self.last_known_status.load().component_revision;
+            let component = self
+                .component_service()
+                .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
+                .await?;
+            let owner = match &self.owner_context {
+                ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                    agent_type_name: agent.agent_type.clone(),
+                },
+                ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
+                    component_id: component.id,
+                },
+            };
+            let activation = match self
+                .environment_state_service()
+                .get_tool_activation(
+                    self.owned_agent_id.environment_id,
+                    component.id,
+                    component_revision,
+                    &owner,
+                    &tool_name,
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            {
+                crate::services::environment_state::ToolActivationOutcome::Ready(activation) => {
+                    activation
+                }
+                crate::services::environment_state::ToolActivationOutcome::NotBound => {
+                    return Err(WorkerExecutorError::permission_denied(format!(
+                        "tool '{tool_name}' is not bound to owner '{owner:?}'"
+                    )));
+                }
+                crate::services::environment_state::ToolActivationOutcome::NotRegistered => {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "tool '{tool_name}' is not registered"
+                    )));
+                }
+            };
+            activation
         };
-        let activation = match self
-            .environment_state_service()
-            .get_tool_activation(
-                self.owned_agent_id.environment_id,
-                component.id,
-                component_revision,
-                &owner,
-                &tool_name,
-            )
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        {
-            crate::services::environment_state::ToolActivationOutcome::Ready(activation) => {
-                activation
-            }
-            crate::services::environment_state::ToolActivationOutcome::NotBound => {
-                return Err(WorkerExecutorError::permission_denied(format!(
-                    "tool '{tool_name}' is not bound to owner '{owner:?}'"
-                )));
-            }
-            crate::services::environment_state::ToolActivationOutcome::NotRegistered => {
-                return Err(WorkerExecutorError::invalid_request(format!(
-                    "tool '{tool_name}' is not registered"
-                )));
-            }
-        };
-        self.invoke_and_await(AgentInvocation::ExternalTool {
+        require_expected_tool_deployment_revision(
+            expected_deployment_revision,
+            activation.registered_tool.deployment_revision,
+        )?;
+        Ok(AgentInvocation::ExternalTool {
             idempotency_key,
             tool_name,
             command_path,
             input,
+            stdin,
+            stdout,
             activation,
             invocation_context,
             principal,
             scope_card,
         })
-        .await
     }
 
     /// Invokes the worker and awaits for a result.
@@ -3793,6 +3878,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<OplogEntry, WorkerExecutorError> {
+        self.accept_ephemeral_invocation(&invocation)?;
         let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
@@ -3868,6 +3954,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let producer = self.durable_stream_producer().await?;
+        let tool_stdin = request.tool_stdin;
+        let tool_stdout = request.tool_stdout;
+        let roles = request
+            .registrations
+            .iter()
+            .map(|(id, registration)| {
+                registration
+                    .session_mapping
+                    .as_ref()
+                    .map(|mapping| (*id, mapping.role))
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(
+                            "session registration has no stream role",
+                        )
+                    })
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        if let AgentInvocation::ExternalTool { stdin, stdout, .. } = &request.invocation
+            && (*stdin != tool_stdin.is_some() || *stdout != tool_stdout.is_some())
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "tool byte stream flags disagree with the session mappings",
+            ));
+        }
         let mut invocation = Some(request.invocation);
         let mut acceptance_committed = Some(request.acceptance_committed);
         let mut attached_during_prepare = false;
@@ -3909,7 +4019,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map(|mapping| mapping.handle.clone())
                     .collect()
             };
-            requested_attempt.invocation.stream_handles = requested_handles.clone();
+            requested_attempt.invocation.stream_handles = if foreign_mappings.is_empty() {
+                request
+                    .registrations
+                    .iter()
+                    .zip(&requested_handles)
+                    .filter(|((id, _), _)| Some(*id) != tool_stdin && Some(*id) != tool_stdout)
+                    .map(|(_, handle)| handle.clone())
+                    .collect()
+            } else {
+                requested_handles.clone()
+            };
             if !persisted_stream_descriptor_matches(
                 &prepared.attempt.invocation,
                 &requested_attempt.invocation,
@@ -3935,14 +4055,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
                             transport_stream_id,
                             handle,
-                            role: SessionStreamRoleV1::Input,
+                            role: roles[&transport_stream_id],
                         },
                     )
                     .collect()
             } else {
                 foreign_mappings.clone()
             };
-            if prepared.stream_mappings != requested_mappings {
+            if prepared.stream_mappings != requested_mappings
+                || prepared.tool_stdin != tool_stdin
+                || prepared.tool_stdout != tool_stdout
+            {
                 return Err(WorkerExecutorError::invalid_request(
                     "AttemptConflict: the durable session stream mappings do not exactly match the persisted attempt",
                 ));
@@ -3958,6 +4081,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 format_version: 1,
                 attempt,
                 stream_mappings: foreign_mappings.clone(),
+                tool_stdin,
+                tool_stdout,
             };
             producer
                 .append_session_record(StreamSessionRecordV1::Prepared(prepared.clone()))
@@ -3982,8 +4107,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .expect("fresh durable session has a commit notification"),
                     move |bindings| {
                         let mut attempt = attempt;
-                        attempt.invocation.stream_handles =
-                            bindings.iter().map(|(_, handle)| handle.clone()).collect();
+                        attempt.invocation.stream_handles = bindings
+                            .iter()
+                            .filter(|(id, _)| Some(*id) != tool_stdin && Some(*id) != tool_stdout)
+                            .map(|(_, handle)| handle.clone())
+                            .collect();
                         StreamSessionPreparedRecordV1 {
                             format_version: 1,
                             stream_mappings: bindings
@@ -3992,11 +4120,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
                                         transport_stream_id,
                                         handle,
-                                        role: SessionStreamRoleV1::Input,
+                                        role: roles[&transport_stream_id],
                                     },
                                 )
                                 .collect(),
                             attempt,
+                            tool_stdin,
+                            tool_stdout,
                         }
                     },
                 )
@@ -4553,6 +4683,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub(crate) async fn native_tool_session(
+        &self,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<Option<(StreamSessionPreparedRecordV1, DurableSessionStreams)>, WorkerExecutorError>
+    {
+        let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
+            return Ok(None);
+        };
+        let streams = DurableSessionStreams::new(
+            self.durable_stream_producer().await?,
+            self.oplog.clone(),
+            prepared.attempt.session_key.clone(),
+            prepared.stream_mappings.iter().map(|mapping| {
+                (
+                    mapping.transport_stream_id,
+                    mapping.handle.clone(),
+                    mapping.role,
+                )
+            }),
+        )
+        .with_rpc(self.rpc())
+        .with_consumer_journal(self.durable_stream_consumer_journal())
+        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
+        streams
+            .recover_session_mappings()
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        Ok(Some((prepared, streams)))
+    }
+
     pub(crate) async fn rehydrate_durable_streaming_invocation(
         &self,
         invocation: AgentInvocation,
@@ -4590,9 +4750,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .recover_session_mappings()
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        let value = golem_api_grpc::proto::golem::schema::SchemaValue::decode(
-            prepared.attempt.invocation.invocation_value.as_slice(),
-        )
+        let encoded = prepared.attempt.invocation.invocation_value.as_slice();
+        let value = match &invocation {
+            AgentInvocation::ExternalTool { .. } => {
+                golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
+                    .map_err(|error| error.to_string())
+                    .and_then(|typed| typed.value.ok_or_else(|| "missing tool input".to_string()))
+            }
+            _ => golem_api_grpc::proto::golem::schema::SchemaValue::decode(encoded)
+                .map_err(|error| error.to_string()),
+        }
         .map_err(|error| {
             WorkerExecutorError::runtime(format!(
                 "failed to decode persisted durable invocation input: {error}"
@@ -4606,7 +4773,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        Ok(replace_agent_method_input(invocation, input))
+        Ok(replace_invocation_input(invocation, input))
     }
 
     pub(crate) async fn materialize_durable_streaming_result(
@@ -4796,15 +4963,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     fn durable_stream_consumer_auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
-        let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::runtime(
-                "durable stream consumer is not a registered agent instance",
-            )
-        })?;
-        let surface = agent_effective_surface_from_component_metadata(
+        let surface = crate::durable_host::owner_effective_surface_from_component_metadata(
             self.current_component.load().as_ref(),
             &self.owned_agent_id,
-            parsed_agent_id,
+            &self.owner_context,
         )?;
         Ok(AuthCtx::agent_with_effective_surface(
             self.initial_worker_metadata.created_by,
@@ -8438,6 +8600,20 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn external_tool_deployment_revision_fence_is_optional_and_exact() {
+        let listed = DeploymentRevision::try_from(7_u64).unwrap();
+        let changed = DeploymentRevision::try_from(8_u64).unwrap();
+
+        assert!(require_expected_tool_deployment_revision(None, changed).is_ok());
+        assert!(require_expected_tool_deployment_revision(Some(listed), listed).is_ok());
+        let error = require_expected_tool_deployment_revision(Some(listed), changed).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid request: external tool deployment revision does not match"
+        );
+    }
+
+    #[test]
     fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
         let target_revision = ComponentRevision::new(2).unwrap();
         let (semantic_key, storage_key, payload, _) =
@@ -8919,7 +9095,9 @@ mod tests {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
-                method_name: "consume".to_string(),
+                target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                    method_name: "consume".to_string(),
+                },
                 invocation_value: vec![1],
                 stream_handles: Vec::new(),
                 execution_config: vec![2],
@@ -8936,7 +9114,10 @@ mod tests {
         assert!(!stream_attempt_matches(&attempt, &mismatched));
 
         let mut mismatched = attempt.clone();
-        mismatched.invocation.method_name = "other".to_string();
+        mismatched.invocation.target =
+            golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                method_name: "other".to_string(),
+            };
         assert!(!stream_attempt_matches(&attempt, &mismatched));
 
         let mut mismatched = attempt.clone();
@@ -9429,7 +9610,7 @@ fn persisted_stream_descriptor_matches(
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
         && persisted.target_component_revision == requested.target_component_revision
-        && persisted.method_name == requested.method_name
+        && persisted.target == requested.target
         && persisted.invocation_value == requested.invocation_value
         && persisted.stream_handles == requested.stream_handles
         && persisted.execution_config == requested.execution_config
@@ -9509,28 +9690,18 @@ fn validate_stream_session_record(
     }
 }
 
-fn replace_agent_method_input(
-    invocation: AgentInvocation,
+fn replace_invocation_input(
+    mut invocation: AgentInvocation,
     replacement: golem_common::schema::SchemaValue,
 ) -> AgentInvocation {
-    match invocation {
-        AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            invocation_context,
-            principal,
-            scope_card,
-            ..
-        } => AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input: replacement,
-            invocation_context,
-            principal,
-            scope_card,
-        },
-        other => other,
+    match &mut invocation {
+        AgentInvocation::AgentMethod { input, .. } => *input = replacement,
+        AgentInvocation::ExternalTool { input, .. } => {
+            *input = TypedSchemaValue::new(input.graph().clone(), replacement);
+        }
+        _ => {}
     }
+    invocation
 }
 
 #[allow(clippy::large_enum_variant)]

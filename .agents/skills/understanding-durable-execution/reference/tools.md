@@ -20,12 +20,24 @@ payload; retries attach to the accepted key before consulting deployment state. 
 use the revision folded from oplog status, even when the owner's Store is not loaded. An update
 queued ahead of a tool does not change the binding already pinned at admission.
 
+Public REST, CLI and native invocation sessions address either an exact, already-existing real
+owner or a component target for which the executor creates an ephemeral virtual owner. They never
+silently create a named real owner. The typed input and success/custom-error result carry
+materialized scalar schemas and values only: streams cannot be nested recursively in those values.
+The only streaming tool attachments are optional byte `stdin` and byte `stdout` roots.
+
 `worker/invocation.rs` drives `invoke_native_tool` through a registered `NativeToolTask` under
 the same invocation start, deadline, principal/scope, tail settlement and committed completion as
 methods. Registering the task lets Wasmtime account for pending host I/O rather than reporting an
 idle-store deadlock. Native dispatch uses the same entity boundary without an outer call-tool
 `Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
-dispatcher again and reconstructs completed bodies before checking the invocation result.
+dispatcher again using the activation pinned when the invocation was accepted and reconstructs
+completed bodies before checking the invocation result. `tool_stdin`, `drain_tool_stdout` and
+`materialize_tool_result` use producer-journal bytes/terminals and the consumer session journal as
+the durable facts. Historical stdout is compared byte-for-byte, including its terminal, rather
+than republished. Execution and stdout draining run together with `try_join!`; only after both
+complete is the native structured result materialized in the session journal. Replaying a changed
+structured result is rejected.
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 
@@ -114,6 +126,15 @@ Store's `local_live_tail`; completed replays reuse historical memory charges and
 pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
+
+`AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
+counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin
+staging before body execution and publish stdout only after the body terminal and lane return.
+A native external call has a `SessionJournal` counterparty. Its root byte streams
+are independent of the guest lane, so stdin and stdout are configured live and EOF staging is
+skipped; entity-slot registration, owner-lane acquisition and handoff are unchanged. This avoids
+deadlocking a filesystem-capable body behind a session stream whose progress does not use its
+lane.
 
 ### Scheduling
 

@@ -336,6 +336,8 @@ pub enum StreamRegistrationCoordinateV1 {
 pub enum StreamRootKindV1 {
     MethodInput,
     MethodResult,
+    ToolStdin,
+    ToolStdout,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -509,15 +511,28 @@ pub struct PersistedStreamInvocationDescriptorV1 {
     pub format_version: u8,
     pub session_key: StreamSessionKeyV1,
     pub target_component_revision: ComponentRevision,
-    pub method_name: String,
+    pub target: PersistedInvocationTargetV1,
     /// Canonical serialization of the complete recursive invocation value after replacing each
-    /// stream leaf with its corresponding durable handle in `stream_handles`.
+    /// stream leaf with its corresponding durable handle in `stream_handles`. Tool invocations
+    /// store canonical typed-value bytes containing both the schema graph and value.
     pub invocation_value: Vec<u8>,
     pub stream_handles: Vec<DurableStreamHandleV1>,
     /// Canonical execution-mode and configuration bytes that affect the call.
     pub execution_config: Vec<u8>,
     /// Canonical effective principal and grant identity. Credential bytes and expiry are excluded.
     pub effective_identity: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PersistedInvocationTargetV1 {
+    AgentMethod {
+        method_name: String,
+    },
+    ExternalTool {
+        tool_name: String,
+        command_path: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -541,6 +556,8 @@ pub struct StreamSessionPreparedRecordV1 {
     pub format_version: u8,
     pub attempt: StartAttemptDescriptorV1,
     pub stream_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub tool_stdin: Option<u64>,
+    pub tool_stdout: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1091,7 +1108,42 @@ impl StreamSessionRecordV1 {
                     .iter()
                     .map(|mapping| (mapping.handle.clone(), mapping.role))
                     .collect::<HashSet<_>>();
+                let target_mappings_are_valid = match &record.attempt.invocation.target {
+                    PersistedInvocationTargetV1::AgentMethod { .. } => {
+                        record.tool_stdin.is_none()
+                            && record.tool_stdout.is_none()
+                            && record
+                                .stream_mappings
+                                .iter()
+                                .all(|mapping| mapping.role == SessionStreamRoleV1::Input)
+                    }
+                    PersistedInvocationTargetV1::ExternalTool { .. } => {
+                        !(record.tool_stdin.is_some() && record.tool_stdin == record.tool_stdout)
+                            && record.tool_stdin.is_none_or(|id| {
+                                record.stream_mappings.iter().any(|mapping| {
+                                    mapping.transport_stream_id == id
+                                        && mapping.role == SessionStreamRoleV1::Input
+                                })
+                            })
+                            && record.tool_stdout.is_none_or(|id| {
+                                record.stream_mappings.iter().any(|mapping| {
+                                    mapping.transport_stream_id == id
+                                        && mapping.role == SessionStreamRoleV1::Output
+                                })
+                            })
+                            && record.stream_mappings.iter().all(|mapping| {
+                                if Some(mapping.transport_stream_id) == record.tool_stdin {
+                                    mapping.role == SessionStreamRoleV1::Input
+                                } else if Some(mapping.transport_stream_id) == record.tool_stdout {
+                                    mapping.role == SessionStreamRoleV1::Output
+                                } else {
+                                    mapping.role == SessionStreamRoleV1::Input
+                                }
+                            })
+                    }
+                };
                 supported_attempt(&record.attempt)
+                    && target_mappings_are_valid
                     && record
                         .attempt
                         .invocation
@@ -1101,13 +1153,17 @@ impl StreamSessionRecordV1 {
                     && record.stream_mappings.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
                     && record.stream_mappings.len() == unique_transport_ids.len()
                     && record.stream_mappings.len() == unique_mappings.len()
-                    && record.stream_mappings.iter().all(|mapping| {
-                        mapping.role == SessionStreamRoleV1::Input
-                            && supported_handle(&mapping.handle)
-                    })
                     && record
                         .stream_mappings
                         .iter()
+                        .all(|mapping| supported_handle(&mapping.handle))
+                    && record
+                        .stream_mappings
+                        .iter()
+                        .filter(|mapping| {
+                            Some(mapping.transport_stream_id) != record.tool_stdin
+                                && Some(mapping.transport_stream_id) != record.tool_stdout
+                        })
                         .map(|mapping| &mapping.handle)
                         .eq(record.attempt.invocation.stream_handles.iter())
             }
@@ -1285,10 +1341,11 @@ fn topology_mapping_matches(
 #[cfg(test)]
 mod tests {
     use super::{
-        AttachmentId, AttemptId, DurableStreamHandleV1, PersistedStreamInvocationDescriptorV1,
-        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamConsumerItemValueRecordV1, StreamId,
-        StreamInvocationIdV1, StreamOffsetError, StreamOffsetV1, StreamSessionPreparedRecordV1,
-        StreamSessionRecordV1,
+        AttachmentId, AttemptId, DurableStreamHandleV1, PersistedInvocationTargetV1,
+        PersistedStreamInvocationDescriptorV1, SessionStreamRoleV1, StartAttemptDescriptorV1,
+        StreamAttachmentKeyV1, StreamConsumerItemValueRecordV1, StreamId, StreamInvocationIdV1,
+        StreamOffsetError, StreamOffsetV1, StreamSessionMappingRecordV1,
+        StreamSessionPreparedRecordV1, StreamSessionRecordV1,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
@@ -1504,7 +1561,9 @@ mod tests {
                     format_version: 1,
                     session_key,
                     target_component_revision: ComponentRevision::new(1).unwrap(),
-                    method_name: "method".to_string(),
+                    target: PersistedInvocationTargetV1::AgentMethod {
+                        method_name: "method".to_string(),
+                    },
                     invocation_value: Vec::new(),
                     stream_handles: vec![unsupported_handle],
                     execution_config: Vec::new(),
@@ -1514,11 +1573,109 @@ mod tests {
                 live_join_buffer_events: 32,
             },
             stream_mappings: Vec::new(),
+            tool_stdin: None,
+            tool_stdout: None,
         });
 
         assert!(
             !record.has_supported_format(),
             "a prepared v1 record must reject a non-v1 handle in its persisted invocation descriptor"
         );
+    }
+
+    #[test]
+    fn prepared_tool_record_validates_reserved_stream_roles_and_ids() {
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::from_u128(2)),
+            agent_id: "tool-host".to_string(),
+        };
+        let fingerprint = AgentFingerprint(Uuid::from_u128(3));
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: environment_id,
+            callee: agent_id.clone(),
+            callee_fingerprint: fingerprint,
+            idempotency_key: IdempotencyKey::new("tool-invocation".to_string()),
+        };
+        let attachment_id =
+            AttachmentId::primary(environment_id, &agent_id, &session_key.idempotency_key).unwrap();
+        let handle = |id| DurableStreamHandleV1 {
+            format_version: 1,
+            stream_id: StreamId(Uuid::from_u128(id)),
+            producer_environment_id: environment_id,
+            producer: agent_id.clone(),
+            expected_producer_fingerprint: fingerprint,
+            source_invocation: session_key.clone(),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+        };
+        let stdin = handle(4);
+        let stdout = handle(5);
+        let argument = handle(6);
+        let mut prepared = StreamSessionPreparedRecordV1 {
+            format_version: 1,
+            attempt: StartAttemptDescriptorV1 {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: fingerprint,
+                attempt_id: AttemptId::fresh(),
+                invocation: PersistedStreamInvocationDescriptorV1 {
+                    format_version: 1,
+                    session_key,
+                    target_component_revision: ComponentRevision::INITIAL,
+                    target: PersistedInvocationTargetV1::ExternalTool {
+                        tool_name: "cat".to_string(),
+                        command_path: vec!["/bin/cat".to_string()],
+                    },
+                    invocation_value: vec![],
+                    stream_handles: vec![argument.clone()],
+                    execution_config: vec![],
+                    effective_identity: vec![],
+                },
+                effective_identity: vec![],
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: vec![
+                StreamSessionMappingRecordV1 {
+                    transport_stream_id: 10,
+                    handle: stdin,
+                    role: SessionStreamRoleV1::Input,
+                },
+                StreamSessionMappingRecordV1 {
+                    transport_stream_id: 11,
+                    handle: stdout,
+                    role: SessionStreamRoleV1::Output,
+                },
+                StreamSessionMappingRecordV1 {
+                    transport_stream_id: 12,
+                    handle: argument,
+                    role: SessionStreamRoleV1::Input,
+                },
+            ],
+            tool_stdin: Some(10),
+            tool_stdout: Some(11),
+        };
+
+        assert!(StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+
+        prepared.stream_mappings[0].role = SessionStreamRoleV1::Output;
+        assert!(!StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+        prepared.stream_mappings[0].role = SessionStreamRoleV1::Input;
+        prepared.tool_stdout = Some(10);
+        assert!(!StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+        prepared.tool_stdout = Some(99);
+        assert!(!StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+        prepared.tool_stdout = Some(11);
+        prepared.stream_mappings[2].role = SessionStreamRoleV1::Output;
+        assert!(!StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+        prepared.stream_mappings[2].role = SessionStreamRoleV1::Input;
+        prepared.tool_stdout = None;
+        assert!(!StreamSessionRecordV1::Prepared(prepared.clone()).has_supported_format());
+        prepared.attempt.invocation.target = PersistedInvocationTargetV1::AgentMethod {
+            method_name: "run".to_string(),
+        };
+        prepared.tool_stdout = Some(11);
+        assert!(!StreamSessionRecordV1::Prepared(prepared).has_supported_format());
     }
 }

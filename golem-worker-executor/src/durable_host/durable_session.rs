@@ -54,7 +54,7 @@ use golem_common::base_model::durable_stream::{
     StreamSessionResumeAttemptRecordV1, StreamSourceKindV1, StreamTopologyActivatedRecordV1,
     StreamTopologyPreparedRecordV1, StreamValuePathStepV1,
 };
-use golem_common::base_model::oplog::OplogEntry;
+use golem_common::base_model::oplog::{OplogEntry, PublicExternalToolResult};
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
@@ -440,6 +440,11 @@ impl SessionControlMetadata {
                 std::slice::from_ref(&record.mapping)
             }
             StreamSessionRecordV1::Prepared(record) if &record.attempt.session_key == key => {
+                if let Some(stdout) = record.tool_stdout
+                    && !self.root_outputs.contains(&stdout)
+                {
+                    self.root_outputs.push(stdout);
+                }
                 &record.stream_mappings
             }
             StreamSessionRecordV1::TopologyPrepared(record) if &record.session_key == key => {
@@ -2570,6 +2575,39 @@ impl DurableSessionStreams {
         Ok(strip_streams(value))
     }
 
+    pub(crate) async fn materialize_tool_result(
+        &self,
+        response: Result<
+            golem_common::model::oplog::payload::types::SerializableToolInvocationResult,
+            golem_common::model::oplog::payload::types::SerializableToolRpcError,
+        >,
+    ) -> Result<(), String> {
+        let result: golem_api_grpc::proto::golem::worker::PublicExternalToolResult = match response
+        {
+            Ok(result) => PublicExternalToolResult::Success(result),
+            Err(error) => PublicExternalToolResult::Failure(error),
+        }
+        .try_into()?;
+        let record = StreamSessionInvocationResultRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: self.session_key.clone(),
+            result: result.encode_to_vec(),
+            output_streams: Vec::new(),
+            stream_mappings: Vec::new(),
+        };
+        if let Some(existing) = self.remote_result_record().await? {
+            if existing != record {
+                return Err("native tool result conflicts with its session journal".to_string());
+            }
+        } else {
+            self.append_record(StreamSessionRecordV1::InvocationResult(record))
+                .await;
+            self.commit_consumer_journal().await?;
+            self.producer.notify_session_records_changed();
+        }
+        Ok(())
+    }
+
     pub(crate) async fn materialize_remote_result(
         &self,
         value: ProtoSchemaValue,
@@ -2761,6 +2799,155 @@ impl DurableSessionStreams {
                 Ok(Some(record))
             }
             _ => Err("durable result metadata points at a different record".into()),
+        }
+    }
+
+    pub(crate) async fn drain_tool_stdout(
+        &self,
+        handle: DurableStreamHandleV1,
+        endpoint: LiveStreamEndpoint,
+    ) -> Result<(), String> {
+        let lifecycle = endpoint.lifecycle();
+        let mut source = endpoint.activate();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let registration_id = self
+            .producer
+            .register_source_cancellation(handle.stream_id, cancelled.clone());
+        let _registration = OutputDrainRegistration {
+            producer: self.producer.clone(),
+            stream_id: handle.stream_id,
+            registration_id,
+            lifecycle: lifecycle.clone(),
+        };
+        let high_water = self
+            .producer
+            .input_high_water(handle.stream_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut history = if high_water.is_some() {
+            Some(
+                self.producer
+                    .catch_up(handle.clone(), None)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        let mut pending = None;
+        let mut sequence = 0;
+        loop {
+            let event = match pending.take() {
+                Some(event) => event,
+                None => tokio::select! {
+                    biased;
+                    _ = cancelled.cancelled() => return Ok(()),
+                    _ = lifecycle.cancelled() => return Ok(()),
+                    received = source.recv() => match received {
+                        Ok(event) => event,
+                        Err(LiveStreamReceiveError::Closed) if lifecycle.is_aborted() => return Ok(()),
+                        Err(error) => return Err(format!("tool stdout closed without a terminal: {error:?}")),
+                    },
+                },
+            };
+            if event.offset != sequence {
+                return Err("tool stdout producer sequence diverged".into());
+            }
+            let payload = match event.payload {
+                LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                    CommittedProducerStreamEventPayloadV1::PackedU8(byte)
+                }
+                LiveStreamEventPayload::Item(_) => {
+                    return Err("tool stdout contains a non-byte value".into());
+                }
+                LiveStreamEventPayload::End => {
+                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                }
+                LiveStreamEventPayload::Error(error) => CommittedProducerStreamEventPayloadV1::End(
+                    StreamEndResultV1::ErrorContext(error.into_bytes()),
+                ),
+            };
+            if let Some(reader) = history.as_mut() {
+                let recorded = reader
+                    .next()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "tool stdout history ended before its high water".to_string())?;
+                if recorded.producer_sequence != sequence {
+                    return Err("tool stdout history has a non-contiguous sequence".into());
+                }
+                if matches!(
+                    recorded.payload,
+                    CommittedProducerStreamEventPayloadV1::Cancel {
+                        role: StreamCancelRoleV1::OutputConsumer,
+                        ..
+                    }
+                ) {
+                    return Ok(());
+                }
+                if recorded.payload != payload {
+                    return Err("tool stdout differs from its recorded bytes or terminal".into());
+                }
+                if recorded.is_terminal() {
+                    return Ok(());
+                }
+                if high_water
+                    .as_ref()
+                    .is_some_and(|water| recorded.offset == water.resulting_offset)
+                {
+                    history = None;
+                }
+                sequence += 1;
+                continue;
+            }
+            match payload {
+                CommittedProducerStreamEventPayloadV1::PackedU8(byte) => {
+                    let first_sequence = sequence;
+                    let mut bytes = vec![byte];
+                    sequence += 1;
+                    let deadline = tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
+                    while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
+                        let next = match tokio::time::timeout_at(deadline, source.recv()).await {
+                            Ok(Ok(event)) => event,
+                            Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
+                            Ok(Err(error)) => return Err(format!("{error:?}")),
+                        };
+                        if next.offset != sequence {
+                            return Err("tool stdout producer sequence diverged".into());
+                        }
+                        match next.payload {
+                            LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                                bytes.push(byte);
+                                sequence += 1;
+                            }
+                            payload => {
+                                pending = Some(crate::durable_host::stream_bus::LiveStreamEvent {
+                                    offset: next.offset,
+                                    payload,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    self.producer
+                        .write_items_with_nested_sources(
+                            handle.stream_id,
+                            first_sequence,
+                            StreamItemsPayloadV1::PackedU8(bytes),
+                            Vec::new(),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                CommittedProducerStreamEventPayloadV1::End(result) => {
+                    self.producer
+                        .end(handle.stream_id, sequence, result)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    return Ok(());
+                }
+                _ => unreachable!("native stdout produces only bytes and terminals"),
+            }
         }
     }
 
@@ -3232,6 +3419,28 @@ impl DurableSessionStreams {
             }
             changed.await;
         }
+    }
+
+    pub(crate) async fn persisted_tool_result(
+        &self,
+    ) -> Result<
+        Option<(
+            golem_api_grpc::proto::golem::worker::PublicExternalToolResult,
+            Vec<DurableStreamMapping>,
+        )>,
+        String,
+    > {
+        let Some(result) = self.remote_result_record().await? else {
+            return Ok(None);
+        };
+        let value = golem_api_grpc::proto::golem::worker::PublicExternalToolResult::decode(
+            result.result.as_slice(),
+        )
+        .map_err(|error| format!("invalid persisted native tool result: {error}"))?;
+        if value.result.is_none() {
+            return Err("persisted native tool result has no result".to_string());
+        }
+        Ok(Some((value, Vec::new())))
     }
 
     pub(crate) async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, String> {
@@ -3784,6 +3993,16 @@ impl DurableSessionStreams {
                     format!("duplicate or unknown durable input handle index {handle_index}")
                 })
         })
+    }
+
+    pub(crate) async fn tool_stdin(
+        &self,
+        handle: DurableStreamHandleV1,
+    ) -> Result<DurableByteInputProducer, String> {
+        let endpoint = self.endpoint(handle, 0, SessionStreamRoleV1::Input).await?;
+        Ok(DurableByteInputProducer(DurableInputProducer::new(
+            endpoint,
+        )))
     }
 
     async fn endpoint(
@@ -4745,19 +4964,20 @@ impl Drop for DurableInputProducer {
     }
 }
 
-impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
-    type Item = wire::SchemaValueTree;
-    type Buffer = Option<wire::SchemaValueTree>;
+enum DurableInputItem {
+    Value(SchemaValue),
+    Terminal(StreamResult),
+}
 
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
+impl DurableInputProducer {
+    fn poll_value<Ctx: WorkerCtx>(
+        &mut self,
         cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, Ctx>,
-        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        store: &mut StoreContextMut<'_, Ctx>,
         finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<DurableInputItem>> {
         if self.finished {
-            return Poll::Ready(Ok(StreamResult::Dropped));
+            return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
         }
         if finish {
             if !self.dropping {
@@ -4797,7 +5017,7 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     self.finished = true;
                     self.pending = None;
                     self.reader = None;
-                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                    return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
                 }
             }
         }
@@ -4858,7 +5078,7 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             CommittedProducerStreamEventPayloadV1::PackedU8(byte) => SchemaValue::U8(byte),
             CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok) => {
                 self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
             CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::ErrorContext(error)) => {
                 self.finished = true;
@@ -4871,14 +5091,14 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                 ..
             } => {
                 self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
             CommittedProducerStreamEventPayloadV1::Cancel {
                 role: StreamCancelRoleV1::InputConsumer | StreamCancelRoleV1::OutputConsumer,
                 ..
             } => {
                 self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Cancelled));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
             }
             CommittedProducerStreamEventPayloadV1::Cancel {
                 role: role @ StreamCancelRoleV1::System,
@@ -4890,6 +5110,25 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     durable_stream_cancel_error(role, reason, details),
                 )));
             }
+        };
+        Poll::Ready(Ok(DurableInputItem::Value(value)))
+    }
+}
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
+    type Item = wire::SchemaValueTree;
+    type Buffer = Option<wire::SchemaValueTree>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let value = match std::task::ready!(self.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(value) => value,
+            DurableInputItem::Terminal(result) => return Poll::Ready(Ok(result)),
         };
         let encoded = {
             let mut resolver = StoreValueResolver::new(&mut store);
@@ -4918,6 +5157,35 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             Ok(Box::new(ForwardedDurableInput { handle }))
         } else {
             Err(me)
+        }
+    }
+}
+
+pub(crate) struct DurableByteInputProducer(pub(crate) DurableInputProducer);
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
+    type Item = u8;
+    type Buffer = bytes::Bytes;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        match std::task::ready!(self.0.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(SchemaValue::U8(byte)) => {
+                destination.set_buffer(bytes::Bytes::copy_from_slice(&[byte]));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            DurableInputItem::Value(_) => {
+                self.0.finished = true;
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "tool stdin contains a non-byte value",
+                )))
+            }
+            DurableInputItem::Terminal(result) => Poll::Ready(Ok(result)),
         }
     }
 }
@@ -5171,7 +5439,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: identity.invocation.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "consume".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "consume".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: stream_mappings
                                 .iter()
@@ -5184,6 +5454,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings,
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await
@@ -5361,7 +5633,7 @@ mod tests {
         let (root_publisher, root_endpoint) = test_output_stream_pair(4).unwrap();
 
         let materialize_result = match root_kind {
-            StreamRootKindV1::MethodInput => {
+            StreamRootKindV1::MethodInput | StreamRootKindV1::ToolStdin => {
                 streams
                     .materialize_agent_input(
                         &SchemaValue::Stream(SchemaValueStream::from_host_endpoint(root_endpoint)),
@@ -5373,7 +5645,7 @@ mod tests {
                     .unwrap();
                 None
             }
-            StreamRootKindV1::MethodResult => {
+            StreamRootKindV1::MethodResult | StreamRootKindV1::ToolStdout => {
                 let streams = streams.clone();
                 let graph = graph.clone();
                 let root_type = root_type.clone();
@@ -5816,6 +6088,194 @@ mod tests {
         })
         .await
         .expect("stream terminal was not committed");
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn tool_stdout_replay_checks_bytes_and_terminal_without_republishing_history() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::ToolStdout,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        // Persist differently sized batches before discarding all resident stream state.
+        producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![0, 255]),
+            )
+            .await
+            .unwrap();
+        producer
+            .write_items(handle.stream_id, 2, StreamItemsPayloadV1::PackedU8(vec![9]))
+            .await
+            .unwrap();
+        drop(producer);
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation,
+            [(7, handle.clone(), SessionStreamRoleV1::Output)],
+        );
+        let (publisher, endpoint) = test_output_stream_pair(2).unwrap();
+        let ((), result) = tokio::join!(
+            async {
+                for byte in [0, 255, 9, 128] {
+                    publisher.publish_item(SchemaValue::U8(byte)).await.unwrap();
+                }
+                publisher.publish_end().await.unwrap();
+            },
+            streams.drain_tool_stdout(handle.clone(), endpoint)
+        );
+        result.unwrap();
+        let mut reader = producer.catch_up(handle.clone(), None).await.unwrap();
+        for (sequence, byte) in [0, 255, 9, 128].into_iter().enumerate() {
+            let event = reader.next().await.unwrap().unwrap();
+            assert_eq!(event.producer_sequence, sequence as u64);
+            assert_eq!(
+                event.payload,
+                CommittedProducerStreamEventPayloadV1::PackedU8(byte)
+            );
+        }
+        let terminal = reader.next().await.unwrap().unwrap();
+        assert_eq!(terminal.producer_sequence, 4);
+        assert_eq!(
+            terminal.payload,
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+        );
+        assert!(reader.next().await.unwrap().is_none());
+        let completed_index = oplog.current_oplog_index().await;
+
+        for (bytes, should_succeed) in [
+            (vec![0, 255, 9, 128], true),
+            (vec![0, 254, 9, 128], false),
+            (vec![0, 255], false),
+            (vec![0, 255, 9, 128, 17], false),
+        ] {
+            let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
+            let ((), result) = tokio::join!(
+                async {
+                    for byte in bytes {
+                        let _ = publisher.publish_item(SchemaValue::U8(byte)).await;
+                    }
+                    let _ = publisher.publish_end().await;
+                },
+                streams.drain_tool_stdout(handle.clone(), endpoint)
+            );
+            assert_eq!(result.is_ok(), should_succeed, "{result:?}");
+            assert_eq!(oplog.current_oplog_index().await, completed_index);
+        }
+    }
+
+    #[test]
+    async fn native_tool_results_survive_session_reconstruction_and_reject_changed_results() {
+        use golem_common::model::tool::{
+            SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+        };
+        use golem_common::schema::TypedSchemaValue;
+
+        let value = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::u64()),
+            SchemaValue::U64(917),
+        );
+        for response in [
+            Ok(SerializableToolInvocationResult {
+                result: Some(value.clone()),
+            }),
+            Ok(SerializableToolInvocationResult { result: None }),
+            Err(SerializableToolRpcError::Denied("denied tool".to_string())),
+            Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::CustomError(Box::new(value)),
+            ))),
+        ] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let streams = DurableSessionStreams::new(
+                producer.clone(),
+                oplog.clone(),
+                identity.invocation.clone(),
+                [],
+            )
+            .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+            streams
+                .materialize_tool_result(response.clone())
+                .await
+                .unwrap();
+            let recorded_index = oplog.current_oplog_index().await;
+            drop(streams);
+            drop(producer);
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let streams =
+                DurableSessionStreams::new(producer, oplog.clone(), identity.invocation, [])
+                    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+            let (recorded, mappings) = streams.persisted_tool_result().await.unwrap().unwrap();
+            assert!(mappings.is_empty());
+            let expected = match response.clone() {
+                Ok(success) => PublicExternalToolResult::Success(success),
+                Err(error) => PublicExternalToolResult::Failure(error),
+            };
+            assert_eq!(
+                PublicExternalToolResult::try_from(recorded).unwrap(),
+                expected
+            );
+            streams.materialize_tool_result(response).await.unwrap();
+            assert_eq!(oplog.current_oplog_index().await, recorded_index);
+            assert!(
+                streams
+                    .materialize_tool_result(Err(SerializableToolRpcError::Denied(
+                        "different".to_string()
+                    )))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(oplog.current_oplog_index().await, recorded_index);
+        }
     }
 
     #[test]
@@ -7450,7 +7910,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: identity.invocation.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "consume".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "consume".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: vec![handle.clone()],
                             execution_config: vec![2],
@@ -7460,6 +7922,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings: vec![mapping.clone()],
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await
@@ -7958,7 +8422,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: consumer.invocation.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "forward".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "forward".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: vec![handle.clone()],
                             execution_config: vec![2],
@@ -7968,6 +8434,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings: vec![mapping.clone()],
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await;
@@ -8395,7 +8863,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: identity.invocation.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "consume".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "consume".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: vec![handle.clone()],
                             execution_config: vec![2],
@@ -8405,6 +8875,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings: vec![mapping.clone()],
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await
@@ -8778,7 +9250,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: session_key.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "produce".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "produce".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: Vec::new(),
                             execution_config: vec![2],
@@ -8788,6 +9262,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings: Vec::new(),
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await
@@ -9163,7 +9639,9 @@ mod tests {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: consumer.invocation.clone(),
                             target_component_revision: ComponentRevision::INITIAL,
-                            method_name: "resume-foreign".to_string(),
+                            target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                method_name: "resume-foreign".to_string(),
+                            },
                             invocation_value: vec![1],
                             stream_handles: Vec::new(),
                             execution_config: vec![2],
@@ -9173,6 +9651,8 @@ mod tests {
                         live_join_buffer_events: 8,
                     },
                     stream_mappings: Vec::new(),
+                    tool_stdin: None,
+                    tool_stdout: None,
                 },
             ))
             .await;

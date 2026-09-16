@@ -3585,7 +3585,9 @@ mod test {
                     format_version: 1,
                     session_key: session_key.clone(),
                     target_component_revision: ComponentRevision::INITIAL,
-                    method_name: "large-cold-status".to_string(),
+                    target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                        method_name: "large-cold-status".to_string(),
+                    },
                     invocation_value: vec![7; 70 * 1024],
                     stream_handles: Vec::new(),
                     execution_config: Vec::new(),
@@ -3595,6 +3597,8 @@ mod test {
                 live_join_buffer_events: 1,
             },
             stream_mappings: Vec::new(),
+            tool_stdin: None,
+            tool_stdout: None,
         });
         let bytes = golem_common::serialization::serialize(&record).unwrap();
         assert!(bytes.len() > 64 * 1024);

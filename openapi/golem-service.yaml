@@ -1989,6 +1989,93 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/agents/invoke-tool:
+    post:
+      tags:
+      - Agent
+      summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
+      description: |-
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        require an attached invocation session rather than this scalar endpoint.
+      operationId: invoke_tool
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolInvocationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/agents/invoke-agent-session:
     get:
       tags:
@@ -15026,6 +15113,13 @@ components:
     InterruptResponse:
       title: InterruptResponse
       type: object
+    InvocationStatus:
+      description: Status of an idempotency key lookup on a worker.
+      type: string
+      enum:
+      - unknown
+      - pending
+      - complete
     JsonSnapshotData:
       title: JsonSnapshotData
       type: object
@@ -15157,6 +15251,122 @@ components:
       required:
       - name
       - body
+    NativeToolFailure:
+      title: NativeToolFailure
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/SerializableToolRpcError'
+      required:
+      - error
+    NativeToolInvocationMode:
+      type: string
+      enum:
+      - await
+      - schedule
+      - lookup
+    NativeToolInvocationRequest:
+      title: NativeToolInvocationRequest
+      description: |-
+        Select exactly one target: `agentId` for an existing real owner, or `componentId`
+        for a fresh host-only ephemeral owner using that deployed component's baseline.
+        Input is required for await and schedule, and forbidden for lookup.
+      type: object
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        input:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        mode:
+          $ref: '#/components/schemas/NativeToolInvocationMode'
+        scheduleAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+      required:
+      - appName
+      - envName
+      - toolName
+      - commandPath
+      - mode
+    NativeToolInvocationResponse:
+      title: NativeToolInvocationResponse
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
+        status:
+          $ref: '#/components/schemas/InvocationStatus'
+        componentRevision:
+          type: integer
+          format: uint64
+        agentFingerprint:
+          type: string
+          format: uuid
+        oplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - agentId
+      - idempotencyKey
+    NativeToolResult:
+      discriminator:
+        propertyName: type
+        mapping:
+          Success: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+          Failure: '#/components/schemas/NativeToolResult_NativeToolFailure'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolFailure'
+    NativeToolResult_NativeToolFailure:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Failure
+            type: string
+            enum:
+            - Failure
+        required:
+        - type
+      - $ref: '#/components/schemas/NativeToolFailure'
+    NativeToolResult_NativeToolSuccess:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Success
+            type: string
+            enum:
+            - Success
+        required:
+        - type
+      - $ref: '#/components/schemas/NativeToolSuccess'
+    NativeToolSuccess:
+      title: NativeToolSuccess
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
     NormalizedJsonValue:
       type: object
     NumericBound:

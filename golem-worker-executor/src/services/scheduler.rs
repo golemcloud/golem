@@ -90,6 +90,20 @@ pub trait SchedulerWorkerAccess {
         worker_parent: Option<golem_common::model::AgentId>,
         worker_creation_principal: Principal,
     ) -> Result<(), WorkerExecutorError>;
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError>;
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
@@ -153,6 +167,28 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         Worker::start_if_needed(worker).await?;
 
         Ok(())
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.deref()
+            .enqueue_exact_existing(owned_agent_id, target_worker_fingerprint, invocation)
+            .await
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        self.deref()
+            .enqueue_ephemeral_external_tool(owned_agent_id, component_revision, invocation)
+            .await
     }
 }
 
@@ -606,6 +642,33 @@ impl SchedulerServiceDefault {
                 invocation,
                 target_worker_fingerprint,
             } => {
+                if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
+                    return match self
+                        .worker_access
+                        .enqueue_exact_existing(
+                            &owned_agent_id,
+                            target_worker_fingerprint,
+                            *invocation,
+                        )
+                        .await
+                    {
+                        Ok(true) => true,
+                        Ok(false) => {
+                            info!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Dropping stale scheduled external-tool invocation"
+                            );
+                            true
+                        }
+                        Err(error) => {
+                            error!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to enqueue scheduled external-tool invocation: {error}"
+                            );
+                            false
+                        }
+                    };
+                }
                 // A mismatch means the original worker was deleted and recreated — drop the stale
                 // invocation silently.
                 let stale = match self
@@ -673,18 +736,27 @@ impl SchedulerServiceDefault {
                 parent: worker_parent,
                 creation_principal: worker_creation_principal,
             } => {
-                let result = self
-                    .worker_access
-                    .enqueue_invocation(
-                        &owned_agent_id,
-                        *invocation,
-                        Some(worker_env),
-                        worker_agent_config,
-                        Some(component_revision),
-                        worker_parent,
-                        *worker_creation_principal,
-                    )
-                    .await;
+                let result = if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
+                    self.worker_access
+                        .enqueue_ephemeral_external_tool(
+                            &owned_agent_id,
+                            *invocation,
+                            component_revision,
+                        )
+                        .await
+                } else {
+                    self.worker_access
+                        .enqueue_invocation(
+                            &owned_agent_id,
+                            *invocation,
+                            Some(worker_env),
+                            worker_agent_config,
+                            Some(component_revision),
+                            worker_parent,
+                            *worker_creation_principal,
+                        )
+                        .await
+                };
 
                 match result {
                     Ok(()) => true,
@@ -865,6 +937,24 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
     }
 
     struct ActiveWorkerAccessMock {
@@ -918,6 +1008,34 @@ mod tests {
             };
             self.executions.lock().unwrap().push(idempotency_key.value);
             Ok(())
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            let AgentInvocation::AgentMethod {
+                idempotency_key, ..
+            } = invocation
+            else {
+                unreachable!()
+            };
+            self.executions.lock().unwrap().push(idempotency_key.value);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
         }
     }
 
@@ -991,6 +1109,37 @@ mod tests {
                 Ok(())
             }
         }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            invocation: AgentInvocation,
+            component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            let principal = invocation
+                .principal()
+                .cloned()
+                .ok_or_else(|| WorkerExecutorError::invalid_request("missing principal"))?;
+            self.enqueue_invocation(
+                owned_agent_id,
+                invocation,
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                principal,
+            )
+            .await
+        }
     }
 
     #[async_trait]
@@ -1028,6 +1177,28 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             self.enqueue_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
         }
     }
 
@@ -1068,6 +1239,24 @@ mod tests {
             _component_revision: Option<ComponentRevision>,
             _worker_parent: Option<golem_common::model::AgentId>,
             _worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
@@ -1117,6 +1306,31 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
         }
     }
 

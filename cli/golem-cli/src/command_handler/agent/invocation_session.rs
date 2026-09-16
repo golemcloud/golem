@@ -1587,6 +1587,10 @@ async fn handle_response(
                         emit(output_tx, OutputJob::Text("void".to_string())).await?;
                     }
                 }
+                PublicInvocationResult::ToolSuccess { .. }
+                | PublicInvocationResult::ToolFailure { .. } => {
+                    bail!("native tool result received by the agent invocation command");
+                }
             }
         }
         ServerFrame::Message(PublicServerMessage::OutputStreamItem {
@@ -2728,6 +2732,7 @@ mod public_tests {
         let mapping = PublicStreamMapping {
             channel: 3,
             direction: PublicStreamDirection::Output,
+            byte_role: None,
             input_high_water: None,
             provisional_ref: None,
             stream_token: "stream-one".to_string(),

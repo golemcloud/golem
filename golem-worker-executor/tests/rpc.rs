@@ -1628,6 +1628,7 @@ async fn open_invocation_session(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            external_tool: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -1666,6 +1667,9 @@ async fn receive_invocation_session(
                 result = match value.result {
                     Some(invocation_session_result::Result::MethodResult(value)) => {
                         Some(value.try_into().map_err(anyhow::Error::msg)?)
+                    }
+                    Some(invocation_session_result::Result::ToolResult(_)) => {
+                        anyhow::bail!("method invocation session returned a tool result")
                     }
                     Some(invocation_session_result::Result::NoResult(_)) | None => {
                         anyhow::bail!("invocation session returned no method result")

@@ -72,6 +72,8 @@ pub enum SessionTransportError {
     Protocol(String),
     #[error("failed to persist invocation session state: {0}")]
     StatePersistence(String),
+    #[error("invocation session input/output failed: {0}")]
+    Io(#[from] std::io::Error),
     #[error("delivery cursor sequence overflow")]
     SequenceOverflow,
     #[error("output channel {channel} delivered sequence {actual} after {previous}")]
@@ -1843,6 +1845,271 @@ impl InvocationSession {
     }
 }
 
+/// Drives native byte attachments concurrently with the structured tool result, using the
+/// same input acknowledgements and reconnect cursors as agent invocation sessions.
+pub async fn drive_native_tool_session<R, W>(
+    session: InvocationSession,
+    input: Option<R>,
+    output: &mut W,
+) -> Result<PublicInvocationResult, SessionTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    drive_native_tool_session_until(session, input, output, std::future::pending()).await
+}
+
+/// Drives a native tool session until completion or explicit client cancellation.
+pub async fn drive_native_tool_session_until<R, W, C>(
+    mut session: InvocationSession,
+    input: Option<R>,
+    output: &mut W,
+    cancelled: C,
+) -> Result<PublicInvocationResult, SessionTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    C: std::future::Future<Output = ()>,
+{
+    use golem_common::model::invocation_session_public::PublicByteStreamRole;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let Some(PublicClientMessage::ToolStart { stdin, stdout, .. }) =
+        session.state().pending_operation
+    else {
+        return Err(SessionTransportError::Protocol(
+            "native tool driver requires a tool start operation".to_string(),
+        ));
+    };
+    if stdin != input.is_some() {
+        return Err(SessionTransportError::Protocol(
+            "native tool stdin does not match its source".to_string(),
+        ));
+    }
+    let buffer = InputReplayBuffer::new(MAX_LOGICAL_VALUE_SIZE, PIPELINE_ITEMS);
+    if stdin {
+        // The sole byte input is bound by the accepted stdin mapping, not by a typed
+        // provisional reference. Once accepted, its stable token identifies it on resume.
+        session.register_input(uuid::Uuid::new_v4(), None, buffer.clone())?;
+    }
+    let (input_tx, mut input_rx) = mpsc::channel(PIPELINE_ITEMS);
+    let (cancel_input, mut input_cancelled) = tokio::sync::watch::channel(false);
+    let producer = async {
+        let Some(mut input) = input else {
+            return Ok::<_, SessionTransportError>(());
+        };
+        let mut sequence = 0_u64;
+        let mut bytes = vec![0; 64 * 1024];
+        loop {
+            let count = tokio::select! {
+                _ = input_cancelled.changed() => return Ok(()),
+                count = input.read(&mut bytes) => count?,
+            };
+            let request = if count == 0 {
+                ReplayableInput::End { sequence }
+            } else {
+                ReplayableInput::Binary(BinaryMessage {
+                    metadata: BinaryMessageMetadata {
+                        channel: 0,
+                        cursor_token: None,
+                        item_count: DecimalU64(count as u64),
+                        kind: BinaryMessageKind::InputU8,
+                        mime_type: None,
+                        sequence: DecimalU64(sequence),
+                        version: INVOCATION_SESSION_VERSION,
+                    },
+                    payload: bytes[..count].to_vec(),
+                })
+            };
+            tokio::select! {
+                _ = input_cancelled.changed() => return Ok(()),
+                result = async {
+                    let admitted = buffer.admit(request, count).await?;
+                    input_tx.send(admitted).await.map_err(|_| SessionTransportError::Closed)
+                } => result?,
+            }
+            if count == 0 {
+                return Ok(());
+            }
+            sequence = sequence
+                .checked_add(count as u64)
+                .ok_or(SessionTransportError::SequenceOverflow)?;
+        }
+    };
+    tokio::pin!(producer);
+    tokio::pin!(cancelled);
+    let mut producer_done = false;
+    let result = async {
+        let mut input_open = stdin;
+        let mut stdout_channel = None;
+        let mut stdout_terminal = !stdout;
+        let mut stdout_failure = None;
+        let mut result = None;
+        loop {
+            let unsent = buffer.next_unsent();
+            let sender = session.sender();
+            let binding = session.input_binding(&buffer);
+            tokio::select! {
+                result = &mut producer, if !producer_done => {
+                    producer_done = true;
+                    if let Err(error) = result {
+                        cancel_native_streams(
+                            &session,
+                            binding.as_ref().map(|binding| binding.0),
+                            stdout_channel.filter(|_| !stdout_terminal),
+                            PublicClientCancelReason::SourceUnavailable,
+                        ).await;
+                        return Err(error);
+                    }
+                }
+                _ = &mut cancelled => {
+                    let _ = cancel_input.send(true);
+                    cancel_native_streams(
+                        &session,
+                        binding.as_ref().map(|binding| binding.0),
+                        stdout_channel.filter(|_| !stdout_terminal),
+                        PublicClientCancelReason::Cancelled,
+                    ).await;
+                    return Err(SessionTransportError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "native tool invocation cancelled",
+                    )));
+                }
+                admitted = input_rx.recv(), if input_open && session.is_accepted() => {
+                    match admitted {
+                        Some(admitted) => buffer.push(admitted),
+                        None => input_open = false,
+                    }
+                }
+                sent = async {
+                    let (index, request, offset) = unsent.as_ref().unwrap();
+                    send_replayable_input(&sender, request, binding.as_ref().unwrap().0, *offset).await?;
+                    Ok::<_, SessionTransportError>(*index)
+                }, if session.is_accepted() && binding.is_some() && unsent.is_some() && !*cancel_input.borrow() => {
+                    match sent {
+                        Ok(index) => buffer.mark_sent(index)?,
+                        Err(error) => session.recover_after_send_failure(error).await?,
+                    }
+                }
+                received = session.receive() => {
+                    let mut received = received?;
+                    match received.frame() {
+                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { mappings, .. }) => {
+                            stdout_channel = None;
+                            for mapping in mappings {
+                                match (mapping.byte_role, mapping.direction) {
+                                    (Some(PublicByteStreamRole::Stdin), PublicStreamDirection::Input) if stdin => {},
+                                    (Some(PublicByteStreamRole::Stdout), PublicStreamDirection::Output) if stdout && stdout_channel.is_none() => {
+                                        stdout_channel = Some(mapping.channel);
+                                    }
+                                    _ => return Err(SessionTransportError::InvalidMapping),
+                                }
+                            }
+                            if stdout != stdout_channel.is_some() || stdin != session.input_binding(&buffer).is_some() {
+                                return Err(SessionTransportError::InvalidMapping);
+                            }
+                        }
+                        ServerFrame::Binary(message) if Some(message.metadata.channel) == stdout_channel && message.metadata.kind == BinaryMessageKind::OutputU8 => {
+                            if let Err(error) = output.write_all(&message.payload).await.and_then(|_| Ok(())) {
+                                cancel_native_streams(
+                                    &session,
+                                    binding.as_ref().map(|binding| binding.0),
+                                    stdout_channel,
+                                    PublicClientCancelReason::ConsumerDrop,
+                                ).await;
+                                return Err(error.into());
+                            }
+                            if let Err(error) = output.flush().await {
+                                cancel_native_streams(
+                                    &session,
+                                    binding.as_ref().map(|binding| binding.0),
+                                    stdout_channel,
+                                    PublicClientCancelReason::ConsumerDrop,
+                                ).await;
+                                return Err(error.into());
+                            }
+                        }
+                        ServerFrame::Message(PublicServerMessage::OutputStreamItem { channel, value, .. }) if Some(*channel) == stdout_channel => {
+                            let byte = value.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| {
+                                SessionTransportError::Protocol("native stdout item is not a byte".to_string())
+                            })?;
+                            if let Err(error) = output.write_all(&[byte]).await {
+                                cancel_native_streams(
+                                    &session,
+                                    binding.as_ref().map(|binding| binding.0),
+                                    stdout_channel,
+                                    PublicClientCancelReason::ConsumerDrop,
+                                ).await;
+                                return Err(error.into());
+                            }
+                            if let Err(error) = output.flush().await {
+                                cancel_native_streams(
+                                    &session,
+                                    binding.as_ref().map(|binding| binding.0),
+                                    stdout_channel,
+                                    PublicClientCancelReason::ConsumerDrop,
+                                ).await;
+                                return Err(error.into());
+                            }
+                        }
+                        ServerFrame::Message(PublicServerMessage::OutputStreamEnd { channel, outcome, .. }) if Some(*channel) == stdout_channel => {
+                            if !matches!(outcome, PublicOutputStreamOutcome::Ok) {
+                                stdout_failure = Some(outcome.clone());
+                            }
+                            stdout_terminal = true;
+                        }
+                        ServerFrame::Message(PublicServerMessage::InvocationResult { result: value @ (PublicInvocationResult::ToolSuccess { .. } | PublicInvocationResult::ToolFailure { .. }), mappings, .. }) if mappings.is_empty() => {
+                            result = Some(value.clone());
+                        }
+                        ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
+                        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
+                            input_open = false;
+                            let _ = cancel_input.send(true);
+                        }
+                        ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome: PublicInvocationOutcome::Success, .. }) => {
+                            if !stdout_terminal {
+                                return Err(SessionTransportError::Protocol("native invocation finished before stdout".to_string()));
+                            }
+                            if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. }))
+                                && let Some(outcome) = stdout_failure
+                            {
+                                return Err(SessionTransportError::Protocol(format!("native stdout failed: {outcome:?}")));
+                            }
+                            return result.ok_or_else(|| SessionTransportError::Protocol("native invocation finished without a tool result".to_string()));
+                        }
+                        other => return Err(SessionTransportError::Protocol(format!("unexpected native tool response: {other:?}"))),
+                    }
+                    received.mark_delivered()?;
+                }
+            }
+        }
+    }.await;
+    let _ = cancel_input.send(true);
+    result
+}
+
+async fn cancel_native_streams(
+    session: &InvocationSession,
+    input_channel: Option<u32>,
+    output_channel: Option<u32>,
+    reason: PublicClientCancelReason,
+) {
+    let sender = session.sender();
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        for channel in [input_channel, output_channel].into_iter().flatten() {
+            sender
+                .send_message(&PublicClientMessage::StreamCancel {
+                    channel,
+                    reason,
+                    version: INVOCATION_SESSION_VERSION,
+                })
+                .await?;
+        }
+        sender.close().await
+    })
+    .await;
+}
+
 pub async fn send_replayable_input(
     sender: &InvocationSessionSender,
     request: &ReplayableInput,
@@ -1935,6 +2202,7 @@ async fn connect_for_pending_operation(
 fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
     match operation {
         PublicClientMessage::InvocationStart { attempt_id, .. }
+        | PublicClientMessage::ToolStart { attempt_id, .. }
         | PublicClientMessage::ResumeAttach { attempt_id, .. } => Some(*attempt_id),
         _ => None,
     }
@@ -2547,6 +2815,12 @@ where
                             .decode_value(&graph.root, value)
                             .map_err(|error| SessionTransportError::Protocol(error.to_string()))?,
                     )
+                }
+                PublicInvocationResult::ToolSuccess { .. }
+                | PublicInvocationResult::ToolFailure { .. } => {
+                    return Err(SessionTransportError::Protocol(
+                        "native tool result received by an agent invocation session".to_string(),
+                    ));
                 }
             };
             let decoder = decode.take().ok_or_else(|| {
@@ -3266,9 +3540,9 @@ mod tests {
         }
     }
     use golem_common::model::invocation_session_public::{
-        DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicErrorCode,
-        PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
-        PublicOutputStreamOutcome, decode_client_text,
+        DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicByteStreamRole,
+        PublicErrorCode, PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
+        PublicNativeToolTarget, PublicOutputStreamOutcome, PublicTypedValue, decode_client_text,
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
@@ -3306,6 +3580,27 @@ mod tests {
         }
     }
 
+    fn tool_start_request(attempt_id: uuid::Uuid) -> PublicClientMessage {
+        PublicClientMessage::ToolStart {
+            attempt_id,
+            application: "app".to_string(),
+            environment: "env".to_string(),
+            idempotency_key: "tool-invocation-key".to_string(),
+            tool_name: "tool".to_string(),
+            command_path: Vec::new(),
+            target: PublicNativeToolTarget::Component {
+                component_id: uuid::Uuid::new_v4(),
+            },
+            input: PublicTypedValue {
+                schema: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!(7),
+            },
+            stdin: true,
+            stdout: true,
+            version: 1,
+        }
+    }
+
     async fn receive_client_message(
         socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
     ) -> PublicClientMessage {
@@ -3327,11 +3622,387 @@ mod tests {
         Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap()
     }
 
+    async fn verify_native_tool_session(result_before_stdout_end: bool) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const MARKER: &[u8] = b"ready:";
+        const PAYLOAD: &[u8] = &[0, 255, 17, 128, 9];
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let structured_result = if result_before_stdout_end {
+            PublicInvocationResult::ToolSuccess {
+                result: Some(PublicTypedValue {
+                    schema: SchemaGraph::anonymous(SchemaType::string()),
+                    value: serde_json::json!("structured-result"),
+                }),
+            }
+        } else {
+            PublicInvocationResult::ToolFailure {
+                code: "custom-code".to_string(),
+                message: Some("structured failure".to_string()),
+                custom_error: Some(PublicTypedValue {
+                    schema: SchemaGraph::anonymous(SchemaType::u8()),
+                    value: serde_json::json!(255),
+                }),
+            }
+        };
+        let server_result = structured_result.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            PublicStreamMapping {
+                                channel: 11,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: Some(PublicByteStreamRole::Stdin),
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                }),
+                                provisional_ref: None,
+                                stream_token: "native-stdin".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 12,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stdout),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stdout".to_string(),
+                            },
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let marker = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 12,
+                    cursor_token: Some("stdout-marker".to_string()),
+                    item_count: DecimalU64(MARKER.len() as u64),
+                    kind: BinaryMessageKind::OutputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                payload: MARKER.to_vec(),
+            };
+            socket
+                .send(Message::Binary(
+                    encode_binary_message(&marker).unwrap().into(),
+                ))
+                .await
+                .unwrap();
+
+            let Message::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+                panic!("expected packed native stdin")
+            };
+            let input = decode_binary_message(&frame).unwrap();
+            assert_eq!(input.metadata.channel, 11);
+            assert_eq!(input.metadata.kind, BinaryMessageKind::InputU8);
+            assert_eq!(input.metadata.sequence, DecimalU64(0));
+            assert_eq!(input.payload, PAYLOAD);
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::InputStreamEnd {
+                    channel: 11,
+                    sequence: DecimalU64(5),
+                    ..
+                }
+            ));
+
+            let result_message = PublicServerMessage::InvocationResult {
+                mappings: Vec::new(),
+                result: server_result,
+                version: 1,
+            };
+            if result_before_stdout_end {
+                socket
+                    .send(Message::Text(encode_text(&result_message).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            let echoed = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 12,
+                    cursor_token: Some("stdout-payload".to_string()),
+                    item_count: DecimalU64(PAYLOAD.len() as u64),
+                    kind: BinaryMessageKind::OutputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(MARKER.len() as u64),
+                    version: 1,
+                },
+                payload: PAYLOAD.to_vec(),
+            };
+            socket
+                .send(Message::Binary(
+                    encode_binary_message(&echoed).unwrap().into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::OutputStreamEnd {
+                        channel: 12,
+                        cursor_token: Some("stdout-end".to_string()),
+                        outcome: if result_before_stdout_end {
+                            PublicOutputStreamOutcome::Ok
+                        } else {
+                            PublicOutputStreamOutcome::Error {
+                                code: golem_common::model::invocation_session_public::PublicErrorCode::ProtocolError,
+                                message: "tool invocation rejected".to_string(),
+                            }
+                        },
+                        sequence: DecimalU64((MARKER.len() + PAYLOAD.len()) as u64),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            if !result_before_stdout_end {
+                socket
+                    .send(Message::Text(encode_text(&result_message).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationFinished {
+                        outcome: PublicInvocationOutcome::Success,
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (input_reader, mut input_writer) = tokio::io::duplex(64);
+        let (mut output_reader, mut output_writer) = tokio::io::duplex(64);
+        let consumer = tokio::spawn(async move {
+            let mut output = vec![0; MARKER.len()];
+            output_reader.read_exact(&mut output).await.unwrap();
+            assert_eq!(output, MARKER);
+            input_writer.write_all(PAYLOAD).await.unwrap();
+            input_writer.shutdown().await.unwrap();
+            output_reader.read_to_end(&mut output).await.unwrap();
+            output
+        });
+
+        let actual_result = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_native_tool_session(session, Some(input_reader), &mut output_writer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(output_writer);
+        let output = consumer.await.unwrap();
+        assert_eq!(output, [MARKER, PAYLOAD].concat());
+        assert_eq!(actual_result, structured_result);
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn native_tool_session_drains_stdout_before_stdin_and_result_before_terminal() {
+        verify_native_tool_session(true).await;
+    }
+
+    #[test]
+    async fn native_tool_session_preserves_custom_failure_after_stdout_terminal() {
+        verify_native_tool_session(false).await;
+    }
+
+    async fn verify_native_tool_session_cancels_open_streams(output_failure: bool) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            PublicStreamMapping {
+                                channel: 11,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: Some(PublicByteStreamRole::Stdin),
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                }),
+                                provisional_ref: None,
+                                stream_token: "native-stdin".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 12,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stdout),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stdout".to_string(),
+                            },
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            if output_failure {
+                socket
+                    .send(Message::Binary(
+                        encode_binary_message(&BinaryMessage {
+                            metadata: BinaryMessageMetadata {
+                                channel: 12,
+                                cursor_token: Some("stdout".to_string()),
+                                item_count: DecimalU64(1),
+                                kind: BinaryMessageKind::OutputU8,
+                                mime_type: None,
+                                sequence: DecimalU64(0),
+                                version: 1,
+                            },
+                            payload: vec![1],
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            } else {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancel_tx.send(()).unwrap();
+            }
+            let reason = if output_failure {
+                PublicClientCancelReason::ConsumerDrop
+            } else {
+                PublicClientCancelReason::Cancelled
+            };
+            for channel in [11, 12] {
+                assert!(matches!(
+                    receive_client_message(&mut socket).await,
+                    PublicClientMessage::StreamCancel {
+                        channel: actual,
+                        reason: actual_reason,
+                        ..
+                    } if actual == channel && actual_reason == reason
+                ));
+            }
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let mut output = if output_failure {
+            Box::pin(FailingWriter) as Pin<Box<dyn tokio::io::AsyncWrite>>
+        } else {
+            Box::pin(tokio::io::sink()) as Pin<Box<dyn tokio::io::AsyncWrite>>
+        };
+        let cancelled = async {
+            let _ = cancel_rx.await;
+        };
+        assert!(
+            drive_native_tool_session_until(session, Some(input), &mut output, cancelled)
+                .await
+                .is_err()
+        );
+        server.await.unwrap();
+    }
+
+    struct FailingWriter;
+
+    impl tokio::io::AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Err(std::io::Error::other("mock output failure")))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[test]
+    async fn native_tool_session_cancels_streams_on_client_cancel() {
+        verify_native_tool_session_cancels_open_streams(false).await;
+    }
+
+    #[test]
+    async fn native_tool_session_cancels_streams_on_output_io_failure() {
+        verify_native_tool_session_cancels_open_streams(true).await;
+    }
+
     fn output_frame(tracker: &DeliveryTracker, sequence: u64, token: &str) -> ReceivedFrame {
         tracker
             .install_mappings(&[PublicStreamMapping {
                 channel: 7,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "stream-seven".to_string(),
@@ -3407,6 +4078,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 7,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "replacement-stream".to_string(),
@@ -3452,6 +4124,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 2,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "stable-stream".to_string(),
@@ -3461,6 +4134,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Input,
+                byte_role: None,
                 input_high_water: Some(
                     golem_common::model::invocation_session_public::PublicInputHighWater {
                         sequence: DecimalU64(0),
@@ -3568,6 +4242,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "packed-stream".to_string(),
@@ -3611,6 +4286,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "packed-stream".to_string(),
@@ -3784,6 +4460,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -4145,6 +4822,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -4188,6 +4866,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -4272,6 +4951,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
@@ -4318,6 +4998,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
@@ -4721,6 +5402,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
@@ -4788,6 +5470,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,

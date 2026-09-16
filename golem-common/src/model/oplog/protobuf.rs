@@ -2455,6 +2455,47 @@ impl TryFrom<PublicAgentInvocation>
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicExternalToolResult>
+    for PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicExternalToolResult,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        match value.result.ok_or("Missing external tool result")? {
+            Result::Success(success) => Ok(Self::Success(SerializableToolInvocationResult {
+                result: success.result.map(TryInto::try_into).transpose()?,
+            })),
+            Result::Error(error) => Ok(Self::Failure(tool_rpc_error_from_proto(error)?)),
+        }
+    }
+}
+
+impl TryFrom<PublicExternalToolResult>
+    for golem_api_grpc::proto::golem::worker::PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(value: PublicExternalToolResult) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        let result = match value {
+            PublicExternalToolResult::Success(result) => Result::Success(
+                golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
+                    result: result.result.map(TryInto::try_into).transpose()?,
+                },
+            ),
+            PublicExternalToolResult::Failure(error) => {
+                Result::Error(tool_rpc_error_to_proto(error)?)
+            }
+        };
+        Ok(Self {
+            result: Some(result),
+        })
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
     for PublicAgentInvocationResult
 {
@@ -2479,14 +2520,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
             }
             ProtoResult::ExternalTool(tool) => Ok(PublicAgentInvocationResult::ExternalTool(
                 ExternalToolResultParameters {
-                    result: match tool.result.ok_or("Missing external tool result")? {
-                        golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Success(success) =>
-                            PublicExternalToolResult::Success(SerializableToolInvocationResult {
-                                result: success.result.map(TryInto::try_into).transpose()?,
-                            }),
-                        golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Error(error) =>
-                            PublicExternalToolResult::Failure(tool_rpc_error_from_proto(error)?),
-                    },
+                    result: tool.try_into()?,
                 },
             )),
             ProtoResult::ManualUpdate(_) => Ok(PublicAgentInvocationResult::ManualUpdate(Empty {})),
@@ -2568,21 +2602,7 @@ impl TryFrom<PublicAgentInvocationResult>
                 ProtoResult::AgentMethodOutput(output.output.try_into()?)
             }
             PublicAgentInvocationResult::ExternalTool(tool) => {
-                let result = match tool.result {
-                    PublicExternalToolResult::Success(result) => golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Success(
-                        golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
-                            result: result.result.map(TryInto::try_into).transpose()?,
-                        },
-                    ),
-                    PublicExternalToolResult::Failure(error) => golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Error(
-                        tool_rpc_error_to_proto(error)?,
-                    ),
-                };
-                ProtoResult::ExternalTool(
-                    golem_api_grpc::proto::golem::worker::PublicExternalToolResult {
-                        result: Some(result),
-                    },
-                )
+                ProtoResult::ExternalTool(tool.result.try_into()?)
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})

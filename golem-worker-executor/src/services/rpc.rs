@@ -546,6 +546,7 @@ impl Rpc for RemoteInvocationRpc {
                     .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
                     .transpose()
                     .map_err(|details| RpcError::ProtocolError { details })?,
+                external_tool: None,
             })),
         };
         let mut retry_delay = std::time::Duration::from_millis(25);
@@ -606,6 +607,12 @@ impl Rpc for RemoteInvocationRpc {
                                     details:
                                         "durable streaming invocation returned no method result"
                                             .to_string(),
+                                });
+                            }
+                            Some(invocation_session_result::Result::ToolResult(_)) => {
+                                return Err(RpcError::ProtocolError {
+                                    details: "agent RPC returned an external-tool result"
+                                        .to_string(),
                                 });
                             }
                         };
@@ -1553,6 +1560,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
                 .transpose()
                 .map_err(|details| RpcError::ProtocolError { details })?,
+            external_tool: None,
         };
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),

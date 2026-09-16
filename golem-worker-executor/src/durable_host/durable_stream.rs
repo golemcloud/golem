@@ -761,7 +761,8 @@ impl ProducerStreamIndex {
             (
                 StreamRegistrationCoordinateV1::Root {
                     root_kind:
-                        golem_common::base_model::durable_stream::StreamRootKindV1::MethodInput,
+                        golem_common::base_model::durable_stream::StreamRootKindV1::MethodInput
+                        | golem_common::base_model::durable_stream::StreamRootKindV1::ToolStdin,
                     ..
                 },
                 None,
@@ -769,7 +770,8 @@ impl ProducerStreamIndex {
             (
                 StreamRegistrationCoordinateV1::Root {
                     root_kind:
-                        golem_common::base_model::durable_stream::StreamRootKindV1::MethodResult,
+                        golem_common::base_model::durable_stream::StreamRootKindV1::MethodResult
+                        | golem_common::base_model::durable_stream::StreamRootKindV1::ToolStdout,
                     ..
                 },
                 None,
@@ -9489,7 +9491,9 @@ pub(crate) mod tests {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                                         session_key,
                                         target_component_revision: ComponentRevision::INITIAL,
-                                        method_name: "consume".to_string(),
+                                        target: golem_common::base_model::durable_stream::PersistedInvocationTargetV1::AgentMethod {
+                                            method_name: "consume".to_string(),
+                                        },
                                         invocation_value: vec![1],
                                         stream_handles: handles,
                                         execution_config: vec![2],
@@ -9508,6 +9512,8 @@ pub(crate) mod tests {
                                         }
                                     })
                                     .collect(),
+                                tool_stdin: None,
+                                tool_stdout: None,
                             }
                         },
                     )

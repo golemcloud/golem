@@ -787,6 +787,52 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         .await
     }
 
+    /// Creates or returns a virtual external-tool owner at the component revision pinned when
+    /// the invocation was accepted by the scheduler.
+    pub async fn get_or_add_ephemeral_external_tool_pinned<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        component_revision: ComponentRevision,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, Some(component_revision))
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool owner environment does not match the component environment",
+            ));
+        }
+        let owned_agent_id = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
+            },
+        );
+        self.get_or_add_internal(
+            deps,
+            &owned_agent_id,
+            None,
+            Vec::new(),
+            Some(component_revision),
+            None,
+            invocation_context_stack,
+            principal,
+            InvocationFreshnessDisposition::MayExist,
+            WorkerCreationMode::EphemeralExternalTool,
+        )
+        .await
+    }
+
     /// Loads an existing owner into the active set without creating it when its durable record is
     /// absent. This is the admission path for requests whose authority is tied to an exact owner.
     pub async fn get_existing<T>(

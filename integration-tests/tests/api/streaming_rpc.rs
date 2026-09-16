@@ -350,6 +350,7 @@ async fn invoke_agent_session(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            external_tool: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -388,7 +389,9 @@ async fn invoke_agent_session(
                     Some(invocation_session_result::Result::MethodResult(value)) => {
                         Some(value.try_into().map_err(anyhow::Error::msg)?)
                     }
-                    Some(invocation_session_result::Result::NoResult(_)) | None => {
+                    Some(invocation_session_result::Result::NoResult(_))
+                    | Some(invocation_session_result::Result::ToolResult(_))
+                    | None => {
                         anyhow::bail!("invocation session returned no method result")
                     }
                 };
@@ -479,6 +482,7 @@ impl TrustedInvocationSession {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                external_tool: None,
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -720,6 +724,33 @@ struct TrustedInvocationReport {
     unsent_requests: Vec<InvocationRequest>,
 }
 
+#[test]
+fn trusted_invocation_report_rejects_tool_results() {
+    let response = |result| InvocationResponse {
+        response: Some(invocation_response::Response::Result(
+            golem_api_grpc::proto::golem::worker::InvocationSessionResult {
+                result: Some(result),
+                ..Default::default()
+            },
+        )),
+    };
+    let mut report = TrustedInvocationReport::default();
+    assert!(
+        report
+            .record(response(invocation_session_result::Result::ToolResult(
+                Default::default(),
+            )))
+            .is_err()
+    );
+    let value = ProtoSchemaValue::try_from(SchemaValue::U32(17)).unwrap();
+    report
+        .record(response(invocation_session_result::Result::MethodResult(
+            value.clone(),
+        )))
+        .unwrap();
+    assert_eq!(report.result, Some(value));
+}
+
 impl TrustedInvocationReport {
     fn record(&mut self, response: InvocationResponse) -> anyhow::Result<()> {
         match response.response {
@@ -729,7 +760,9 @@ impl TrustedInvocationReport {
                 }
                 self.result = match result.result {
                     Some(invocation_session_result::Result::MethodResult(value)) => Some(value),
-                    Some(invocation_session_result::Result::NoResult(_)) | None => {
+                    Some(invocation_session_result::Result::NoResult(_))
+                    | Some(invocation_session_result::Result::ToolResult(_))
+                    | None => {
                         anyhow::bail!("trusted invocation returned no method result")
                     }
                 };
