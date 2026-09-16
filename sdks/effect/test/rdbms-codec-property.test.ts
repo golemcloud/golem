@@ -87,6 +87,18 @@ describe("Postgres early-year temporal decoding", () => {
   })
 })
 
+describe("MySQL early-year temporal decoding", () => {
+  it("preserves year 99 instead of coercing it to 1999", () => {
+    const timestamp = {
+      date: { year: 99, month: 12, day: 31 },
+      time: { hour: 23, minute: 59, second: 59, nanosecond: 999_000_000 },
+    }
+
+    expect(My.timestampToDate(timestamp).toISOString()).toBe("0099-12-31T23:59:59.999Z")
+    expect(My.dateOnlyToDate(timestamp.date).toISOString()).toBe("0099-12-31T00:00:00.000Z")
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Per-adapter properties
 // ---------------------------------------------------------------------------

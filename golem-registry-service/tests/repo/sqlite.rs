@@ -46,14 +46,24 @@ inherit_test_dep!(Tracing);
 // Deps setup --------------------------------------------------------------------------------------
 
 pub struct SqliteDb {
-    pub db_path: String,
     pub pool: SqlitePool,
+    _db_dir: tempfile::TempDir,
 }
 
 impl SqliteDb {
     pub async fn new() -> Self {
-        tempfile::tempfile().unwrap();
-        let db_path = format!("/tmp/golem-registry-{}.db", new_repo_uuid());
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("golem-registry-");
+        let db_dir = match std::env::var_os("RUST_TEST_TMPDIR") {
+            Some(root) => builder.tempdir_in(root),
+            None => builder.tempdir(),
+        }
+        .unwrap();
+        let db_path = db_dir
+            .path()
+            .join(format!("{}.db", new_repo_uuid()))
+            .to_string_lossy()
+            .into_owned();
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 3,
@@ -71,13 +81,10 @@ impl SqliteDb {
 
         info!("Created sqlite database pool, database path: {}", db_path);
 
-        Self { db_path, pool }
-    }
-}
-
-impl Drop for SqliteDb {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.db_path).unwrap();
+        Self {
+            pool,
+            _db_dir: db_dir,
+        }
     }
 }
 
@@ -325,13 +332,131 @@ async fn test_account_usage_history(deps: &Deps) {
 }
 
 #[test]
+async fn test_monthly_usage_mode_transitions(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_transitions(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_attribution_uses_accrual_revision(deps).await;
+}
+
+#[test]
+async fn test_monthly_policy_revision_tracks_allowance_changes(deps: &Deps) {
+    crate::repo::common::test_monthly_policy_revision_tracks_allowance_changes(deps).await;
+}
+
+#[test]
+async fn test_billable_excess_preserves_fractional_usage_and_refunds(deps: &Deps) {
+    crate::repo::common::test_billable_excess_preserves_fractional_usage_and_refunds(deps).await;
+}
+
+#[test]
+async fn test_fractional_memory_attribution_reduces_available_capacity(deps: &Deps) {
+    crate::repo::common::test_fractional_memory_attribution_reduces_available_capacity(deps).await;
+}
+
+#[test]
+async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
+    crate::repo::common::test_total_grouped_usage_reads_monthly_remainders(deps).await;
+}
+
+#[test]
+async fn test_fractional_storage_attribution_reduces_separate_capacities(deps: &Deps) {
+    crate::repo::common::test_fractional_storage_attribution_reduces_separate_capacities(deps)
+        .await;
+}
+
+#[test]
+async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
+    crate::repo::common::test_resource_usage_update_uses_declared_period(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_mode_consent_invariants(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
+}
+
+#[test]
 async fn test_account_resource_override_resolution(deps: &Deps) {
     crate::repo::common::test_account_resource_override_resolution(deps).await;
 }
 
 #[test]
-async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
-    crate::repo::common::test_storage_limit_is_clamped_after_plan_update(deps).await;
+async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps) {
+    crate::repo::common::test_account_resource_override_clear_falls_back_to_plan(deps).await;
+}
+
+#[test]
+async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(deps: &Deps) {
+    crate::repo::common::test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(deps).await;
+}
+
+#[test]
+async fn test_replacing_admin_grant_must_raise_current_grant(deps: &Deps) {
+    crate::repo::common::test_replacing_admin_grant_must_raise_current_grant(deps).await;
+}
+
+#[test]
+async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempotent(deps: &Deps) {
+    crate::repo::common::test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempotent(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(deps: &Deps) {
+    crate::repo::common::test_replacing_expired_admin_grant_records_expiry_before_new_grant(deps)
+        .await;
+}
+
+#[test]
+async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(deps: &Deps) {
+    crate::repo::common::test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_update_preserves_active_grants(deps: &Deps) {
+    crate::repo::common::test_plan_update_preserves_active_grants(deps).await;
+}
+
+#[test]
+async fn test_account_plan_change_preserves_active_grants(deps: &Deps) {
+    crate::repo::common::test_account_plan_change_preserves_active_grants(deps).await;
+}
+
+#[test]
+async fn test_admin_grant_cleanup_rejects_zero_interval(deps: &Deps) {
+    crate::repo::common::test_admin_grant_cleanup_rejects_zero_interval(deps).await;
+}
+
+#[test]
+async fn test_storage_limit_discards_out_of_range_override_after_plan_update(deps: &Deps) {
+    crate::repo::common::test_storage_limit_discards_out_of_range_override_after_plan_update(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(deps: &Deps) {
+    crate::repo::common::test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
+    crate::repo::common::test_plan_monthly_amounts_are_upserted(deps).await;
+}
+
+#[test]
+async fn test_plan_reseed_clamps_overrides_before_range_expansion(deps: &Deps) {
+    crate::repo::common::test_plan_reseed_clamps_overrides_before_range_expansion(deps).await;
+}
+
+#[test]
+async fn test_atomic_user_override_set_validates_current_policy(deps: &Deps) {
+    crate::repo::common::test_atomic_user_override_set_validates_current_policy(deps).await;
 }
 
 #[test]

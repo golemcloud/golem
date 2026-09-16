@@ -4,8 +4,30 @@ package golem.common;
 
 import "golem/common/account_id.proto";
 
+enum MonthlyUsageMode {
+  MONTHLY_USAGE_MODE_HARD_LIMIT = 0;
+  MONTHLY_USAGE_MODE_ALLOW_OVERAGE = 1;
+}
+
+message AccountUsagePeriod {
+  int32 year = 1;
+  uint32 month = 2;
+}
+
+message MonthlyResourcePolicy {
+  AccountUsagePeriod period = 1;
+  MonthlyUsageMode mode = 2;
+  uint64 available_fuel = 3;
+  uint64 available_memory_gb_seconds = 4;
+  uint64 available_memory_byte_nanoseconds_remainder = 5;
+  uint64 available_durable_storage_byte_seconds = 6;
+  uint64 available_durable_storage_byte_nanoseconds_remainder = 7;
+  uint64 available_ephemeral_storage_byte_seconds = 8;
+  uint64 available_ephemeral_storage_byte_nanoseconds_remainder = 9;
+}
+
 message ResourceLimits {
-  uint64 available_fuel = 1;
+  MonthlyResourcePolicy monthly_policy = 1;
   uint64 max_memory_per_worker = 2;
   uint64 max_table_elements_per_worker = 3;
   uint64 max_disk_space_per_worker = 4;
@@ -17,6 +39,8 @@ message ResourceLimits {
   uint64 oplog_writes_per_second = 10;
   // True only when the registry applied the corresponding batch update.
   bool usage_update_applied = 11;
+  uint64 monthly_usage_mode_revision = 12;
+  uint64 monthly_policy_revision = 13;
 }
 
 message AccountResourceLimitsEntry {

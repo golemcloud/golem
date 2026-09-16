@@ -139,8 +139,23 @@ pub struct WorkersMetadataRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResourceLimits {
+pub struct MonthlyResourcePolicy {
+    pub period: golem_common::model::account_usage::AccountUsagePeriod,
+    pub mode: golem_common::model::account_usage::MonthlyUsageMode,
     pub available_fuel: u64,
+    pub available_memory_gb_seconds: u64,
+    pub available_memory_byte_nanoseconds_remainder: u64,
+    pub available_durable_storage_byte_seconds: u64,
+    pub available_durable_storage_byte_nanoseconds_remainder: u64,
+    pub available_ephemeral_storage_byte_seconds: u64,
+    pub available_ephemeral_storage_byte_nanoseconds_remainder: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceLimits {
+    pub monthly_usage_mode_revision: u64,
+    pub monthly_policy_revision: u64,
+    pub monthly_policy: MonthlyResourcePolicy,
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
     pub max_disk_space_per_worker: u64,
@@ -179,8 +194,39 @@ const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
     fn from(value: ResourceLimits) -> Self {
+        let monthly_policy = value.monthly_policy;
         Self {
-            available_fuel: value.available_fuel,
+            monthly_usage_mode_revision: value.monthly_usage_mode_revision,
+            monthly_policy_revision: value.monthly_policy_revision,
+            monthly_policy: Some(
+                golem_api_grpc::proto::golem::common::MonthlyResourcePolicy {
+                    period: Some(golem_api_grpc::proto::golem::common::AccountUsagePeriod {
+                        year: monthly_policy.period.year,
+                        month: monthly_policy.period.month,
+                    }),
+                    mode: match monthly_policy.mode {
+                        golem_common::model::account_usage::MonthlyUsageMode::HardLimit => {
+                            golem_api_grpc::proto::golem::common::MonthlyUsageMode::HardLimit.into()
+                        }
+                        golem_common::model::account_usage::MonthlyUsageMode::AllowOverage => {
+                            golem_api_grpc::proto::golem::common::MonthlyUsageMode::AllowOverage
+                                .into()
+                        }
+                    },
+                    available_fuel: monthly_policy.available_fuel,
+                    available_memory_gb_seconds: monthly_policy.available_memory_gb_seconds,
+                    available_memory_byte_nanoseconds_remainder: monthly_policy
+                        .available_memory_byte_nanoseconds_remainder,
+                    available_durable_storage_byte_seconds: monthly_policy
+                        .available_durable_storage_byte_seconds,
+                    available_durable_storage_byte_nanoseconds_remainder: monthly_policy
+                        .available_durable_storage_byte_nanoseconds_remainder,
+                    available_ephemeral_storage_byte_seconds: monthly_policy
+                        .available_ephemeral_storage_byte_seconds,
+                    available_ephemeral_storage_byte_nanoseconds_remainder: monthly_policy
+                        .available_ephemeral_storage_byte_nanoseconds_remainder,
+                },
+            ),
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
@@ -195,10 +241,79 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
     }
 }
 
-impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        Self {
-            available_fuel: value.available_fuel,
+impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::ResourceLimits,
+    ) -> Result<Self, Self::Error> {
+        let monthly_policy = value.monthly_policy.ok_or("missing monthly_policy field")?;
+        let period = monthly_policy.period.ok_or("missing period field")?;
+        if !(1..=12).contains(&period.month) {
+            return Err(format!(
+                "invalid account usage period month: {}",
+                period.month
+            ));
+        }
+        let mode = match golem_api_grpc::proto::golem::common::MonthlyUsageMode::try_from(
+            monthly_policy.mode,
+        )
+        .map_err(|_| format!("invalid monthly usage mode: {}", monthly_policy.mode))?
+        {
+            golem_api_grpc::proto::golem::common::MonthlyUsageMode::HardLimit => {
+                golem_common::model::account_usage::MonthlyUsageMode::HardLimit
+            }
+            golem_api_grpc::proto::golem::common::MonthlyUsageMode::AllowOverage => {
+                golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
+            }
+        };
+        if monthly_policy.available_memory_byte_nanoseconds_remainder
+            >= golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND as u64
+        {
+            return Err(format!(
+                "invalid available memory byte-nanoseconds remainder: {}",
+                monthly_policy.available_memory_byte_nanoseconds_remainder
+            ));
+        }
+        for (dimension, remainder) in [
+            (
+                "durable storage",
+                monthly_policy.available_durable_storage_byte_nanoseconds_remainder,
+            ),
+            (
+                "ephemeral storage",
+                monthly_policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+            ),
+        ] {
+            if remainder >= 1_000_000_000 {
+                return Err(format!(
+                    "invalid available {dimension} byte-nanoseconds remainder: {remainder}"
+                ));
+            }
+        }
+
+        Ok(Self {
+            monthly_usage_mode_revision: value.monthly_usage_mode_revision,
+            monthly_policy_revision: value.monthly_policy_revision,
+            monthly_policy: MonthlyResourcePolicy {
+                period: golem_common::model::account_usage::AccountUsagePeriod {
+                    year: period.year,
+                    month: period.month,
+                },
+                mode,
+                available_fuel: monthly_policy.available_fuel,
+                available_memory_gb_seconds: monthly_policy.available_memory_gb_seconds,
+                available_memory_byte_nanoseconds_remainder: monthly_policy
+                    .available_memory_byte_nanoseconds_remainder,
+                available_durable_storage_byte_seconds: monthly_policy
+                    .available_durable_storage_byte_seconds,
+                available_durable_storage_byte_nanoseconds_remainder: monthly_policy
+                    .available_durable_storage_byte_nanoseconds_remainder,
+                available_ephemeral_storage_byte_seconds: monthly_policy
+                    .available_ephemeral_storage_byte_seconds,
+                available_ephemeral_storage_byte_nanoseconds_remainder: monthly_policy
+                    .available_ephemeral_storage_byte_nanoseconds_remainder,
+            },
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
@@ -215,7 +330,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
                 value.oplog_writes_per_second,
             ),
             usage_update_applied: value.usage_update_applied,
-        }
+        })
     }
 }
 
@@ -239,7 +354,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::AccountResourceLimits>
                 let resource_limits: ResourceLimits = e
                     .resource_limits
                     .ok_or("missing resource_limits field")?
-                    .into();
+                    .try_into()?;
                 Ok::<_, Self::Error>((account_id, resource_limits))
             })
             .collect::<Result<_, _>>()?;
@@ -498,12 +613,35 @@ impl From<golem_api_grpc::proto::golem::registry::AgentDeploymentDetails>
 
 #[cfg(test)]
 mod tests {
+    use golem_api_grpc::proto::golem::common::{
+        AccountResourceLimits as ProtoAccountResourceLimits, AccountUsagePeriod,
+        MonthlyResourcePolicy, MonthlyUsageMode, ResourceLimits,
+    };
+    use golem_common::model::account::AccountId;
+    use std::collections::HashMap;
     use test_r::test;
+
+    fn monthly_resource_policy() -> MonthlyResourcePolicy {
+        MonthlyResourcePolicy {
+            period: Some(AccountUsagePeriod {
+                year: 2026,
+                month: 9,
+            }),
+            mode: MonthlyUsageMode::AllowOverage.into(),
+            available_fuel: 1,
+            available_memory_gb_seconds: 2,
+            available_memory_byte_nanoseconds_remainder: 3,
+            available_durable_storage_byte_seconds: 4,
+            available_durable_storage_byte_nanoseconds_remainder: 5,
+            available_ephemeral_storage_byte_seconds: 6,
+            available_ephemeral_storage_byte_nanoseconds_remainder: 7,
+        }
+    }
 
     #[test]
     fn resource_limits_proto_zero_limit_maps_to_unlimited_sentinel() {
-        let proto = golem_api_grpc::proto::golem::common::ResourceLimits {
-            available_fuel: 1,
+        let proto = ResourceLimits {
+            monthly_policy: Some(monthly_resource_policy()),
             max_memory_per_worker: 2,
             max_table_elements_per_worker: 3,
             max_disk_space_per_worker: 4,
@@ -514,9 +652,11 @@ mod tests {
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
             usage_update_applied: false,
+            monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
         };
 
-        let converted: super::ResourceLimits = proto.into();
+        let converted: super::ResourceLimits = proto.try_into().unwrap();
 
         assert_eq!(
             converted.max_concurrent_agents_per_executor,
@@ -527,8 +667,8 @@ mod tests {
 
     #[test]
     fn resource_limits_proto_non_zero_limit_is_preserved() {
-        let proto = golem_api_grpc::proto::golem::common::ResourceLimits {
-            available_fuel: 1,
+        let proto = ResourceLimits {
+            monthly_policy: Some(monthly_resource_policy()),
             max_memory_per_worker: 2,
             max_table_elements_per_worker: 3,
             max_disk_space_per_worker: 4,
@@ -539,11 +679,191 @@ mod tests {
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
             usage_update_applied: true,
+            monthly_usage_mode_revision: 6,
+            monthly_policy_revision: 7,
         };
 
-        let converted: super::ResourceLimits = proto.into();
+        let converted: super::ResourceLimits = proto.try_into().unwrap();
 
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
         assert_eq!(converted.oplog_writes_per_second, 500);
+        assert_eq!(converted.monthly_usage_mode_revision, 6);
+        assert_eq!(converted.monthly_policy_revision, 7);
+        assert_eq!(converted.monthly_policy.period.year, 2026);
+        assert_eq!(converted.monthly_policy.period.month, 9);
+        assert_eq!(
+            converted.monthly_policy.mode,
+            golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
+        );
+        assert_eq!(converted.monthly_policy.available_fuel, 1);
+        assert_eq!(converted.monthly_policy.available_memory_gb_seconds, 2);
+        assert_eq!(
+            converted
+                .monthly_policy
+                .available_memory_byte_nanoseconds_remainder,
+            3
+        );
+        assert_eq!(
+            converted
+                .monthly_policy
+                .available_durable_storage_byte_seconds,
+            4
+        );
+        assert_eq!(
+            converted
+                .monthly_policy
+                .available_ephemeral_storage_byte_nanoseconds_remainder,
+            7
+        );
+    }
+
+    #[test]
+    fn resource_limits_monthly_resource_policy_converts_to_proto() {
+        let limits = super::ResourceLimits {
+            monthly_usage_mode_revision: 6,
+            monthly_policy_revision: 7,
+            monthly_policy: super::MonthlyResourcePolicy {
+                period: golem_common::model::account_usage::AccountUsagePeriod {
+                    year: 2026,
+                    month: 9,
+                },
+                mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
+                available_fuel: 123,
+                available_memory_gb_seconds: 456,
+                available_memory_byte_nanoseconds_remainder: 789,
+                available_durable_storage_byte_seconds: 1_234,
+                available_durable_storage_byte_nanoseconds_remainder: 567,
+                available_ephemeral_storage_byte_seconds: 8_901,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 234,
+            },
+            max_memory_per_worker: 0,
+            max_table_elements_per_worker: 0,
+            max_disk_space_per_worker: 0,
+            per_invocation_http_call_limit: 0,
+            per_invocation_rpc_call_limit: 0,
+            available_http_calls: 0,
+            available_rpc_calls: 0,
+            max_concurrent_agents_per_executor: 7,
+            oplog_writes_per_second: 8,
+            usage_update_applied: true,
+        };
+
+        let proto: ResourceLimits = limits.clone().into();
+        assert_eq!(proto.monthly_policy_revision, 7);
+        let monthly_policy = proto.monthly_policy.unwrap();
+        assert_eq!(monthly_policy.period.unwrap().month, 9);
+        assert_eq!(
+            MonthlyUsageMode::try_from(monthly_policy.mode).unwrap(),
+            MonthlyUsageMode::AllowOverage
+        );
+        assert_eq!(monthly_policy.available_fuel, 123);
+        assert_eq!(monthly_policy.available_memory_gb_seconds, 456);
+        assert_eq!(
+            monthly_policy.available_memory_byte_nanoseconds_remainder,
+            789
+        );
+        assert_eq!(monthly_policy.available_durable_storage_byte_seconds, 1_234);
+        assert_eq!(
+            monthly_policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+            234
+        );
+
+        let account_limits =
+            super::AccountResourceLimits(HashMap::from([(AccountId::SYSTEM, limits)]));
+        let proto: ProtoAccountResourceLimits = account_limits.into();
+        assert_eq!(proto.entries.len(), 1);
+        let entry = &proto.entries[0];
+        assert!(entry.account_id.is_some());
+        assert_eq!(
+            entry
+                .resource_limits
+                .as_ref()
+                .and_then(|limits| limits.monthly_policy.as_ref())
+                .map(|policy| policy.available_memory_gb_seconds),
+            Some(456)
+        );
+    }
+
+    #[test]
+    fn resource_limits_proto_requires_valid_monthly_resource_policy() {
+        let missing_policy = ResourceLimits::default();
+        assert!(super::ResourceLimits::try_from(missing_policy).is_err());
+
+        let invalid_month = ResourceLimits {
+            monthly_policy: Some(MonthlyResourcePolicy {
+                period: Some(AccountUsagePeriod {
+                    year: 2026,
+                    month: 13,
+                }),
+                mode: MonthlyUsageMode::HardLimit.into(),
+                available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(super::ResourceLimits::try_from(invalid_month).is_err());
+
+        let unknown_mode = ResourceLimits {
+            monthly_policy: Some(MonthlyResourcePolicy {
+                period: Some(AccountUsagePeriod {
+                    year: 2026,
+                    month: 9,
+                }),
+                mode: 99,
+                available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(super::ResourceLimits::try_from(unknown_mode).is_err());
+
+        let invalid_memory_remainder = ResourceLimits {
+            monthly_policy: Some(MonthlyResourcePolicy {
+                period: Some(AccountUsagePeriod {
+                    year: 2026,
+                    month: 9,
+                }),
+                mode: MonthlyUsageMode::HardLimit.into(),
+                available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder:
+                    golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND as u64,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(super::ResourceLimits::try_from(invalid_memory_remainder).is_err());
+
+        let invalid_storage_remainder = ResourceLimits {
+            monthly_policy: Some(MonthlyResourcePolicy {
+                period: Some(AccountUsagePeriod {
+                    year: 2026,
+                    month: 9,
+                }),
+                mode: MonthlyUsageMode::HardLimit.into(),
+                available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 1_000_000_000,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(super::ResourceLimits::try_from(invalid_storage_remainder).is_err());
     }
 }

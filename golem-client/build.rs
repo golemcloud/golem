@@ -66,6 +66,90 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::AccountUsageMetering",
             ),
             (
+                "AccountResourcePolicy",
+                "golem_common::model::account_usage::AccountResourcePolicy",
+            ),
+            (
+                "AdminResourceGrant",
+                "golem_common::model::account_usage::AdminResourceGrant",
+            ),
+            (
+                "AdminResourceGrantChange",
+                "golem_common::model::account_usage::AdminResourceGrantChange",
+            ),
+            (
+                "AdminResourceGrantChangeValue",
+                "golem_common::model::account_usage::AdminResourceGrantChangeValue",
+            ),
+            (
+                "ClearedAdminResourceGrantChange",
+                "golem_common::model::account_usage::AdminResourceGrantChange",
+            ),
+            (
+                "AdminResourceGrantDimension",
+                "golem_common::model::account_usage::AdminResourceGrantDimension",
+            ),
+            (
+                "AdminResourceGrantEventType",
+                "golem_common::model::account_usage::AdminResourceGrantEventType",
+            ),
+            (
+                "AdminResourceGrantReason",
+                "golem_common::model::account_usage::AdminResourceGrantReason",
+            ),
+            (
+                "SetAdminResourceGrant",
+                "golem_common::model::account_usage::SetAdminResourceGrant",
+            ),
+            (
+                "MonthlyResourceLimits",
+                "golem_common::model::account_usage::MonthlyResourceLimits",
+            ),
+            (
+                "MonthlyComputeLimit",
+                "golem_common::model::account_usage::MonthlyComputeLimit",
+            ),
+            (
+                "MonthlyMemoryLimit",
+                "golem_common::model::account_usage::MonthlyMemoryLimit",
+            ),
+            (
+                "MonthlyStorageLimit",
+                "golem_common::model::account_usage::MonthlyStorageLimit",
+            ),
+            (
+                "MonthlyLimitBehavior",
+                "golem_common::model::account_usage::MonthlyLimitBehavior",
+            ),
+            (
+                "MonthlyUsageMode",
+                "golem_common::model::account_usage::MonthlyUsageMode",
+            ),
+            (
+                "MonthlyUsageModeTransitionSource",
+                "golem_common::model::account_usage::MonthlyUsageModeTransitionSource",
+            ),
+            (
+                "MonthlyUsageModeTransition",
+                "golem_common::model::account_usage::MonthlyUsageModeTransition",
+            ),
+            (
+                "SetMonthlyUsageMode",
+                "golem_common::model::account_usage::SetMonthlyUsageMode",
+            ),
+            (
+                "MonthlyComputeUnit",
+                "golem_common::model::account_usage::MonthlyComputeUnit",
+            ),
+            (
+                "MonthlyMemoryUnit",
+                "golem_common::model::account_usage::MonthlyMemoryUnit",
+            ),
+            (
+                "MonthlyStorageUnit",
+                "golem_common::model::account_usage::MonthlyStorageUnit",
+            ),
+            (
                 "MeteringStatus",
                 "golem_common::model::account_usage::MeteringStatus",
             ),
@@ -84,6 +168,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "MemoryLimit",
                 "golem_common::model::account_usage::MemoryLimit",
+            ),
+            (
+                "ResourceLimitValue",
+                "golem_common::model::account_usage::ResourceLimitValue",
+            ),
+            (
+                "StorageResourceLimitValue",
+                "golem_common::model::account_usage::StorageResourceLimitValue",
             ),
             (
                 "SetMemoryLimit",

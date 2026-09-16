@@ -21,6 +21,7 @@ use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::MonthlyPlanAmounts;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_registry_service::RegistryService;
@@ -70,7 +71,12 @@ pub struct LaunchArgs {
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub agent_filesystem_root: Option<PathBuf>,
+    pub managed_xfs_root_dir: Option<PathBuf>,
     pub resource_usage_metering: ResourceUsageMeteringConfig,
+    pub monthly_compute_gcu: u64,
+    pub monthly_memory_gb_seconds: u64,
+    pub monthly_durable_storage_gb_month: u64,
+    pub monthly_ephemeral_storage_gb_month: u64,
 }
 
 impl LaunchArgs {
@@ -80,6 +86,22 @@ impl LaunchArgs {
             "::" => "::1".to_string(),
             host => host.to_string(),
         }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.agent_filesystem_root.is_none() || self.managed_xfs_root_dir.is_none(),
+            "Agent filesystem root cannot be combined with managed XFS root"
+        );
+        MonthlyPlanAmounts {
+            compute_gcu: self.monthly_compute_gcu,
+            memory_gb_seconds: self.monthly_memory_gb_seconds,
+            durable_storage_gb_month: self.monthly_durable_storage_gb_month,
+            ephemeral_storage_gb_month: self.monthly_ephemeral_storage_gb_month,
+        }
+        .resolve()
+        .map_err(|error| anyhow::anyhow!("Invalid local monthly Plan amount: {error}"))?;
+        Ok(())
     }
 }
 
@@ -96,6 +118,7 @@ pub struct StartupPorts {
 pub async fn launch_golem_services(
     args: &LaunchArgs,
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts)> {
+    args.validate()?;
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -189,8 +212,12 @@ async fn start_components(
     .await?;
 
     let worker_executor = {
-        let config =
-            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
+        let config = worker_executor_config(
+            args,
+            shard_manager.grpc_port,
+            registry_service.grpc_port,
+            worker_service.grpc_port,
+        )?;
         run_worker_executor(config, join_set).await?
     };
 
@@ -252,16 +279,19 @@ fn registry_service_config(
                     storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
-                    max_memory_per_worker: u64::MAX,
-                    max_memory_per_worker_ceiling: u64::MAX,
-                    max_memory_per_worker_user_configurable: true,
-                    monthly_memory_gb_seconds: u64::MAX,
-                    monthly_memory_gb_seconds_ceiling: u64::MAX,
-                    monthly_memory_gb_seconds_user_configurable: true,
+                    monthly_compute_gcu: args.monthly_compute_gcu,
+                    monthly_memory_gb_seconds: args.monthly_memory_gb_seconds,
+                    monthly_durable_storage_gb_month: args.monthly_durable_storage_gb_month,
+                    monthly_ephemeral_storage_gb_month: args.monthly_ephemeral_storage_gb_month,
+                    overage_eligible: false,
+                    max_memory_per_agent: u64::MAX,
+                    max_memory_per_agent_ceiling: u64::MAX,
+                    max_memory_per_agent_user_configurable: true,
                     max_table_elements_per_worker: u64::MAX,
-                    max_disk_space_per_worker: u64::MAX,
-                    max_disk_space_per_worker_ceiling: None,
-                    max_disk_space_per_worker_user_configurable: true,
+                    max_storage_per_agent_enabled: false,
+                    max_storage_per_agent: u64::MAX,
+                    max_storage_per_agent_ceiling: None,
+                    max_storage_per_agent_user_configurable: false,
                     per_invocation_http_call_limit: u64::MAX,
                     per_invocation_rpc_call_limit: u64::MAX,
                     monthly_http_call_limit: u64::MAX,
@@ -372,9 +402,9 @@ fn component_compilation_service_config(
 
 fn worker_executor_config(
     args: &LaunchArgs,
-    shard_manager_run_details: &golem_shard_manager::RunDetails,
-    registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
-    worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
+    shard_manager_grpc_port: u16,
+    registry_service_grpc_port: u16,
+    worker_service_grpc_port: u16,
 ) -> anyhow::Result<WorkerExecutorConfig> {
     let mut config = WorkerExecutorConfig {
         http_port: 0,
@@ -405,12 +435,12 @@ fn worker_executor_config(
         ),
         shard_manager: GrpcShardManagerConfig {
             host: args.host_for_service_connect(),
-            port: shard_manager_run_details.grpc_port,
+            port: shard_manager_grpc_port,
             ..GrpcShardManagerConfig::default()
         },
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.host_for_service_connect(),
-            port: registry_service_run_details.grpc_port,
+            port: registry_service_grpc_port,
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::default(),
@@ -422,7 +452,7 @@ fn worker_executor_config(
         ),
         public_worker_api: WorkerServiceGrpcConfig {
             host: args.host_for_service_connect(),
-            port: worker_service_run_details.grpc_port,
+            port: worker_service_grpc_port,
             client_config: GrpcClientConfig::default(),
         },
         environment_state_service: EnvironmentStateServiceConfig {
@@ -435,6 +465,7 @@ fn worker_executor_config(
         },
         filesystem_storage: FilesystemStorageConfig {
             deterministic_root_dir: args.agent_filesystem_root.clone(),
+            managed_xfs_root_dir: args.managed_xfs_root_dir.clone(),
             ..Default::default()
         },
         ..Default::default()
@@ -558,40 +589,122 @@ async fn run_worker_service(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use poem::EndpointExt;
     use test_r::test;
+
+    fn launch_args() -> LaunchArgs {
+        LaunchArgs {
+            system_memory_override: None,
+            router_addr: "127.0.0.1".to_string(),
+            router_port: 0,
+            custom_request_port: 0,
+            mcp_port: 0,
+            ports_file: None,
+            data_dir: PathBuf::from("/tmp/golem-launch-config-test"),
+            agent_filesystem_root: None,
+            managed_xfs_root_dir: None,
+            resource_usage_metering: ResourceUsageMeteringConfig::default(),
+            monthly_compute_gcu: 0,
+            monthly_memory_gb_seconds: 0,
+            monthly_durable_storage_gb_month: 0,
+            monthly_ephemeral_storage_gb_month: 0,
+        }
+    }
+
+    #[test]
+    fn registry_config_uses_single_binary_plan() {
+        let mut args = launch_args();
+        args.monthly_compute_gcu = 2;
+        args.monthly_memory_gb_seconds = 3;
+        args.monthly_durable_storage_gb_month = 5;
+        args.monthly_ephemeral_storage_gb_month = 7;
+        let config = registry_service_config(
+            &args,
+            &golem_component_compilation_service::RunDetails {
+                http_port: 0,
+                grpc_port: 0,
+            },
+        )
+        .unwrap();
+        let plan = config.initial_plans.get("default").unwrap();
+
+        assert_eq!(
+            plan.plan_id,
+            PlanId(uuid!("e808bd76-a6ab-4090-ade4-8447b8e8550f"))
+        );
+        assert!(!plan.max_storage_per_agent_enabled);
+        assert_eq!(plan.max_storage_per_agent, u64::MAX);
+        assert_eq!(plan.monthly_compute_gcu, 2);
+        assert_eq!(plan.monthly_memory_gb_seconds, 3);
+        assert_eq!(plan.monthly_durable_storage_gb_month, 5);
+        assert_eq!(plan.monthly_ephemeral_storage_gb_month, 7);
+        assert_eq!(plan.max_memory_per_agent, u64::MAX);
+        assert_eq!(plan.max_memory_per_agent_ceiling, u64::MAX);
+        assert!(plan.max_memory_per_agent_user_configurable);
+    }
+
+    #[test]
+    fn worker_executor_config_preserves_metering_and_filesystem_roots() {
+        let mut args = launch_args();
+        args.resource_usage_metering = ResourceUsageMeteringConfig {
+            compute: true,
+            memory: false,
+            filesystem: true,
+        };
+        args.managed_xfs_root_dir = Some(PathBuf::from("/managed-xfs"));
+
+        let config = worker_executor_config(&args, 1001, 1002, 1003).unwrap();
+
+        assert_eq!(
+            config.resource_usage_metering,
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: false,
+                filesystem: true,
+            }
+        );
+        assert_eq!(
+            config.filesystem_storage.managed_xfs_root_dir,
+            Some(PathBuf::from("/managed-xfs"))
+        );
+        assert_eq!(config.filesystem_storage.deterministic_root_dir, None);
+        assert_eq!(config.shard_manager.host, "127.0.0.1");
+        assert_eq!(config.shard_manager.port, 1001);
+        assert_eq!(config.registry_service.host, "127.0.0.1");
+        assert_eq!(config.registry_service.port, 1002);
+        assert_eq!(config.public_worker_api.port, 1003);
+        let ResourceLimitsConfig::Grpc(resource_limits) = config.resource_limits else {
+            panic!("local worker executor resource limits must remain enabled")
+        };
+        assert_eq!(
+            resource_limits.batch_update_interval,
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            resource_limits.limit_refresh_interval,
+            Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn launch_args_reject_conflicting_filesystem_roots() {
+        let mut args = launch_args();
+        args.agent_filesystem_root = Some(PathBuf::from("/agents"));
+        args.managed_xfs_root_dir = Some(PathBuf::from("/managed-xfs"));
+
+        assert!(
+            args.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be combined")
+        );
+    }
 
     #[test]
     fn local_server_system_memory_override_reaches_executor_config() {
-        let shard_manager = golem_shard_manager::RunDetails {
-            http_port: 0,
-            grpc_port: 0,
-            leadership: None,
-        };
-        let registry = golem_registry_service::SingleExecutableRunDetails {
-            grpc_port: 0,
-            endpoint: poem::endpoint::make_sync(|_| poem::Response::default()).boxed(),
-        };
-        let worker_service = golem_worker_service::TrafficReadyEndpoints {
-            grpc_port: 0,
-            custom_request_port: 0,
-            mcp_port: 0,
-            api_endpoint: poem::endpoint::make_sync(|_| poem::Response::default()).boxed(),
-        };
         for system_memory_override in [None, std::num::NonZeroU64::new(2_147_483_648)] {
-            let args = LaunchArgs {
-                system_memory_override,
-                router_addr: "127.0.0.1".into(),
-                router_port: 0,
-                custom_request_port: 0,
-                mcp_port: 0,
-                ports_file: None,
-                data_dir: PathBuf::from("unused"),
-                agent_filesystem_root: None,
-                resource_usage_metering: ResourceUsageMeteringConfig::default(),
-            };
-            let config =
-                worker_executor_config(&args, &shard_manager, &registry, &worker_service).unwrap();
+            let mut args = launch_args();
+            args.system_memory_override = system_memory_override;
+            let config = worker_executor_config(&args, 0, 0, 0).unwrap();
             assert_eq!(
                 config.memory.system_memory_override,
                 system_memory_override.map(|value| value.get())

@@ -176,7 +176,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -589,6 +589,8 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
+    production_active_agents:
+        Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     leak_detector: std::sync::Weak<()>,
 }
 
@@ -887,8 +889,14 @@ impl TestWorkerExecutor {
     ///   - the shell is present but the wasmtime instance has been unloaded
     ///     (e.g. after memory-pressure eviction).
     ///
-    /// Used by the read-only cache eviction-survival test (#3393 T5).
+    /// Used by tests that need to prove a wasmtime instance is resident.
     pub async fn worker_is_loaded(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        if let Some(active_agents) = &self.production_active_agents {
+            return match active_agents.try_get(owned_agent_id).await {
+                Some(worker) => worker.is_loaded().await,
+                None => false,
+            };
+        }
         match self
             .additional_test_deps
             .try_get_worker(owned_agent_id)
@@ -1760,6 +1768,7 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
+                production_active_agents: None,
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -2971,12 +2980,32 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    active_agents:
+        Arc<OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>>,
 }
 
 #[async_trait]
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn create_active_agents(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
+        let active_agents = Arc::new(ActiveAgents::new(
+            &golem_config.active_agents,
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+            &golem_config.agent_status_flush,
+            shutdown_token,
+        )?);
+        self.active_agents
+            .set(active_agents.clone())
+            .map_err(|_| anyhow!("production ActiveAgents initialized more than once"))?;
+        Ok(active_agents)
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -3199,11 +3228,13 @@ async fn run_production_context_bootstrap(
 
     let handle = tokio::runtime::Handle::current();
     let mut join_set = tokio::task::JoinSet::new();
+    let production_active_agents = Arc::new(OnceLock::new());
 
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            active_agents: production_active_agents.clone(),
         },
         config,
         prometheus.clone(),
@@ -3238,14 +3269,13 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
-                // Production-context bootstrap path uses the real `NoAdditionalDeps`
-                // worker context, not `TestWorkerCtx`, so the worker-inspection
-                // helpers do not apply here. We hand the executor a fresh, empty
-                // `AdditionalTestDeps` purely to satisfy the field; calling
-                // `worker_is_loaded` / `worker_eviction_class` / `worker_memory_requirement`
-                // on this path will report "no worker" because no `ActiveAgents`
-                // handle was ever captured.
                 additional_test_deps: AdditionalTestDeps::new(),
+                production_active_agents: Some(
+                    production_active_agents
+                        .get()
+                        .expect("production ActiveAgents must be initialized during bootstrap")
+                        .clone(),
+                ),
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -3280,6 +3310,22 @@ pub async fn start_with_resource_limits(
         resource_limits,
         None,
         "Timeout waiting for custom-resource-limits server to start",
+    )
+    .await
+}
+
+pub async fn start_with_resource_limits_and_configure(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    configure: Arc<dyn Fn(&mut GolemConfig) + Send + Sync>,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        resource_limits,
+        Some(configure),
+        "Timeout waiting for configured custom-resource-limits server to start",
     )
     .await
 }

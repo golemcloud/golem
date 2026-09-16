@@ -17,6 +17,7 @@ use golem_client::api::{
 };
 use golem_client::model::AccountUpdate;
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountRevision};
+use golem_common::model::account_usage::StorageResourceLimitValue;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use pretty_assertions::{assert_eq, assert_matches};
 use test_r::{inherit_test_dep, test};
@@ -58,8 +59,16 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
     // get account plan
     {
-        let result = client.get_account_plan(&user.account_id.0).await;
-        assert_matches!(result, Ok(_))
+        let plan = client.get_account_plan(&user.account_id.0).await?;
+        assert_matches!(
+            plan.max_storage_per_agent,
+            StorageResourceLimitValue::Disabled(_)
+        );
+        assert_matches!(
+            plan.max_storage_per_agent_ceiling,
+            StorageResourceLimitValue::Disabled(_)
+        );
+        assert!(!plan.max_storage_per_agent_user_configurable);
     }
 
     // get account tokens

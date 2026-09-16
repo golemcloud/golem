@@ -409,8 +409,22 @@ impl From<AccountResourceOverrideError> for ApiError {
             AccountResourceOverrideError::BelowPlanDefault(_, _) => {
                 Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
             }
-            AccountResourceOverrideError::ExpiryRequiresAdmin => {
+            AccountResourceOverrideError::FeatureDisabled(_) => {
+                Self::bad_request(api::error_code::FEATURE_DISABLED, error)
+            }
+            AccountResourceOverrideError::OwnerOnly => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            AccountResourceOverrideError::AdminOnly => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            AccountResourceOverrideError::GrantDoesNotIncreaseResolvedValue { .. }
+            | AccountResourceOverrideError::PromotionalExpiryRequired
+            | AccountResourceOverrideError::GrantValueOverflow => {
+                Self::bad_request(api::error_code::RESOURCE_GRANT_INVALID, error)
+            }
+            AccountResourceOverrideError::GrantNotFound => {
+                Self::not_found(api::error_code::RESOURCE_GRANT_NOT_FOUND, error)
             }
             AccountResourceOverrideError::AccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
@@ -438,6 +452,16 @@ impl From<AccountUsageError> for ApiError {
             AccountUsageError::AccountNotfound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
+            AccountUsageError::OverageNotEligible => {
+                Self::bad_request(api::error_code::MONTHLY_USAGE_MODE_NOT_ELIGIBLE, error)
+            }
+            AccountUsageError::MonthlyUsageModeUnchanged(_) => {
+                Self::bad_request(api::error_code::MONTHLY_USAGE_MODE_UNCHANGED, error)
+            }
+            AccountUsageError::MonthlyUsageModeChangeNotAllowed => Self::forbidden(
+                api::error_code::MONTHLY_USAGE_MODE_CHANGE_NOT_ALLOWED,
+                error,
+            ),
             AccountUsageError::Unauthorized(inner) => inner.into(),
             AccountUsageError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -548,11 +572,13 @@ impl From<PlanError> for ApiError {
         match value {
             PlanError::PlanNotFound(_) => Self::not_found(api::error_code::PLAN_NOT_FOUND, error),
             PlanError::Unauthorized(inner) => inner.into(),
-            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
-                cause: Some(value.into_anyhow()),
-            })),
+            PlanError::InvalidPolicy(_) | PlanError::InternalError(_) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    cause: Some(value.into_anyhow()),
+                }))
+            }
         }
     }
 }
@@ -1476,7 +1502,13 @@ mod tests {
             ApiError::LimitExceeded(_)
         ));
         assert!(matches!(
-            ApiError::from(AccountResourceOverrideError::ExpiryRequiresAdmin),
+            ApiError::from(AccountResourceOverrideError::FeatureDisabled(
+                "Maximum storage per agent"
+            )),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::OwnerOnly),
             ApiError::Forbidden(_)
         ));
         assert!(matches!(

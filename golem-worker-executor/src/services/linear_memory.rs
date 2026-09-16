@@ -14,6 +14,7 @@
 
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
+use crate::services::byte_time_accumulator::MeteringTime;
 use crate::services::resource_limits::{AgentMemoryLimitTarget, AtomicResourceEntry};
 use golem_common::model::agent::AgentMode;
 use std::future::Future;
@@ -86,6 +87,27 @@ impl LinearMemoryTracker {
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         now: Instant,
     ) -> Self {
+        Self::new_at(
+            bytes,
+            initially_reserved_bytes,
+            mode,
+            replaying,
+            resource_entry,
+            retained_growth_grant,
+            MeteringTime::now().at_instant(now),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_at(
+        bytes: u64,
+        initially_reserved_bytes: u64,
+        mode: AgentMode,
+        replaying: bool,
+        resource_entry: Arc<AtomicResourceEntry>,
+        retained_growth_grant: Arc<Mutex<MemoryGrant>>,
+        now: MeteringTime,
+    ) -> Self {
         Self::new_inner(
             bytes,
             initially_reserved_bytes,
@@ -113,7 +135,7 @@ impl LinearMemoryTracker {
             replaying,
             resource_entry,
             retained_growth_grant,
-            metering_enabled.then(Instant::now),
+            metering_enabled.then(MeteringTime::now),
         )
     }
 
@@ -124,7 +146,7 @@ impl LinearMemoryTracker {
         replaying: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
-        meter_started_at: Option<Instant>,
+        meter_started_at: Option<MeteringTime>,
     ) -> Self {
         let inner = Arc::new(Inner {
             bytes: AtomicU64::new(bytes),
@@ -147,7 +169,7 @@ impl LinearMemoryTracker {
             resource_entry: resource_entry.clone(),
             limit_exceeded: Mutex::new(None),
             meter: meter_started_at
-                .map(|now| AgentMemoryMeter::new(mode, bytes, false, resource_entry, now)),
+                .map(|now| AgentMemoryMeter::new_at(mode, bytes, false, resource_entry, now)),
         });
         let limit_target: Arc<dyn AgentMemoryLimitTarget> = inner.clone();
         inner

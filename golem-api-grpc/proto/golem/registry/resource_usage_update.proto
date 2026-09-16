@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.registry;
 
 import "golem/common/account_id.proto";
+import "golem/common/resource_limits.proto";
 
 message ResourceUsageUpdate {
   golem.common.AccountId account_id = 1;
@@ -15,4 +16,10 @@ message ResourceUsageUpdate {
   bool compute_metering_enabled = 8;
   bool memory_metering_enabled = 9;
   bool filesystem_metering_enabled = 10;
+  uint64 monthly_usage_mode_revision = 11;
+  uint64 memory_byte_nanoseconds_remainder = 12;
+  uint64 durable_storage_byte_nanoseconds_remainder = 13;
+  uint64 ephemeral_storage_byte_nanoseconds_remainder = 14;
+  golem.common.AccountUsagePeriod period = 15;
+  uint64 monthly_policy_revision = 16;
 }

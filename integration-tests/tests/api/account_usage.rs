@@ -13,15 +13,24 @@
 // limitations under the License.
 
 use anyhow::Context;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use golem_client::api::{
+    RegistryServiceClearAccountAdminResourceGrantError,
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
-    RegistryServiceGetAccountStorageOverrideError, RegistryServiceSetAccountStorageOverrideError,
+    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountAdminResourceGrantError,
+    RegistryServiceSetAccountMonthlyUsageModeError, RegistryServiceSetAccountStorageOverrideError,
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, MemoryLimit, MeteringStatus, SetMemoryLimit, SetStorageLimit, StorageLimit,
+    AccountUsagePeriod, AdminResourceGrantChangeValue, AdminResourceGrantDimension,
+    AdminResourceGrantEventType, AdminResourceGrantReason, BYTE_SECONDS_PER_GB_MONTH,
+    EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FiniteResourceLimit, MemoryLimit, MeteringStatus,
+    MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit,
+    MonthlyUsageMode, MonthlyUsageModeTransitionSource, PerAgentLimitUnit, ResourceLimitValue,
+    SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
+    StorageResourceLimitValue,
 };
+use golem_common::model::auth::TokenCreation;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService as _, ResourceUsageMetering,
     ResourceUsageUpdate,
@@ -36,6 +45,10 @@ use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+const DEFAULT_MONTHLY_COMPUTE_GCU: u64 = 1_000_000_000_000;
+const DEFAULT_MONTHLY_MEMORY_GB_SECONDS: u64 = 1_000_000_000_000_000_000;
+const DEFAULT_MONTHLY_STORAGE_GB_MONTH: u64 = 6_000;
 
 fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
     if period.month == 1 {
@@ -156,7 +169,7 @@ async fn account_usage_reports_all_customer_dimensions(
     let user = deps.user().await?;
     let registry_service = deps.registry_service();
     let registry_client = registry_client(deps);
-    let byte_seconds_per_gb_month = (1024_u64.pow(3) * 730 * 3600) as f64;
+    let byte_seconds_per_gb_month = BYTE_SECONDS_PER_GB_MONTH as f64;
 
     let updates_started_at = Utc::now();
     for (fuel_delta, durable_storage_byte_seconds_delta, ephemeral_storage_byte_seconds_delta) in
@@ -166,6 +179,12 @@ async fn account_usage_reports_all_customer_dimensions(
             .batch_update_resource_usage(HashMap::from([(
                 AccountId(user.account_id.0),
                 ResourceUsageUpdate {
+                    period: AccountUsagePeriod::current(),
+                    monthly_usage_mode_revision: 0,
+                    monthly_policy_revision: 0,
+                    memory_byte_nanoseconds_remainder: 0,
+                    durable_storage_byte_nanoseconds_remainder: 0,
+                    ephemeral_storage_byte_nanoseconds_remainder: 0,
                     fuel_delta,
                     http_call_count_delta: 0,
                     rpc_call_count_delta: 0,
@@ -209,6 +228,105 @@ async fn account_usage_reports_all_customer_dimensions(
     assert!(usage.usage.as_of >= updates_started_at);
     assert!(usage.usage.as_of <= updates_finished_at);
 
+    let limits = registry_service
+        .client(&user.token)
+        .await
+        .get_account_limits(&user.account_id.0)
+        .await?;
+    assert_eq!(limits.account_id, user.account_id);
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert!(limits.overage_allowed_by_plan);
+    assert!(limits.latest_owner_transition.is_none());
+    assert_eq!(limits.monthly.compute_gcu.metering, MeteringStatus::Enabled);
+    assert_eq!(
+        limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert_eq!(
+        limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert_eq!(limits.monthly.compute_gcu.allow_overage_usage, Some(0.0));
+    assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
+    assert_eq!(
+        limits.monthly.compute_gcu.remaining,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU as f64 - 1.5)
+    );
+    assert_eq!(limits.monthly.compute_gcu.unit, MonthlyComputeUnit::Gcu);
+    assert_eq!(
+        limits.monthly.compute_gcu.behavior,
+        Some(MonthlyLimitBehavior::HardLimit)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.plan_amount,
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.resolved_monthly_amount,
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.allow_overage_usage,
+        Some(0.0)
+    );
+    assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.remaining,
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS - 14)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.unit,
+        MonthlyMemoryUnit::GbSeconds
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.plan_amount,
+        Some(DEFAULT_MONTHLY_STORAGE_GB_MONTH)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.usage,
+        Some(140.0 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.remaining,
+        Some(
+            (DEFAULT_MONTHLY_STORAGE_GB_MONTH * BYTE_SECONDS_PER_GB_MONTH - 140) as f64
+                / byte_seconds_per_gb_month
+        )
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.unit,
+        MonthlyStorageUnit::GbMonth
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.plan_amount,
+        Some(DEFAULT_MONTHLY_STORAGE_GB_MONTH)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.usage,
+        Some(500.0 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.remaining,
+        Some(
+            (DEFAULT_MONTHLY_STORAGE_GB_MONTH * BYTE_SECONDS_PER_GB_MONTH - 500) as f64
+                / byte_seconds_per_gb_month
+        )
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.unit,
+        MonthlyStorageUnit::GbMonth
+    );
+    assert_eq!(
+        limits.max_memory_per_agent.effective_value,
+        ResourceLimitValue::from_memory_value(1024 * 1024 * 1024)
+    );
+    assert_eq!(limits.max_memory_per_agent.unit, PerAgentLimitUnit::Bytes);
+    assert_eq!(limits.max_storage_per_agent.unit, PerAgentLimitUnit::Bytes);
+    assert!(matches!(
+        limits.max_storage_per_agent.effective_value,
+        StorageResourceLimitValue::Disabled(_)
+    ));
+
     let historical_period = previous_period(usage.usage.period);
     let historical_as_of =
         insert_usage_for_period(deps, user.account_id, historical_period).await?;
@@ -241,6 +359,199 @@ async fn account_usage_reports_all_customer_dimensions(
         MeteringStatus::Enabled
     );
     assert_eq!(history[0].usage.as_of, historical_as_of);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn account_owner_explicitly_changes_monthly_usage_mode(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry = deps.registry_service();
+    let client = registry.client(&user.token).await;
+    registry_client(deps)
+        .batch_update_resource_usage(HashMap::from([(
+            AccountId(user.account_id.0),
+            ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
+                monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
+                fuel_delta: 0,
+                http_call_count_delta: 0,
+                rpc_call_count_delta: 0,
+                durable_storage_byte_seconds_delta: 0,
+                ephemeral_storage_byte_seconds_delta: 0,
+                memory_gb_seconds_delta: 0,
+                metering: ResourceUsageMetering::all_enabled(),
+            },
+        )]))
+        .await?;
+
+    let enabled = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    assert_eq!(enabled.actor_account_id, user.account_id);
+    assert_eq!(enabled.source, MonthlyUsageModeTransitionSource::Owner);
+    assert_eq!(enabled.previous_mode, MonthlyUsageMode::HardLimit);
+    assert_eq!(enabled.new_mode, MonthlyUsageMode::AllowOverage);
+
+    let limits = client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
+    assert!(limits.overage_allowed_by_plan);
+    assert_eq!(
+        limits.monthly.compute_gcu.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(limits.latest_owner_transition, Some(enabled.clone()));
+
+    let error = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error400(body)) =
+        error
+    else {
+        panic!("expected unchanged-mode error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_UNCHANGED");
+    assert_eq!(
+        body.errors,
+        vec!["Monthly usage mode is already allowOverage".to_string()]
+    );
+
+    let disabled = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::HardLimit,
+            },
+        )
+        .await?;
+    assert_eq!(disabled.previous_mode, MonthlyUsageMode::AllowOverage);
+    assert_eq!(disabled.new_mode, MonthlyUsageMode::HardLimit);
+
+    client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    let impersonation = admin_client
+        .create_impersonation_token(
+            &user.account_id.0,
+            &TokenCreation {
+                expires_at: Utc::now() + chrono::Duration::minutes(5),
+            },
+        )
+        .await?;
+    let impersonated_client = registry.client(&impersonation.secret).await;
+    let forced = impersonated_client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::HardLimit,
+            },
+        )
+        .await?;
+    assert_eq!(forced.actor_account_id, admin.account_id);
+    assert_eq!(
+        forced.source,
+        MonthlyUsageModeTransitionSource::Administrator
+    );
+    let error = impersonated_client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error403(body)) =
+        error
+    else {
+        panic!("expected administrator-consent error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_CHANGE_NOT_ALLOWED");
+    assert_eq!(
+        body.error,
+        "Only an account owner may enable overage; administrators may only force hardLimit"
+    );
+
+    client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let downgraded = client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(downgraded.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert!(!downgraded.overage_allowed_by_plan);
+    assert_eq!(
+        downgraded.latest_owner_transition.unwrap().new_mode,
+        MonthlyUsageMode::AllowOverage
+    );
+    let error = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error400(body)) =
+        error
+    else {
+        panic!("expected ineligible-plan error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_NOT_ELIGIBLE");
+    assert_eq!(
+        body.errors,
+        vec!["The account's current plan does not permit paid overage".to_string()]
+    );
 
     Ok(())
 }
@@ -283,6 +594,12 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
+                monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
                 fuel_delta: 0,
                 http_call_count_delta: 0,
                 rpc_call_count_delta: 0,
@@ -319,6 +636,12 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
+                monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
                 fuel_delta: 0,
                 http_call_count_delta: 0,
                 rpc_call_count_delta: 0,
@@ -374,22 +697,30 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
     let client = deps.registry_service().client(&user.token).await;
 
     let error = client
-        .get_account_storage_override(&foreign_user.account_id.0)
+        .get_account_limits(&foreign_user.account_id.0)
         .await
         .unwrap_err();
     assert!(matches!(
         error,
-        golem_client::Error::Item(RegistryServiceGetAccountStorageOverrideError::Error404(_))
+        golem_client::Error::Item(RegistryServiceGetAccountLimitsError::Error404(_))
     ));
 
     let error = client
-        .set_account_storage_override(
+        .set_account_monthly_usage_mode(
             &foreign_user.account_id.0,
-            &SetStorageLimit {
-                value: 1,
-                expires_at: None,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
             },
         )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error404(_))
+    ));
+
+    let error = client
+        .set_account_storage_override(&foreign_user.account_id.0, &SetStorageLimit { value: 1 })
         .await
         .unwrap_err();
     assert!(matches!(
@@ -411,7 +742,7 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
 
 #[test]
 #[tracing::instrument]
-async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
+async fn account_storage_override_endpoints_resolve_set_and_clear(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -429,48 +760,48 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
 
     let client = deps.registry_service().client(&user.token).await;
     let expected_default = StorageLimit {
-        effective_value: 5,
-        plan_default: 5,
+        unit: PerAgentLimitUnit::Bytes,
+        active_admin_grant: None,
+        effective_value: StorageResourceLimitValue::from_storage_value(5),
+        plan_default: ResourceLimitValue::from_storage_value(5),
         override_value: None,
-        ceiling: 20,
+        ceiling: ResourceLimitValue::from_storage_value(20),
         user_configurable: true,
     };
     assert_eq!(
         client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_default
     );
 
     let expected_override = StorageLimit {
-        effective_value: 12,
-        override_value: Some(12),
+        effective_value: StorageResourceLimitValue::from_storage_value(12),
+        override_value: Some(ResourceLimitValue::from_storage_value(12)),
         ..expected_default.clone()
     };
     assert_eq!(
         client
-            .set_account_storage_override(
-                &user.account_id.0,
-                &SetStorageLimit {
-                    value: 12,
-                    expires_at: None,
-                },
-            )
+            .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 12 },)
             .await?,
         expected_override
     );
 
     let expected_max_memory = MemoryLimit {
-        effective_value: 10_000_000_000_000_000,
-        plan_default: 10_000_000_000_000_000,
+        unit: PerAgentLimitUnit::Bytes,
+        active_admin_grant: None,
+        effective_value: ResourceLimitValue::from_memory_value(10_000_000_000_000_000),
+        plan_default: ResourceLimitValue::from_memory_value(10_000_000_000_000_000),
         override_value: None,
-        ceiling: 20_000_000_000_000_000,
+        ceiling: ResourceLimitValue::from_memory_value(20_000_000_000_000_000),
         user_configurable: true,
     };
     assert_eq!(
         client
-            .get_account_max_memory_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_memory_per_agent,
         expected_max_memory
     );
     let max_memory_override = client
@@ -478,13 +809,14 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
             &user.account_id.0,
             &SetMemoryLimit {
                 value: 12_000_000_000_000_000,
-                expires_at: None,
             },
         )
         .await?;
     assert_eq!(
         max_memory_override.override_value,
-        Some(12_000_000_000_000_000)
+        Some(ResourceLimitValue::from_memory_value(
+            12_000_000_000_000_000
+        ))
     );
     assert_eq!(
         client
@@ -493,63 +825,31 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
         expected_max_memory
     );
 
-    let expected_monthly_memory = MemoryLimit {
-        effective_value: 30,
-        plan_default: 30,
-        override_value: None,
-        ceiling: 60,
-        user_configurable: true,
-    };
     assert_eq!(
         client
-            .get_account_monthly_memory_override(&user.account_id.0)
-            .await?,
-        expected_monthly_memory
-    );
-    let monthly_override = client
-        .set_account_monthly_memory_override(
-            &user.account_id.0,
-            &SetMemoryLimit {
-                value: 45,
-                expires_at: None,
-            },
-        )
-        .await?;
-    assert_eq!(monthly_override.override_value, Some(45));
-    assert_eq!(
-        client
-            .clear_account_monthly_memory_override(&user.account_id.0)
-            .await?,
-        expected_monthly_memory
-    );
-    assert_eq!(
-        client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_override
     );
 
+    let error = admin_client
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 15 })
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error403(body)) =
+        error
+    else {
+        panic!("expected account-owner-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
     assert_eq!(
-        admin_client
-            .set_account_storage_override(
-                &user.account_id.0,
-                &SetStorageLimit {
-                    value: 15,
-                    expires_at: Some(Utc::now() - Duration::seconds(1)),
-                },
-            )
-            .await?,
-        expected_default
+        body.error,
+        "Only account owners may change per-agent resource limits"
     );
 
     client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 12,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 12 })
         .await?;
     assert_eq!(
         client
@@ -559,8 +859,9 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
     );
     assert_eq!(
         client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_default
     );
 
@@ -569,20 +870,14 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
 
 #[test]
 #[tracing::instrument]
-async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
+async fn account_storage_override_endpoints_validate_capability_and_plan_range(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let error = client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 1,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 1 })
         .await
         .unwrap_err();
     let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error400(body)) =
@@ -590,8 +885,11 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
     else {
         panic!("expected non-configurable plan error, got {error:?}")
     };
-    assert_eq!(body.code, "RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE");
-    assert_eq!(body.errors, ["Storage limit is not user configurable"]);
+    assert_eq!(body.code, "FEATURE_DISABLED");
+    assert_eq!(
+        body.errors,
+        ["Maximum storage per agent is disabled because managed filesystem quotas are unavailable"]
+    );
 
     let admin = deps.admin().await;
     admin
@@ -607,13 +905,7 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
         .await?;
 
     let error = client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 21,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 21 })
         .await
         .unwrap_err();
     let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error422(body)) =
@@ -622,25 +914,256 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
         panic!("expected plan ceiling error, got {error:?}")
     };
     assert_eq!(body.code, "LIMIT_EXCEEDED");
-    assert_eq!(body.error, "Storage limit exceeds plan ceiling 20");
+    assert_eq!(
+        body.error,
+        "Maximum storage per agent exceeds plan ceiling 20"
+    );
 
     let error = client
-        .set_account_storage_override(
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 4 })
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error400(body)) =
+        error
+    else {
+        panic!("expected plan default error, got {error:?}")
+    };
+    assert_eq!(body.code, "LIMIT_EXCEEDED");
+    assert_eq!(
+        body.errors,
+        ["Maximum storage per agent is below plan default 5"]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let user_client = deps.registry_service().client(&user.token).await;
+    registry_client(deps)
+        .batch_update_resource_usage(HashMap::from([(
+            user.account_id,
+            ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
+                monthly_usage_mode_revision: 0,
+                monthly_policy_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
+                fuel_delta: 0,
+                http_call_count_delta: 0,
+                rpc_call_count_delta: 0,
+                durable_storage_byte_seconds_delta: 0,
+                ephemeral_storage_byte_seconds_delta: 0,
+                memory_gb_seconds_delta: 0,
+                metering: ResourceUsageMetering::all_enabled(),
+            },
+        )]))
+        .await?;
+    let dimension = AdminResourceGrantDimension::MonthlyComputeGcu;
+    let request = SetAdminResourceGrant {
+        value: 2_000_000_000_000,
+        reason: AdminResourceGrantReason::Support,
+        expires_at: None,
+    };
+
+    let error = user_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error403(body)) =
+        error
+    else {
+        panic!("expected admin-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
+    assert_eq!(body.error, "Only administrators may change resource grants");
+
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    let impersonation = admin_client
+        .create_impersonation_token(
             &user.account_id.0,
-            &SetStorageLimit {
-                value: 12,
-                expires_at: Some(Utc::now() + Duration::hours(1)),
+            &TokenCreation {
+                expires_at: Utc::now() + chrono::Duration::minutes(5),
+            },
+        )
+        .await?;
+    let impersonated_client = deps.registry_service().client(&impersonation.secret).await;
+    let error = impersonated_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error403(body)) =
+        error
+    else {
+        panic!("expected admin-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
+
+    let granted = admin_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await?;
+    assert_eq!(granted.account_id, user.account_id);
+    assert_eq!(granted.dimension, dimension);
+    assert_eq!(
+        granted.event_type,
+        AdminResourceGrantEventType::OverrideGranted
+    );
+    assert_eq!(granted.reason, AdminResourceGrantReason::Support);
+    assert_eq!(granted.actor_account_id, admin.account_id);
+    assert_eq!(granted.old_value, DEFAULT_MONTHLY_COMPUTE_GCU);
+    assert_eq!(
+        granted.new_value,
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit {
+            value: 2_000_000_000_000
+        })
+    );
+    assert_eq!(granted.expires_at, None);
+
+    let granted_limits = user_client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(
+        granted_limits.monthly_usage_mode,
+        MonthlyUsageMode::HardLimit
+    );
+    assert_eq!(
+        granted_limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert_eq!(
+        granted_limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(2_000_000_000_000)
+    );
+    let active_grant = granted_limits
+        .monthly
+        .compute_gcu
+        .active_admin_grant
+        .expect("compute grant must be exposed on its dimension");
+    assert_eq!(active_grant.dimension, dimension);
+    assert_eq!(active_grant.value, 2_000_000_000_000);
+
+    let cleared = admin_client
+        .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
+        .await?;
+    assert_eq!(
+        cleared.event_type,
+        AdminResourceGrantEventType::OverrideCleared
+    );
+    assert_eq!(cleared.actor_account_id, admin.account_id);
+    assert_eq!(cleared.old_value, 2_000_000_000_000);
+    assert_eq!(
+        cleared.new_value,
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit {
+            value: DEFAULT_MONTHLY_COMPUTE_GCU
+        })
+    );
+
+    let cleared_limits = user_client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(
+        cleared_limits.monthly_usage_mode,
+        MonthlyUsageMode::HardLimit
+    );
+    assert_eq!(
+        cleared_limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert_eq!(
+        cleared_limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert!(
+        cleared_limits
+            .monthly
+            .compute_gcu
+            .active_admin_grant
+            .is_none()
+    );
+
+    let error = admin_client
+        .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceClearAccountAdminResourceGrantError::Error404(
+        body,
+    )) = error
+    else {
+        panic!("expected missing-grant error, got {error:?}")
+    };
+    assert_eq!(body.code, "RESOURCE_GRANT_NOT_FOUND");
+
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &dimension,
+            &SetAdminResourceGrant {
+                value: 2_000_000_000_000,
+                reason: AdminResourceGrantReason::Promotional,
+                expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
             },
         )
         .await
         .unwrap_err();
-    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error403(body)) =
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
         error
     else {
-        panic!("expected admin-only expiry error, got {error:?}")
+        panic!("expected promotional-expiry error, got {error:?}")
     };
-    assert_eq!(body.code, "AUTH_FORBIDDEN");
-    assert_eq!(body.error, "Only admins may set an override expiry");
+    assert_eq!(body.code, "RESOURCE_GRANT_INVALID");
+
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &AdminResourceGrantDimension::MaxStoragePerAgent,
+            &SetAdminResourceGrant {
+                value: 1,
+                reason: AdminResourceGrantReason::Support,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
+        error
+    else {
+        panic!("expected disabled-storage error, got {error:?}")
+    };
+    assert_eq!(body.code, "FEATURE_DISABLED");
+
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &AdminResourceGrantDimension::MaxStoragePerAgent,
+            &SetAdminResourceGrant {
+                value: EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+                reason: AdminResourceGrantReason::Support,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
+        error
+    else {
+        panic!("expected finite-storage validation error, got {error:?}")
+    };
+    assert_eq!(body.code, "RESOURCE_GRANT_INVALID");
+    assert_eq!(
+        body.errors,
+        ["The grant value exceeds the supported internal range"]
+    );
 
     Ok(())
 }

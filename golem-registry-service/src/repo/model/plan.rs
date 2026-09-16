@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::account_usage::UsageType;
+use golem_common::model::account_usage::{ResourceLimitValue, StorageResourceLimitValue};
 use golem_common::model::plan::{Plan, PlanId, PlanName};
 use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
@@ -26,10 +27,13 @@ pub struct PlanRecord {
     pub max_memory_per_worker: NumericU64,
     pub max_memory_per_worker_ceiling: NumericU64,
     pub max_memory_per_worker_user_configurable: bool,
+    pub monthly_compute_gcu: NumericU64,
     pub monthly_memory_gb_seconds: NumericU64,
-    pub monthly_memory_gb_seconds_ceiling: NumericU64,
-    pub monthly_memory_gb_seconds_user_configurable: bool,
+    pub monthly_durable_storage_gb_month: NumericU64,
+    pub monthly_ephemeral_storage_gb_month: NumericU64,
+    pub overage_eligible: bool,
     pub max_table_elements_per_worker: NumericU64,
+    pub max_disk_space_per_worker_enabled: bool,
     pub max_disk_space_per_worker: NumericU64,
     pub max_disk_space_per_worker_ceiling: NumericU64,
     pub max_disk_space_per_worker_user_configurable: bool,
@@ -77,20 +81,35 @@ impl From<PlanRecord> for Plan {
             component_limit: value.total_component_count.get(),
             worker_connection_limit: value.total_worker_connection_count.get(),
             storage_limit: value.total_component_storage_bytes.get(),
-            monthly_gas_limit: value.monthly_gas_limit.get(),
             monthly_upload_limit: value.monthly_component_upload_limit_bytes.get(),
-            max_memory_per_worker: value.max_memory_per_worker.get(),
-            max_memory_per_worker_ceiling: value.max_memory_per_worker_ceiling.get(),
-            max_memory_per_worker_user_configurable: value.max_memory_per_worker_user_configurable,
+            monthly_compute_gcu: value.monthly_compute_gcu.get(),
             monthly_memory_gb_seconds: value.monthly_memory_gb_seconds.get(),
-            monthly_memory_gb_seconds_ceiling: value.monthly_memory_gb_seconds_ceiling.get(),
-            monthly_memory_gb_seconds_user_configurable: value
-                .monthly_memory_gb_seconds_user_configurable,
+            monthly_durable_storage_gb_month: value.monthly_durable_storage_gb_month.get(),
+            monthly_ephemeral_storage_gb_month: value.monthly_ephemeral_storage_gb_month.get(),
+            overage_allowed_by_plan: value.overage_eligible,
+            max_memory_per_agent: ResourceLimitValue::from_memory_value(
+                value.max_memory_per_worker.get(),
+            ),
+            max_memory_per_agent_ceiling: ResourceLimitValue::from_memory_value(
+                value.max_memory_per_worker_ceiling.get(),
+            ),
+            max_memory_per_agent_user_configurable: value.max_memory_per_worker_user_configurable,
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
-            max_disk_space_per_worker: value.max_disk_space_per_worker.get(),
-            max_disk_space_per_worker_ceiling: value.max_disk_space_per_worker_ceiling.get(),
-            max_disk_space_per_worker_user_configurable: value
-                .max_disk_space_per_worker_user_configurable,
+            max_storage_per_agent: if value.max_disk_space_per_worker_enabled {
+                StorageResourceLimitValue::from_storage_value(value.max_disk_space_per_worker.get())
+            } else {
+                StorageResourceLimitValue::disabled()
+            },
+            max_storage_per_agent_ceiling: if value.max_disk_space_per_worker_enabled {
+                StorageResourceLimitValue::from_storage_value(
+                    value.max_disk_space_per_worker_ceiling.get(),
+                )
+            } else {
+                StorageResourceLimitValue::disabled()
+            },
+            max_storage_per_agent_user_configurable: value
+                .max_disk_space_per_worker_user_configurable
+                && value.max_disk_space_per_worker_enabled,
             per_invocation_http_call_limit: value.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit.get(),
             monthly_http_call_limit: value.monthly_http_call_limit.get(),

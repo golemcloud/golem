@@ -28,6 +28,8 @@ pub mod status_checkpointer;
 pub mod status_flusher;
 pub(crate) mod tasks;
 
+#[cfg(test)]
+pub(crate) use invocation_loop::{MonthlyResourceAdmission, monthly_resource_admission};
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{
@@ -1797,7 +1799,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             replaying,
             Arc::clone(&self.resource_entry),
             retained_memory_grant,
-            self.config().resource_usage_metering.memory,
+            self.config().effective_resource_usage_metering().memory,
         );
         if let Some(meter) = linear_memory.meter_if_enabled() {
             meter.resume(initial_linear_memory, std::time::Instant::now());
@@ -2764,32 +2766,47 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
         let lifecycle = self.lock_non_stopping_worker().await;
         lifecycle.ensure_not_deleting()?;
-        match &*lifecycle {
+        let receiver = match &*lifecycle {
             WorkerInstance::Running(running) => {
-                running.resume_replay_pending.store(true, Ordering::Release);
-                running
+                running.resume_replay_pending.fetch_add(1, Ordering::AcqRel);
+                let (sender, receiver) = oneshot::channel();
+                if running
                     .sender
-                    .send(WorkerCommand::ResumeReplay)
-                    .expect("Failed to send resume command");
-
-                Ok(())
+                    .send(WorkerCommand::ResumeReplay { sender })
+                    .is_err()
+                {
+                    running.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
+                    return Err(WorkerExecutorError::runtime(
+                        "worker stopped before accepting the resume request",
+                    ));
+                }
+                receiver
             }
             WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
-                Err(WorkerExecutorError::invalid_request(
+                return Err(WorkerExecutorError::invalid_request(
                     "Explicit resume is not supported for uninitialized workers",
-                ))
+                ));
             }
-            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
+            WorkerInstance::CleanupFailed(error) => return Err(error.clone()),
             WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
-                Err(WorkerExecutorError::invalid_request(
+                return Err(WorkerExecutorError::invalid_request(
                     "Explicit resume is not supported for deleting workers",
-                ))
+                ));
             }
-            WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => Err(
-                WorkerExecutorError::runtime("Worker initialization has not completed"),
-            ),
+            WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Worker initialization has not completed",
+                ));
+            }
             WorkerInstance::Stopping(_) => panic!("impossible"),
-        }
+        };
+        drop(lifecycle);
+
+        receiver.await.unwrap_or_else(|_| {
+            Err(WorkerExecutorError::runtime(
+                "worker stopped before processing the resume request",
+            ))
+        })
     }
 
     /// Extracts the read-only context for `invocation` by looking up the
@@ -3686,7 +3703,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
         let has_pending_invocations = !self.pending_invocations().await.is_empty();
         let has_queued_internal_work = !running.queue.read().await.is_empty();
-        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire) != 0;
         let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
         let has_filesystem_effects = self.has_active_filesystem_effects(running);
         let has_concurrent_agent_permit =
@@ -3799,7 +3816,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire) != 0;
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -3867,7 +3884,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire) != 0;
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -8050,7 +8067,7 @@ struct RunningWorker {
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
     /// than the internal queue, so eviction must treat it as pending work.
-    resume_replay_pending: Arc<AtomicBool>,
+    resume_replay_pending: Arc<AtomicU64>,
     start_attempt: Uuid,
 }
 
@@ -8145,7 +8162,7 @@ impl RunningWorker {
         let idle_since_millis_clone = Arc::clone(&idle_since_millis);
         let interrupt_signal = parent.interrupt_signal.clone();
         let interrupt_signal_clone = interrupt_signal.clone();
-        let resume_replay_pending = Arc::new(AtomicBool::new(false));
+        let resume_replay_pending = Arc::new(AtomicU64::new(0));
         let resume_replay_pending_clone = resume_replay_pending.clone();
         let memory_grant = Arc::new(StdMutex::new(memory_grant));
         let memory_grant_registration =
@@ -8443,7 +8460,7 @@ impl RunningWorker {
             true,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
-            parent.config().resource_usage_metering.memory,
+            parent.config().effective_resource_usage_metering().memory,
         );
         let reconstructing = match bind_configured_resource_usage_metering(
             created,
@@ -8452,7 +8469,7 @@ impl RunningWorker {
                 linear_memory.clone(),
                 Arc::clone(&parent.resource_entry),
             ),
-            parent.config().resource_usage_metering,
+            parent.config().effective_resource_usage_metering(),
         ) {
             Ok(filesystem) => filesystem,
             Err(failure) => {
@@ -8722,7 +8739,7 @@ impl RunningWorker {
         filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
         unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
         idle_since_millis: Arc<AtomicU64>,
-        resume_replay_pending: Arc<AtomicBool>,
+        resume_replay_pending: Arc<AtomicU64>,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
@@ -10391,7 +10408,9 @@ fn invocation_keys_to_fail(
 enum WorkerCommand {
     WorkAvailable,
     InternalStatusChanged,
-    ResumeReplay,
+    ResumeReplay {
+        sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
     UpdateFilesystemLimit {
         allocated_bytes: u64,
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,

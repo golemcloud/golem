@@ -80,7 +80,7 @@ async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let services = Services::new(&config, &mut join_set).await?;
 
     let open_api_service = make_open_api_service(&services);
-    println!("{}", open_api_service.spec_yaml());
+    print!("{}", open_api_service.spec_yaml());
     Ok(())
 }
 

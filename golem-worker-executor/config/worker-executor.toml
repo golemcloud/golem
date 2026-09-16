@@ -406,7 +406,6 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-
 ## Generated from example config: with redis indexed_storage and s3 blob storage
 # http_address = "0.0.0.0"
 # http_port = 8082

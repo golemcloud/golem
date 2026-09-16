@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
+use crate::services::byte_time_accumulator::{
+    ByteTimeAccumulator, MeteringTime, PeriodByteTimeSettlement,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
+use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
 use golem_common::model::agent::AgentMode;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
-
-pub(crate) const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024) * 1_000_000_000;
 
 #[derive(Clone, Debug)]
 /// Leaf meter for linear-memory byte-time and memory-limit state.
@@ -60,6 +61,22 @@ impl AgentMemoryMeter {
         entry: Arc<AtomicResourceEntry>,
         now: Instant,
     ) -> Self {
+        Self::new_at(
+            mode,
+            bytes,
+            active,
+            entry,
+            MeteringTime::now().at_instant(now),
+        )
+    }
+
+    pub(crate) fn new_at(
+        mode: AgentMode,
+        bytes: u64,
+        active: bool,
+        entry: Arc<AtomicResourceEntry>,
+        now: MeteringTime,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 mode,
@@ -81,6 +98,10 @@ impl AgentMemoryMeter {
     /// Changes only memory metering. Resource-window lifecycle transitions must use
     /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn resume(&self, bytes: u64, now: Instant) -> bool {
+        self.resume_at(bytes, MeteringTime::now().at_instant(now))
+    }
+
+    pub(crate) fn resume_at(&self, bytes: u64, now: MeteringTime) -> bool {
         self.inner.transition(now, |state| {
             if state.stopped {
                 false
@@ -95,12 +116,20 @@ impl AgentMemoryMeter {
     /// Changes only memory metering. Resource-window lifecycle transitions must use
     /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn pause(&self, now: Instant) {
+        self.pause_at(MeteringTime::now().at_instant(now));
+    }
+
+    pub(crate) fn pause_at(&self, now: MeteringTime) {
         self.inner.transition(now, |state| state.active = false);
     }
 
     /// Changes only memory metering. Resource-window lifecycle transitions must use
     /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn stop(&self, now: Instant) {
+        self.stop_at(MeteringTime::now().at_instant(now));
+    }
+
+    pub(crate) fn stop_at(&self, now: MeteringTime) {
         let settlement = {
             let mut state = self.inner.state.lock().unwrap();
             state.accrue(now);
@@ -118,55 +147,61 @@ impl AgentMemoryMeter {
     }
 
     pub fn set_bytes(&self, bytes: u64, now: Instant) {
+        self.set_bytes_at(bytes, MeteringTime::now().at_instant(now));
+    }
+
+    pub(crate) fn set_bytes_at(&self, bytes: u64, now: MeteringTime) {
         self.inner.transition(now, |state| state.bytes = bytes);
     }
 
     pub fn flush(&self, now: Instant) {
-        let units = self.take_units(now);
-        self.inner.record(units);
+        self.flush_at(MeteringTime::now().at_instant(now));
     }
 
-    pub(crate) fn take_units(&self, now: Instant) -> i64 {
+    pub(crate) fn flush_at(&self, now: MeteringTime) {
+        let settlement = self.take_settlement_at(now);
+        self.inner.record_settlement(settlement);
+    }
+
+    pub(crate) fn take_settlement(&self) -> Vec<PeriodByteTimeSettlement> {
+        self.inner.state.lock().unwrap().take_settlement()
+    }
+
+    pub(crate) fn take_settlement_at(&self, now: MeteringTime) -> Vec<PeriodByteTimeSettlement> {
         let mut state = self.inner.state.lock().unwrap();
         state.accrue(now);
-        state.usage.take_units()
-    }
-
-    pub(crate) fn take_settlement(&self) -> ByteTimeSettlement {
-        self.inner.state.lock().unwrap().take_settlement()
+        state.take_settlement()
     }
 }
 
 impl Inner {
-    fn transition<R>(&self, now: Instant, update: impl FnOnce(&mut State) -> R) -> R {
+    fn transition<R>(&self, now: MeteringTime, update: impl FnOnce(&mut State) -> R) -> R {
         let mut state = self.state.lock().unwrap();
         state.accrue(now);
         update(&mut state)
     }
 
-    fn record(&self, units: i64) {
-        if units != 0
-            && let Some(entry) = self.entry.upgrade()
-        {
-            entry.record_memory_gb_seconds(self.mode, units);
-        }
-    }
-
-    fn record_settlement(&self, settlement: ByteTimeSettlement) {
+    fn record_settlement(&self, settlements: Vec<PeriodByteTimeSettlement>) {
         if let Some(entry) = self.entry.upgrade() {
-            entry.record_memory_settlement(self.mode, settlement);
+            for settlement in settlements {
+                entry.record_memory_settlement_for_period(
+                    self.mode,
+                    settlement.period,
+                    settlement.usage,
+                );
+            }
         }
     }
 }
 
 impl State {
-    fn accrue(&mut self, now: Instant) {
+    fn accrue(&mut self, now: MeteringTime) {
         let bytes = (self.active && !self.stopped).then_some(self.bytes);
         self.usage.accrue(now, bytes);
     }
 
-    fn take_settlement(&mut self) -> ByteTimeSettlement {
-        self.usage.take_settlement()
+    fn take_settlement(&mut self) -> Vec<PeriodByteTimeSettlement> {
+        self.usage.take_settlements()
     }
 }
 
@@ -174,7 +209,7 @@ impl Drop for Inner {
     fn drop(&mut self) {
         let settlement = {
             let state = self.state.get_mut().unwrap();
-            state.accrue(Instant::now());
+            state.accrue(MeteringTime::now());
             state.take_settlement()
         };
         self.record_settlement(settlement);
@@ -184,6 +219,7 @@ impl Drop for Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use std::time::Duration;
     use test_r::test;
 
@@ -191,20 +227,37 @@ mod tests {
         bytes * 1024 * 1024 * 1024
     }
 
+    fn metering_time(instant: Instant) -> MeteringTime {
+        MeteringTime {
+            instant,
+            utc: Utc
+                .with_ymd_and_hms(2030, 6, 15, 12, 0, 0)
+                .single()
+                .unwrap(),
+        }
+    }
+
+    fn later(time: MeteringTime, duration: Duration) -> MeteringTime {
+        MeteringTime {
+            instant: time.instant + duration,
+            utc: time.utc + chrono::Duration::from_std(duration).unwrap(),
+        }
+    }
+
     #[test]
     fn pause_resume_and_stop_are_idempotent() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+        let now = metering_time(Instant::now());
+        let meter = AgentMemoryMeter::new_at(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
-        meter.pause(now + Duration::from_secs(2));
-        meter.pause(now + Duration::from_secs(3));
-        assert!(meter.resume(gib(1), now + Duration::from_secs(4)));
-        assert!(meter.resume(gib(1), now + Duration::from_secs(5)));
-        meter.stop(now + Duration::from_secs(7));
-        meter.stop(now + Duration::from_secs(8));
-        assert!(!meter.resume(gib(1), now + Duration::from_secs(9)));
-        meter.flush(now + Duration::from_secs(10));
+        meter.pause_at(later(now, Duration::from_secs(2)));
+        meter.pause_at(later(now, Duration::from_secs(3)));
+        assert!(meter.resume_at(gib(1), later(now, Duration::from_secs(4))));
+        assert!(meter.resume_at(gib(1), later(now, Duration::from_secs(5))));
+        meter.stop_at(later(now, Duration::from_secs(7)));
+        meter.stop_at(later(now, Duration::from_secs(8)));
+        assert!(!meter.resume_at(gib(1), later(now, Duration::from_secs(9))));
+        meter.flush_at(later(now, Duration::from_secs(10)));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 5);
     }
@@ -212,11 +265,11 @@ mod tests {
     #[test]
     fn paused_warm_runnable_time_does_not_accrue() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+        let now = metering_time(Instant::now());
+        let meter = AgentMemoryMeter::new_at(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
-        meter.pause(now + Duration::from_secs(1));
-        meter.flush(now + Duration::from_secs(11));
+        meter.pause_at(later(now, Duration::from_secs(1)));
+        meter.flush_at(later(now, Duration::from_secs(11)));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 1);
     }
@@ -224,12 +277,12 @@ mod tests {
     #[test]
     fn growth_is_prospective() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+        let now = metering_time(Instant::now());
+        let meter = AgentMemoryMeter::new_at(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
-        meter.set_bytes(gib(2), now + Duration::from_secs(2));
+        meter.set_bytes_at(gib(2), later(now, Duration::from_secs(2)));
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
-        meter.flush(now + Duration::from_secs(5));
+        meter.flush_at(later(now, Duration::from_secs(5)));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 8);
     }
@@ -237,18 +290,19 @@ mod tests {
     #[test]
     fn fractional_remainder_crosses_short_lived_agents() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
+        let now = metering_time(Instant::now());
 
-        let first = AgentMemoryMeter::new(AgentMode::Ephemeral, gib(1), true, entry.clone(), now);
-        first.stop(now + Duration::from_millis(400));
-        let second = AgentMemoryMeter::new(
+        let first =
+            AgentMemoryMeter::new_at(AgentMode::Ephemeral, gib(1), true, entry.clone(), now);
+        first.stop_at(later(now, Duration::from_millis(400)));
+        let second = AgentMemoryMeter::new_at(
             AgentMode::Ephemeral,
             gib(1),
             true,
             entry.clone(),
-            now + Duration::from_millis(400),
+            later(now, Duration::from_millis(400)),
         );
-        second.stop(now + Duration::from_secs(1));
+        second.stop_at(later(now, Duration::from_secs(1)));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 1);
     }
@@ -256,18 +310,19 @@ mod tests {
     #[test]
     fn account_remainder_crosses_agent_modes() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
+        let now = metering_time(Instant::now());
 
-        let durable = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
-        durable.stop(now + Duration::from_millis(400));
-        let ephemeral = AgentMemoryMeter::new(
+        let durable =
+            AgentMemoryMeter::new_at(AgentMode::Durable, gib(1), true, entry.clone(), now);
+        durable.stop_at(later(now, Duration::from_millis(400)));
+        let ephemeral = AgentMemoryMeter::new_at(
             AgentMode::Ephemeral,
             gib(1),
             true,
             entry.clone(),
-            now + Duration::from_millis(400),
+            later(now, Duration::from_millis(400)),
         );
-        ephemeral.stop(now + Duration::from_secs(1));
+        ephemeral.stop_at(later(now, Duration::from_secs(1)));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 1);
@@ -276,15 +331,15 @@ mod tests {
     #[test]
     fn normal_transitions_publish_only_on_flush() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+        let now = metering_time(Instant::now());
+        let meter = AgentMemoryMeter::new_at(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
-        meter.pause(now + Duration::from_secs(2));
-        assert!(meter.resume(gib(2), now + Duration::from_secs(3)));
-        meter.set_bytes(gib(3), now + Duration::from_secs(4));
+        meter.pause_at(later(now, Duration::from_secs(2)));
+        assert!(meter.resume_at(gib(2), later(now, Duration::from_secs(3))));
+        meter.set_bytes_at(gib(3), later(now, Duration::from_secs(4)));
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
 
-        meter.flush(now + Duration::from_secs(5));
+        meter.flush_at(later(now, Duration::from_secs(5)));
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 7);
     }
 }

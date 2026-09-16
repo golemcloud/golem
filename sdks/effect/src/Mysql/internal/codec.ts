@@ -228,6 +228,7 @@ export const timestampToDate = (ts: Timestamp): Date => {
 export const dateOnlyToDate = (d: { year: number; month: number; day: number }): Date => {
   const result = new Date(0)
   result.setUTCFullYear(d.year, d.month - 1, d.day)
+  result.setUTCHours(0, 0, 0, 0)
   return result
 }
 

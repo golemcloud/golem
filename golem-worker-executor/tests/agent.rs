@@ -45,6 +45,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo_unnamed")]
     PrecompiledComponent
 );
@@ -562,6 +566,77 @@ async fn ephemeral_agent_works(
     assert_eq!(result2, "param1!");
     assert_eq!(result3, "param2!");
     assert_eq!(result4, "param2!");
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn ephemeral_agent_rejects_start_when_monthly_memory_is_exhausted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use async_trait::async_trait;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::model::MonthlyResourcePolicy;
+    use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+    use golem_worker_executor_test_utils::start_with_resource_limits;
+    use std::sync::Arc;
+
+    struct ExhaustedMonthlyMemory;
+
+    #[async_trait]
+    impl ResourceLimits for ExhaustedMonthlyMemory {
+        async fn initialize_account(
+            &self,
+            _account_id: AccountId,
+        ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+            Ok(Arc::new(AtomicResourceEntry::new_with_monthly_policy(
+                MonthlyResourcePolicy {
+                    period: AccountUsagePeriod::current(),
+                    mode: MonthlyUsageMode::HardLimit,
+                    available_fuel: u64::MAX,
+                    available_memory_gb_seconds: 0,
+                    available_memory_byte_nanoseconds_remainder: 0,
+                    available_durable_storage_byte_seconds: u64::MAX,
+                    available_durable_storage_byte_nanoseconds_remainder: 0,
+                    available_ephemeral_storage_byte_seconds: u64::MAX,
+                    available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+                },
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            )))
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let executor =
+        start_with_resource_limits(deps, &context, Arc::new(ExhaustedMonthlyMemory)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("EphemeralCounter", "monthly-memory-exhausted"),
+            "increment",
+            data_value!(),
+        )
+        .await
+        .expect_err("exhausted monthly memory must reject ephemeral startup");
+
+    assert!(
+        error.to_string().contains("monthly memory exhausted"),
+        "unexpected error: {error}"
+    );
     Ok(())
 }
 

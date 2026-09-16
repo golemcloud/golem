@@ -15,6 +15,7 @@
 use crate::config::PrecreatedPlan;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
+use golem_common::model::account_usage::{EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyPlanAmounts};
 use golem_common::model::card::owner::EmptyOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, PermissionTarget, PlanIdPattern, PlanResourcePattern, PlanVerb,
@@ -32,6 +33,8 @@ use tracing::{debug, info};
 pub enum PlanError {
     #[error("Plan not found for id {0}")]
     PlanNotFound(PlanId),
+    #[error("Invalid plan policy: {0}")]
+    InvalidPolicy(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -41,7 +44,7 @@ pub enum PlanError {
 impl SafeDisplay for PlanError {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::PlanNotFound(_) => self.to_string(),
+            Self::PlanNotFound(_) | Self::InvalidPolicy(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -64,44 +67,15 @@ impl PlanService {
         plans: &HashMap<String, PrecreatedPlan>,
     ) -> Result<(), PlanError> {
         for (name, plan) in plans {
-            let desired_plan = Plan {
-                plan_id: plan.plan_id,
-                name: plan.plan_name.clone(),
-                app_limit: plan.app_limit,
-                env_limit: plan.env_limit,
-                component_limit: plan.component_limit,
-                worker_connection_limit: plan.worker_connection_limit,
-                storage_limit: plan.storage_limit,
-                monthly_gas_limit: plan.monthly_gas_limit,
-                monthly_upload_limit: plan.monthly_upload_limit,
-                max_memory_per_worker: plan.max_memory_per_worker,
-                max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling,
-                max_memory_per_worker_user_configurable: plan
-                    .max_memory_per_worker_user_configurable,
-                monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds,
-                monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling,
-                monthly_memory_gb_seconds_user_configurable: plan
-                    .monthly_memory_gb_seconds_user_configurable,
-                max_table_elements_per_worker: plan.max_table_elements_per_worker,
-                max_disk_space_per_worker: plan.max_disk_space_per_worker,
-                max_disk_space_per_worker_ceiling: plan
-                    .resolved_max_disk_space_per_worker_ceiling(),
-                max_disk_space_per_worker_user_configurable: plan
-                    .max_disk_space_per_worker_user_configurable,
-                per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
-                per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
-                monthly_http_call_limit: plan.monthly_http_call_limit,
-                monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
-                max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
-                oplog_writes_per_second: plan.oplog_writes_per_second,
-            };
+            validate_plan_policy(plan)?;
+            let desired_record = plan_record(plan);
 
-            let needs_update = match self.get(&plan.plan_id, &AuthCtx::System).await {
-                Ok(existing_plan) => {
+            let needs_update = match self.plan_repo.get_by_id(plan.plan_id.0).await? {
+                Some(existing_plan) => {
                     // Comparing the whole record keeps reconciliation exhaustive: every
                     // field written below is also a field that can trigger an update, so
                     // a newly added plan limit is covered without touching this line.
-                    let needs_update = existing_plan != desired_plan;
+                    let needs_update = existing_plan != desired_record;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -109,15 +83,14 @@ impl PlanService {
 
                     needs_update
                 }
-                Err(PlanError::PlanNotFound(_)) => {
+                None => {
                     info!("Creating initial plan {} with id {}", name, plan.plan_id);
                     true
                 }
-                Err(other) => Err(other)?,
             };
 
             if needs_update {
-                self.create_or_update_plan(desired_plan, &AuthCtx::System)
+                self.create_or_update_plan(desired_record, &AuthCtx::System)
                     .await?;
             }
         }
@@ -126,6 +99,14 @@ impl PlanService {
     }
 
     pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {
+        Ok(self.get_record(plan_id, auth).await?.into())
+    }
+
+    pub(crate) async fn get_record(
+        &self,
+        plan_id: &PlanId,
+        auth: &AuthCtx,
+    ) -> Result<PlanRecord, PlanError> {
         authorize_plan_permission(auth, PlanVerb::View, plan_resource(*plan_id))
             .map_err(|_| PlanError::PlanNotFound(*plan_id))?;
 
@@ -137,45 +118,94 @@ impl PlanService {
             .await?
             .ok_or(PlanError::PlanNotFound(*plan_id))?;
 
-        Ok(result.into())
+        Ok(result)
     }
 
-    async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
-        authorize_plan_permission(auth, PlanVerb::Update, plan_resource(plan.plan_id))?;
+    async fn create_or_update_plan(
+        &self,
+        plan: PlanRecord,
+        auth: &AuthCtx,
+    ) -> Result<(), PlanError> {
+        authorize_plan_permission(auth, PlanVerb::Update, plan_resource(PlanId(plan.plan_id)))?;
 
-        let record: PlanRecord = PlanRecord {
-            name: plan.name.0,
-            plan_id: plan.plan_id.0,
-            max_memory_per_worker: plan.max_memory_per_worker.into(),
-            max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling.into(),
-            max_memory_per_worker_user_configurable: plan.max_memory_per_worker_user_configurable,
-            monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
-            monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling.into(),
-            monthly_memory_gb_seconds_user_configurable: plan
-                .monthly_memory_gb_seconds_user_configurable,
-            max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
-            max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
-            max_disk_space_per_worker_ceiling: plan.max_disk_space_per_worker_ceiling.into(),
-            max_disk_space_per_worker_user_configurable: plan
-                .max_disk_space_per_worker_user_configurable,
-            max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
-            total_app_count: plan.app_limit.into(),
-            total_env_count: plan.env_limit.into(),
-            total_component_count: plan.component_limit.into(),
-            total_component_storage_bytes: plan.storage_limit.into(),
-            total_worker_connection_count: plan.worker_connection_limit.into(),
-            monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
-            monthly_gas_limit: plan.monthly_gas_limit.into(),
-            per_invocation_http_call_limit: plan.per_invocation_http_call_limit.into(),
-            per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
-            monthly_http_call_limit: plan.monthly_http_call_limit.into(),
-            monthly_rpc_call_limit: plan.monthly_rpc_call_limit.into(),
-            oplog_writes_per_second: plan.oplog_writes_per_second.into(),
-        };
-
-        self.plan_repo.create_or_update(record).await?;
+        self.plan_repo.create_or_update(plan).await?;
 
         Ok(())
+    }
+}
+
+fn validate_plan_policy(plan: &PrecreatedPlan) -> Result<(), PlanError> {
+    MonthlyPlanAmounts {
+        compute_gcu: plan.monthly_compute_gcu,
+        memory_gb_seconds: plan.monthly_memory_gb_seconds,
+        durable_storage_gb_month: plan.monthly_durable_storage_gb_month,
+        ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month,
+    }
+    .resolve()
+    .map_err(|error| PlanError::InvalidPolicy(error.to_string()))?;
+
+    if plan.max_memory_per_agent > plan.max_memory_per_agent_ceiling {
+        return Err(PlanError::InvalidPolicy(
+            "maximum memory per agent default exceeds its ceiling".to_string(),
+        ));
+    }
+
+    if plan.max_storage_per_agent_enabled {
+        if plan.max_storage_per_agent == 0 {
+            return Err(PlanError::InvalidPolicy(
+                "maximum storage per agent default must be greater than zero".to_string(),
+            ));
+        }
+        if plan.max_storage_per_agent >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT {
+            return Err(PlanError::InvalidPolicy(format!(
+                "maximum storage per agent default must be below {EFFECTIVELY_UNLIMITED_STORAGE_LIMIT}"
+            )));
+        }
+        if plan.resolved_max_storage_per_agent_ceiling() >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT {
+            return Err(PlanError::InvalidPolicy(format!(
+                "maximum storage per agent ceiling must be below {EFFECTIVELY_UNLIMITED_STORAGE_LIMIT}"
+            )));
+        }
+        if plan.max_storage_per_agent > plan.resolved_max_storage_per_agent_ceiling() {
+            return Err(PlanError::InvalidPolicy(
+                "maximum storage per agent default exceeds its ceiling".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn plan_record(plan: &PrecreatedPlan) -> PlanRecord {
+    PlanRecord {
+        name: plan.plan_name.0.clone(),
+        plan_id: plan.plan_id.0,
+        max_memory_per_worker: plan.max_memory_per_agent.into(),
+        max_memory_per_worker_ceiling: plan.max_memory_per_agent_ceiling.into(),
+        max_memory_per_worker_user_configurable: plan.max_memory_per_agent_user_configurable,
+        monthly_compute_gcu: plan.monthly_compute_gcu.into(),
+        monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
+        monthly_durable_storage_gb_month: plan.monthly_durable_storage_gb_month.into(),
+        monthly_ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month.into(),
+        overage_eligible: plan.overage_eligible,
+        max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
+        max_disk_space_per_worker_enabled: plan.max_storage_per_agent_enabled,
+        max_disk_space_per_worker: plan.max_storage_per_agent.into(),
+        max_disk_space_per_worker_ceiling: plan.resolved_max_storage_per_agent_ceiling().into(),
+        max_disk_space_per_worker_user_configurable: plan.max_storage_per_agent_user_configurable,
+        max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
+        total_app_count: plan.app_limit.into(),
+        total_env_count: plan.env_limit.into(),
+        total_component_count: plan.component_limit.into(),
+        total_component_storage_bytes: plan.storage_limit.into(),
+        total_worker_connection_count: plan.worker_connection_limit.into(),
+        monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
+        monthly_gas_limit: plan.monthly_gas_limit.into(),
+        per_invocation_http_call_limit: plan.per_invocation_http_call_limit.into(),
+        per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
+        monthly_http_call_limit: plan.monthly_http_call_limit.into(),
+        monthly_rpc_call_limit: plan.monthly_rpc_call_limit.into(),
+        oplog_writes_per_second: plan.oplog_writes_per_second.into(),
     }
 }
 
@@ -193,4 +223,193 @@ fn authorize_plan_permission(
 
 fn plan_resource(plan_id: PlanId) -> PlanResourcePattern {
     PlanResourcePattern::Plan(PlanIdPattern::PlanId(plan_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RegistryServiceConfig;
+    use crate::repo::model::plan::PlanRecord;
+    use async_trait::async_trait;
+    use golem_common::model::account_usage::StorageResourceLimitValue;
+    use golem_service_base::repo::RepoResult;
+    use std::sync::Mutex;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[derive(Default)]
+    struct InMemoryPlanRepo {
+        plans: Mutex<HashMap<Uuid, PlanRecord>>,
+    }
+
+    #[async_trait]
+    impl PlanRepo for InMemoryPlanRepo {
+        async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
+            self.plans.lock().unwrap().insert(plan.plan_id, plan);
+            Ok(())
+        }
+
+        async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>> {
+            Ok(self.plans.lock().unwrap().get(&plan_id).cloned())
+        }
+
+        async fn list(&self) -> RepoResult<Vec<PlanRecord>> {
+            Ok(self.plans.lock().unwrap().values().cloned().collect())
+        }
+    }
+
+    #[test]
+    async fn initial_plan_preserves_storage_capability() {
+        let repo = Arc::new(InMemoryPlanRepo::default());
+        let service = PlanService::new(repo.clone());
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+        let plan_id = plan.plan_id;
+
+        plan.max_storage_per_agent_enabled = true;
+        plan.max_storage_per_agent = 5;
+        plan.max_storage_per_agent_ceiling = Some(20);
+        plan.max_storage_per_agent_user_configurable = true;
+        plan.monthly_compute_gcu = 2;
+        plan.monthly_memory_gb_seconds = 3;
+        plan.monthly_durable_storage_gb_month = 5;
+        plan.monthly_ephemeral_storage_gb_month = 7;
+        plan.overage_eligible = true;
+        service
+            .create_initial_plans(&HashMap::from([("test".to_string(), plan.clone())]))
+            .await
+            .unwrap();
+        let seeded = repo.get_by_id(plan_id.0).await.unwrap().unwrap();
+        assert!(seeded.max_disk_space_per_worker_enabled);
+        assert_eq!(seeded.monthly_compute_gcu.get(), 2);
+        assert_eq!(seeded.monthly_memory_gb_seconds.get(), 3);
+        assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
+        assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
+        assert!(seeded.overage_eligible);
+        let public = Plan::from(seeded);
+        assert!(public.overage_allowed_by_plan);
+        assert!(matches!(
+            public.max_storage_per_agent,
+            StorageResourceLimitValue::Finite(_)
+        ));
+        assert!(public.max_storage_per_agent_user_configurable);
+
+        plan.max_storage_per_agent_enabled = false;
+        plan.monthly_compute_gcu = 11;
+        plan.monthly_memory_gb_seconds = 13;
+        plan.monthly_durable_storage_gb_month = 17;
+        plan.monthly_ephemeral_storage_gb_month = 19;
+        plan.overage_eligible = false;
+        service
+            .create_initial_plans(&HashMap::from([("test".to_string(), plan)]))
+            .await
+            .unwrap();
+        let updated = repo.get_by_id(plan_id.0).await.unwrap().unwrap();
+        assert!(!updated.max_disk_space_per_worker_enabled);
+        assert_eq!(updated.monthly_compute_gcu.get(), 11);
+        assert_eq!(updated.monthly_memory_gb_seconds.get(), 13);
+        assert_eq!(updated.monthly_durable_storage_gb_month.get(), 17);
+        assert_eq!(updated.monthly_ephemeral_storage_gb_month.get(), 19);
+        assert!(!updated.overage_eligible);
+        let public = Plan::from(updated);
+        assert!(matches!(
+            public.max_storage_per_agent,
+            StorageResourceLimitValue::Disabled(_)
+        ));
+        assert!(matches!(
+            public.max_storage_per_agent_ceiling,
+            StorageResourceLimitValue::Disabled(_)
+        ));
+        assert!(!public.max_storage_per_agent_user_configurable);
+    }
+
+    #[test]
+    fn plan_policy_requires_coherent_memory_range() {
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+        plan.max_memory_per_agent = 11;
+        plan.max_memory_per_agent_ceiling = 10;
+
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message == "maximum memory per agent default exceeds its ceiling"
+        ));
+
+        plan.max_memory_per_agent_ceiling = 11;
+        assert!(validate_plan_policy(&plan).is_ok());
+    }
+
+    #[test]
+    fn enabled_storage_policy_must_be_finite_and_coherent() {
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+        plan.max_storage_per_agent_enabled = true;
+        plan.max_storage_per_agent = 1;
+        plan.max_storage_per_agent_ceiling = Some(1);
+        assert!(validate_plan_policy(&plan).is_ok());
+
+        plan.max_storage_per_agent = 0;
+        assert!(validate_plan_policy(&plan).is_err());
+
+        plan.max_storage_per_agent = 3;
+        plan.max_storage_per_agent_ceiling = Some(2);
+        assert!(validate_plan_policy(&plan).is_err());
+
+        plan.max_storage_per_agent = 1;
+        plan.max_storage_per_agent_ceiling = Some(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT);
+        assert!(validate_plan_policy(&plan).is_err());
+
+        plan.max_storage_per_agent = EFFECTIVELY_UNLIMITED_STORAGE_LIMIT;
+        plan.max_storage_per_agent_ceiling = Some(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT - 1);
+        assert!(validate_plan_policy(&plan).is_err());
+    }
+
+    #[test]
+    fn disabled_storage_policy_allows_internal_unlimited_values() {
+        let plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+        assert!(!plan.max_storage_per_agent_enabled);
+        assert!(validate_plan_policy(&plan).is_ok());
+    }
+
+    #[test]
+    fn monthly_plan_amounts_reject_internal_unit_overflow() {
+        use golem_common::model::account_usage::{BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU};
+
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+        plan.monthly_compute_gcu = u64::MAX / FUEL_PER_GCU + 1;
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message == "monthly compute GCU amount exceeds the supported fuel range"
+        ));
+
+        plan.monthly_compute_gcu = 0;
+        plan.monthly_durable_storage_gb_month = u64::MAX / BYTE_SECONDS_PER_GB_MONTH + 1;
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message.contains("monthly durable storage GB-month")
+        ));
+
+        plan.monthly_durable_storage_gb_month = 0;
+        plan.monthly_ephemeral_storage_gb_month = u64::MAX / BYTE_SECONDS_PER_GB_MONTH + 1;
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message.contains("monthly ephemeral storage GB-month")
+        ));
+    }
 }

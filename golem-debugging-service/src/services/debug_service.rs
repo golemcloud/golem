@@ -32,7 +32,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, AgentMetadata, OwnedAgentId};
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::services::component::ComponentService;
@@ -162,6 +162,10 @@ pub struct DebugServiceDefault {
     component_service: Arc<dyn ComponentService>,
     debug_session: Arc<dyn DebugSessions>,
     all: All<DebugContext>,
+}
+
+fn playback_reached_target(stopped_at_index: OplogIndex, target_index: OplogIndex) -> bool {
+    stopped_at_index >= target_index
 }
 
 impl DebugServiceDefault {
@@ -645,9 +649,33 @@ impl DebugService for DebugServiceDefault {
             )
             .await;
 
-        // this will fail if the worker is not currently running and do nothing.
-        // If this succeeded it means we continued from the previous oplog and only some of the log events are reemitted.
-        let incremental_playback = worker.resume_replay().await.is_ok();
+        // An unloaded worker has no invocation loop to resume, so start it below. Other failures
+        // came from the running loop and must not be mistaken for a successful restart path.
+        let incremental_playback = match worker.resume_replay().await {
+            Ok(()) => true,
+            Err(WorkerExecutorError::InvalidRequest { .. }) if !worker.is_loaded().await => false,
+            Err(
+                error @ (WorkerExecutorError::Interrupted { .. }
+                | WorkerExecutorError::InvocationFailed { .. }),
+            ) => {
+                return Err(DebugServiceError::validation_failed(
+                    vec![format!(
+                        "Playback worker {} cannot resume: {error}",
+                        owned_agent_id.agent_id
+                    )],
+                    Some(agent_id.clone()),
+                ));
+            }
+            Err(error) => {
+                return Err(DebugServiceError::internal(
+                    format!(
+                        "Failed to resume playback worker {}: {error}",
+                        owned_agent_id.agent_id
+                    ),
+                    Some(agent_id.clone()),
+                ));
+            }
+        };
 
         // the worker was not running, we need to start it so it starts replaying
         if !incremental_playback {
@@ -673,13 +701,15 @@ impl DebugService for DebugServiceDefault {
         // example a replay target inside an in-flight durable call, whose live repair is refused
         // in debug sessions). Failures at or past the target are the expected trap when playback
         // runs off the end of the recorded oplog into live mode, and stay ignored.
-        if let Err(error) = &ready_result
-            && stopped_at_index < new_target_index
-        {
+        if !playback_reached_target(stopped_at_index, new_target_index) {
+            let reason = match &ready_result {
+                Err(error) => format!(": {error}"),
+                Ok(()) => String::new(),
+            };
             return Err(DebugServiceError::validation_failed(
                 vec![format!(
-                    "Playback worker {} stopped at index {} before reaching target index {}: {}",
-                    owned_agent_id.agent_id, stopped_at_index, new_target_index, error
+                    "Playback worker {} stopped at index {} before reaching target index {}{}",
+                    owned_agent_id.agent_id, stopped_at_index, new_target_index, reason
                 )],
                 Some(agent_id.clone()),
             ));
@@ -1017,6 +1047,22 @@ mod tests {
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn playback_must_reach_its_target() {
+        assert!(!playback_reached_target(
+            OplogIndex::from_u64(4),
+            OplogIndex::from_u64(5)
+        ));
+        assert!(playback_reached_target(
+            OplogIndex::from_u64(5),
+            OplogIndex::from_u64(5)
+        ));
+        assert!(playback_reached_target(
+            OplogIndex::from_u64(6),
+            OplogIndex::from_u64(5)
+        ));
+    }
 
     #[test]
     fn debugging_requires_every_permission_in_the_legacy_alias_expansion() {

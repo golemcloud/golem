@@ -500,7 +500,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             principal,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            prepare_metered_guest_call(store, display_name).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_initialize(accessor, agent_type, input, principal)
@@ -532,7 +532,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             expected_output,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            prepare_metered_guest_call(store, display_name).await?;
             let result = if expected_output.uses_streams() {
                 let result = store
                     .as_context_mut()
@@ -577,7 +577,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            prepare_metered_guest_call(store, display_name).await?;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
                     .await;
@@ -600,7 +600,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            prepare_metered_guest_call(store, display_name).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
             })
@@ -630,7 +630,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             entries,
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            prepare_metered_guest_call(store, display_name).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_process(
@@ -680,6 +680,36 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
             .get_public_state()
             .event_service()
             .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
+    }
+}
+
+/// Rearms compute enforcement before entering an agent guest call.
+async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    display_name: &str,
+) -> Result<(), WorkerExecutorError> {
+    rearm_fuel_check(store);
+    let current_level = store.get_fuel().unwrap_or(0);
+    let agent_mode = store.data().agent_mode();
+    if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+        return Err(fuel_exhaustion_error(agent_mode, error));
+    }
+    prepare_guest_call(store, display_name).await;
+    Ok(())
+}
+
+pub(crate) fn fuel_exhaustion_error(
+    agent_mode: AgentMode,
+    error: OplogAgentError,
+) -> WorkerExecutorError {
+    match agent_mode {
+        AgentMode::Durable => WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
+        },
+        AgentMode::Ephemeral => WorkerExecutorError::InvocationFailed {
+            error,
+            stderr: String::new(),
+        },
     }
 }
 
@@ -1660,6 +1690,29 @@ mod tests {
 
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
+
+    #[test]
+    fn compute_exhaustion_maps_to_suspend_or_invocation_failure_by_agent_mode() {
+        let durable = fuel_exhaustion_error(
+            AgentMode::Durable,
+            OplogAgentError::InternalError("exhausted".to_string()),
+        );
+        assert!(matches!(
+            durable,
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(_)
+            }
+        ));
+
+        let ephemeral = fuel_exhaustion_error(
+            AgentMode::Ephemeral,
+            OplogAgentError::InternalError("exhausted".to_string()),
+        );
+        assert!(matches!(
+            ephemeral,
+            WorkerExecutorError::InvocationFailed { .. }
+        ));
+    }
 
     #[test]
     async fn live_streaming_response_is_published_exactly_once() {

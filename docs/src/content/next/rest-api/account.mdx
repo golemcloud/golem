@@ -142,31 +142,42 @@ Path|Method|Protected
 
 ```json copy
 {
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
-  "name": "string",
-  "appLimit": 0,
-  "envLimit": 0,
-  "componentLimit": 0,
-  "workerConnectionLimit": 0,
-  "storageLimit": 0,
-  "monthlyGasLimit": 0,
-  "monthlyUploadLimit": 0,
-  "maxMemoryPerWorker": 0,
-  "maxMemoryPerWorkerCeiling": 0,
-  "maxMemoryPerWorkerUserConfigurable": true,
-  "monthlyMemoryGbSeconds": 0,
-  "monthlyMemoryGbSecondsCeiling": 0,
-  "monthlyMemoryGbSecondsUserConfigurable": true,
-  "maxTableElementsPerWorker": 0,
-  "maxDiskSpacePerWorker": 0,
-  "maxDiskSpacePerWorkerCeiling": 0,
-  "maxDiskSpacePerWorkerUserConfigurable": true,
-  "perInvocationHttpCallLimit": 0,
-  "perInvocationRpcCallLimit": 0,
-  "monthlyHttpCallLimit": 0,
-  "monthlyRpcCallLimit": 0,
-  "maxConcurrentAgentsPerExecutor": 0,
-  "oplogWritesPerSecond": 0
+  "appLimit": 10,
+  "componentLimit": 100,
+  "envLimit": 40,
+  "maxConcurrentAgentsPerExecutor": 100,
+  "maxMemoryPerAgent": {
+    "type": "unlimited"
+  },
+  "maxMemoryPerAgentCeiling": {
+    "type": "unlimited"
+  },
+  "maxMemoryPerAgentUserConfigurable": false,
+  "maxStoragePerAgent": {
+    "reason": "managedFilesystemUnavailable",
+    "type": "disabled"
+  },
+  "maxStoragePerAgentCeiling": {
+    "reason": "managedFilesystemUnavailable",
+    "type": "disabled"
+  },
+  "maxStoragePerAgentUserConfigurable": false,
+  "maxTableElementsPerWorker": 16384,
+  "monthlyComputeGcu": 100,
+  "monthlyDurableStorageGbMonth": 50,
+  "monthlyEphemeralStorageGbMonth": 25,
+  "monthlyHttpCallLimit": 10000,
+  "monthlyMemoryGbSeconds": 10000,
+  "monthlyRpcCallLimit": 10000,
+  "monthlyUploadLimit": 1000000000,
+  "name": "default",
+  "oplogWritesPerSecond": 1000,
+  "overageAllowedByPlan": false,
+  "perInvocationHttpCallLimit": 1000,
+  "perInvocationRpcCallLimit": 1000,
+  "planId": "00000000-0000-0000-0000-000000000001",
+  "storageLimit": 500000000,
+  "workerConnectionLimit": 100
 }
 ```
 
@@ -262,7 +273,7 @@ ephemeral storage in GB-month using byte-seconds / (1024^3 * 730 * 3600). `asOf`
 the registry last received a usage snapshot for the period, or the response time if no
 snapshot exists. Metering status distinguishes enabled meters that measured zero from
 disabled meters. `unknown` means no usage producer has reported metering state for the
-period. Durable and ephemeral storage both reflect the shared filesystem meter.
+period. Durable and ephemeral storage both use storage metering.
 
 **Query Parameters**
 
@@ -337,25 +348,132 @@ last|integer|No|-
 ]
 ```
 
-## Get effective storage-per-agent override metadata for an account.
+## Get the current account resource policy.
 
 Path|Method|Protected
 ---|---|---
-`/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|GET|Yes
+`/v1/accounts/{account_id}/limits`|GET|Yes
+
+The policy combines Plan Row monthly amounts with current UTC-period usage and both
+per-agent safety limits. Enabled monthly dimensions report measured usage and remaining
+capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
+behavior. `unknown` means no producer has reported metering state; it does not mean disabled
+or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
+GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
+`includedAllowance`, according to the account's current usage mode.
 
 **Example Response JSON**
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "maxMemoryPerAgent": {
+    "ceiling": {
+      "type": "unlimited"
+    },
+    "effectiveValue": {
+      "type": "unlimited"
+    },
+    "planDefault": {
+      "type": "unlimited"
+    },
+    "unit": "bytes",
+    "userConfigurable": false
+  },
+  "maxStoragePerAgent": {
+    "ceiling": {
+      "type": "finite",
+      "value": 10737418240
+    },
+    "effectiveValue": {
+      "reason": "managedFilesystemUnavailable",
+      "type": "disabled"
+    },
+    "planDefault": {
+      "type": "finite",
+      "value": 1073741824
+    },
+    "unit": "bytes",
+    "userConfigurable": false
+  },
+  "monthly": {
+    "computeGcu": {
+      "allowOverageUsage": 0,
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "planAmount": 100,
+      "remaining": 75,
+      "resolvedMonthlyAmount": 100,
+      "unit": "GCU",
+      "usage": 25
+    },
+    "durableStorageGbMonth": {
+      "allowOverageUsage": 0,
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "planAmount": 50,
+      "remaining": 37.5,
+      "resolvedMonthlyAmount": 50,
+      "unit": "GB-month",
+      "usage": 12.5
+    },
+    "ephemeralStorageGbMonth": {
+      "allowOverageUsage": 0,
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "planAmount": 25,
+      "remaining": 20,
+      "resolvedMonthlyAmount": 25,
+      "unit": "GB-month",
+      "usage": 5
+    },
+    "memoryGbSeconds": {
+      "allowOverageUsage": 0,
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "planAmount": 10000,
+      "remaining": 7500,
+      "resolvedMonthlyAmount": 10000,
+      "unit": "GB-seconds",
+      "usage": 2500
+    }
+  },
+  "monthlyUsageMode": "hardLimit",
+  "overageAllowedByPlan": false
 }
 ```
 
-## Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+## Explicitly enter or leave paid-overage mode.
+
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/monthly-usage-mode`|PUT|Yes
+
+Only the account owner can enable overage, and the current Plan Row must permit it.
+Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
+Each successful transition records immutable consent history. Requests that repeat the
+current mode are rejected and do not add history.
+
+**Example Request JSON**
+```json copy
+{
+  "mode": "hardLimit"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "actorAccountId": "00000000-0000-0000-0000-000000000001",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "newMode": "hardLimit",
+  "previousMode": "allowOverage",
+  "source": "owner"
+}
+```
+
+## Set a storage-per-agent override for the authenticated account owner.
 
 Path|Method|Protected
 ---|---|---
@@ -364,8 +482,7 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
+  "value": 0
 }
 ```
 
@@ -373,10 +490,26 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "activeAdminGrant": {
+    "actorAccountId": "00000000-0000-0000-0000-000000000002",
+    "dimension": "maxStoragePerAgent",
+    "grantedAt": "2023-11-14T22:13:20+00:00",
+    "reason": "support",
+    "value": 2147483648
+  },
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
+  "unit": "bytes",
   "userConfigurable": true
 }
 ```
@@ -391,33 +524,31 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "activeAdminGrant": {
+    "actorAccountId": "00000000-0000-0000-0000-000000000002",
+    "dimension": "maxStoragePerAgent",
+    "grantedAt": "2023-11-14T22:13:20+00:00",
+    "reason": "support",
+    "value": 2147483648
+  },
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
+  "unit": "bytes",
   "userConfigurable": true
 }
 ```
 
-## Get the effective maximum linear memory per agent.
-
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|GET|Yes
-
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
-}
-```
-
-## Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+## Set the maximum linear memory per agent for the authenticated account owner.
 
 Path|Method|Protected
 ---|---|---
@@ -426,8 +557,7 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
+  "value": 0
 }
 ```
 
@@ -435,10 +565,26 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "activeAdminGrant": {
+    "actorAccountId": "00000000-0000-0000-0000-000000000002",
+    "dimension": "maxMemoryPerAgent",
+    "grantedAt": "2023-11-14T22:13:20+00:00",
+    "reason": "support",
+    "value": 2147483648
+  },
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
+  "unit": "bytes",
   "userConfigurable": true
 }
 ```
@@ -453,43 +599,44 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "activeAdminGrant": {
+    "actorAccountId": "00000000-0000-0000-0000-000000000002",
+    "dimension": "maxMemoryPerAgent",
+    "grantedAt": "2023-11-14T22:13:20+00:00",
+    "reason": "support",
+    "value": 2147483648
+  },
+  "ceiling": {
+    "type": "finite",
+    "value": 10737418240
+  },
+  "effectiveValue": {
+    "type": "finite",
+    "value": 2147483648
+  },
+  "planDefault": {
+    "type": "finite",
+    "value": 1073741824
+  },
+  "unit": "bytes",
   "userConfigurable": true
 }
 ```
 
-## Get the effective monthly memory GB-seconds allowance.
+## Grant an account additional resources.
 
 Path|Method|Protected
 ---|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|GET|Yes
+`/v1/accounts/{account_id}/resource-grants/{dimension}`|PUT|Yes
 
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
-}
-```
-
-## Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
-
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|PUT|Yes
+This operation requires an administrator token. Promotional grants require a future
+expiry. Grants do not change the account's paid-overage consent.
 
 **Example Request JSON**
 ```json copy
 {
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
+  "reason": "support",
+  "value": 10
 }
 ```
 
@@ -497,29 +644,41 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "actorAccountId": "00000000-0000-0000-0000-000000000002",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "dimension": "monthlyComputeGcu",
+  "eventType": "override_granted",
+  "newValue": {
+    "type": "finite",
+    "value": 10
+  },
+  "oldValue": 5,
+  "reason": "support"
 }
 ```
 
-## Clear the monthly memory GB-seconds allowance override.
+## Clear an active admin resource grant.
 
 Path|Method|Protected
 ---|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|DELETE|Yes
+`/v1/accounts/{account_id}/resource-grants/{dimension}`|DELETE|Yes
 
 **Example Response JSON**
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "actorAccountId": "00000000-0000-0000-0000-000000000002",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "dimension": "monthlyComputeGcu",
+  "eventType": "override_cleared",
+  "newValue": {
+    "type": "finite",
+    "value": 5
+  },
+  "oldValue": 10,
+  "reason": "support"
 }
 ```
 

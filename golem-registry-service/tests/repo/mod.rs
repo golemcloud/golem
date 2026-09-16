@@ -181,10 +181,13 @@ impl Deps {
                 max_memory_per_worker: 4000.into(),
                 max_memory_per_worker_ceiling: u64::MAX.into(),
                 max_memory_per_worker_user_configurable: true,
+                monthly_compute_gcu: 2.into(),
                 monthly_memory_gb_seconds: 6000.into(),
-                monthly_memory_gb_seconds_ceiling: u64::MAX.into(),
-                monthly_memory_gb_seconds_user_configurable: true,
+                monthly_durable_storage_gb_month: 3.into(),
+                monthly_ephemeral_storage_gb_month: 4.into(),
+                overage_eligible: false,
                 max_table_elements_per_worker: 16384.into(),
+                max_disk_space_per_worker_enabled: true,
                 max_disk_space_per_worker: 1073741824.into(),
                 max_disk_space_per_worker_ceiling: 1073741824.into(),
                 max_disk_space_per_worker_user_configurable: false,
@@ -205,6 +208,13 @@ impl Deps {
 
     pub fn account_usage_service(&self) -> AccountUsageService {
         AccountUsageService::new(self.account_usage_repo.clone(), self.account_service())
+    }
+
+    pub fn plan_service(&self) -> PlanService {
+        match &self.test_db {
+            TestDb::Postgres(pool) => PlanService::new(Arc::new(DbPlanRepo::new(pool.clone()))),
+            TestDb::Sqlite(pool) => PlanService::new(Arc::new(DbPlanRepo::new(pool.clone()))),
+        }
     }
 
     pub fn account_service(&self) -> Arc<AccountService> {

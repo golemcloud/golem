@@ -1,8 +1,12 @@
 use super::*;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use chrono::TimeZone;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
+use golem_common::model::account_usage::MonthlyUsageMode;
 use golem_common::model::component::ComponentId;
+use golem_service_base::model::MonthlyResourcePolicy;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -12,8 +16,15 @@ use uuid::Uuid;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
+fn ordinary_utc() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2030, 6, 15, 12, 0, 0)
+        .single()
+        .unwrap()
+}
+
 struct TestClock {
     base: Instant,
+    base_utc: DateTime<Utc>,
     offset_nanos: AtomicU64,
     sleep_deadline_nanos: AtomicU64,
     changed: tokio::sync::Notify,
@@ -21,8 +32,13 @@ struct TestClock {
 
 impl TestClock {
     fn new(base: Instant) -> Arc<Self> {
+        Self::new_at(base, ordinary_utc())
+    }
+
+    fn new_at(base: Instant, base_utc: DateTime<Utc>) -> Arc<Self> {
         Arc::new(Self {
             base,
+            base_utc,
             offset_nanos: AtomicU64::new(0),
             sleep_deadline_nanos: AtomicU64::new(u64::MAX),
             changed: tokio::sync::Notify::new(),
@@ -53,6 +69,16 @@ impl TestClock {
 impl MeteringClock for TestClock {
     fn now(&self) -> Instant {
         self.base + Duration::from_nanos(self.offset_nanos.load(Ordering::Acquire))
+    }
+
+    fn utc_now(&self) -> DateTime<Utc> {
+        self.base_utc
+            + chrono::Duration::nanoseconds(
+                self.offset_nanos
+                    .load(Ordering::Acquire)
+                    .try_into()
+                    .unwrap(),
+            )
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -166,11 +192,44 @@ fn configured_account(
     memory_metering: bool,
     now: Instant,
 ) -> (ResourceUsageAccount, LinearMemoryTracker) {
+    configured_account_at(
+        entry,
+        memory_bytes,
+        memory_metering,
+        MeteringTime {
+            instant: now,
+            utc: ordinary_utc(),
+        },
+    )
+}
+
+fn configured_account_at(
+    entry: &Arc<AtomicResourceEntry>,
+    memory_bytes: u64,
+    memory_metering: bool,
+    now: MeteringTime,
+) -> (ResourceUsageAccount, LinearMemoryTracker) {
+    configured_account_at_mode(
+        entry,
+        memory_bytes,
+        memory_metering,
+        AgentMode::Durable,
+        now,
+    )
+}
+
+fn configured_account_at_mode(
+    entry: &Arc<AtomicResourceEntry>,
+    memory_bytes: u64,
+    memory_metering: bool,
+    mode: AgentMode,
+    now: MeteringTime,
+) -> (ResourceUsageAccount, LinearMemoryTracker) {
     let memory = if memory_metering {
-        LinearMemoryTracker::new(
+        LinearMemoryTracker::new_at(
             memory_bytes,
             memory_bytes,
-            AgentMode::Durable,
+            mode,
             false,
             entry.clone(),
             Arc::new(Mutex::new(MemoryGrant::inert(0))),
@@ -180,7 +239,7 @@ fn configured_account(
         LinearMemoryTracker::new_with_metering(
             memory_bytes,
             memory_bytes,
-            AgentMode::Durable,
+            mode,
             false,
             entry.clone(),
             Arc::new(Mutex::new(MemoryGrant::inert(0))),
@@ -188,7 +247,7 @@ fn configured_account(
         )
     };
     (
-        ResourceUsageAccount::new(AgentMode::Durable, memory.clone(), entry.clone()),
+        ResourceUsageAccount::new(mode, memory.clone(), entry.clone()),
         memory,
     )
 }
@@ -199,7 +258,18 @@ fn meter(
     entry: &Arc<AtomicResourceEntry>,
     memory_bytes: u64,
 ) -> (ResourceUsageMeter, LinearMemoryTracker) {
-    let (account, memory) = configured_account(entry, memory_bytes, true, clock.base);
+    meter_for_mode(reader, clock, entry, memory_bytes, AgentMode::Durable)
+}
+
+fn meter_for_mode(
+    reader: Arc<ScriptedUsageReader>,
+    clock: Arc<TestClock>,
+    entry: &Arc<AtomicResourceEntry>,
+    memory_bytes: u64,
+    mode: AgentMode,
+) -> (ResourceUsageMeter, LinearMemoryTracker) {
+    let (account, memory) =
+        configured_account_at_mode(entry, memory_bytes, true, mode, clock.time());
     let clock_trait: Arc<dyn MeteringClock> = clock;
     let meter = create_configured_meter_with_clock(
         ResourceUsageMeteringConfig {
@@ -280,40 +350,51 @@ async fn wait_for_active_observation(window: &ResourceUsageMeteringWindow) {
 }
 
 #[test]
-fn deployment_switches_construct_only_enabled_storage_state() {
-    for memory in [false, true] {
-        for filesystem in [false, true] {
-            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
-            let (account, tracker) = configured_account(&entry, GIB, memory, Instant::now());
-            let constructions = Arc::new(AtomicUsize::new(0));
-            let factory_constructions = Arc::clone(&constructions);
-            let reader = ScriptedUsageReader::new(Vec::new());
-            let meter = create_configured_meter(
-                ResourceUsageMeteringConfig {
-                    compute: false,
-                    memory,
-                    filesystem,
-                },
-                move || {
-                    factory_constructions.fetch_add(1, Ordering::AcqRel);
-                    FilesystemUsageSource::scripted(reader)
-                },
-                account,
-            );
+async fn deployment_switches_construct_only_enabled_byte_time_state_in_all_combinations() {
+    for compute in [false, true] {
+        for memory in [false, true] {
+            for filesystem in [false, true] {
+                let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+                let (account, tracker) = configured_account(&entry, GIB, memory, Instant::now());
+                let constructions = Arc::new(AtomicUsize::new(0));
+                let factory_constructions = Arc::clone(&constructions);
+                let reader = ScriptedUsageReader::new(Vec::new());
+                let meter = create_configured_meter(
+                    ResourceUsageMeteringConfig {
+                        compute,
+                        memory,
+                        filesystem,
+                    },
+                    move || {
+                        factory_constructions.fetch_add(1, Ordering::AcqRel);
+                        FilesystemUsageSource::scripted(reader)
+                    },
+                    account,
+                );
 
-            assert_eq!(meter.shared.is_some(), memory || filesystem);
-            assert_eq!(tracker.meter_if_enabled().is_some(), memory);
-            assert_eq!(
-                meter
-                    .shared
-                    .as_ref()
-                    .is_some_and(|shared| shared.observation_lane.is_some()),
-                filesystem
-            );
-            assert_eq!(
-                constructions.load(Ordering::Acquire),
-                usize::from(filesystem)
-            );
+                assert_eq!(meter.shared.is_some(), memory || filesystem);
+                assert_eq!(tracker.meter_if_enabled().is_some(), memory);
+                assert_eq!(
+                    meter
+                        .shared
+                        .as_ref()
+                        .is_some_and(|shared| shared.observation_lane.is_some()),
+                    filesystem
+                );
+                assert_eq!(
+                    constructions.load(Ordering::Acquire),
+                    usize::from(filesystem)
+                );
+                if !compute && !memory && !filesystem {
+                    let (_, _, permit) = permit(&entry).await;
+                    let window = open_window(&meter, permit).await.unwrap();
+                    assert!(window.shared.is_none());
+                    close_window(window, Instant::now() + Duration::from_secs(1))
+                        .await
+                        .unwrap();
+                    assert_eq!(constructions.load(Ordering::Acquire), 0);
+                }
+            }
         }
     }
 }
@@ -599,13 +680,16 @@ async fn retry_backoff_uses_the_full_capped_sequence() {
 
 #[test]
 fn scheduler_staleness_caps_accrual_at_one_second() {
-    let now = Instant::now();
+    let now = MeteringTime {
+        instant: Instant::now(),
+        utc: ordinary_utc(),
+    };
     let mut storage = StorageState::new(now);
     storage.accept(100, now);
 
-    storage.accrue_until(now + Duration::from_secs(3), None);
+    storage.accrue_until(now.at_instant(now.instant + Duration::from_secs(3)), None);
 
-    assert_eq!(storage.accumulator.take_settlement().units, 100);
+    assert_eq!(storage.accumulator.take_settlements()[0].usage.units, 100);
     assert_eq!(storage.level, None);
 }
 
@@ -699,6 +783,231 @@ async fn account_batch_flushes_active_memory_and_storage_without_close_duplicati
         .unwrap();
     assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
     assert_eq!(entry.durable_byte_seconds_delta(), 0);
+}
+
+#[test]
+#[timeout("5s")]
+async fn active_memory_and_storage_are_split_at_the_utc_month_boundary() {
+    let now = Instant::now();
+    let base_utc = Utc
+        .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
+        .single()
+        .unwrap()
+        + chrono::Duration::milliseconds(500);
+    let clock = TestClock::new_at(now, base_utc);
+    let reader = ScriptedUsageReader::new(vec![ObservationGate::ready(authoritative(100))]);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+    let (meter, _) = meter(reader.clone(), clock.clone(), &entry, GIB);
+    let (_, _, permit) = permit(&entry).await;
+    let window = open_window(&meter, permit).await.unwrap();
+    wait_for_calls(&reader, 1).await;
+    wait_for_observations_to_finish(&reader).await;
+    wait_for_observation_state(&window).await;
+    stop_periodic_sampling(&window);
+
+    clock.set(Duration::from_secs(1)).await;
+    meter.flush(clock.now());
+
+    let february_period = AccountUsagePeriod {
+        year: 2030,
+        month: 2,
+    };
+    let january = entry.capture_usage_update_at_for_test(february_period);
+    let january_remainder = entry.capture_usage_update_at_for_test(february_period);
+    assert_eq!(
+        (
+            january.period,
+            january.durable_storage_byte_seconds_delta,
+            january.durable_storage_byte_nanoseconds_remainder,
+        ),
+        (
+            AccountUsagePeriod {
+                year: 2030,
+                month: 1,
+            },
+            50,
+            0,
+        )
+    );
+    assert_eq!(
+        (
+            january_remainder.period,
+            january_remainder.memory_gb_seconds_delta,
+            january_remainder.memory_byte_nanoseconds_remainder,
+        ),
+        (
+            AccountUsagePeriod {
+                year: 2030,
+                month: 1,
+            },
+            0,
+            (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64,
+        )
+    );
+
+    let march = AccountUsagePeriod {
+        year: 2030,
+        month: 3,
+    };
+    let february = entry.capture_usage_update_at_for_test(march);
+    let february_remainder = entry.capture_usage_update_at_for_test(march);
+    assert_eq!(february.period, february_period);
+    assert_eq!(february.memory_gb_seconds_delta, 0);
+    assert_eq!(february.durable_storage_byte_seconds_delta, 50);
+    assert_eq!(february.memory_byte_nanoseconds_remainder, 0);
+    assert_eq!(february.durable_storage_byte_nanoseconds_remainder, 0);
+    assert_eq!(february_remainder.period, february_period);
+    assert_eq!(february_remainder.memory_gb_seconds_delta, 0);
+    assert_eq!(
+        february_remainder.memory_byte_nanoseconds_remainder,
+        (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+    );
+
+    drop(window);
+}
+
+#[test]
+#[timeout("5s")]
+async fn ephemeral_meter_rollover_keeps_storage_separate_and_recovers_hard_limit() {
+    let now = Instant::now();
+    let january_period = AccountUsagePeriod {
+        year: 2030,
+        month: 1,
+    };
+    let february_period = AccountUsagePeriod {
+        year: 2030,
+        month: 2,
+    };
+    let base_utc = Utc
+        .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
+        .single()
+        .unwrap()
+        + chrono::Duration::milliseconds(500);
+    let clock = TestClock::new_at(now, base_utc);
+    let reader = ScriptedUsageReader::new(vec![ObservationGate::ready(authoritative(100))]);
+    let entry = Arc::new(AtomicResourceEntry::new_with_monthly_policy(
+        MonthlyResourcePolicy {
+            period: january_period,
+            mode: MonthlyUsageMode::HardLimit,
+            available_fuel: u64::MAX,
+            available_memory_gb_seconds: 0,
+            available_memory_byte_nanoseconds_remainder: (BYTE_NANOSECONDS_PER_GB_SECOND / 2)
+                as u64,
+            available_durable_storage_byte_seconds: u64::MAX,
+            available_durable_storage_byte_nanoseconds_remainder: 0,
+            available_ephemeral_storage_byte_seconds: 50,
+            available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+        },
+        usize::MAX,
+        usize::MAX,
+        u64::MAX,
+        AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+    ));
+    let (meter, _) = meter_for_mode(
+        reader.clone(),
+        clock.clone(),
+        &entry,
+        GIB,
+        AgentMode::Ephemeral,
+    );
+    let (_, _, permit) = permit(&entry).await;
+    let window = open_window(&meter, permit).await.unwrap();
+    wait_for_calls(&reader, 1).await;
+    wait_for_observations_to_finish(&reader).await;
+    wait_for_observation_state(&window).await;
+    stop_periodic_sampling(&window);
+
+    clock.set(Duration::from_secs(1)).await;
+    meter.flush(clock.now());
+
+    assert_eq!(
+        entry.monthly_memory_and_storage_capacity(AgentMode::Ephemeral),
+        Err(crate::services::resource_limits::MonthlyResourceExhaustion::Memory)
+    );
+    assert!(entry.apply_monthly_snapshot_for_test(
+        1,
+        MonthlyResourcePolicy {
+            period: february_period,
+            mode: MonthlyUsageMode::HardLimit,
+            available_fuel: u64::MAX,
+            available_memory_gb_seconds: 1,
+            available_memory_byte_nanoseconds_remainder: 0,
+            available_durable_storage_byte_seconds: u64::MAX,
+            available_durable_storage_byte_nanoseconds_remainder: 0,
+            available_ephemeral_storage_byte_seconds: 100,
+            available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+        },
+        0,
+    ));
+    assert_eq!(
+        entry.monthly_memory_and_storage_capacity(AgentMode::Ephemeral),
+        Ok(())
+    );
+
+    let january = entry.capture_usage_update_at_for_test(february_period);
+    let january_remainder = entry.capture_usage_update_at_for_test(february_period);
+    assert_eq!(january.period, january_period);
+    assert_eq!(january.durable_storage_byte_seconds_delta, 0);
+    assert_eq!(january.ephemeral_storage_byte_seconds_delta, 50);
+    assert_eq!(january_remainder.period, january_period);
+    assert_eq!(
+        january_remainder.memory_byte_nanoseconds_remainder,
+        (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+    );
+
+    let march = AccountUsagePeriod {
+        year: 2030,
+        month: 3,
+    };
+    let february = entry.capture_usage_update_at_for_test(march);
+    let february_remainder = entry.capture_usage_update_at_for_test(march);
+    assert_eq!(february.period, february_period);
+    assert_eq!(february.durable_storage_byte_seconds_delta, 0);
+    assert_eq!(february.ephemeral_storage_byte_seconds_delta, 50);
+    assert_eq!(february_remainder.period, february_period);
+    assert_eq!(
+        february_remainder.memory_byte_nanoseconds_remainder,
+        (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+    );
+
+    drop(window);
+}
+
+#[test]
+#[timeout("5s")]
+async fn account_batch_combines_fractional_memory_from_active_agents() {
+    let now = Instant::now();
+    let clock = TestClock::new(now);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 2));
+    let config = ResourceUsageMeteringConfig {
+        compute: false,
+        memory: true,
+        filesystem: false,
+    };
+    let (first_account, _) = configured_account(&entry, GIB, true, now);
+    let (second_account, _) = configured_account(&entry, GIB, true, now);
+    let first = create_configured_meter_with_clock(
+        config,
+        || unreachable!("filesystem metering is disabled"),
+        first_account,
+        clock.clone(),
+    );
+    let second = create_configured_meter_with_clock(
+        config,
+        || unreachable!("filesystem metering is disabled"),
+        second_account,
+        clock.clone(),
+    );
+    let (_, _, first_permit) = permit(&entry).await;
+    let (_, _, second_permit) = permit(&entry).await;
+    let first_window = open_window(&first, first_permit).await.unwrap();
+    let second_window = open_window(&second, second_permit).await.unwrap();
+
+    clock.set(Duration::from_millis(600)).await;
+    assert_eq!(entry.capture_byte_time_usage_for_test(), (1, 0));
+
+    drop(first_window);
+    drop(second_window);
 }
 
 #[test]

@@ -480,6 +480,16 @@ impl Services {
             });
         }
 
+        {
+            let cleanup_repo = repos.account_resource_override_repo.clone();
+            let cleanup_interval = config.resource_grants.cleanup_interval;
+            join_set.spawn(async move {
+                cleanup_repo
+                    .run_admin_grant_cleanup_loop(cleanup_interval)
+                    .await
+            });
+        }
+
         crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,

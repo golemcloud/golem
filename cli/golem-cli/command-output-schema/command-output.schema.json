@@ -386,7 +386,7 @@
     },
     "account.limits.show": {
       "type": "object",
-      "description": "Single structured output document emitted by account storage and memory limit commands.",
+      "description": "Single structured output document containing monthly resource policy and per-agent storage and memory limits.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account limits show",
       "x-golem-commands": [
@@ -396,41 +396,36 @@
       ],
       "required": [
         "$type",
-        "effectiveValue",
-        "planDefault",
-        "overrideValue",
-        "ceiling",
-        "userConfigurable",
-        "maxMemoryPerAgent",
-        "monthlyMemoryGbSeconds"
+        "accountId",
+        "monthlyUsageMode",
+        "overageAllowedByPlan",
+        "monthly",
+        "maxStoragePerAgent",
+        "maxMemoryPerAgent"
       ],
       "properties": {
         "$type": {
           "const": "account.limits.show"
         },
-        "effectiveValue": {
-          "type": "integer",
-          "minimum": 0
+        "accountId": {
+          "type": "string"
         },
-        "planDefault": {
-          "type": "integer",
-          "minimum": 0
+        "monthlyUsageMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
         },
-        "overrideValue": {
-          "type": ["integer", "null"],
-          "minimum": 0
-        },
-        "ceiling": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "userConfigurable": {
+        "overageAllowedByPlan": {
           "type": "boolean"
         },
-        "maxMemoryPerAgent": {
-          "$ref": "#/definitions/MemoryLimit"
+        "latestOwnerTransition": {
+          "$ref": "#/definitions/MonthlyUsageModeTransition"
         },
-        "monthlyMemoryGbSeconds": {
+        "monthly": {
+          "$ref": "#/definitions/MonthlyResourceLimits"
+        },
+        "maxStoragePerAgent": {
+          "$ref": "#/definitions/StorageLimit"
+        },
+        "maxMemoryPerAgent": {
           "$ref": "#/definitions/MemoryLimit"
         }
       },
@@ -802,7 +797,7 @@
     },
     "AccountUsageMetering": {
       "type": "object",
-      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use the filesystem meter.",
+      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use storage metering.",
       "required": [
         "compute",
         "memory",
@@ -852,37 +847,363 @@
       },
       "additionalProperties": false
     },
+    "MonthlyResourceLimits": {
+      "type": "object",
+      "required": [
+        "computeGcu",
+        "memoryGbSeconds",
+        "durableStorageGbMonth",
+        "ephemeralStorageGbMonth"
+      ],
+      "properties": {
+        "computeGcu": {
+          "$ref": "#/definitions/MonthlyComputeLimit"
+        },
+        "memoryGbSeconds": {
+          "$ref": "#/definitions/MonthlyMemoryLimit"
+        },
+        "durableStorageGbMonth": {
+          "$ref": "#/definitions/MonthlyStorageLimit"
+        },
+        "ephemeralStorageGbMonth": {
+          "$ref": "#/definitions/MonthlyStorageLimit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyComputeLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "number",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GCU"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyMemoryLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GB-seconds"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyStorageLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "planAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "resolvedMonthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "number",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "allowOverageUsage": {
+          "description": "Usage above the applied revision's resolved allowance that accrued with overage enabled.",
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GB-month"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyLimitBehavior": {
+      "type": "string",
+      "enum": ["hardLimit", "includedAllowance"]
+    },
+    "AdminResourceGrant": {
+      "type": "object",
+      "required": [
+        "dimension",
+        "value",
+        "reason",
+        "actorAccountId",
+        "grantedAt"
+      ],
+      "properties": {
+        "dimension": {
+          "$ref": "#/definitions/AdminResourceGrantDimension"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "$ref": "#/definitions/AdminResourceGrantReason"
+        },
+        "actorAccountId": {
+          "type": "string"
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdminResourceGrantDimension": {
+      "type": "string",
+      "enum": [
+        "monthlyComputeGcu",
+        "monthlyMemoryGbSeconds",
+        "monthlyDurableStorageGbMonth",
+        "monthlyEphemeralStorageGbMonth",
+        "maxMemoryPerAgent",
+        "maxStoragePerAgent"
+      ]
+    },
+    "AdminResourceGrantReason": {
+      "type": "string",
+      "enum": [
+        "promotional",
+        "support"
+      ]
+    },
+    "MonthlyUsageMode": {
+      "type": "string",
+      "enum": ["hardLimit", "allowOverage"]
+    },
+    "MonthlyUsageModeTransitionSource": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "administrator",
+        "planEligibilityRemoved",
+        "ineligiblePlanAssigned"
+      ]
+    },
+    "MonthlyUsageModeTransition": {
+      "type": "object",
+      "required": [
+        "actorAccountId",
+        "changedAt",
+        "source",
+        "previousMode",
+        "newMode"
+      ],
+      "properties": {
+        "actorAccountId": {
+          "type": "string"
+        },
+        "changedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "$ref": "#/definitions/MonthlyUsageModeTransitionSource"
+        },
+        "previousMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
+        },
+        "newMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
+        }
+      },
+      "additionalProperties": false
+    },
     "MemoryLimit": {
       "type": "object",
       "required": [
         "effectiveValue",
         "planDefault",
-        "overrideValue",
         "ceiling",
+        "unit",
         "userConfigurable"
       ],
       "properties": {
         "effectiveValue": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "planDefault": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "overrideValue": {
-          "type": ["integer", "null"],
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
         },
         "ceiling": {
-          "type": "integer",
-          "minimum": 0
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        "unit": {
+          "const": "bytes"
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
         },
         "userConfigurable": {
           "type": "boolean"
         }
       },
       "additionalProperties": false
+    },
+    "StorageLimit": {
+      "type": "object",
+      "required": [
+        "effectiveValue",
+        "planDefault",
+        "ceiling",
+        "unit",
+        "userConfigurable"
+      ],
+      "properties": {
+        "effectiveValue": {
+          "$ref": "#/definitions/StorageResourceLimitValue"
+        },
+        "planDefault": {
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        "overrideValue": {
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        "ceiling": {
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        "unit": {
+          "const": "bytes"
+        },
+        "activeAdminGrant": {
+          "$ref": "#/definitions/AdminResourceGrant"
+        },
+        "userConfigurable": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceLimitValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": {
+              "const": "finite"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "const": "unlimited"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "StorageResourceLimitValue": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/ResourceLimitValue"
+        },
+        {
+          "type": "object",
+          "required": ["type", "reason"],
+          "properties": {
+            "type": {
+              "const": "disabled"
+            },
+            "reason": {
+              "const": "managedFilesystemUnavailable"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "PermissionShare": {
       "type": "object",

@@ -293,7 +293,6 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-
 ## Generated from example config: default-debug-config
 # cors_origin_regex = "https://*.golem.cloud"
 # http_address = "0.0.0.0"

@@ -208,9 +208,27 @@ impl RegistryServiceGrpcApi {
             .into_iter()
             .map(|u| {
                 let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
+                let period = u.period.ok_or("missing period field")?;
+                if chrono::NaiveDate::from_ymd_opt(period.year, period.month, 1).is_none() {
+                    return Err(GrpcApiError::from(format!(
+                        "invalid account usage period: {:04}-{:02}",
+                        period.year, period.month
+                    )));
+                }
                 Ok::<_, GrpcApiError>((
                     account_id,
                     ResourceUsageUpdate {
+                        period: golem_common::model::account_usage::AccountUsagePeriod {
+                            year: period.year,
+                            month: period.month,
+                        },
+                        monthly_usage_mode_revision: u.monthly_usage_mode_revision,
+                        monthly_policy_revision: u.monthly_policy_revision,
+                        memory_byte_nanoseconds_remainder: u.memory_byte_nanoseconds_remainder,
+                        durable_storage_byte_nanoseconds_remainder: u
+                            .durable_storage_byte_nanoseconds_remainder,
+                        ephemeral_storage_byte_nanoseconds_remainder: u
+                            .ephemeral_storage_byte_nanoseconds_remainder,
                         fuel_delta: u.fuel_delta,
                         http_call_count_delta: u.http_call_count_delta,
                         rpc_call_count_delta: u.rpc_call_count_delta,
