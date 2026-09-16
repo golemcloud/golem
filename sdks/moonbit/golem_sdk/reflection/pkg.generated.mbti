@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk/reflection"
 
 import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/agent/host",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
@@ -49,20 +50,33 @@ pub(all) struct AgentType {
   implemented_by : @types.ComponentId
   constructor_input : SchemaRef
   methods : Array[AgentMethod]
+  config : Array[ReflectedConfigDeclaration]
 } derive(Eq, @debug.Debug)
 pub fn AgentType::agent_id_json(Self, Json, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn AgentType::agent_id_value(Self, @schema_model.SchemaValue, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn AgentType::ephemeral_json(Self, Json) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_json_with_config(Self, Json, @types.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_value_with_config(Self, @schema_model.SchemaValue, @types.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::find_method(Self, String) -> AgentMethod?
 pub fn AgentType::get_json(Self, Json) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_phantom_json_with_config(Self, Json, @types.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_phantom_value_with_config(Self, @schema_model.SchemaValue, @types.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::get_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::new_phantom_json(Self, Json) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::new_phantom_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::new_phantom_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::new_phantom_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::pack_config_json(Self, Array[ReflectedConfigJsonValue]) -> Array[@common.TypedAgentConfigValue] raise ReflectError
 pub fn AgentType::resume_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::resume_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::validate_config_values(Self, Array[ReflectedConfigValue]) -> Array[@common.TypedAgentConfigValue] raise ReflectError
 
 pub(all) struct CallerCodecClient {
   reusable_identity : ParsedAgentId?
@@ -141,6 +155,22 @@ pub fn ReflectedAgentClient::schedule_json(Self, @system-clock.Instant, String, 
 pub fn ReflectedAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
 pub fn ReflectedAgentClient::trigger_json(Self, String, Json) -> InvocationMetadata raise ReflectError
 pub fn ReflectedAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
+
+pub(all) struct ReflectedConfigDeclaration {
+  path : Array[String]
+  source : @common.AgentConfigSource
+  schema : SchemaRef
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReflectedConfigJsonValue {
+  path : Array[String]
+  value : Json
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReflectedConfigValue {
+  path : Array[String]
+  value : @schema_model.SchemaValue
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ScheduledInvocation {
   metadata : InvocationMetadata

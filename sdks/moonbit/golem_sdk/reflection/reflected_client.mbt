@@ -9,6 +9,25 @@ pub(all) struct AgentMethod {
 } derive(Debug, Eq)
 
 ///|
+pub(all) struct ReflectedConfigDeclaration {
+  path : Array[String]
+  source : @common.AgentConfigSource
+  schema : SchemaRef
+} derive(Debug, Eq)
+
+///|
+pub(all) struct ReflectedConfigJsonValue {
+  path : Array[String]
+  value : Json
+} derive(Debug, Eq)
+
+///|
+pub(all) struct ReflectedConfigValue {
+  path : Array[String]
+  value : @model.SchemaValue
+} derive(Debug, Eq)
+
+///|
 /// An agent type discovered from the runtime registry.
 pub(all) struct AgentType {
   name : String
@@ -18,6 +37,7 @@ pub(all) struct AgentType {
   implemented_by : @types.ComponentId
   constructor_input : SchemaRef
   methods : Array[AgentMethod]
+  config : Array[ReflectedConfigDeclaration]
 } derive(Debug, Eq)
 
 ///|
@@ -105,6 +125,21 @@ fn decode_agent_type(
       output: decode_output(raw.schema, decoded, raw_method.output_schema),
     })
   }
+  let config : Array[ReflectedConfigDeclaration] = []
+  for declaration in raw.config {
+    let rooted = @model.schema_graph_from_wit({
+      ..raw.schema,
+      root: declaration.value_type,
+    }) catch {
+      error =>
+        raise Schema("failed to decode reflected config schema: \{repr(error)}")
+    }
+    config.push({
+      path: declaration.path,
+      source: declaration.source,
+      schema: SchemaRef::new(rooted),
+    })
+  }
   {
     name: raw.type_name,
     description: raw.description,
@@ -120,6 +155,7 @@ fn decode_agent_type(
       raw.constructor_.input_schema,
     ),
     methods,
+    config,
   }
 }
 
@@ -179,12 +215,202 @@ fn AgentType::client_value(
   phantom_id : @types.Uuid?,
   reusable_identity : ParsedAgentId?,
 ) -> ReflectedAgentClient raise ReflectError {
+  self.client_value_with_config(
+    constructor_value,
+    phantom_id,
+    reusable_identity,
+    [],
+  )
+}
+
+///|
+fn AgentType::client_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  phantom_id : @types.Uuid?,
+  reusable_identity : ParsedAgentId?,
+  config : Array[@common.TypedAgentConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
   {
     agent_type: self,
-    transport: Transport::create(self.name, constructor_value, phantom_id),
+    transport: Transport::create_with_config(
+      self.name,
+      constructor_value,
+      phantom_id,
+      config,
+    ),
     reusable_identity,
     phantom_id,
   }
+}
+
+///|
+pub fn AgentType::get_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  config : Array[ReflectedConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Durable else {
+    raise Identity(
+      "existing identity lookup is unavailable for ephemeral agents",
+    )
+  }
+  let overrides = self.validate_config_values(config)
+  let identity = self.agent_id_value(constructor_value)
+  self.client_value_with_config(
+    constructor_value,
+    None,
+    Some(identity),
+    overrides,
+  )
+}
+
+///|
+pub fn AgentType::get_json_with_config(
+  self : AgentType,
+  constructor_json : Json,
+  config : Array[ReflectedConfigJsonValue],
+) -> ReflectedAgentClient raise ReflectError {
+  let packed_constructor = self.constructor_input.pack_json(constructor_json)
+  guard self.mode == Durable else {
+    raise Identity(
+      "existing identity lookup is unavailable for ephemeral agents",
+    )
+  }
+  let overrides = self.pack_config_json(config)
+  let identity = self.agent_id_value(packed_constructor)
+  self.client_value_with_config(
+    packed_constructor,
+    None,
+    Some(identity),
+    overrides,
+  )
+}
+
+///|
+pub fn AgentType::get_phantom_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  phantom_id : @types.Uuid,
+  config : Array[ReflectedConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
+  let overrides = self.validate_config_values(config)
+  let identity = if self.mode == Durable {
+    Some(self.agent_id_value(constructor_value, phantom_id=Some(phantom_id)))
+  } else {
+    None
+  }
+  self.client_value_with_config(
+    constructor_value,
+    Some(phantom_id),
+    identity,
+    overrides,
+  )
+}
+
+///|
+pub fn AgentType::get_phantom_json_with_config(
+  self : AgentType,
+  constructor_json : Json,
+  phantom_id : @types.Uuid,
+  config : Array[ReflectedConfigJsonValue],
+) -> ReflectedAgentClient raise ReflectError {
+  let overrides = self.pack_config_json(config)
+  let packed_constructor = self.constructor_input.pack_json(constructor_json)
+  let identity = if self.mode == Durable {
+    Some(self.agent_id_value(packed_constructor, phantom_id=Some(phantom_id)))
+  } else {
+    None
+  }
+  self.client_value_with_config(
+    packed_constructor,
+    Some(phantom_id),
+    identity,
+    overrides,
+  )
+}
+
+///|
+pub fn AgentType::new_phantom_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  config : Array[ReflectedConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
+  let overrides = self.validate_config_values(config)
+  if self.mode == Ephemeral {
+    self.client_value_with_config(constructor_value, None, None, overrides)
+  } else {
+    let phantom_id = @apiHost.generate_idempotency_key()
+    let identity = self.agent_id_value(
+      constructor_value,
+      phantom_id=Some(phantom_id),
+    )
+    self.client_value_with_config(
+      constructor_value,
+      Some(phantom_id),
+      Some(identity),
+      overrides,
+    )
+  }
+}
+
+///|
+pub fn AgentType::new_phantom_json_with_config(
+  self : AgentType,
+  constructor_json : Json,
+  config : Array[ReflectedConfigJsonValue],
+) -> ReflectedAgentClient raise ReflectError {
+  let overrides = self.pack_config_json(config)
+  let packed_constructor = self.constructor_input.pack_json(constructor_json)
+  if self.mode == Ephemeral {
+    self.client_value_with_config(packed_constructor, None, None, overrides)
+  } else {
+    let phantom_id = @apiHost.generate_idempotency_key()
+    let identity = self.agent_id_value(
+      packed_constructor,
+      phantom_id=Some(phantom_id),
+    )
+    self.client_value_with_config(
+      packed_constructor,
+      Some(phantom_id),
+      Some(identity),
+      overrides,
+    )
+  }
+}
+
+///|
+pub fn AgentType::ephemeral_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  config : Array[ReflectedConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Ephemeral else {
+    raise Identity("ephemeral invocation is unavailable for durable agents")
+  }
+  self.client_value_with_config(
+    constructor_value,
+    None,
+    None,
+    self.validate_config_values(config),
+  )
+}
+
+///|
+pub fn AgentType::ephemeral_json_with_config(
+  self : AgentType,
+  constructor_json : Json,
+  config : Array[ReflectedConfigJsonValue],
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Ephemeral else {
+    raise Identity("ephemeral invocation is unavailable for durable agents")
+  }
+  self.client_value_with_config(
+    self.constructor_input.pack_json(constructor_json),
+    None,
+    None,
+    self.pack_config_json(config),
+  )
 }
 
 ///|
@@ -301,6 +527,46 @@ pub fn AgentType::ephemeral_phantom_json(
   self.ephemeral_phantom_value(
     self.constructor_input.pack_json(constructor_json),
     phantom_id,
+  )
+}
+
+///|
+pub fn AgentType::ephemeral_phantom_value_with_config(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  phantom_id : @types.Uuid,
+  config : Array[ReflectedConfigValue],
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Ephemeral else {
+    raise Identity(
+      "ephemeral phantom invocation is unavailable for durable agents",
+    )
+  }
+  self.client_value_with_config(
+    constructor_value,
+    Some(phantom_id),
+    None,
+    self.validate_config_values(config),
+  )
+}
+
+///|
+pub fn AgentType::ephemeral_phantom_json_with_config(
+  self : AgentType,
+  constructor_json : Json,
+  phantom_id : @types.Uuid,
+  config : Array[ReflectedConfigJsonValue],
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Ephemeral else {
+    raise Identity(
+      "ephemeral phantom invocation is unavailable for durable agents",
+    )
+  }
+  self.client_value_with_config(
+    self.constructor_input.pack_json(constructor_json),
+    Some(phantom_id),
+    None,
+    self.pack_config_json(config),
   )
 }
 
