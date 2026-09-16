@@ -61,6 +61,7 @@ pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
+pub mod worker_initialization;
 
 test_r::enable!();
 
@@ -92,6 +93,7 @@ pub fn raw_params(
 
 tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
+tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);

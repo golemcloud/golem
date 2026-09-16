@@ -144,6 +144,18 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
+shared attempt independently of request cancellation. `finish_construction` prepares resolved data
+privately; failure drains and joins attempt-owned work before returning to `Unresolved`, without
+deleting persisted data. Existing waiters receive that attempt's error; later explicit demand
+retries by reloading persisted identity and pending initialization. Local success publishes the
+resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
+run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
+acquire mutually referring cold workers on different executors, so awaiting them before publication
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
+existing-only acquisition, and reciprocal cold topologies.
+
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
 is owned by that worker: concurrent callers share its retained attempt result, a later call retries

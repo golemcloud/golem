@@ -158,7 +158,9 @@ use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
-use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
+use golem_worker_executor::worker::{
+    RetryDecision, Worker, WorkerDeletionHook, WorkerInitializationHook,
+};
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
@@ -633,6 +635,23 @@ impl TestWorkerExecutor {
 
     pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
         self.additional_test_deps.set_worker_deletion_hook(hook);
+    }
+
+    pub fn set_worker_initialization_hook(&self, hook: Arc<dyn WorkerInitializationHook>) {
+        *self
+            .additional_test_deps
+            .worker_initialization_hook
+            .lock()
+            .unwrap() = Some(hook);
+    }
+
+    pub async fn cached_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<TestWorkerCtx>>> {
+        self.additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
     }
 
     pub fn fail_snapshot_download_once(&self, agent_id: &AgentId, snapshot_index: OplogIndex) {
@@ -2234,6 +2253,16 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_deletion_hook(extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
         extra_deps.worker_deletion_hook()
+    }
+
+    fn worker_initialization_hook(
+        extra_deps: &Self::ExtraDeps,
+    ) -> Option<Arc<dyn WorkerInitializationHook>> {
+        extra_deps
+            .worker_initialization_hook
+            .lock()
+            .unwrap()
+            .clone()
     }
 
     async fn create(
@@ -4422,6 +4451,7 @@ pub struct AdditionalTestDeps {
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
+    worker_initialization_hook: Arc<Mutex<Option<Arc<dyn WorkerInitializationHook>>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -4462,6 +4492,7 @@ impl AdditionalTestDeps {
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
+            worker_initialization_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
     }

@@ -820,7 +820,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 .remove_if_cached(owned_agent_id, move |current| {
                     Arc::ptr_eq(current, &expected)
                         && Arc::strong_count(current) == 3
-                        && current.primary.is_unresolved()
+                        && current.primary.can_discard_unresolved()
                 })
                 .await;
         }
@@ -1026,6 +1026,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .collect()
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn evict_unloaded_workers_for_test(&self) {
+        evict_expired_unloaded_agents(&self.agents, &self.card_interest_index, Duration::ZERO)
+            .await;
+    }
+
     /// Interrupts and unloads all in-memory workers whose environment matches
     /// `environment_id`.  Called when the environment is deleted so that
     /// running workers stop promptly.
@@ -1169,7 +1175,7 @@ async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
                 .remove_if_cached_older_than(&owned_agent_id, ttl, |current| {
                     Arc::ptr_eq(current, &active_agent)
                         && Arc::strong_count(current) == 2
-                        && current.primary.is_unresolved()
+                        && current.primary.can_discard_unresolved()
                 })
                 .await;
             continue;
