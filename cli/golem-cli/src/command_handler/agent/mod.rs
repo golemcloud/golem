@@ -2539,7 +2539,9 @@ impl AgentCommandHandler {
 
         let command = render_revert_command(
             &crate::command_name(),
-            &self.ctx.profile_name().0,
+            self.ctx
+                .explicit_profile_name()
+                .map(|profile_name| profile_name.0.as_str()),
             self.ctx.global_environment_selector(),
             agent_id_match.environment_reference(),
             &agent_id_match.agent_id,
@@ -3149,7 +3151,7 @@ fn all_modes_filter() -> AgentFilter {
 
 fn render_revert_command(
     executable: &str,
-    profile_name: &str,
+    explicit_profile_name: Option<&str>,
     global_environment_selector: Option<&GlobalEnvironmentSelector>,
     matched_environment_reference: Option<&EnvironmentReference>,
     agent_id: &RawAgentId,
@@ -3160,11 +3162,10 @@ fn render_revert_command(
             .into_owned()
     }
 
-    let mut args = vec![
-        quote(executable),
-        "--profile".to_string(),
-        quote(profile_name),
-    ];
+    let mut args = vec![quote(executable)];
+    if let Some(profile_name) = explicit_profile_name {
+        args.extend(["--profile".to_string(), quote(profile_name)]);
+    }
     match global_environment_selector {
         Some(GlobalEnvironmentSelector::Environment(environment)) => {
             args.extend(["--environment".to_string(), quote(&environment.to_string())]);
@@ -3334,7 +3335,7 @@ mod tests {
         };
         let command = render_revert_command(
             "/opt/Golem CLI/golem",
-            "team profile",
+            Some("team profile"),
             None,
             Some(&environment),
             &RawAgentId("MyAgent(\"a b's\")".to_string()),
@@ -3373,9 +3374,10 @@ mod tests {
             GlobalEnvironmentSelector::Local,
             GlobalEnvironmentSelector::Cloud,
         ] {
-            let command =
-                render_revert_command("golem", "profile", Some(&selector), None, &agent_id);
+            let command = render_revert_command("golem", None, Some(&selector), None, &agent_id);
             let args = shlex::split(&command).unwrap();
+
+            assert!(!args.contains(&"--profile".to_string()));
 
             match selector {
                 GlobalEnvironmentSelector::Environment(environment) => {

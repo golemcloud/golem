@@ -507,13 +507,12 @@ impl From<std::io::Error> for WorkerExecutorError {
 
 impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
-        if matches!(value, WorkerExecutorError::PreviousInvocationFailed { .. }) {
-            let message = value.to_string();
-            let details = golem::worker::v1::WorkerExecutionError::from(value).encode_to_vec();
-            return Self::with_details(tonic::Code::FailedPrecondition, message, details.into());
-        }
-
         match value {
+            error @ WorkerExecutorError::PreviousInvocationFailed { .. } => {
+                let message = error.to_string();
+                let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
+                Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+            }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
                 Self::not_found(format!("Promise not found: {promise_id}"))

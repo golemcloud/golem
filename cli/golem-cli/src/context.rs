@@ -74,6 +74,7 @@ pub struct Context {
     help_mode: bool,
     post_deploy_args: PostDeployArgs,
     profile: NamedProfile,
+    explicit_profile_name: Option<ProfileName>,
     environment_reference: Option<EnvironmentReference>,
     global_environment_selector: Option<GlobalEnvironmentSelector>,
     manifest_environment: Option<SelectedManifestEnvironment>,
@@ -267,7 +268,8 @@ impl Context {
             })
             .unwrap_or_default();
 
-        let profile = Self::load_profile(&global_flags, use_cloud_profile_for_env)?;
+        let (profile, explicit_profile_name) =
+            Self::load_profile(&global_flags, use_cloud_profile_for_env)?;
 
         let mut yes = global_flags.yes;
         let mut post_deploy_args = PostDeployArgs::none();
@@ -353,6 +355,7 @@ impl Context {
             help_mode: log_output_for_help.is_some(),
             post_deploy_args,
             profile,
+            explicit_profile_name,
             app_context_config,
             http_batch_size: global_flags.http_batch_size(),
             http_parallelism: global_flags.http_parallelism(),
@@ -446,8 +449,8 @@ impl Context {
         self.global_environment_selector.as_ref()
     }
 
-    pub fn profile_name(&self) -> &ProfileName {
-        &self.profile.name
+    pub fn explicit_profile_name(&self) -> Option<&ProfileName> {
+        self.explicit_profile_name.as_ref()
     }
 
     pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
@@ -717,12 +720,13 @@ impl Context {
     fn load_profile(
         global_flags: &GolemCliGlobalFlags,
         force_use_cloud_profile: bool,
-    ) -> anyhow::Result<NamedProfile> {
+    ) -> anyhow::Result<(NamedProfile, Option<ProfileName>)> {
         let config = Config::from_dir(&global_flags.config_dir())?;
+        let explicit_profile_name = global_flags.profile.clone();
 
         let profile_name = force_use_cloud_profile
             .then(ProfileName::cloud)
-            .or_else(|| global_flags.profile.clone())
+            .or_else(|| explicit_profile_name.clone())
             .or_else(|| global_flags.local.then(ProfileName::local))
             .or_else(|| global_flags.cloud.then(ProfileName::cloud))
             .or(config.default_profile)
@@ -735,10 +739,13 @@ impl Context {
             });
         };
 
-        Ok(NamedProfile {
-            name: profile_name,
-            profile: profile.clone(),
-        })
+        Ok((
+            NamedProfile {
+                name: profile_name,
+                profile: profile.clone(),
+            },
+            explicit_profile_name,
+        ))
     }
 }
 
