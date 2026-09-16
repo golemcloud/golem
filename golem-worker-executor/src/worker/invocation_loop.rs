@@ -956,6 +956,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     filesystem_cleanup_failure,
                 }) => {
                     warn!("Failed to start the worker: {err}");
+                    let err = if matches!(
+                        err,
+                        WorkerExecutorError::PreviousInvocationFailed { .. }
+                            | WorkerExecutorError::PreviousInvocationExited
+                    ) {
+                        err
+                    } else {
+                        self.parent.record_recovery_failure(&err).await;
+                        err
+                    };
                     self.parent
                         .complete_startup(self.start_attempt, Err(err.clone()));
                     let final_state = if let Some(failure) = filesystem_cleanup_failure {

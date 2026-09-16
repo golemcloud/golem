@@ -719,6 +719,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "invocation request transport closed before start".to_string(),
                     None,
                     None,
+                    None,
                 )
                 .await;
                 return;
@@ -728,6 +729,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &outward,
                     InvocationRejectionReason::Protocol,
                     error.to_string(),
+                    None,
                     None,
                     None,
                 )
@@ -742,6 +744,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 error,
                 request_idempotency_key(&first),
                 request_agent_id(&first),
+                None,
             )
             .await;
             return;
@@ -837,14 +840,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 early_inbound,
             } => (acceptance, early_output, early_inbound),
             AcceptanceRace::InvocationFinished(result) => {
-                let (reason, error) = match result {
+                let (reason, error, worker_error) = match result {
                     Ok(_) => (
                         InvocationRejectionReason::Internal,
                         "invocation completed before acceptance".to_string(),
+                        None,
                     ),
-                    Err(error) => (pre_acceptance_rejection_reason(&error), error.to_string()),
+                    Err(error) => (
+                        pre_acceptance_rejection_reason(&error),
+                        error.to_string(),
+                        Some(error.into()),
+                    ),
                 };
-                send_rejection(&responses, reason, error, &start).await;
+                send_rejection_with_worker_error(&responses, reason, error, worker_error, &start)
+                    .await;
                 return;
             }
             AcceptanceRace::InboundBeforeAcceptance(request) => {
@@ -1454,6 +1463,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -1529,6 +1539,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -2588,6 +2599,7 @@ async fn send_unvalidated_rejection(
     error: String,
     idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
+    worker_error: Option<WorkerExecutionError>,
 ) {
     let _ = responses
         .send(InvocationResponse {
@@ -2598,6 +2610,7 @@ async fn send_unvalidated_rejection(
                     idempotency_key,
                     agent_id,
                     component_revision: None,
+                    worker_error,
                 },
             )),
         })
@@ -2610,12 +2623,23 @@ async fn send_rejection(
     error: String,
     start: &InvocationStart,
 ) {
+    send_rejection_with_worker_error(responses, reason, error, None, start).await;
+}
+
+async fn send_rejection_with_worker_error(
+    responses: &mpsc::Sender<InvocationResponse>,
+    reason: InvocationRejectionReason,
+    error: String,
+    worker_error: Option<WorkerExecutionError>,
+    start: &InvocationStart,
+) {
     send_unvalidated_rejection(
         responses,
         reason,
         error,
         start.idempotency_key.clone(),
         start.agent_id.clone(),
+        worker_error,
     )
     .await;
 }

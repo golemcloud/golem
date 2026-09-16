@@ -29,6 +29,7 @@ pub mod entity;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod error;
 pub mod http_api_deployment;
 pub mod invocation_context;
@@ -50,6 +51,8 @@ pub mod retry_policy;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
+pub mod tool_middleware;
+pub mod tool_middleware_release;
 pub mod tool_release;
 pub mod worker;
 
@@ -1235,6 +1238,7 @@ impl Default for InvocationResultMembership {
 #[desert(evolution())]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
+    pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
@@ -1286,6 +1290,7 @@ impl Default for AgentStatusRecord {
     fn default() -> Self {
         AgentStatusRecord {
             status: AgentStatus::Idle,
+            last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),

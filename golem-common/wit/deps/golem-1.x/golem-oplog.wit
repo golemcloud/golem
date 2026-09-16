@@ -206,8 +206,14 @@ interface oplog {
         component-revision: u64,
     }
 
+    enum oplog-error-kind {
+        invocation,
+        recovery
+    }
+
     record error-parameters {
         timestamp: datetime,
+        kind: oplog-error-kind,
         error: string,
         retry-from: oplog-index,
         inside-atomic-region: bool,
@@ -667,6 +673,7 @@ interface oplog {
 
     record raw-error-parameters {
         timestamp: datetime,
+        kind: oplog-error-kind,
         error: worker-error,
         retry-from: oplog-index,
         inside-atomic-region: bool,
@@ -775,6 +782,8 @@ interface oplog {
         suspend(timestamp),
         /// Agent failed
         error(raw-error-parameters),
+        /// A previously failed startup or replay completed successfully.
+        recovery-succeeded(timestamp),
         /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
         /// more predictable.
         no-op(timestamp),
@@ -897,6 +906,8 @@ interface oplog {
         suspend(timestamp),
         /// Agent failed
         error(error-parameters),
+        /// A previously failed startup or replay completed successfully.
+        recovery-succeeded(timestamp),
         /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
         /// more predictable.
         no-op(timestamp),

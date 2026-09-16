@@ -54,7 +54,8 @@ use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, native_test_tool_metadata, start_with_overrides,
+    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
+    start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -62,6 +63,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
+
+mod moonbit_exports;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -128,6 +131,13 @@ struct ScalaCleanupEvidence {
     error: String,
     stdin_cancelled: bool,
     stdout_terminal: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct ScalaOutputEvidence {
+    bytes: Vec<i32>,
+    terminal: String,
+    result: String,
 }
 
 fn deployment_state(
@@ -207,6 +217,8 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
 }
 
@@ -262,6 +274,8 @@ fn native_deployment_state(
         deployment_revision,
         registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
         agent_tool_bindings: BTreeMap::from([(agent_type, BTreeMap::from([(tool_name, binding)]))]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     };
     let helper_name = ToolName::try_from("native-durable-helper").unwrap();
     let helper_source = ToolSource::Host {
@@ -905,21 +919,12 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let mut streaming = metadata
-        .tools
-        .into_iter()
-        .find(|tool| tool.commands.nodes[0].name == "streaming")
-        .expect("streaming tool definition");
+    let mut streaming = native_streaming_tool_metadata();
     streaming.commands.nodes[0].name = "native-streaming".to_string();
     let executor = start_with_overrides(
         deps,
@@ -5457,6 +5462,34 @@ async fn scala_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, "scala-marker:scala-live");
     assert_eq!(evidence.bytes_read, 10);
+
+    for (mode, terminal, result) in [
+        ("finish", "finished", "done"),
+        ("fail", "failed:stream producer failed", "done"),
+        ("unit", "finished", "unit"),
+        ("plain", "none", "plain"),
+    ] {
+        let output: ScalaOutputEvidence = executor
+            .invoke_and_await_agent(
+                &stored_component,
+                &agent_id,
+                "outputEvidence",
+                data_value!(mode),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(
+            output.bytes,
+            if mode == "plain" {
+                vec![]
+            } else {
+                vec![0, 127, 128, 255]
+            },
+            "{mode}"
+        );
+        assert_eq!(output.terminal, terminal, "{mode}");
+        assert_eq!(output.result, result, "{mode}");
+    }
 
     let cleanup: ScalaCleanupEvidence = executor
         .invoke_and_await_agent(

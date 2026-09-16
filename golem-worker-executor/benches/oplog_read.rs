@@ -31,7 +31,7 @@ use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::AgentMode;
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::oplog::{AgentError, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, RetryConfig,
 };
@@ -115,6 +115,7 @@ fn entry(value: u64) -> OplogEntry {
     OplogEntry::Error {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
+        kind: OplogErrorKind::Invocation,
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         inside_atomic_region: false,

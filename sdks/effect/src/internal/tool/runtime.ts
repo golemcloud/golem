@@ -70,7 +70,10 @@ export async function invokeRegistered(
         Effect.fail(
           asError({
             tag: "custom-error",
-            val: { graph: declared.codec.schemaGraph, value },
+            val: {
+              name: declared.spec.name,
+              payload: { graph: declared.codec.schemaGraph, value },
+            },
           }),
         ),
       )

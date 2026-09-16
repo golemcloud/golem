@@ -42,7 +42,7 @@ use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
     JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
-    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
+    OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
@@ -683,6 +683,7 @@ fn suspend_serialization_poem_serde_equivalence() {
 fn error_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Error(ErrorParams {
         timestamp: Timestamp::now_utc().rounded(),
+        kind: OplogErrorKind::Invocation,
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
         inside_atomic_region: false,
@@ -1689,8 +1690,8 @@ mod scope_scan {
     use crate::model::oplog::host_functions::HostFunctionName;
     use crate::model::oplog::raw_types::PayloadId;
     use crate::model::oplog::{
-        AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
-        OplogScopeProjection, ScopeScanState,
+        AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogErrorKind,
+        OplogPayload, OplogScopeProjection, ScopeScanState,
     };
     use crate::model::regions::OplogRegion;
     use crate::model::{
@@ -1780,6 +1781,7 @@ mod scope_scan {
                 11,
                 OplogEntry::error(
                     Some(idx(10)),
+                    OplogErrorKind::Invocation,
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
                     false,
@@ -1790,6 +1792,7 @@ mod scope_scan {
                 12,
                 OplogEntry::error(
                     None,
+                    OplogErrorKind::Invocation,
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
                     false,

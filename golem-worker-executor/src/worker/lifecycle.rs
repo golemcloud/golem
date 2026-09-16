@@ -17,7 +17,7 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex, UpdateDescription};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -59,19 +59,32 @@ fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> Interr
         | AgentStatus::Idle
         | AgentStatus::Failed
         | AgentStatus::Interrupted => InterruptDecision::Ignore,
-        AgentStatus::Suspended | AgentStatus::Retrying => InterruptDecision::Interrupt,
-        AgentStatus::Running if recover_immediately => InterruptDecision::Restart,
-        AgentStatus::Running => InterruptDecision::Interrupt,
+        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying
+            if recover_immediately =>
+        {
+            InterruptDecision::Restart
+        }
+        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying => {
+            InterruptDecision::Interrupt
+        }
     }
 }
 
-fn resume_decision(status: &AgentStatus, force: bool) -> ResumeDecision {
+fn resume_decision(
+    status: &AgentStatus,
+    last_error_kind: Option<OplogErrorKind>,
+    force: bool,
+) -> ResumeDecision {
     match status {
+        AgentStatus::Failed if force && last_error_kind == Some(OplogErrorKind::Recovery) => {
+            ResumeDecision::ForceStart
+        }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
-        AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
-            ResumeDecision::Start
-        }
+        AgentStatus::Suspended
+        | AgentStatus::Interrupted
+        | AgentStatus::Idle
+        | AgentStatus::Retrying => ResumeDecision::Start,
         _ if force => ResumeDecision::ForceStart,
         _ => ResumeDecision::Reject,
     }
@@ -174,12 +187,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
-        match metadata.last_known_status.status {
-            AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
-            AgentStatus::Retrying => {
-                debug!("Marking worker scheduled to be retried as interrupted")
+        if decision == InterruptDecision::Interrupt {
+            match metadata.last_known_status.status {
+                AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
+                AgentStatus::Retrying => {
+                    debug!("Marking worker scheduled to be retried as interrupted")
+                }
+                _ => {}
             }
-            _ => {}
         }
 
         let interrupt_kind = match decision {
@@ -210,7 +225,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         let metadata = worker.get_latest_worker_metadata().await;
 
-        match resume_decision(&metadata.last_known_status.status, force) {
+        match resume_decision(
+            &metadata.last_known_status.status,
+            metadata.last_known_status.last_error_kind,
+            force,
+        ) {
             ResumeDecision::PreviousFailed => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     deps,
@@ -220,10 +239,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
-                    return Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    });
+                    return if metadata.last_known_status.last_error_kind
+                        == Some(golem_common::model::oplog::OplogErrorKind::Recovery)
+                    {
+                        Err(WorkerExecutorError::failed_to_resume_worker(
+                            owned_agent_id.agent_id.clone(),
+                            WorkerExecutorError::runtime(
+                                last_error.error.to_string(&last_error.stderr),
+                            ),
+                        ))
+                    } else {
+                        Err(WorkerExecutorError::PreviousInvocationFailed {
+                            error: last_error.error,
+                            stderr: last_error.stderr,
+                        })
+                    };
                 }
                 Err(WorkerExecutorError::runtime(
                     "Previous invocation failed, but failed to get error details",
@@ -246,7 +276,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(())
             }
             ResumeDecision::Reject => Err(WorkerExecutorError::invalid_request(format!(
-                "Worker {agent_id} is not suspended, interrupted or idle",
+                "Worker {agent_id} is not suspended, interrupted, idle, or retrying",
                 agent_id = owned_agent_id.agent_id
             ))),
         }
@@ -585,9 +615,9 @@ mod tests {
         let expected_recovering = [
             InterruptDecision::Restart,
             InterruptDecision::Ignore,
-            InterruptDecision::Interrupt,
+            InterruptDecision::Restart,
             InterruptDecision::Ignore,
-            InterruptDecision::Interrupt,
+            InterruptDecision::Restart,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
         ];
@@ -607,7 +637,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::Reject,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
@@ -616,7 +646,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::ForceStart,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
@@ -624,9 +654,14 @@ mod tests {
         for ((status, expected), expected_forced) in
             STATUSES.iter().zip(expected).zip(expected_forced)
         {
-            assert_eq!(resume_decision(status, false), expected);
-            assert_eq!(resume_decision(status, true), expected_forced);
+            assert_eq!(resume_decision(status, None, false), expected);
+            assert_eq!(resume_decision(status, None, true), expected_forced);
         }
+
+        assert_eq!(
+            resume_decision(&AgentStatus::Failed, Some(OplogErrorKind::Recovery), true),
+            ResumeDecision::ForceStart
+        );
     }
 
     #[test]
