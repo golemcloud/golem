@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Fiber, Layer, Result } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parse } from "../src/AgentIdentity.js"
 import { bind as bindDynamic } from "../src/DynamicClient.js"
@@ -210,6 +211,73 @@ describe("reflection", () => {
       ])
       expect(dropped).toBe(3)
     }).pipe(Effect.provide(Layer.mergeAll(host, rpc, durability)))
+  })
+
+  it.effect("validates reflected config before opening a scoped RPC connection", () => {
+    const raw = registration()
+    const valueType = raw.agentType.schema.typeNodes.length - 1
+    raw.agentType.config = [
+      { path: ["greeting"], source: "local", valueType },
+      { path: ["apiKey"], source: "secret", valueType },
+    ]
+    const connections: ReadonlyArray<AgentCommon.TypedAgentConfigValue>[] = []
+    const rpc = Layer.succeed(
+      RpcClient,
+      RpcClient.of({
+        connect: (_name, _input, _phantom, config) =>
+          Effect.sync(() => {
+            connections.push(config)
+            return { drop: () => undefined } as RpcConnection
+          }),
+      }),
+    )
+    const host = Layer.succeed(AgentHostClient, {
+      getAgentType: () => raw,
+      makeAgentId: () => 'Recursive("one")',
+    } as never)
+    return Effect.gen(function* () {
+      const reflected = (yield* getAgentType("Recursive"))!
+      if (reflected.mode !== "durable") throw new Error("expected durable mode")
+      expect(reflected.config[0]?.schema.graph.root).toBe(reflected.config[0]?.schema.root)
+      expect(
+        yield* Effect.scoped(
+          reflected.client
+            .get({ name: "one" }, [{ path: ["unknown"], value: "x" }])
+            .pipe(Effect.result),
+        ),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(
+        yield* Effect.scoped(
+          reflected.client
+            .get({ name: "one" }, [{ path: ["apiKey"], value: "x" }])
+            .pipe(Effect.result),
+        ),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(
+        yield* Effect.scoped(
+          reflected.client
+            .get({ name: "one" }, [{ path: ["greeting"], value: 42 }])
+            .pipe(Effect.result),
+        ),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(connections).toHaveLength(0)
+
+      yield* Effect.scoped(
+        reflected.client.get({ name: "one" }, [{ path: ["greeting"], value: "hello" }]),
+      )
+      yield* Effect.scoped(
+        reflected.client.getValue(reflected.constructorInput.packJson({ name: "two" }), [
+          { path: ["greeting"], value: reflected.config[0]!.schema.packJson("hello") },
+        ]),
+      )
+      expect(connections).toHaveLength(2)
+      expect(connections[0]?.[0]?.path).toEqual(["greeting"])
+      const identity = yield* reflected.agentId({ name: "one" })
+      yield* Effect.scoped(
+        reflected.bindWithJsonConfig(identity, [{ path: ["greeting"], value: "bound" }]),
+      )
+      expect(connections).toHaveLength(3)
+    }).pipe(Effect.provide(Layer.merge(host, rpc)))
   })
 
   it.effect(

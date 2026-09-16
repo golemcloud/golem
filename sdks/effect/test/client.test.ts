@@ -566,18 +566,41 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         methods: Configured.methods,
       })
       const runtime = makeRuntime()
-      yield* Configured.client
-        .get({}, { overrides: { greeting: "hello" } })
-        .pipe(Effect.scoped, Effect.provide(runtime.layer))
-      yield* caller.client
-        .get({}, { overrides: { greeting: "hello" } })
-        .pipe(Effect.scoped, Effect.provide(runtime.layer))
+      yield* Configured.client.get({}, { overrides: { greeting: "hello" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      yield* caller.client.get({}, { overrides: { greeting: "hello" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      const host = Layer.succeed(AgentHostClient, { makeAgentId: () => "Configured()" } as never)
+      const identity = yield* caller.agentId({}).pipe(Effect.provide(host))
+      yield* caller.bindWithConfig(identity, { overrides: { greeting: "bound" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      const methodOnly = defineAgentClient({ methods: Configured.methods })
+      yield* methodOnly.bindWithEntries(identity, [runtime.calls[0]!.config[0]!]).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      expect(runtime.calls[2]?.config[0]?.path).toEqual(["greeting"])
+      expect(runtime.calls[3]?.config[0]?.path).toEqual(["greeting"])
+      const rejected = yield* caller
+        .bindWithConfig(identity, { overrides: { secret: "leak" } as never })
+        .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
+      expect(rejected._tag).toBe("Failure")
       const remote = yield* Configured.client
         .get({}, { overrides: { secret: "leak" } as never })
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(remote._tag).toBe("Failure")
-      expect(runtime.calls).toHaveLength(0)
-      expect(runtime.lifecycle.connectionOpen).toBe(2)
+      expect(runtime.calls).toHaveLength(4)
+      expect(runtime.lifecycle.connectionOpen).toBe(4)
     }),
   )
 

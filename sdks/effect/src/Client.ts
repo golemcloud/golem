@@ -181,6 +181,15 @@ export interface MethodOnlyClient<
   Methods extends Record<string, AnyMethodSpec>,
 > extends IdentityBinding<RemoteAgent<Methods>> {
   readonly methods: Methods
+  /** Raw typed entries are forwarded when this binding creates a worker. */
+  readonly bindWithEntries: (
+    identity: Identity,
+    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+  ) => Effect.Effect<
+    RemoteAgent<Methods>,
+    RemoteCallError | UnsupportedSchemaError | ClientBindingError,
+    RpcClient | Scope.Scope
+  >
 }
 
 /** Complete caller-owned client definition with typed identity and lifecycle factories. @since 1.6.0 @category models */
@@ -208,7 +217,17 @@ export type CompleteClient<
         AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
         AgentHostClient
       >
-} & IdentityBinding<RemoteAgent<Methods>>
+} & IdentityBinding<RemoteAgent<Methods>> & {
+    /** Declared overrides apply only when this binding creates a worker. */
+    readonly bindWithConfig: (
+      identity: Identity,
+      options?: GetOptions<F>,
+    ) => Effect.Effect<
+      RemoteAgent<Methods>,
+      RemoteCallError | UnsupportedSchemaError | ClientBindingError | ConfigError,
+      RpcClient | Scope.Scope
+    >
+  }
 
 /** Exact caller definition; name and id are inseparable. @since 1.6.0 @category models */
 export interface ClientDefinition<
@@ -372,7 +391,16 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
   readonly name?: string
   readonly id?: MethodParams
   readonly mode?: AgentCommon.AgentMode
-}): IdentityBinding<RemoteAgent<Methods>> => {
+}): IdentityBinding<RemoteAgent<Methods>> & {
+  readonly bindWithEntries: (
+    identity: Identity,
+    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+  ) => Effect.Effect<
+    RemoteAgent<Methods>,
+    RemoteCallError | UnsupportedSchemaError | ClientBindingError,
+    RpcClient | Scope.Scope
+  >
+} => {
   let cachedMethods:
     | ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
     | undefined
@@ -391,51 +419,56 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
       )
     return { methods: cachedMethods, constructorCodec: cachedConstructor }
   })
-  return {
-    [bindIdentity]: (identity) =>
-      Effect.gen(function* () {
-        if (definition.mode === "ephemeral") {
-          return yield* Effect.fail(
-            new ClientBindingError(
-              `Cannot bind existing identity '${identity.encoded}' to ephemeral agent type '${identity.typeName}'; use getPhantom(...) or newPhantom(...)`,
-            ),
-          )
-        }
-        if (definition.name !== undefined && identity.typeName !== definition.name) {
-          return yield* Effect.fail(
-            new ClientBindingError(
-              `Agent client contract '${definition.name}' cannot bind agent type '${identity.typeName}'`,
-            ),
-          )
-        }
-        const compiled = yield* compile
-        if (compiled.constructorCodec !== undefined) {
-          const constructor = compiled.constructorCodec.graph
-          if (
-            !SchemaRef.fromImmutableGraph(constructor, constructor.root).validateValue(
-              identity.constructorValue,
-            ).success
-          ) {
-            return yield* Effect.fail(
-              new ClientBindingError(
-                `Agent client contract '${definition.name}' cannot bind identity '${identity.encoded}': constructor value does not conform to the contract ID schema`,
-              ),
-            )
-          }
-        }
-        const phantom = yield* Effect.try({
-          try: () => rawPhantomId(identity),
-          catch: (cause) => new ClientBindingError(String(cause)),
-        })
-        const host = yield* RpcClient
-        const rpc = yield* Effect.acquireRelease(
-          host
-            .connect(identity.typeName, identity.constructorValue, phantom, [])
-            .pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
-          (connection) => Effect.sync(() => connection.drop()),
+  const bindWithEntries = (
+    identity: Identity,
+    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+  ) =>
+    Effect.gen(function* () {
+      if (definition.mode === "ephemeral") {
+        return yield* Effect.fail(
+          new ClientBindingError(
+            `Cannot bind existing identity '${identity.encoded}' to ephemeral agent type '${identity.typeName}'; use getPhantom(...) or newPhantom(...)`,
+          ),
         )
-        return buildRemote(rpc, compiled, false) as RemoteAgent<Methods>
-      }),
+      }
+      if (definition.name !== undefined && identity.typeName !== definition.name) {
+        return yield* Effect.fail(
+          new ClientBindingError(
+            `Agent client contract '${definition.name}' cannot bind agent type '${identity.typeName}'`,
+          ),
+        )
+      }
+      const compiled = yield* compile
+      if (compiled.constructorCodec !== undefined) {
+        const constructor = compiled.constructorCodec.graph
+        if (
+          !SchemaRef.fromImmutableGraph(constructor, constructor.root).validateValue(
+            identity.constructorValue,
+          ).success
+        ) {
+          return yield* Effect.fail(
+            new ClientBindingError(
+              `Agent client contract '${definition.name}' cannot bind identity '${identity.encoded}': constructor value does not conform to the contract ID schema`,
+            ),
+          )
+        }
+      }
+      const phantom = yield* Effect.try({
+        try: () => rawPhantomId(identity),
+        catch: (cause) => new ClientBindingError(String(cause)),
+      })
+      const host = yield* RpcClient
+      const rpc = yield* Effect.acquireRelease(
+        host
+          .connect(identity.typeName, identity.constructorValue, phantom, entries)
+          .pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
+        (connection) => Effect.sync(() => connection.drop()),
+      )
+      return buildRemote(rpc, compiled, false) as RemoteAgent<Methods>
+    })
+  return {
+    [bindIdentity]: (identity) => bindWithEntries(identity, []),
+    bindWithEntries,
   }
 }
 
@@ -508,6 +541,30 @@ export function defineAgentClient(definition: {
     >,
   )
   const binding = bindingForDefinition(canonical)
+  const bindWithConfig = (identity: Identity, options?: GetOptions<ConfigFields>) =>
+    Effect.gen(function* () {
+      let entries: AgentCommon.TypedAgentConfigValue[] = []
+      if (options?.overrides !== undefined) {
+        if (canonical.config === undefined)
+          return yield* Effect.fail(
+            new ConfigError([], {
+              _tag: "Unsupported",
+              reason: `agent '${canonical.name}' has no config; cannot apply overrides`,
+            }),
+          )
+        entries = yield* encodeOverrides(
+          yield* canonical.config.__compile(),
+          options.overrides as Record<string, unknown>,
+        ).pipe(
+          Effect.mapError((error) =>
+            error instanceof ConfigError
+              ? error
+              : responseError(`failed to encode config override: ${String(error)}`),
+          ),
+        )
+      }
+      return yield* binding.bindWithEntries(identity, entries)
+    })
   let identityCodec: CompiledInputCodec | undefined
   const agentId = (input: CallerInput<MethodParams>, phantomId?: string) =>
     Effect.gen(function* () {
@@ -530,7 +587,7 @@ export function defineAgentClient(definition: {
         ...(phantomId === undefined ? {} : { phantomId }),
       })
     })
-  return Object.freeze({ ...canonical, client, agentId, ...binding })
+  return Object.freeze({ ...canonical, client, agentId, ...binding, bindWithConfig })
 }
 
 /** Bind a parsed identity through a caller-owned, exact, or reflected contract. @since 1.6.0 @category constructors */
