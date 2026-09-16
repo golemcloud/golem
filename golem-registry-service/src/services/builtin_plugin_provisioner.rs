@@ -15,6 +15,7 @@
 use crate::config::BuiltinPluginsConfig;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
+use crate::services::auth::AuthService;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
@@ -73,6 +74,7 @@ pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
     builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
+    auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
@@ -85,7 +87,9 @@ pub async fn provision_builtin_plugins(
         return Ok(());
     }
 
-    let auth = AuthCtx::system();
+    let auth = auth_service
+        .builtin_owner_auth(builtin_plugin_owner_account_id)
+        .await?;
 
     let app = get_or_create_application(
         application_service,

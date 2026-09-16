@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::application::{ApplicationError, ApplicationService};
+use crate::services::auth::AuthService;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
@@ -54,6 +55,7 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[];
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_builtin_tools(
     builtin_tool_owner_account_id: AccountId,
+    auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
@@ -65,6 +67,7 @@ pub async fn provision_builtin_tools(
     provision_descriptors(
         BUILTIN_TOOLS,
         builtin_tool_owner_account_id,
+        auth_service,
         application_service,
         environment_service,
         component_service,
@@ -80,6 +83,7 @@ pub async fn provision_builtin_tools(
 pub async fn provision_descriptors(
     descriptors: &[BuiltinToolDescriptor],
     owner: AccountId,
+    auth_service: &Arc<AuthService>,
     applications: &Arc<ApplicationService>,
     environments: &Arc<EnvironmentService>,
     components: &Arc<ComponentService>,
@@ -147,7 +151,7 @@ pub async fn provision_descriptors(
             .await?;
         extracted.push(tool);
     }
-    let auth = AuthCtx::system();
+    let auth = auth_service.builtin_owner_auth(owner).await?;
     let app = get_or_create_application(applications, owner, &auth).await?;
     let env = get_or_create_environment(environments, app.id, &auth).await?;
     let mut staged = Vec::new();
