@@ -2356,9 +2356,7 @@ async fn initial_file_reading_through_api(
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
                 worker.read_file(
-                    golem_common::model::filesystem::FileReadTarget::Exact {
-                        file_path: "/bar/baz.txt".into(),
-                    },
+                    CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     golem_common::model::filesystem::FileByteSelection::Full,
                     admission.reserve(owned_agent_id.clone(), Instant::now())?,
                 ),

@@ -122,7 +122,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
     ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -3609,13 +3609,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn read_file(
         self: &Arc<Self>,
-        target: FileReadTarget,
+        path: CanonicalFilePath,
         selection: FileByteSelection,
         reservation: FileReadReservation,
     ) -> Result<FileReadResponse, FileReadError> {
-        target
-            .validate()
-            .map_err(|_| FileReadError::InvalidTarget)?;
+        validate_file_read_path(path.as_abs_str())?;
         selection.validate()?;
         let deadline = reservation.deadline();
         if tokio::time::Instant::now() >= deadline {
@@ -3644,7 +3642,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .lock()
                 .unwrap()
                 .push_back(QueuedWorkerInvocation::ReadFile {
-                    target,
+                    path,
                     selection,
                     reservation,
                     order,
@@ -9481,7 +9479,7 @@ pub enum QueuedWorkerInvocation {
     },
     // Owns admission until the bounded producer observes EOF, cancellation, or failure.
     ReadFile {
-        target: FileReadTarget,
+        path: CanonicalFilePath,
         selection: FileByteSelection,
         reservation: FileReadReservation,
         order: InspectionOrder,

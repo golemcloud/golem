@@ -25,20 +25,6 @@ message FileSystemNode {
   }
 }
 
-// Filesystem text, never URI syntax. Each suffix element is one checked segment.
-message RootBoundedFileReadTarget {
-  string root = 1;
-  repeated string suffix = 2;
-  bool directory_request = 3;
-}
-
-message FileReadTarget {
-  oneof target {
-    string exact = 1;
-    RootBoundedFileReadTarget within_root = 2;
-  }
-}
-
 message BoundedFileByteSelection {
   uint64 start = 1;
   uint64 end_inclusive = 2;

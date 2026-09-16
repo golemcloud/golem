@@ -47,9 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::filesystem::{
-    FileByteSelection, FileReadExtent, FileReadHead, FileReadTarget,
-};
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
@@ -1191,12 +1189,7 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .get_file_contents(GetFileContentsRequest {
                 agent_id: Some(agent_id.clone().into()),
-                target: Some(
-                    FileReadTarget::Exact {
-                        file_path: path.to_string(),
-                    }
-                    .into(),
-                ),
+                file_path: path.to_string(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),

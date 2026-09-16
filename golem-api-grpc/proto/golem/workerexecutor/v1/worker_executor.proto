@@ -392,7 +392,7 @@ message GetFileContentsRequest {
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
   golem.common.EnvironmentId environment_id = 3;
-  golem.worker.FileReadTarget target = 4;
+  string file_path = 4;
   golem.auth.AuthCtx auth_ctx = 5;
   optional golem.component.Principal principal = 6;
   golem.worker.FileByteSelection selection = 7;

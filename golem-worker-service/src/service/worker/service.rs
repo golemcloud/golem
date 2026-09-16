@@ -52,7 +52,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::filesystem::{FileByteSelection, FileReadHead, FileReadTarget};
+use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
 use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -1196,9 +1196,7 @@ impl WorkerService {
             .worker_client
             .get_file_contents(
                 agent_id,
-                FileReadTarget::Exact {
-                    file_path: path.to_string(),
-                },
+                path.clone(),
                 FileByteSelection::Full,
                 component.environment_id,
                 component.account_id,
@@ -2797,7 +2795,7 @@ mod tests {
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::model::filesystem::{FileByteSelection, FileReadHead, FileReadTarget};
+    use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
     use golem_common::model::invocation_session_public::InvocationSelector;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{
@@ -3584,7 +3582,7 @@ mod tests {
         async fn get_file_contents(
             &self,
             _: &AgentId,
-            _: FileReadTarget,
+            _: CanonicalFilePath,
             _: FileByteSelection,
             _: EnvironmentId,
             _: AccountId,

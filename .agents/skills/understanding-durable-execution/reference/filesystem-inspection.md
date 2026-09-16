@@ -1,4 +1,4 @@
-# Root-bounded filesystem inspection
+# Exact-path filesystem inspection
 
 Read this when changing external file reads, their queueing, activation, filesystem isolation,
 or worker lifecycle interactions. This is an executor observation protocol, not an HTTP handler
@@ -7,11 +7,11 @@ does not invoke an exported method or append an invocation to the oplog.
 
 ## Ownership and wire boundary
 
-- `golem-common/src/model/filesystem.rs` owns `FileReadTarget`, `FileByteSelection`, metadata,
-  status and typed errors, including protobuf conversions. `Exact { file_path }` is a canonical
-  absolute file path; `WithinRoot { root, suffix, directory_request }` retains a canonical root,
-  checked decoded segments and trailing-directory intent. The executor validates again at its
-  filesystem boundary. It does not decode percent escapes or normalize unsafe paths.
+- `golem-common/src/model/filesystem.rs` owns raw read-path validation, `FileByteSelection`, metadata,
+  status and typed errors, including protobuf conversions. The Rust executor API receives the
+  existing `CanonicalFilePath` from `base_model/path.rs`; gRPC carries it as the string `file_path`. Root/suffix composition,
+  decoded-segment checks and trailing-directory intent belong to the HTTP layer. At the executor
+  boundary the raw path is revalidated as a canonical absolute file path without URI decoding.
 - `golem-api-grpc/proto/golem/worker/filesystem.proto` and
   `workerexecutor/v1/worker_executor.proto` carry this contract. A stream begins with one metadata
   head or a failure, then bounded byte chunks or a terminal failure. Metadata distinguishes
@@ -22,7 +22,8 @@ does not invoke an exported method or append an invocation to the oplog.
   `golem-worker-service/src/service/worker/client.rs` validates the first frame inside the routing retry
   loop, then owns the tonic stream directly. It checks framing, chunk size and selected byte
   count. It neither retries after the head nor drains a stream into an intermediate pump.
-  The existing REST inspection consumer retains its Read authorization and requests Exact/Full.
+  The existing REST inspection consumer retains its Read authorization and requests Full for the
+  exact canonical path it derived.
 
 ## Admission through consumer termination
 
@@ -42,9 +43,9 @@ does not invoke an exported method or append an invocation to the oplog.
    than waiting for the invocation loop to reach it.
 4. `Invocation::read_file` acquires the per-agent read turn and the exclusive `OwnerLane`, then
    calls `services/agent_filesystem/lifecycle/inspection.rs::open_file_for_inspection`. It walks
-   descriptor-relative components with no-follow semantics, including the selected root and
-   final target. Any symlink is forbidden, even one pointing inside the root. Only a regular
-   file can be opened; directories, special files and permission failures are forbidden.
+   descriptor-relative components with no-follow semantics through the final target. Any symlink
+   is forbidden. Only a regular file can be opened; directories, special files and permission
+   failures are forbidden.
    Missing targets are absent. There is no implicit index or directory listing in this protocol.
 5. Metadata comes from that open descriptor, and Full/Bounded/OpenEnded/Suffix selection is
    resolved against its length. `inspection_stream.rs::produce_file_read` runs in the invocation
@@ -58,11 +59,11 @@ does not invoke an exported method or append an invocation to the oplog.
 
 ## Policy, lifecycle and generation are different
 
-The target value is immutable for the request. A caller may derive it from a selected deployment's
+The exact path is immutable for the request. A caller may derive it from a selected deployment's
 exposure policy, but inspection does not force the agent back to that deployment's revision.
 Normal activation selects the current lifecycle revision and reconstructs its filesystem. An
 already admitted read finishes from its pinned generation; later reads see the new generation
-under the same selected target. A removed file is a miss, never a reason to choose a wider root.
+at the same exact path. A removed file is a miss, never a reason to select another path.
 
 Updates, revert, invocation writes/rename/delete and entity-body filesystem operations serialize
 against the active read. Unload cannot cause a response to switch descriptors or generations:
@@ -80,7 +81,7 @@ loss aborts the external stream; there is no durable read reattachment contract.
 - `tests/filesystem_inspection.rs` loads real shared corpus vectors from
   `golem-service-base/tests/fixtures/http-handlers/corpus.json`, with IDs in assertion failures.
   It exercises actual guest initialization, concurrent first reads, replay after unload,
-  initializer failure, prior writes, EOF/drop/update ordering and unchanged roots across update.
+  initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
 - `services/agent_filesystem/lifecycle/{inspection,inspection_stream}.rs` tests descriptor
   safety, range boundaries, bounded chunks, early EOF, unpolled deadlines and consumer cleanup.
 - `services/file_read_admission.rs` tests full queues and deadline accounting before activation;

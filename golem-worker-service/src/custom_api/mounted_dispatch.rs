@@ -27,8 +27,7 @@ pub(super) enum MountFile<'a> {
     Initial(&'a RouterFileIndexEntry),
     Live {
         agent_id: &'a AgentId,
-        mapping: &'a FileMapping,
-        suffix: &'a [String],
+        path: String,
         directory_request: bool,
     },
 }
@@ -99,7 +98,7 @@ pub(super) async fn dispatch_mount(
     let directory_request = !relative.is_empty() && selected.request_target.trailing_slash();
     if matches!(*request.underlying.method(), Method::GET | Method::HEAD) {
         for mapping in mappings {
-            let Some((path, suffix)) = mapping_target(mapping, relative, directory_request) else {
+            let Some(path) = mapping_target(mapping, relative, directory_request) else {
                 continue;
             };
             let file = if let Some(router) = router {
@@ -121,8 +120,7 @@ pub(super) async fn dispatch_mount(
             } else {
                 MountFile::Live {
                     agent_id: agent_id.as_ref().unwrap(),
-                    mapping,
-                    suffix,
+                    path,
                     directory_request,
                 }
             };
@@ -142,14 +140,14 @@ pub(super) async fn dispatch_mount(
     }
 }
 
-fn mapping_target<'a>(
-    mapping: &'a FileMapping,
-    relative: &'a [String],
+fn mapping_target(
+    mapping: &FileMapping,
+    relative: &[String],
     directory_request: bool,
-) -> Option<(String, &'a [String])> {
+) -> Option<String> {
     match mapping {
         FileMapping::Exact(exact) if !directory_request && exact.public_path == relative => {
-            Some((exact.file_path.clone(), &[]))
+            Some(exact.file_path.clone())
         }
         FileMapping::Subtree(subtree) if relative.starts_with(&subtree.public_prefix) => {
             let suffix = &relative[subtree.public_prefix.len()..];
@@ -162,7 +160,7 @@ fn mapping_target<'a>(
                     suffix.join("/")
                 )
             };
-            Some((path, suffix))
+            Some(path)
         }
         _ => None,
     }
@@ -206,25 +204,10 @@ mod tests {
                 MountFile::Initial(entry) => (entry.path.clone(), false),
                 MountFile::Live {
                     agent_id,
-                    mapping,
-                    suffix,
+                    path,
                     directory_request,
                 } => {
                     self.agents.push(agent_id.agent_id.clone());
-                    let path = match mapping {
-                        FileMapping::Exact(exact) => exact.file_path.clone(),
-                        FileMapping::Subtree(tree) => {
-                            if suffix.is_empty() {
-                                tree.filesystem_root.clone()
-                            } else {
-                                format!(
-                                    "{}/{}",
-                                    tree.filesystem_root.trim_end_matches('/'),
-                                    suffix.join("/")
-                                )
-                            }
-                        }
-                    };
                     (path, directory_request)
                 }
             };

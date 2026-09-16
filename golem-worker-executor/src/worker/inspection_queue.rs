@@ -123,7 +123,7 @@ mod tests {
     use crate::services::file_read_admission::FileReadAdmission;
     use futures::channel::oneshot;
     use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-    use golem_common::model::filesystem::{FileByteSelection, FileReadTarget};
+    use golem_common::model::filesystem::FileByteSelection;
     use golem_common::model::{IdempotencyKey, PendingInvocationRef, Timestamp};
     use golem_service_base::model::FileReadResponse;
     use test_r::test;
@@ -163,9 +163,7 @@ mod tests {
             .unwrap();
         (
             QueuedWorkerInvocation::ReadFile {
-                target: FileReadTarget::Exact {
-                    file_path: "/file".into(),
-                },
+                path: CanonicalFilePath::from_abs_str("/file").unwrap(),
                 selection: FileByteSelection::Full,
                 reservation,
                 order: InspectionOrder::new(status),

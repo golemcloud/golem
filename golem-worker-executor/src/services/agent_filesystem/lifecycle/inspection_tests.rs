@@ -1,6 +1,6 @@
 use super::*;
 use golem_common::model::filesystem::{
-    FileByteSelection, FileReadError, FileReadExtent, FileReadHead, FileReadTarget,
+    FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
 };
 use test_r::{test, timeout};
 
@@ -47,14 +47,9 @@ async fn inspection_descriptor_metadata_and_selected_bytes() {
     std::fs::create_dir_all(root.join("public/sub")).unwrap();
     std::fs::write(root.join("public/sub/%2e%2e"), b"abcdefghijk").unwrap();
     let handle = resident_generation_handle(&resident);
-    let target = FileReadTarget::WithinRoot {
-        root: "/public".into(),
-        suffix: vec!["sub".into(), "%2e%2e".into()],
-        directory_request: false,
-    };
     let FileInspection::Opened { file, metadata } = open_file_for_inspection(
         &handle,
-        &target,
+        "/public/sub/%2e%2e",
         FileByteSelection::Bounded {
             start: 3,
             end_inclusive: 6,
@@ -131,9 +126,7 @@ async fn inspection_owned_corpus_rejects_symlinks_and_implicit_index() {
         }
         let result = open_file_for_inspection(
             &resident_generation_handle(&resident),
-            &FileReadTarget::Exact {
-                file_path: case["input"]["path"].as_str().unwrap().into(),
-            },
+            case["input"]["path"].as_str().unwrap(),
             FileByteSelection::Full,
         )
         .await
@@ -149,7 +142,7 @@ async fn inspection_owned_corpus_rejects_symlinks_and_implicit_index() {
 #[test]
 #[timeout("30s")]
 #[cfg(target_os = "linux")]
-async fn inspection_root_symlink_fifo_and_directory_intent() {
+async fn inspection_root_symlink_fifo_and_directories() {
     let parent = tempfile::tempdir().unwrap();
     let (resident, root) = native_resident(parent.path()).await;
     std::fs::create_dir(root.join("public")).unwrap();
@@ -161,44 +154,24 @@ async fn inspection_root_symlink_fifo_and_directory_intent() {
         std::ffi::CString::new(root.join("public/fifo").as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let handle = resident_generation_handle(&resident);
-    for (root, suffix, directory_request, expected) in [
-        ("/alias", vec!["file"], false, FileReadHead::Symlink),
-        (
-            "/public",
-            vec!["link-to-file"],
-            false,
-            FileReadHead::Symlink,
-        ),
-        (
-            "/public",
-            vec!["link-dir", "file"],
-            false,
-            FileReadHead::Symlink,
-        ),
-        ("/public", vec!["fifo"], false, FileReadHead::NotRegular),
-        (
-            "/public/fifo",
-            vec!["child"],
-            false,
-            FileReadHead::NotRegular,
-        ),
-        ("/public", vec!["file"], true, FileReadHead::NotRegular),
-        ("/public", vec!["missing"], false, FileReadHead::Absent),
-        ("/", vec![], false, FileReadHead::NotRegular),
+    for (path, expected) in [
+        ("/alias/file", FileReadHead::Symlink),
+        ("/public/link-to-file", FileReadHead::Symlink),
+        ("/public/link-dir/file", FileReadHead::Symlink),
+        ("/public/fifo", FileReadHead::NotRegular),
+        ("/public/fifo/child", FileReadHead::NotRegular),
+        ("/public", FileReadHead::NotRegular),
+        ("/public/missing", FileReadHead::Absent),
+        ("/", FileReadHead::NotRegular),
     ] {
-        let target = FileReadTarget::WithinRoot {
-            root: root.into(),
-            suffix: suffix.into_iter().map(String::from).collect(),
-            directory_request,
-        };
         let FileInspection::Rejected(head) =
-            open_file_for_inspection(&handle, &target, FileByteSelection::Full)
+            open_file_for_inspection(&handle, path, FileByteSelection::Full)
                 .await
                 .unwrap()
         else {
-            panic!("must reject {target:?}");
+            panic!("must reject {path}");
         };
-        assert_eq!(head, expected, "{target:?}");
+        assert_eq!(head, expected, "{path}");
     }
     delete(seal(resident)).await.unwrap();
 }
@@ -209,31 +182,17 @@ async fn inspection_revalidates_before_io_and_sanitizes_permission_failures() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let handle = resident_generation_handle(&filesystem);
     let before = control.calls();
-    for target in [
-        FileReadTarget::Exact {
-            file_path: "/public/../private".into(),
-        },
-        FileReadTarget::WithinRoot {
-            root: "/public".into(),
-            suffix: vec!["../private".into()],
-            directory_request: false,
-        },
-    ] {
-        assert!(matches!(
-            open_file_for_inspection(&handle, &target, FileByteSelection::Full).await,
-            Err(FileReadError::InvalidTarget)
-        ));
-    }
+    assert!(matches!(
+        open_file_for_inspection(&handle, "/public/../private", FileByteSelection::Full).await,
+        Err(FileReadError::InvalidTarget)
+    ));
     assert_eq!(control.calls(), before);
-    let target = FileReadTarget::Exact {
-        file_path: "/file".into(),
-    };
     control.push_open(Err(sandbox_error(
         "secret host path",
         std::io::ErrorKind::PermissionDenied,
     )));
     assert!(matches!(
-        open_file_for_inspection(&handle, &target, FileByteSelection::Full)
+        open_file_for_inspection(&handle, "/file", FileByteSelection::Full)
             .await
             .unwrap(),
         FileInspection::Rejected(FileReadHead::PermissionDenied)
@@ -245,19 +204,14 @@ async fn inspection_revalidates_before_io_and_sanitizes_permission_failures() {
         control.push_get_attributes(Err(sandbox_error("secret host path", kind)));
         control.push_close(Ok(()));
         assert!(matches!(
-            open_file_for_inspection(&handle, &target, FileByteSelection::Full).await,
+            open_file_for_inspection(&handle, "/file", FileByteSelection::Full).await,
             Err(FileReadError::Storage)
         ));
     }
     control.push_delete_and_verify(Ok(()));
     let sealed = seal(filesystem);
-    let root_target = FileReadTarget::WithinRoot {
-        root: "/".into(),
-        suffix: vec![],
-        directory_request: false,
-    };
     assert!(matches!(
-        open_file_for_inspection(&handle, &root_target, FileByteSelection::Full).await,
+        open_file_for_inspection(&handle, "/", FileByteSelection::Full).await,
         Err(FileReadError::Lifecycle)
     ));
     delete(sealed).await.unwrap();
@@ -280,11 +234,7 @@ async fn inspection_walk_uses_single_component_descriptors_and_open_metadata() {
     let before = control.calls().len();
     let FileInspection::Opened { file, metadata } = open_file_for_inspection(
         &handle,
-        &FileReadTarget::WithinRoot {
-            root: "/public/nested".into(),
-            suffix: vec!["leaf".into()],
-            directory_request: false,
-        },
+        "/public/nested/leaf",
         FileByteSelection::Suffix { length: 3 },
     )
     .await

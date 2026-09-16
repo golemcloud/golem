@@ -21,7 +21,6 @@ use futures::Stream;
 use futures::task::AtomicWaker;
 use golem_common::model::filesystem::{
     FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
-    FileReadTarget,
 };
 use golem_service_base::model::FileReadResponse;
 use std::pin::Pin;
@@ -149,7 +148,7 @@ impl Drop for ReadBody {
 /// No producer task is spawned, and file length is never converted to a host-sized allocation.
 pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
     handle: &FilesystemGenerationHandle<Adapter>,
-    target: &FileReadTarget,
+    path: &str,
     selection: FileByteSelection,
     deadline: Instant,
     mut response: oneshot::Sender<Result<FileReadResponse, FileReadError>>,
@@ -162,7 +161,7 @@ pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
         biased;
         _ = sleep_until(deadline) => Err(FileReadError::DeadlineExceeded),
         _ = response.closed() => return,
-        result = open_file_for_inspection(handle, target, selection) => result,
+        result = open_file_for_inspection(handle, path, selection) => result,
     };
     if Instant::now() >= deadline {
         let _ = response.send(Err(FileReadError::DeadlineExceeded));

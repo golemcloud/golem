@@ -42,7 +42,7 @@ use futures::FutureExt;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
@@ -2046,13 +2046,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::ReadFile {
-                target,
+                path,
                 selection,
                 reservation,
                 sender,
                 ..
             } => {
-                self.read_file(target, selection, reservation, sender).await;
+                self.read_file(path, selection, reservation, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
@@ -2747,7 +2747,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// that may modify them.
     async fn read_file(
         &self,
-        target: FileReadTarget,
+        path: CanonicalFilePath,
         selection: FileByteSelection,
         reservation: FileReadReservation,
         mut sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
@@ -2789,7 +2789,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .filesystem_generation_handle();
         crate::services::agent_filesystem::produce_file_read(
             &generation,
-            &target,
+            path.as_abs_str(),
             selection,
             deadline,
             sender,

@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::filesystem::{
-    FileByteSelection, FileReadExtent, FileReadHead, FileReadTarget,
-};
+use golem_common::model::component::CanonicalFilePath;
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_common::{agent_id, data_value};
@@ -359,11 +358,7 @@ async fn live_file_inspection_corpus_byte_selections(
         let worker = executor.active_agent(&owned).await.unwrap().primary();
         let response = worker
             .read_file(
-                FileReadTarget::WithinRoot {
-                    root: "/".into(),
-                    suffix: vec!["a.txt".into()],
-                    directory_request: false,
-                },
+                CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
                 selection,
                 admission.reserve(owned, Instant::now())?,
             )
@@ -413,9 +408,7 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
     let owned = OwnedAgentId::new(context.default_environment_id, &agent);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let admission = Arc::new(FileReadAdmission::default());
-    let target = FileReadTarget::Exact {
-        file_path: "/a.txt".into(),
-    };
+    let target = CanonicalFilePath::from_abs_str("/a.txt").unwrap();
     let mut response = worker
         .read_file(
             target.clone(),
@@ -486,7 +479,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_common::model::component::AgentFilePermissions;
     use golem_test_framework::model::IFSEntry;
     use std::path::PathBuf;
 
@@ -510,11 +503,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
     let owned = OwnedAgentId::new(context.default_environment_id, &agent);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let admission = Arc::new(FileReadAdmission::default());
-    let target = FileReadTarget::WithinRoot {
-        root: "/selected".into(),
-        suffix: vec!["a.txt".into()],
-        directory_request: false,
-    };
+    let target = CanonicalFilePath::from_abs_str("/selected/a.txt").unwrap();
     let response = worker
         .read_file(
             target.clone(),
@@ -667,9 +656,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         matches!(
             worker
                 .read_file(
-                    FileReadTarget::Exact {
-                        file_path: "/a.txt".into()
-                    },
+                    CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
                     FileByteSelection::Full,
                     expiring
                 )
@@ -683,9 +670,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         "{deadline_id}: earlier invocation must still block inspection"
     );
     let mut read = Box::pin(worker.read_file(
-        FileReadTarget::Exact {
-            file_path: "/a.txt".into(),
-        },
+        CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
         FileByteSelection::Full,
         admission.reserve(owned.clone(), Instant::now())?,
     ));
@@ -808,12 +793,7 @@ async fn configured_read_deadline_reaches_grpc_admission(
             agent_id: Some(agent.clone().into()),
             component_owner_account_id: Some(component.account_id.into()),
             environment_id: Some(context.default_environment_id.into()),
-            target: Some(
-                FileReadTarget::Exact {
-                    file_path: "/a.txt".into(),
-                }
-                .into(),
-            ),
+            file_path: "/a.txt".into(),
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
             selection: Some(FileByteSelection::Full.into()),
@@ -839,6 +819,72 @@ async fn configured_read_deadline_reaches_grpc_admission(
     assert_eq!(
         executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
         b"after"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetFileContentsRequest, get_file_contents_response,
+    };
+    use golem_common::model::filesystem::FileReadError;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed = agent_id!(
+        "Inspection",
+        "exact-path",
+        "/%2e%2e",
+        b"literal-percent-path".to_vec(),
+        false
+    );
+    let agent = AgentId {
+        component_id: component.id,
+        agent_id: parsed.to_string(),
+    };
+    for path in ["", "relative", "/sub/../%2e%2e", "//%2e%2e", "/%2e%2e/"] {
+        let mut stream = executor
+            .client
+            .clone()
+            .get_file_contents(GetFileContentsRequest {
+                agent_id: Some(agent.clone().into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(context.default_environment_id.into()),
+                file_path: path.into(),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: None,
+                selection: Some(FileByteSelection::Full.into()),
+            })
+            .await?
+            .into_inner();
+        let first = stream.message().await?.unwrap();
+        let Some(get_file_contents_response::Result::ReadFailure(error)) = first.result else {
+            panic!("{path:?}: expected a typed path error, got {first:?}");
+        };
+        assert_eq!(
+            FileReadError::try_from(error)?,
+            FileReadError::InvalidTarget
+        );
+        assert!(stream.message().await?.is_none());
+        assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
+    }
+    assert_eq!(
+        executor
+            .get_file_contents(&agent, "/%2e%2e")
+            .await?
+            .as_ref(),
+        b"literal-percent-path"
     );
     Ok(())
 }

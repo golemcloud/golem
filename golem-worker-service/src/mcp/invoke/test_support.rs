@@ -437,7 +437,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn get_file_contents(
         &self,
         _: &AgentId,
-        _: golem_common::model::filesystem::FileReadTarget,
+        _: CanonicalFilePath,
         _: golem_common::model::filesystem::FileByteSelection,
         _: EnvironmentId,
         _: AccountId,

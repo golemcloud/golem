@@ -74,7 +74,7 @@ use golem_common::model::agent::{
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::filesystem::{FileByteSelection, FileReadError, FileReadTarget};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
@@ -1637,24 +1637,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         arrival: tokio::time::Instant,
     ) -> Result<Result<FileReadResponse, FileReadError>, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
-        let target = request
-            .target
-            .clone()
-            .ok_or(FileReadError::InvalidTarget)
-            .and_then(|value| {
-                FileReadTarget::try_from(value).map_err(|_| FileReadError::InvalidTarget)
-            });
+        let path = validate_file_read_path(&request.file_path).and_then(|()| {
+            CanonicalFilePath::from_abs_str(&request.file_path)
+                .map_err(|_| FileReadError::InvalidTarget)
+        });
         let selection = request
             .selection
             .ok_or(FileReadError::InvalidSelection)
             .and_then(FileByteSelection::try_from);
-        let (target, selection, deadline) =
-            match (target, selection, self.file_reads.deadline(arrival)) {
-                (Ok(target), Ok(selection), Ok(deadline)) => (target, selection, deadline),
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    return Ok(Err(error));
-                }
-            };
+        let (path, selection, deadline) = match (path, selection, self.file_reads.deadline(arrival))
+        {
+            (Ok(path), Ok(selection), Ok(deadline)) => (path, selection, deadline),
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                return Ok(Err(error));
+            }
+        };
         tokio::time::timeout_at(deadline, async {
             let owned_agent_id =
                 extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
@@ -1665,7 +1662,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Err(error) => return Ok(Err(error)),
             };
             let worker = self.get_or_create(&request).await?;
-            Ok(worker.read_file(target, selection, reservation).await)
+            Ok(worker.read_file(path, selection, reservation).await)
         })
         .await
         .unwrap_or(Ok(Err(FileReadError::DeadlineExceeded)))

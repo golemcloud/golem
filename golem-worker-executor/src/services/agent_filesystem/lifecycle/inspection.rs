@@ -15,7 +15,7 @@
 use super::*;
 use crate::sandbox_filesystem::SandboxInspectionFailure;
 use golem_common::model::filesystem::{
-    FileByteSelection, FileReadError, FileReadHead, FileReadMetadata, FileReadTarget,
+    FileByteSelection, FileReadError, FileReadHead, FileReadMetadata, validate_file_read_path,
 };
 
 pub(crate) enum FileInspection {
@@ -26,36 +26,25 @@ pub(crate) enum FileInspection {
     Rejected(FileReadHead),
 }
 
-/// Opens a canonical target without following any root or suffix symlink.
+/// Opens a canonical absolute path without following any intermediate or final symlink.
 ///
 /// The caller must hold the resident Store and exclusive owner lane from before this call until
 /// the returned file has finished streaming. This is observation, not a durable guest invocation.
 /// Metadata is captured from the opened descriptor; path metadata only rejects unsafe opens.
-/// Directory intent never selects an index file. No returned error contains a host path.
+/// Directories never select an index file. No returned error contains a host path.
 pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
     handle: &FilesystemGenerationHandle<Adapter>,
-    target: &FileReadTarget,
+    path: &str,
     selection: FileByteSelection,
 ) -> Result<FileInspection, FileReadError> {
-    target
-        .validate()
-        .map_err(|_| FileReadError::InvalidTarget)?;
+    validate_file_read_path(path)?;
     selection.validate()?;
     if !matches!(handle.phase, GenerationHandlePhase::Resident) {
         return Err(FileReadError::Lifecycle);
     }
-    let (root, suffix, directory_request) = match target {
-        FileReadTarget::Exact { file_path } => (file_path.as_str(), &[][..], false),
-        FileReadTarget::WithinRoot {
-            root,
-            suffix,
-            directory_request,
-        } => (root.as_str(), suffix.as_slice(), *directory_request),
-    };
-    let components: Vec<&str> = root[1..]
+    let components: Vec<&str> = path[1..]
         .split('/')
         .filter(|part| !part.is_empty())
-        .chain(suffix.iter().map(String::as_str))
         .collect();
     // The empty path is the filesystem root, never a regular file.
     if components.is_empty() {
@@ -69,7 +58,7 @@ pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
     let mut directory = None;
     for (index, component) in components.iter().enumerate() {
         let last = index == components.len() - 1;
-        let expected = if last && !directory_request {
+        let expected = if last {
             SandboxObjectKind::File
         } else {
             SandboxObjectKind::Directory
@@ -88,9 +77,6 @@ pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
             Err(error) => return classify_inspection_error(error),
         };
         if last {
-            if directory_request {
-                return Ok(FileInspection::Rejected(FileReadHead::NotRegular));
-            }
             let attrs = match attributes(handle, Target::Open(&opened.node))
                 .map_err(|_| FileReadError::Lifecycle)?
                 .await

@@ -2,7 +2,7 @@ use super::inspection::native_resident;
 use super::*;
 use futures::StreamExt;
 use golem_common::model::filesystem::{
-    FileByteSelection, FileReadError, FileReadExtent, FileReadHead, FileReadTarget,
+    FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
 };
 use golem_service_base::model::FileReadResponse;
 use test_r::{test, timeout};
@@ -14,13 +14,10 @@ async fn expired_or_abandoned_read_does_not_begin_filesystem_io() {
     let (resident, control, _) = resident(Err(unsupported_allocation())).await;
     let before = control.calls();
     let handle = resident_generation_handle(&resident);
-    let target = FileReadTarget::Exact {
-        file_path: "/file".into(),
-    };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     produce_file_read(
         &handle,
-        &target,
+        "/file",
         FileByteSelection::Full,
         Deadline::now(),
         sender,
@@ -34,7 +31,7 @@ async fn expired_or_abandoned_read_does_not_begin_filesystem_io() {
     drop(receiver);
     produce_file_read(
         &handle,
-        &target,
+        "/file",
         FileByteSelection::Full,
         Deadline::now() + Duration::from_secs(20),
         sender,
@@ -52,16 +49,7 @@ async fn start_read<Adapter: SandboxFilesystemAdapter>(
 ) -> (tokio::task::JoinHandle<()>, FileReadResponse) {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        produce_file_read(
-            &handle,
-            &FileReadTarget::Exact {
-                file_path: "/file".into(),
-            },
-            selection,
-            deadline,
-            sender,
-        )
-        .await;
+        produce_file_read(&handle, "/file", selection, deadline, sender).await;
     });
     (task, receiver.await.unwrap().unwrap())
 }

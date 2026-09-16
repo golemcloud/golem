@@ -50,7 +50,7 @@ use golem_common::model::component::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{
     FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
-    FileReadTarget,
+    validate_file_read_path,
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
@@ -484,7 +484,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        target: FileReadTarget,
+        path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -1432,18 +1432,16 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        target: FileReadTarget,
+        path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<FileReadResponse> {
-        target
-            .validate()
-            .map_err(|_| WorkerServiceError::FileRead(FileReadError::InvalidTarget))?;
+        validate_file_read_path(path.as_abs_str()).map_err(WorkerServiceError::FileRead)?;
         selection.validate().map_err(WorkerServiceError::FileRead)?;
         let agent_id = agent_id.clone();
-        let target_clone = target.clone();
+        let path_clone = path.clone();
         let (first, stream) = self
             .call_worker_executor(
                 agent_id.clone(),
@@ -1452,7 +1450,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     let request = workerexecutor::v1::GetFileContentsRequest {
                             agent_id: Some(agent_id.clone().into()),
                             component_owner_account_id: Some(account_id.into()),
-                            target: Some(target_clone.clone().into()),
+                            file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                             principal: None,
