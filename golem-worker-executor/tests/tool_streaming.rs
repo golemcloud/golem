@@ -6612,7 +6612,8 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         assert!(
             update_error
                 .to_string()
-                .contains("Ephemeral workers cannot be updated")
+                .contains("update is not supported for an external tool owner"),
+            "unexpected update rejection: {update_error}"
         );
         assert!(
             fresh
