@@ -25,6 +25,6 @@ export const ToolClientLive: Layer.Layer<ToolClient> = Layer.succeed(
     createStdin: Host.createStdin,
     createStdinFromStream: Host.createStdinFromStream,
     createStdout: Host.createStdout,
-    rpc: (name) => new Host.ToolRpc(name),
+    rpc: (name) => Host.ToolRpc.create(name),
   }),
 )
