@@ -11,9 +11,19 @@ pub(all) enum RpcError {
 ///|
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
+  RemoteTool(RemoteToolError)
   Tool(E)
   UnknownToolError(String, @model.TypedSchemaValue)
 }
+
+///|
+pub(all) enum RemoteToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+} derive(Eq, Debug)
 
 ///|
 fn release_optional_value(
@@ -609,28 +619,15 @@ fn[E] map_remote_tool_error(
         None => ToolError::UnknownToolError(error.name, decoded)
       }
     }
-    other =>
-      ToolError::Rpc(
-        RpcError::Protocol(
-          "remote tool error: " + remote_tool_error_label(other),
-        ),
-      )
-  }
-}
-
-///|
-fn remote_tool_error_label(error : @toolCommon.ToolError) -> String {
-  match error {
     @toolCommon.ToolError::InvalidToolName(name) =>
-      "invalid tool name `" + name + "`"
+      ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
     @toolCommon.ToolError::InvalidCommandPath(path) =>
-      "invalid command path `" + path.join(" ") + "`"
-    @toolCommon.ToolError::InvalidInput(message) => "invalid input: " + message
+      ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
+    @toolCommon.ToolError::InvalidInput(message) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
     @toolCommon.ToolError::ConstraintViolation(message) =>
-      "constraint violation: " + message
+      ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
     @toolCommon.ToolError::InvalidResult(message) =>
-      "invalid result: " + message
-    @toolCommon.ToolError::CustomError(error) =>
-      "custom error `" + error.name + "`"
+      ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
   }
 }

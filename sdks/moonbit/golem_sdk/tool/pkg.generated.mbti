@@ -133,6 +133,14 @@ pub async fn ProviderStdout::write_all(Self, ArrayView[Byte]) -> Bool
 pub async fn ProviderStdout::write_all_bytes(Self, BytesView) -> Bool
 pub async fn ProviderStdout::write_bytes(Self, BytesView) -> Int
 
+pub(all) enum RemoteToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+} derive(Eq, @debug.Debug)
+
 pub(all) enum RpcError {
   Protocol(String)
   Denied(String)
@@ -157,6 +165,7 @@ pub fn[E] ToolClient::start(Self, Array[String], @schema_model.TypedSchemaValue,
 
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
+  RemoteTool(RemoteToolError)
   Tool(E)
   UnknownToolError(String, @schema_model.TypedSchemaValue)
 }
