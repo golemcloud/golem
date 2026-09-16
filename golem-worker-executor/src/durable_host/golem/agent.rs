@@ -103,7 +103,18 @@ fn validate_constructor_input_value(
         return Err("expected input parameter record".to_string());
     };
 
-    let fields_schema = agent_type.constructor.input_schema.fields();
+    let fields_schema: Vec<_> = agent_type
+        .constructor
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| {
+            matches!(
+                field.source,
+                golem_common::schema::agent::FieldSource::UserSupplied
+            )
+        })
+        .collect();
     if fields.len() != fields_schema.len() {
         return Err(format!(
             "expected {} parameters, got {}",

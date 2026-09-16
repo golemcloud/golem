@@ -114,6 +114,7 @@ pub enum GolemReflectError {
     InvalidType(String),
     KnownEphemeralBinding(String),
     InvalidSchemaValue { issues: Vec<String> },
+    MalformedRemoteOutput(String),
     SchemaRender(RenderError),
     SchemaEncode(String),
     SchemaDecode(String),
@@ -152,6 +153,9 @@ impl Display for GolemReflectError {
             }
             Self::InvalidSchemaValue { issues } => {
                 write!(f, "schema value is invalid: {}", issues.join("; "))
+            }
+            Self::MalformedRemoteOutput(message) => {
+                write!(f, "malformed remote output: {message}")
             }
             Self::SchemaRender(error) => write!(f, "schema rendering failed: {error}"),
             Self::SchemaEncode(message) => write!(f, "schema encoding failed: {message}"),
@@ -743,9 +747,11 @@ impl ReflectedAgentMethod {
             .invoke_and_await(&self.definition.raw.name, input)
             .await?;
         if let (Some(output), Some(value)) = (&self.definition.output, &invocation.value) {
-            output.validate_value(value)?;
+            output
+                .validate_value(value)
+                .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
         } else if self.definition.output.is_some() != invocation.value.is_some() {
-            return Err(GolemReflectError::InvalidType(format!(
+            return Err(GolemReflectError::MalformedRemoteOutput(format!(
                 "method `{}` returned an unexpected unit/value shape",
                 self.definition.raw.name
             )));
@@ -762,7 +768,11 @@ impl ReflectedAgentMethod {
             .invoke_value(self.definition.input.pack_json(input)?)
             .await?;
         let value = match (&self.definition.output, invocation.value) {
-            (Some(schema), Some(value)) => Some(schema.unpack_json(&value)?),
+            (Some(schema), Some(value)) => Some(
+                schema
+                    .unpack_json(&value)
+                    .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?,
+            ),
             _ => None,
         };
         Ok(Invocation {
@@ -1428,9 +1438,11 @@ where
             .invoke_and_await(&self.definition.name, input)
             .await?;
         if let (Some(schema), Some(value)) = (&self.definition.output, &invocation.value) {
-            schema.validate_value(value)?;
+            schema
+                .validate_value(value)
+                .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
         } else if self.definition.output.is_some() != invocation.value.is_some() {
-            return Err(GolemReflectError::InvalidType(format!(
+            return Err(GolemReflectError::MalformedRemoteOutput(format!(
                 "method `{}` returned an unexpected unit/value shape",
                 self.definition.name
             )));
@@ -1440,7 +1452,7 @@ where
             .as_ref()
             .map(O::from_value)
             .transpose()
-            .map_err(|error| GolemReflectError::InvalidType(error.to_string()))?;
+            .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
         Ok(Invocation {
             metadata: invocation.metadata,
             value,
@@ -1525,17 +1537,21 @@ impl<O: crate::FromSchema> Future for TypedPendingInvocation<O> {
             Poll::Ready(Ok(invocation)) => {
                 if let (Some(schema), Some(value)) = (&this.output, &invocation.value) {
                     if let Err(error) = schema.validate_value(value) {
-                        return Poll::Ready(Err(error));
+                        return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
+                            error.to_string(),
+                        )));
                     }
                 } else if this.output.is_some() != invocation.value.is_some() {
-                    return Poll::Ready(Err(GolemReflectError::InvalidType(
+                    return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
                         "pending invocation returned an unexpected unit/value shape".to_string(),
                     )));
                 }
                 let value = match invocation.value.as_ref().map(O::from_value).transpose() {
                     Ok(value) => value,
                     Err(error) => {
-                        return Poll::Ready(Err(GolemReflectError::InvalidType(error.to_string())));
+                        return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
+                            error.to_string(),
+                        )));
                     }
                 };
                 Poll::Ready(Ok(Invocation {

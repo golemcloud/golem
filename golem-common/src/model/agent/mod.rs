@@ -231,6 +231,12 @@ impl ParsedAgentId {
                 .input_schema
                 .fields()
                 .iter()
+                .filter(|field| {
+                    matches!(
+                        field.source,
+                        crate::schema::agent::FieldSource::UserSupplied
+                    )
+                })
                 .map(|field| NamedFieldType {
                     name: field.name.clone(),
                     body: field.schema.clone(),
@@ -295,6 +301,12 @@ pub fn typed_constructor_parameters(
             .input_schema
             .fields()
             .iter()
+            .filter(|field| {
+                matches!(
+                    field.source,
+                    crate::schema::agent::FieldSource::UserSupplied
+                )
+            })
             .map(|field| NamedFieldType {
                 name: field.name.clone(),
                 body: field.schema.clone(),

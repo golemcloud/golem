@@ -20,12 +20,12 @@ use crate::base_model::agent::{
 };
 use crate::model::agent::{
     AgentTypeSchemaResolver, InvocationFreshnessDisposition, ParsedAgentId,
-    ephemeral_invocation_phantom_id,
+    ephemeral_invocation_phantom_id, typed_constructor_parameters,
 };
 use crate::schema::{
-    AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
-    NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,
-    TypedSchemaValue,
+    AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, BinaryRestrictions, InputSchema,
+    MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
+    TextRestrictions, TypedSchemaValue,
 };
 use crate::{agent_id, data_value, phantom_agent_id};
 use poem_openapi::types::ToJSON;
@@ -52,6 +52,39 @@ fn agent_id_structural_normalization() {
         .unwrap();
         assert_eq!(agent_id.to_string(), "agent-3(32,(12,32,f(0,1,2)))");
     }
+}
+
+#[test]
+fn agent_id_excludes_auto_injected_constructor_fields() {
+    let mut agent_type = make_agent_type("principal-scoped", vec![]);
+    agent_type.constructor.input_schema = InputSchema::Parameters(vec![
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
+        NamedField::user_supplied("key", SchemaType::u32()),
+    ]);
+    let mut types = TestAgentTypes::new();
+    types
+        .types
+        .insert(agent_type.type_name.clone(), agent_type.clone());
+
+    let parsed = ParsedAgentId::parse("principal-scoped(42)", types).unwrap();
+    assert_eq!(parsed.to_string(), "principal-scoped(42)");
+    assert_eq!(
+        parsed.parameters,
+        typed_constructor_parameters(
+            &agent_type,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::U32(42)],
+            },
+        )
+    );
+    assert_eq!(
+        parsed.parameters.graph().root,
+        SchemaType::record(vec![record_field("key", SchemaType::u32())]),
+    );
 }
 
 #[test]
