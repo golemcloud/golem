@@ -11,8 +11,7 @@ the target is known while writing the component, prefer its definition client
 
 ## Discover Agent Types
 
-The reflection API exposes the agent types registered for the running
-component revision:
+The reflection API exposes agent types visible in the current environment:
 
 ```typescript
 import {
@@ -24,7 +23,7 @@ const available = getAllAgentTypes();
 const counterType = getReflectedAgentType('CounterAgent');
 
 if (!counterType) {
-  throw new Error('CounterAgent is not registered');
+  throw new Error('CounterAgent is not visible in this environment');
 }
 
 console.log(counterType.name, counterType.mode, counterType.sourceLanguage);
@@ -81,6 +80,10 @@ Use a binding-only contract when an existing durable `ParsedAgentId` supplies
 the target name and constructor value:
 
 ```typescript
+import { ParsedAgentId, defineAgentClient, method } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+
+const existingAgentId = new ParsedAgentId('CounterAgent("main")');
 const PingContract = defineAgentClient({
   methods: {
     ping: method({ input: {}, returns: z.string() }),

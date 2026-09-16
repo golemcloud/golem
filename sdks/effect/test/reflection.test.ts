@@ -2,7 +2,8 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Fiber, Layer, Result } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { fromAgentId } from "../src/DynamicClient.js"
+import { parse } from "../src/AgentIdentity.js"
+import { bind as bindDynamic } from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
 import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
@@ -72,6 +73,11 @@ const hostLayer = (registered?: AgentHost.RegisteredAgentType) =>
       getAgentType: () => registered,
       getAgentTypeByAgentId: () => registered,
       getAllAgentTypes: () => (registered === undefined ? [] : [registered]),
+      parseAgentId: (_encoded: string) => [
+        "Recursive",
+        { value: { root: 0, valueNodes: [] } },
+        undefined,
+      ],
     } as never),
   )
 
@@ -96,12 +102,34 @@ describe("reflection", () => {
         found?.method("walk")?.input.validateJson({ node: { label: "x", next: null } }),
       ).toMatchObject({ success: true })
       expect(Object.isFrozen(found?.methods)).toBe(true)
+      expect(found?.constructorInput.graph).toBe(found?.method("walk")?.input.graph)
+      expect(found?.constructorInput.graph).toBe(found?.method("walk")?.output?.graph)
     }).pipe(Effect.provide(hostLayer())),
+  )
+
+  it.effect("surfaces discovery traps and malformed schema graphs as typed failures", () =>
+    Effect.gen(function* () {
+      const trapped = Layer.succeed(AgentHostClient, {
+        getAgentType: () => {
+          throw new Error("host unavailable")
+        },
+      } as never)
+      expect(
+        yield* getAgentType("Recursive").pipe(Effect.provide(trapped), Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "ReflectionHostError" } })
+
+      const malformed = registration()
+      malformed.agentType.methods[0]!.outputSchema = { tag: "single", val: 999 }
+      expect(
+        yield* getAgentType("Recursive").pipe(Effect.provide(hostLayer(malformed)), Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "ReflectionSchemaError" } })
+    }),
   )
 
   it.effect("discovers by identity and enumerates types without opening RPC connections", () =>
     Effect.gen(function* () {
-      expect(yield* getAgentTypeByAgentId("missing")).toBeUndefined()
+      const missing = yield* parse("missing")
+      expect(yield* getAgentTypeByAgentId(missing)).toBeUndefined()
       expect(yield* getAllAgentTypes).toEqual([])
       const host = Layer.succeed(AgentHostClient, {
         getAgentTypeByAgentId: (id: string) => {
@@ -110,7 +138,8 @@ describe("reflection", () => {
         },
         getAllAgentTypes: () => [registration()],
       } as never)
-      const found = yield* getAgentTypeByAgentId('Recursive("instance")').pipe(Effect.provide(host))
+      const identity = yield* parse('Recursive("instance")')
+      const found = yield* getAgentTypeByAgentId(identity).pipe(Effect.provide(host))
       expect(found?.name).toBe("Recursive")
       expect(found?.method("walk")?.name).toBe("walk")
       const all = yield* getAllAgentTypes.pipe(Effect.provide(host))
@@ -151,9 +180,13 @@ describe("reflection", () => {
       const ephemeral = (yield* getAgentType("Recursive"))!
       if (ephemeral.mode !== "ephemeral") throw new Error("expected ephemeral mode")
       expect("get" in ephemeral.client).toBe(false)
-      expect("getPhantom" in ephemeral.client).toBe(false)
+      expect("getPhantom" in ephemeral.client).toBe(true)
       yield* Effect.scoped(
         Effect.gen(function* () {
+          yield* ephemeral.client.getPhantom(
+            { name: "unique" },
+            "12345678-1234-1234-1234-1234567890ab",
+          )
           const client = yield* ephemeral.client.newPhantom({ name: "unique" })
           expect("agentId" in client).toBe(false)
         }),
@@ -164,14 +197,16 @@ describe("reflection", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const phantom = yield* durable.client.newPhantom({ name: "unique" })
-          expect(phantom).toMatchObject({
-            agentId: "durable-phantom",
-            phantomId: "00000000-0000-0001-0000-000000000007",
-          })
+          expect(phantom.agentId.encoded).toBe("durable-phantom")
+          expect(phantom.phantomId).toBe("00000000-0000-0001-0000-000000000007")
         }),
       )
-      expect(connections).toEqual([undefined, { highBits: 1n, lowBits: 7n }])
-      expect(dropped).toBe(2)
+      expect(connections).toEqual([
+        { highBits: 1311768465173123636n, lowBits: 1311693407469998251n },
+        undefined,
+        { highBits: 1n, lowBits: 7n },
+      ])
+      expect(dropped).toBe(3)
     }).pipe(Effect.provide(Layer.mergeAll(host, rpc, durability)))
   })
 
@@ -253,7 +288,8 @@ describe("reflection", () => {
         pending = true
         const fiber = yield* Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* fromAgentId("opaque-id")
+            const identity = yield* parse("opaque-id")
+            const client = yield* bindDynamic(identity)
             return yield* client.method("walk").invoke({ root: 0, valueNodes: [] })
           }),
         ).pipe(Effect.provide(Layer.mergeAll(host, rpc)), Effect.forkChild)

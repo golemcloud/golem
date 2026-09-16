@@ -8,7 +8,14 @@ QuickJS-backed WASI Preview 3 components.
 - Agent metadata uses `id`, methods use `input`, and `defineAgent` returns a spec with `.client` and
   `.implement(...)`. Do not reintroduce `constructorParams`, `params`, or standalone old clients.
 - Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
-  `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are fiber-interruptible.
+  `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
+  fiber-interruptible.
+- Unimplemented `defineAgent` specs are complete caller-owned contracts. `spec.agentId` constructs
+  a parsed identity, and `Client.bind(identity, spec)` validates exact names and constructor schemas.
+  `Client.contract({ methods })` is method-only and binds without discovery using durable results.
+  `DynamicClient.bind(identity)` uses schema-native values with no contract or discovery. Complete
+  ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
+  `getPhantom` or `newPhantom` factories. Do not add a flat `defineAgentClient` alias.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
   and never snapshotted.
 - Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
@@ -27,8 +34,9 @@ QuickJS-backed WASI Preview 3 components.
   live resource exactly once; defects, interruption, and encode failures drop it unfinished.
 - Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a
   final parity gate. Runtime discovery is in `Reflection`, immutable schema views in `SchemaRef`,
-  and value-only identity binding in `DynamicClient`. Narrow reflected `mode` before selecting
-  a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
+  and value-only identity binding in `DynamicClient`. Parse strings through `AgentIdentity.parse`
+  once; pass parsed identities to typed, reflected, and dynamic binding. Narrow reflected `mode`
+  before selecting a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
 
 The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
 separate concerns and must be tested independently.

@@ -24,6 +24,9 @@
  */
 export * as Agent from "./Agent.js"
 
+/** Parsed environment-scoped agent identities. @since 1.6.0 @category modules */
+export * as AgentIdentity from "./AgentIdentity.js"
+
 /**
  * Effect-typed wrappers around the agent-management subset of
  * `golem:api/host@1.5.0` (metadata, fork/revert/update, the `GetAgents`

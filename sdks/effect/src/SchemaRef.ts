@@ -30,9 +30,18 @@ export class SchemaRef {
   readonly root: SchemaType
   constructor(wireGraph: CoreTypes.SchemaGraph, root = wireGraph.root) {
     const decoded = schemaGraphFromWit({ ...wireGraph, root })
-    this.graph = deepFreeze(decoded)
+    this.graph = freezeSchemaGraph(decoded)
     this.root = this.graph.root
     Object.freeze(this)
+  }
+  /** Build a view over an already decoded, deeply immutable graph. @since 1.6.0 @category constructors */
+  static fromImmutableGraph(graph: SchemaGraph, root: SchemaType): SchemaRef {
+    const ref = Object.create(SchemaRef.prototype) as SchemaRef
+    Object.defineProperties(ref, {
+      graph: { value: graph, enumerable: true },
+      root: { value: root, enumerable: true },
+    })
+    return Object.freeze(ref)
   }
   /** Pack canonical JSON into the native schema-value carrier. @since 1.6.0 @category conversions */
   packJson(value: JsonValue): CoreTypes.SchemaValueTree {
@@ -82,13 +91,15 @@ const invalid = <T>(error: unknown): ValidationResult<T> => ({
     },
   ],
 })
-const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
+/** @internal Freeze a decoded schema graph including its definition map. */
+export const freezeSchemaGraph = <T>(value: T, seen = new WeakSet<object>()): T => {
   if (value === null || typeof value !== "object" || seen.has(value)) return value
+  if (value instanceof Uint8Array) return value
   seen.add(value)
   if (value instanceof Map) {
     for (const [key, item] of value) {
-      deepFreeze(key, seen)
-      deepFreeze(item, seen)
+      freezeSchemaGraph(key, seen)
+      freezeSchemaGraph(item, seen)
     }
     Object.defineProperties(value, {
       set: {
@@ -107,8 +118,7 @@ const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
         },
       },
     })
-  } else if (!(value instanceof Uint8Array))
-    for (const item of Object.values(value)) deepFreeze(item, seen)
+  } else for (const item of Object.values(value)) freezeSchemaGraph(item, seen)
   return Object.freeze(value)
 }
 

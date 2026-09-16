@@ -1,5 +1,13 @@
 import { Effect, Schema, Stream } from "effect"
-import { defineAgent, method, Quota, Reflection, Tool, WitTypes } from "@golemcloud/effect-golem"
+import {
+  AgentIdentity,
+  defineAgent,
+  method,
+  Quota,
+  Reflection,
+  Tool,
+  WitTypes,
+} from "@golemcloud/effect-golem"
 import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
 import { TsPeer as GeneratedTsPeer } from "ts-peer-guest-client"
 
@@ -86,7 +94,9 @@ defineAgent({
           const method = yield* client.method("echo")
           const result = yield* method.invoke({ value })
           const output = result.value as { language: string; value: string }
-          const byId = yield* Reflection.getAgentTypeByAgentId(result.metadata.agentId)
+          const byId = yield* Reflection.getAgentTypeByAgentId(
+            yield* AgentIdentity.parse(result.metadata.agentId),
+          )
           const all = yield* Reflection.getAllAgentTypes
           if (byId?.name !== "TsPeer" || !all.some((type) => type.name === "RustPeer")) {
             return "discovery-mismatch"

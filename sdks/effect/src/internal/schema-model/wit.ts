@@ -334,6 +334,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   // (which resolves to a def id without recursing here), so only a structural
   // back-edge in raw type-node indices is reported as a cycle.
   const onPath = new Uint8Array(nodes.length)
+  const decoded: Array<SchemaType | undefined> = new Array(nodes.length)
 
   function idByDefIndex(di: DefIndex): TypeId {
     if (di < 0 || di >= witDefs.length) {
@@ -349,10 +350,12 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     if (onPath[idx] === 1) {
       throw new SchemaDecodeError(`cyclic type node reference at index ${idx}`)
     }
+    if (decoded[idx] !== undefined) return decoded[idx]
     onPath[idx] = 1
     const node = nodes[idx]
     const result = { body: fromBody(node.body), metadata: node.metadata }
     onPath[idx] = 0
+    decoded[idx] = result
     return result
   }
 

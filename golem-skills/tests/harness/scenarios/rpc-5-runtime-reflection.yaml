@@ -36,16 +36,26 @@ steps:
       Bind the contract to each ID and invoke `echo` with `"schema library"` and
       `"schema value"` respectively.
 
+      Also create a standalone method-only `defineAgentClient({ methods: { echo: ... } })`
+      contract (no name, ID, config, or mode). Bind it to the already constructed
+      `ParsedAgentId` and invoke `echo` with `"method only"`; do not reuse the
+      complete contract for this call.
+
+      Use the parsed identity's schema-free `dynamicClient()` with a packed
+      `SchemaValue` to invoke `echo` with `"dynamic"`.
+
       Construct the target's concrete AgentId from the reflected type, resolve its
       current type with `getAgentTypeByAgentId` after the first invocation, bind that
       reflected type to the AgentId, and invoke `echo` again with `"again"`.
 
       Return exactly an object with fields `listed`, `typeName`, `methodName`, `first`,
-      `second`, `schemaIdsMatch`, `schemaLibrary`, and `schemaValue`. They must
+      `second`, `schemaIdsMatch`, `schemaLibrary`, `schemaValue`, `methodOnly`, and
+      `dynamic`. They must
       respectively contain whether `ReflectionTarget` appeared in the discovered
       list, the discovered type name, the reflected method name, the two reflected
       echoed values, whether both caller-constructed identities have the same agent ID
-      string, and the two contract-call results. Make sure the project builds
+      string, the two complete-contract results, the standalone method-only result,
+      and the dynamic result. Make sure the project builds
       successfully.
     expectedSkills:
       - "golem-agent-reflection"
@@ -78,6 +88,10 @@ steps:
           equals: "schema library"
         - path: "$.schemaValue"
           equals: "schema value"
+        - path: "$.methodOnly"
+          equals: "method only"
+        - path: "$.dynamic"
+          equals: "dynamic"
 
   - id: "add-effect-reflected-rpc"
     only_if:
@@ -87,12 +101,26 @@ steps:
       `name`, with an Effect handler `echo` that accepts `{ message: string }` and returns the
       message. Add a durable `ReflectionCaller` whose Effect-based `run` handler uses the current
       `Reflection` API from `@golemcloud/effect-golem`: list visible types, find
-      `ReflectionTarget`, inspect `echo`, bind its reflected durable client to `{ name: "target" }`,
-      invoke `echo` with `{ message: "hello" }`, resolve the type again from the returned metadata
-      agent ID, and return `{ listed, typeName, methodName, value, resolvedName }`. Keep all
-      reflection and RPC operations Effect-native and scoped. Guard the reflected type's
-      discriminated `mode` before using its durable-only `client.get` factory. Build and deploy
-      successfully.
+      `ReflectionTarget`, inspect `echo`, and bind its reflected durable client to
+      `{ name: "target" }` to invoke `echo` with `{ message: "hello" }`. Parse the returned
+      metadata agent ID with `AgentIdentity.parse`, resolve its type by the parsed identity,
+      and bind it through `Client.bind(identity, reflectedType)` to invoke `"again"`.
+
+      Define a complete, unimplemented `defineAgent` spec named `ReflectionTarget`
+      with the same string ID and `echo` method, then use its `agentId` and
+      `Client.bind` to call `"exact"`. Independently define a method-only
+      `Client.contract({ methods: { echo: ... } })`, bind that parsed identity
+      with `Client.bind`, and call `"method only"`. Finally bind it through
+      the schema-free `DynamicClient.bind` and invoke with packed `SchemaValue`
+      input to return `"dynamic"`. These calls must not import or implement
+      the target's implementation in the caller module.
+
+      Return `{ listed, typeName, methodName, value, resolvedName, reflected,
+      exact, methodOnly, dynamic, identityMatches }`, comparing both encoded
+      identities for `identityMatches`. Keep all operations Effect-native and
+      inside `Effect.scoped`; preserve typed error channels. Guard the reflected
+      type's discriminated `mode` before using its durable-only factory. Build
+      and deploy successfully.
     expectedSkills:
       - "golem-agent-reflection"
       - "golem-agent-reflection-effect"
@@ -118,3 +146,13 @@ steps:
           equals: "hello"
         - path: "$.resolvedName"
           equals: "ReflectionTarget"
+        - path: "$.reflected"
+          equals: "again"
+        - path: "$.exact"
+          equals: "exact"
+        - path: "$.methodOnly"
+          equals: "method only"
+        - path: "$.dynamic"
+          equals: "dynamic"
+        - path: "$.identityMatches"
+          equals: true

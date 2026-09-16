@@ -50,7 +50,8 @@ middleware use the documented sub-imports. `internal/*` and `host/*` are not pub
 
 Keep a definition in a module without calling `.implement` when another component only needs its
 client. Durable definitions expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral
-definitions expose `newPhantom`. Calls, triggers, and schedules take one typed input object.
+definitions expose `getPhantom` and `newPhantom`, but not ordinary `get`. Calls, triggers, and
+schedules take one typed input object.
 
 ```ts
 const program = Effect.scoped(
@@ -70,8 +71,46 @@ schema contains a live stream is rejected because streams require an awaited inv
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
+An unimplemented `defineAgent` spec is a complete caller-owned contract: it has the exact name,
+constructor schema, lifecycle mode, and method codecs without registering an implementation. Its
+`agentId(input, phantomId?)` constructs a parsed environment-scoped identity.
+`Client.bind(identity, spec)` validates the exact name and constructor schema before opening RPC.
+For a method-only contract, use `Client.contract({ methods })` and `Client.bind(identity, contract)`;
+it performs no discovery and assumes durable result semantics.
+
+```ts
+import { Effect, Schema } from "effect"
+import { AgentIdentity, Client, DynamicClient, defineAgent, method } from "@golemcloud/effect-golem"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+
+const Target = defineAgent({
+  name: "Target",
+  id: { name: Schema.String },
+  methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
+}) // no .implement call in this caller
+
+const calls = (inputTree: CoreTypes.SchemaValueTree) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const identity = yield* Target.agentId({ name: "main" })
+      const exact = yield* Client.bind(identity, Target)
+      const first = yield* exact.echo({ message: "exact" })
+      const methods = Client.contract({ methods: Target.methods })
+      const second = yield* (yield* Client.bind(identity, methods)).echo({ message: "method only" })
+      const parsed = yield* AgentIdentity.parse(identity.encoded)
+      const dynamic = yield* DynamicClient.bind(parsed)
+      const raw = yield* dynamic.method("echo").invoke(inputTree)
+      // Dynamic methods accept native SchemaValueTree inputs and return metadata plus native values.
+      return { first, second, raw }
+    }),
+  )
+```
+
+Complete ephemeral specs require a phantom ID for `agentId(input, phantomId)` and reject generic
+existing-ID binding. Address known or fresh phantoms through their factories instead.
+
 For runtime-selected targets, use `Reflection.getAgentType(name)`,
-`getAgentTypeByAgentId(id)`, or `getAllAgentTypes`. Each immutable registration exposes
+`getAgentTypeByAgentId(parsedIdentity)`, or `getAllAgentTypes`. Each immutable registration exposes
 constructor/method `SchemaRef` values with JSON/value validation and JSON Schema rendering.
 Narrow `type.mode` to select its lifecycle factory:
 
@@ -84,17 +123,21 @@ const invokeCounter = Effect.scoped(
     const type = yield* Reflection.getAgentType("Counter")
     if (type === undefined || type.mode !== "durable") return undefined
     const client = yield* type.client.get({ name: "main" })
-    const increment = yield* client.method("increment")
-    return yield* increment.invoke({})
+    const add = yield* client.method("add")
+    return yield* add.invoke({ by: 1 })
   }),
 )
 ```
 
 Reflected invocation results contain metadata and, for non-unit outputs, `value`.
 Ephemeral `newPhantom` returns a client whose actual identity arrives in invocation metadata;
-durable `newPhantom` returns `{ client, agentId, phantomId }`. `invokeValue`, `triggerValue`,
+`getPhantom(input, phantomId)` addresses a known phantom without offering ordinary existing-ID
+binding. Durable `newPhantom` returns `{ client, agentId, phantomId }`, with a parsed `agentId`.
+Durable reflected types also bind through `Client.bind(identity, reflectedType)` after name and
+constructor validation. Discovery misses remain `undefined`; host and malformed-schema failures
+enter the typed error channel. `invokeValue`, `triggerValue`,
 and `scheduleValue` accept native WIT schema-value trees when JSON cannot represent capabilities.
-`DynamicClient.fromAgentId(id)` binds without discovery and uses value-only methods; callers
+`DynamicClient.bind(parsedIdentity)` binds without discovery and uses value-only methods; callers
 must supply the correct remote contract. Both APIs use scopes and fiber interruption and expose
 the same structured remote-call errors as typed clients.
 
