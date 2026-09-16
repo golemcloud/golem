@@ -11,6 +11,16 @@ pub fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
 }
 
 ///|
+pub fn SchemaRef::validate_value(
+  self : SchemaRef,
+  value : @model.SchemaValue,
+) -> Unit raise ReflectError {
+  guard @tool_core.schema_value_matches_graph(self.graph, value) else {
+    raise Schema("schema-native value does not match reflected schema")
+  }
+}
+
+///|
 /// Reports whether this schema root contains a live stream, following named
 /// references without looping on recursive definitions.
 pub fn SchemaRef::contains_stream(self : SchemaRef) -> Bool {

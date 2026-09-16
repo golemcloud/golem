@@ -193,6 +193,7 @@ pub fn AgentType::agent_id_value(
   constructor_value : @model.SchemaValue,
   phantom_id? : @types.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
+  self.constructor_input.validate_value(constructor_value)
   ParsedAgentId::create(self.name, constructor_value, phantom_id~)
 }
 
@@ -231,6 +232,7 @@ fn AgentType::client_value_with_config(
   reusable_identity : ParsedAgentId?,
   config : Array[@common.TypedAgentConfigValue],
 ) -> ReflectedAgentClient raise ReflectError {
+  self.constructor_input.validate_value(constructor_value)
   {
     agent_type: self,
     transport: Transport::create_with_config(
@@ -591,6 +593,7 @@ pub async fn ReflectedAgentClient::invoke_value(
   input : @model.SchemaValue,
 ) -> Invocation[@model.SchemaValue?] {
   let entry = self.require_method(method_name)
+  entry.input.validate_value(input)
   let invocation = self.transport.invoke_value(method_name, input)
   validate_invocation_output(entry, invocation)
 }
@@ -622,6 +625,7 @@ pub fn ReflectedAgentClient::trigger_value(
   input : @model.SchemaValue,
 ) -> InvocationMetadata raise ReflectError {
   let entry = self.require_method(method_name)
+  entry.input.validate_value(input)
   reject_non_awaited_streams(entry, "trigger")
   self.transport.trigger_value(method_name, input)
 }
@@ -645,6 +649,7 @@ pub fn ReflectedAgentClient::schedule_value(
   input : @model.SchemaValue,
 ) -> ScheduledInvocation raise ReflectError {
   let entry = self.require_method(method_name)
+  entry.input.validate_value(input)
   reject_non_awaited_streams(entry, "schedule")
   self.transport.schedule_value(scheduled_at, method_name, input)
 }
@@ -687,7 +692,11 @@ fn validate_invocation_output(
   invocation : Invocation[@model.SchemaValue?],
 ) -> Invocation[@model.SchemaValue?] raise ReflectError {
   match (entry.output, invocation.value) {
-    (None, None) | (Some(_), Some(_)) => invocation
+    (None, None) => invocation
+    (Some(schema), Some(value)) => {
+      schema.validate_value(value)
+      invocation
+    }
     (None, Some(_)) => raise Schema("unit method returned a value")
     (Some(_), None) => raise Schema("single-output method returned no value")
   }

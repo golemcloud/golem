@@ -226,6 +226,14 @@ fn value_matches_type(
 }
 
 ///|
+pub fn schema_value_matches_graph(
+  graph : @model.SchemaGraph,
+  value : @model.SchemaValue,
+) -> Bool {
+  value_matches_type(graph, graph.root, value)
+}
+
+///|
 fn resolve_ref(
   graph : @model.SchemaGraph,
   id : String,

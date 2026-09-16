@@ -245,6 +245,47 @@ test "reflected output validation rejects missing and unexpected values" {
   } noraise {
     _ => fail("expected an unexpected output to be rejected")
   }
+  try
+    validate_invocation_output(
+      value_method,
+      test_invocation(Some(@model.SchemaValue::U32(7U))),
+    )
+  catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected a malformed output to be rejected")
+  }
+}
+
+///|
+test "schema-native reflected values reject wrong nested types" {
+  let schema = test_schema(
+    Record([
+      {
+        name: "items",
+        body: @model.schema_type(List(@model.schema_type(U32(None)))),
+        metadata: @model.empty_metadata(),
+      },
+    ]),
+  )
+  schema.validate_value(
+    @model.SchemaValue::Record([
+      @model.SchemaValue::List([@model.SchemaValue::U32(3U)]),
+    ]),
+  )
+  try
+    schema.validate_value(
+      @model.SchemaValue::Record([
+        @model.SchemaValue::List([@model.SchemaValue::String("wrong")]),
+      ]),
+    )
+  catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected local schema-native validation failure")
+  }
 }
 
 ///|

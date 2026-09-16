@@ -187,6 +187,7 @@ pub fn SchemaRef::contains_stream(Self) -> Bool
 pub fn SchemaRef::new(@schema_model.SchemaGraph) -> Self
 pub fn SchemaRef::pack_json(Self, Json) -> @schema_model.SchemaValue raise ReflectError
 pub fn SchemaRef::unpack_json(Self, @schema_model.SchemaValue) -> Json raise ReflectError
+pub fn SchemaRef::validate_value(Self, @schema_model.SchemaValue) -> Unit raise ReflectError
 
 // Type aliases
 

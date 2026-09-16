@@ -8,6 +8,7 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "golemcloud/golem_sdk/rpc",
+  "golemcloud/golem_sdk/tool-core" @tool_core,
   "moonbitlang/core/string",
   "moonbitlang/core/encoding/base64",
 }
