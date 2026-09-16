@@ -69,6 +69,66 @@ impl Display for RawAgentId {
     }
 }
 
+/// A failed agent of a best-effort bulk action (update, redeploy, delete-all). Agents are
+/// identified by component and agent id: agent ids are unique within a component only, an
+/// agent type moved to another component leaves its old agents behind in the previous one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionError {
+    pub component_name: ComponentName,
+    pub agent_id: RawAgentId,
+    pub error: String,
+}
+
+impl AgentActionError {
+    pub fn is_for(&self, component_name: &ComponentName, agent_id: &RawAgentId) -> bool {
+        self.component_name == *component_name && self.agent_id == *agent_id
+    }
+}
+
+/// Outcome of a best-effort bulk agent action (redeploy, delete-all): what succeeded, and the
+/// error for each agent it failed on.
+pub struct BulkAgentActionResult<T> {
+    pub succeeded: Vec<T>,
+    pub errors: Vec<AgentActionError>,
+}
+
+impl<T> BulkAgentActionResult<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            succeeded: Vec::with_capacity(capacity),
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl<T> Default for BulkAgentActionResult<T> {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+/// Why redeploying a single agent failed. Redeploying deletes and then recreates the agent, so
+/// the two phases are told apart: after a failed recreation the agent no longer exists.
+pub enum RedeployAgentError {
+    Delete(anyhow::Error),
+    Recreate(anyhow::Error),
+}
+
+impl Display for RedeployAgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Delete(error) => write!(f, "failed to delete the agent: {error:#}"),
+            Self::Recreate(error) => {
+                write!(
+                    f,
+                    "the agent was deleted, but failed to recreate it: {error:#}"
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {

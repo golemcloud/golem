@@ -100,8 +100,7 @@ where
                     metadata.fingerprint,
                 )?;
             }
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned, &context, principal).await?;
+            let worker = Worker::get_exact_existing_suspended(self, &owned, principal).await?;
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
             match worker.lookup_invocation_result(&key).await {
@@ -269,8 +268,7 @@ where
                 .await?
         } else {
             let worker =
-                Worker::get_exact_existing_suspended(self, &owned, &context, principal.clone())
-                    .await?;
+                Worker::get_exact_existing_suspended(self, &owned, principal.clone()).await?;
             require_expected_callee_fingerprint(
                 request.expected_callee_fingerprint,
                 worker.get_initial_worker_metadata().fingerprint,

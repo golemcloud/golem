@@ -24,10 +24,10 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
-use crate::model::agent::AgentUpdateMode;
 use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
+use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
@@ -423,16 +423,18 @@ impl ComponentCommandHandler {
         log_action("Redeploying", "existing agents");
         let _indent = LogIndent::new();
 
-        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        // Best-effort, like updating: per-agent failures are collected and reported together,
+        // only failures of listing the agents abort the whole operation.
         let mut agents = Vec::new();
+        let mut errors = Vec::new();
         for component in components {
-            let redeployed = self
+            let result = self
                 .ctx
                 .agent_handler()
                 .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
             let version = component.metadata.root_package_version().clone();
-            for (agent_id, from_revision) in redeployed {
+            for (agent_id, from_revision) in result.succeeded {
                 let from_version = self
                     .component_version_at(&component.id, from_revision)
                     .await;
@@ -445,12 +447,20 @@ impl ComponentCommandHandler {
                     version: version.clone(),
                 });
             }
+            errors.extend(result.errors);
         }
 
+        let has_errors = !errors.is_empty();
+
         self.ctx.log_handler().log_output(AgentRedeployResult {
-            redeployed: true,
+            redeployed: !has_errors,
             agents,
+            errors,
         })?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
+        }
 
         Ok(())
     }
@@ -466,34 +476,53 @@ impl ComponentCommandHandler {
         // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
         //       we do so to help a bit with pending invocations or currently running worker creations,
         //       but this is not a 100% guarantee.
+        //       Deleting is best-effort: per-agent failures are collected and reported together.
+        //       Only successful deletes count as progress, so agents that keep failing do not
+        //       keep the loop alive; an agent that fails first and gets deleted in a later round
+        //       is not reported as an error.
         let mut agents = Vec::new();
-        let mut found_any = true;
+        let mut errors: Vec<AgentActionError> = Vec::new();
+        let mut deleted_any = true;
         let mut first_round = true;
-        while found_any {
-            found_any = false;
+        while deleted_any {
+            deleted_any = false;
             for component in components {
-                let deleted = self
+                let result = self
                     .ctx
                     .agent_handler()
                     .delete_component_agents(&component.component_name, &component.id, first_round)
                     .await?;
-                if !deleted.is_empty() {
-                    found_any = true;
+                if !result.succeeded.is_empty() {
+                    deleted_any = true;
                 }
-                for agent_id in deleted {
+                for agent_id in result.succeeded {
+                    errors.retain(|error| !error.is_for(&component.component_name, &agent_id));
                     agents.push(AgentDeletionMeta {
                         component_name: component.component_name.clone(),
                         agent_id,
                     });
                 }
+                for error in result.errors {
+                    errors.retain(|existing| {
+                        !existing.is_for(&error.component_name, &error.agent_id)
+                    });
+                    errors.push(error);
+                }
             }
             first_round = false;
         }
 
+        let has_errors = !errors.is_empty();
+
         self.ctx.log_handler().log_output(AgentDeleteAllView {
-            deleted: true,
+            deleted: !has_errors,
             agents,
+            errors,
         })?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
+        }
 
         Ok(())
     }
@@ -2386,7 +2415,7 @@ impl ComponentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .component
+            .component_upload
             .create_component(
                 &environment.environment_id.0,
                 &ComponentCreation {
@@ -2503,7 +2532,7 @@ impl ComponentCommandHandler {
             .golem_clients()
             .await
             .map_err(UpdateStagedComponentError::Other)?
-            .component
+            .component_upload
             .update_component(
                 &component.id.0,
                 &ComponentUpdate {

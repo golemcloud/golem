@@ -1518,13 +1518,14 @@
     },
     "agent.delete-all": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`). Deleting is best-effort: `agents` lists the deleted agents, `errors` the agents that failed with their errors, and `deleted` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "deploy",
       "required": [
         "$type",
         "deleted",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1537,6 +1538,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentDeletionMeta"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -1850,14 +1857,15 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`.",
+      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent redeploy",
       "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1870,6 +1878,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentRedeploymentMeta"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -2022,9 +2036,9 @@
           }
         },
         "errors": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -5579,6 +5593,16 @@
       "properties": {
         "componentName": { "type": "string" },
         "agentId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentActionError": {
+      "type": "object",
+      "required": ["componentName", "agentId", "error"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "error": { "type": "string" }
       },
       "additionalProperties": false
     },

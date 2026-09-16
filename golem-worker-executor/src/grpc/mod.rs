@@ -584,7 +584,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Principal::anonymous(),
         )
         .await?;
-        worker.control_durable_stream_attachment(control).await
+        let scope = crate::worker::tasks::TaskScope::default();
+        scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        scope
+            .run(worker.control_durable_stream_attachment(control))
+            .await
+            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
     }
 
     async fn read_durable_stream_segment_internal(
@@ -905,7 +912,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = Worker::get_exact_existing_suspended(
                 self,
                 &OwnedAgentId::new(request.environment_id()?, &agent_id),
-                &InvocationContextStack::fresh(),
                 request.principal(),
             )
             .await?;
@@ -947,14 +953,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Ok(None);
             }
-            return Worker::get_exact_existing_suspended(
-                self,
-                &owner,
-                &InvocationContextStack::fresh(),
-                request.principal(),
-            )
-            .await
-            .map(Some);
+            return Worker::get_exact_existing_suspended(self, &owner, request.principal())
+                .await
+                .map(Some);
         }
 
         let owned_agent_id = self
@@ -1945,13 +1946,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
             &owned_agent_id.agent_id.agent_id,
         ) {
-            Worker::get_exact_existing_suspended(
-                self,
-                &owned_agent_id,
-                &InvocationContextStack::fresh(),
-                request.principal(),
-            )
-            .await?
+            Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal()).await?
         } else {
             self.get_or_create_pending_with_freshness(
                 &request,

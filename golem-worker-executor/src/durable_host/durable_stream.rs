@@ -1644,6 +1644,7 @@ pub(crate) struct DurableStreamProducer {
     self_weak: std::sync::Weak<Self>,
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
+    worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
     control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
     environment_id: EnvironmentId,
     producer: AgentId,
@@ -1765,6 +1766,15 @@ fn encoded_event_bytes(event: &CommittedProducerStreamEventV1) -> usize {
 }
 
 impl DurableStreamProducer {
+    pub(crate) fn set_worker_tasks(&self, tasks: crate::worker::tasks::WorkerTasks) {
+        assert!(self.worker_tasks.set(tasks).is_ok());
+    }
+
+    pub(crate) fn tasks(&self) -> &crate::worker::tasks::WorkerTasks {
+        self.worker_tasks
+            .get_or_init(|| self.oplog.task_owner().cloned().unwrap_or_default())
+    }
+
     pub(crate) fn set_control_metadata_provider(
         &self,
         service: Arc<dyn WorkerService>,
@@ -2078,6 +2088,7 @@ impl DurableStreamProducer {
             self_weak: self_weak.clone(),
             oplog,
             commit,
+            worker_tasks: std::sync::OnceLock::new(),
             control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
             producer,

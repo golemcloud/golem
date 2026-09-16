@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -59,7 +59,6 @@ use crate::worker::entity_slot::EntitySlot;
 use crate::worker::instance::{
     EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
 };
-use crate::worker::invocation::with_invocation_stack;
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
@@ -69,8 +68,7 @@ use crate::worker::{Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::OwnerKind;
-use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{InvocationFreshnessDisposition, OwnerKind, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{
@@ -104,12 +102,10 @@ impl RegisteredConcurrentAccount {
 pub struct ActiveAgent<Ctx: WorkerCtx> {
     owner_id: OwnedAgentId,
     primary: Arc<Worker<Ctx>>,
-    execution: Arc<OwnerExecution>,
-    resources: Arc<OwnerRuntimeResources>,
     entities: Mutex<HashMap<AgentEntity, Arc<EntitySlot>>>,
     accepting_entities: AtomicBool,
     entity_fence_generation: AtomicU64,
-    _metrics: OwnerGroupMetricsGuard,
+    metrics: OnceLock<OwnerGroupMetricsGuard>,
 }
 
 struct OwnerGroupMetricsGuard;
@@ -145,16 +141,14 @@ pub struct ActiveAgentEntityMetadata {
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
-    fn new(primary: Arc<Worker<Ctx>>) -> Self {
+    fn new_unresolved(owner_id: OwnedAgentId, primary: Arc<Worker<Ctx>>) -> Self {
         Self {
-            owner_id: primary.owned_agent_id().clone(),
-            execution: primary.owner_execution(),
-            resources: primary.owner_runtime_resources(),
+            owner_id,
+            primary,
             entities: Mutex::new(HashMap::new()),
             accepting_entities: AtomicBool::new(true),
             entity_fence_generation: AtomicU64::new(0),
-            _metrics: OwnerGroupMetricsGuard::new(),
-            primary,
+            metrics: OnceLock::new(),
         }
     }
 
@@ -163,15 +157,21 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     }
 
     pub fn primary(&self) -> Arc<Worker<Ctx>> {
+        assert!(self.primary.is_resolved(), "active agent is not resolved");
+        self.metrics.get_or_init(OwnerGroupMetricsGuard::new);
         self.primary.clone()
     }
 
+    fn resolved_primary(&self) -> Option<Arc<Worker<Ctx>>> {
+        self.primary.is_resolved().then(|| self.primary())
+    }
+
     pub fn execution(&self) -> Arc<OwnerExecution> {
-        self.execution.clone()
+        self.primary().owner_execution()
     }
 
     pub fn resources(&self) -> Arc<OwnerRuntimeResources> {
-        self.resources.clone()
+        self.primary().owner_runtime_resources()
     }
 
     pub fn entity_slot(&self, entity: &AgentEntity) -> Arc<EntitySlot> {
@@ -228,9 +228,9 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             owner_id: self.owner_id.clone(),
             accepting_entities: self.accepting_entities.load(Ordering::Acquire),
             slots,
-            lane: self.execution.lane().metadata(),
-            tool_operations: self.execution.tool_operation_metadata(),
-            reached_oplog_marker: self.execution.reached_oplog_marker(),
+            lane: self.execution().lane().metadata(),
+            tool_operations: self.execution().tool_operation_metadata(),
+            reached_oplog_marker: self.execution().reached_oplog_marker(),
         }
     }
 
@@ -255,7 +255,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     }
 
     pub(crate) async fn begin_fence_entity_bodies(&self, failure: OwnerFailureWinner) {
-        let tool_operations = self.execution.tool_operations();
+        let tool_operations = self.execution().tool_operations();
         debug!(
             owner_id = %self.owner_id,
             failure_kind = failure.kind_label(),
@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
                 slot.fence();
             }
         }
-        self.resources.fence_filesystem_generation();
+        self.resources().fence_filesystem_generation();
         debug!(owner_id = %self.owner_id, "Entity fence selected and resources closed");
     }
 
@@ -287,7 +287,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         for slot in entities {
             slot.wait_drained().await;
         }
-        self.execution
+        self.execution()
             .tool_operations()
             .drain_owner_failure_lanes()
             .await;
@@ -308,7 +308,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     /// lifecycle fence.
     pub(crate) fn try_fence_idle_entity_bodies(&self) -> Option<Option<u64>> {
         let entities = self.entities.lock().unwrap();
-        if self.execution.tool_operations().has_active_operations()
+        if self.execution().tool_operations().has_active_operations()
             || entities
                 .values()
                 .any(|slot| slot.active_invocation_count() != 0)
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     ) -> Result<InstanceHost<Ctx>, WorkerExecutorError> {
         let entity = activation.entity();
         let slot = self.entity_slot(&entity);
-        InstanceHost::new_entity(&self.primary, activation, slot, owner_component_metadata)
+        InstanceHost::new_entity(&self.primary(), activation, slot, owner_component_metadata)
     }
 
     /// Starts one already-durable entity invocation in a fresh Store.
@@ -390,7 +390,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         }
         let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
         let host = InstanceHost::new_entity(
-            &self.primary,
+            &self.primary(),
             scope.activation(),
             slot.clone(),
             owner_component_metadata,
@@ -398,7 +398,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         start_entity_invocation(
             host,
             slot,
-            self.execution.lane(),
+            self.execution().lane(),
             parent,
             scope,
             mode,
@@ -435,7 +435,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         }
         let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
         let host = InstanceHost::new_entity(
-            &self.primary,
+            &self.primary(),
             scope.activation(),
             slot.clone(),
             owner_component_metadata,
@@ -443,7 +443,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         start_pre_acquired_entity_invocation(
             host,
             slot,
-            self.execution.lane(),
+            self.execution().lane(),
             scope,
             mode,
             invoke,
@@ -493,7 +493,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
         start_native_entity_invocation(
             slot,
-            self.execution.lane(),
+            self.execution().lane(),
             parent,
             scope,
             mode,
@@ -779,22 +779,27 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        self.get_or_add_internal(
-            deps,
-            owned_agent_id,
-            worker_env,
-            worker_agent_config,
-            component_revision,
-            parent,
-            invocation_context_stack,
-            principal,
-            freshness_disposition,
-            WorkerCreationMode::ComponentAgent,
-        )
-        .await
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+        let worker = active_agent.primary.clone();
+        worker
+            .ensure_created(
+                worker_env,
+                worker_agent_config,
+                component_revision,
+                parent,
+                invocation_context_stack.clone(),
+                principal,
+                freshness_disposition,
+                WorkerCreationMode::ComponentAgent,
+            )
+            .in_current_span()
+            .await?;
+        Ok(active_agent.primary())
     }
 
-    /// Creates or returns the virtual owner reserved for one native external-tool invocation.
     pub async fn get_or_add_ephemeral_external_tool<T>(
         &self,
         deps: &T,
@@ -807,41 +812,22 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        // Establish the component's authoritative environment before touching the owner cache or
-        // durable owner state.
         let component = deps
             .component_service()
             .get_metadata(component_id, None)
             .await?;
-        if component.environment_id != environment_id {
-            return Err(WorkerExecutorError::invalid_request(
-                "external tool owner environment does not match the component environment",
-            ));
-        }
-        let owned_agent_id = OwnedAgentId::new(
-            environment_id,
-            &AgentId {
-                component_id,
-                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
-            },
-        );
-        self.get_or_add_internal(
+        self.get_or_add_ephemeral_external_tool_pinned(
             deps,
-            &owned_agent_id,
-            None,
-            Vec::new(),
-            Some(component.revision),
-            None,
+            component_id,
+            environment_id,
+            idempotency_key,
+            component.revision,
             invocation_context_stack,
             principal,
-            InvocationFreshnessDisposition::MayExist,
-            WorkerCreationMode::EphemeralExternalTool,
         )
         .await
     }
 
-    /// Creates or returns a virtual external-tool owner at the component revision pinned when
-    /// the invocation was accepted by the scheduler.
     pub async fn get_or_add_ephemeral_external_tool_pinned<T>(
         &self,
         deps: &T,
@@ -871,120 +857,114 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
             },
         );
-        self.get_or_add_internal(
-            deps,
-            &owned_agent_id,
-            None,
-            Vec::new(),
-            Some(component_revision),
-            None,
-            invocation_context_stack,
-            principal,
-            InvocationFreshnessDisposition::MayExist,
-            WorkerCreationMode::EphemeralExternalTool,
-        )
-        .await
-    }
-
-    /// Loads an existing owner into the active set without creating it when its durable record is
-    /// absent. This is the admission path for requests whose authority is tied to an exact owner.
-    pub async fn get_existing<T>(
-        &self,
-        deps: &T,
-        owned_agent_id: &OwnedAgentId,
-        invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
-    where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
-    {
-        self.get_or_add_internal(
-            deps,
-            owned_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            invocation_context_stack,
-            principal,
-            InvocationFreshnessDisposition::MayExist,
-            WorkerCreationMode::ExistingOnly,
-        )
-        .await
-    }
-
-    async fn get_or_add_internal<T>(
-        &self,
-        deps: &T,
-        owned_agent_id: &OwnedAgentId,
-        worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
-        component_revision: Option<ComponentRevision>,
-        parent: Option<AgentId>,
-        invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
-        freshness_disposition: InvocationFreshnessDisposition,
-        creation_mode: WorkerCreationMode,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
-    where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
-    {
-        if creation_mode == WorkerCreationMode::ComponentAgent {
-            OwnerKind::ComponentAgent
-                .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-                .map_err(WorkerExecutorError::invalid_request)?;
-        }
-        let owned_agent_id = owned_agent_id.clone();
-        let cache_key = owned_agent_id.clone();
-        let deps = deps.clone();
-        let invocation_context_stack = invocation_context_stack.clone();
-        let active_agent = self
-            .agents
-            .get_or_insert_simple(&cache_key, || {
-                Box::pin(async move {
-                    let worker = with_invocation_stack(Worker::new(
-                        &deps,
-                        self.card_interest_index.clone(),
-                        owned_agent_id.clone(),
-                        worker_env,
-                        worker_agent_config,
-                        component_revision,
-                        parent,
-                        &invocation_context_stack,
-                        principal,
-                        freshness_disposition,
-                        creation_mode,
-                    ))
-                    .in_current_span()
-                    .await;
-
-                    worker.map(|worker| {
-                        let worker = Arc::new(worker);
-                        Worker::start_durable_stream_attachment_reconciler(&worker);
-                        Arc::new(ActiveAgent::new(worker))
-                    })
-                })
-            })
+        let active_agent = self.get_or_add_unresolved(deps, &owned_agent_id).await?;
+        let worker = active_agent.primary.clone();
+        worker
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                invocation_context_stack.clone(),
+                principal,
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::EphemeralExternalTool,
+            )
+            .in_current_span()
             .await?;
         Ok(active_agent.primary())
     }
 
-    pub async fn try_get(&self, owned_agent_id: &OwnedAgentId) -> Option<Arc<Worker<Ctx>>> {
-        self.try_get_active_agent(owned_agent_id)
+    /// Acquires a cached or persisted worker without ever creating a logical agent.
+    /// The cache initialization is shared with create-or-load, so absence is decided
+    /// inside the single-flight constructor rather than by a racy preflight lookup.
+    pub(crate) async fn get_existing<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+        let worker = active_agent.primary.clone();
+        let result = worker.ensure_existing(principal).in_current_span().await;
+        if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
+            && Arc::strong_count(&active_agent) == 2
+            && Arc::strong_count(&worker) == 2
+        {
+            let expected = active_agent.clone();
+            self.agents
+                .remove_if_cached(owned_agent_id, move |current| {
+                    Arc::ptr_eq(current, &expected)
+                        && Arc::strong_count(current) == 3
+                        && current.primary.can_discard_unresolved()
+                })
+                .await;
+        }
+        result.map(|()| active_agent.primary())
+    }
+
+    async fn get_or_add_unresolved<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Arc<ActiveAgent<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx>,
+    {
+        let owned_agent_id = owned_agent_id.clone();
+        let worker = Worker::unresolved(
+            deps,
+            self.card_interest_index.clone(),
+            owned_agent_id.clone(),
+        );
+        self.agents
+            .get_or_insert_simple(&owned_agent_id.clone(), || {
+                Box::pin(async move {
+                    Ok(Arc::new(ActiveAgent::new_unresolved(
+                        owned_agent_id,
+                        worker,
+                    )))
+                })
+            })
             .await
-            .map(|active_agent| active_agent.primary())
+    }
+
+    pub async fn try_get(&self, owned_agent_id: &OwnedAgentId) -> Option<Arc<Worker<Ctx>>> {
+        self.agents
+            .get(owned_agent_id)
+            .await
+            .and_then(|active_agent| active_agent.resolved_primary())
+    }
+
+    pub(crate) async fn contains_worker_generation(&self, expected: &Arc<Worker<Ctx>>) -> bool {
+        self.agents
+            .get(expected.owned_agent_id())
+            .await
+            .is_some_and(|active_agent| {
+                active_agent.primary.is_resolved() && Arc::ptr_eq(&active_agent.primary, expected)
+            })
     }
 
     pub async fn try_get_active_agent(
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<ActiveAgent<Ctx>>> {
-        self.agents.get(owned_agent_id).await
+        self.agents
+            .get(owned_agent_id)
+            .await
+            .filter(|active_agent| active_agent.primary.is_resolved())
     }
 
     /// Checks whether an owner group is cached without refreshing its TTL.
     pub async fn contains_cached_agent(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        self.agents.contains_key(owned_agent_id).await
+        self.agents
+            .iter()
+            .await
+            .into_iter()
+            .any(|(id, active_agent)| id == *owned_agent_id && active_agent.primary.is_resolved())
     }
 
     /// Inspects all currently known entity slots for an active owner. No durable child status is
@@ -1010,18 +990,57 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     }
 
     pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
-        if let Some(active_agent) = self.agents.get(owned_agent_id).await {
+        if let Some(worker) = self.try_get(owned_agent_id).await {
+            self.remove_worker(&worker, false).await;
+        }
+    }
+
+    /// Removes only the cache generation owned by `expected`. Bookkeeping is cleared only when
+    /// that exact generation was still authoritative at the point of removal.
+    pub(crate) async fn remove_worker(
+        &self,
+        expected: &Arc<Worker<Ctx>>,
+        deletion_owner: bool,
+    ) -> bool {
+        let owned_agent_id = expected.owned_agent_id().clone();
+        let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
+            return false;
+        };
+        if !active_agent.primary.is_resolved() || !Arc::ptr_eq(&active_agent.primary, expected) {
+            return false;
+        }
+        let Some(retirement) = (if deletion_owner {
+            expected.try_begin_deletion_cache_retirement().await
+        } else {
+            expected.try_begin_cache_retirement().await
+        }) else {
+            return false;
+        };
+        if !deletion_owner {
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
                     Timestamp::now_utc(),
                 )))
                 .await;
-            let worker = active_agent.primary();
-            self.card_interest_index
-                .set_card_interest(worker.owned_agent_id().clone(), &[])
-                .await;
         }
-        self.agents.remove(owned_agent_id).await
+        let expected_active = active_agent.clone();
+        let expected_worker = expected.clone();
+        let removed = self
+            .card_interest_index
+            .clear_agent_interest_if(
+                &owned_agent_id,
+                self.agents
+                    .remove_if_cached(&owned_agent_id, move |current| {
+                        Arc::ptr_eq(current, &expected_active)
+                            && current.primary.is_resolved()
+                            && Arc::ptr_eq(&current.primary, &expected_worker)
+                    }),
+            )
+            .await;
+        if removed {
+            retirement.commit();
+        }
+        removed
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -1063,7 +1082,13 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 continue;
             };
 
-            worker.queue_card_revocations(&affected_card_ids).await;
+            let scope = crate::worker::tasks::TaskScope::default();
+            if scope.bind(&worker.tasks).is_err() {
+                continue;
+            }
+            scope
+                .run(worker.queue_card_revocations(&affected_card_ids))
+                .await;
         }
     }
 
@@ -1072,9 +1097,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .iter()
             .await
             .into_iter()
-            .map(|(_, active_agent)| {
-                let primary = active_agent.primary();
-                (primary.agent_id(), primary)
+            .filter_map(|(_, active_agent)| {
+                active_agent
+                    .resolved_primary()
+                    .map(|primary| (primary.agent_id(), primary))
             })
             .collect()
     }
@@ -1217,11 +1243,20 @@ async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
     ttl: Duration,
 ) {
     for (owned_agent_id, active_agent) in agents.entries_older_than(ttl).await {
-        let worker = &active_agent.primary;
+        let Some(worker) = active_agent.resolved_primary() else {
+            let _ = agents
+                .remove_if_cached_older_than(&owned_agent_id, ttl, |current| {
+                    Arc::ptr_eq(current, &active_agent)
+                        && Arc::strong_count(current) == 2
+                        && current.primary.can_discard_unresolved()
+                })
+                .await;
+            continue;
+        };
         let Some(retirement) = worker.try_begin_cache_retirement().await else {
             continue;
         };
-        if Arc::strong_count(&active_agent) != 2 || Arc::strong_count(worker) != 1 {
+        if Arc::strong_count(&active_agent) != 2 || Arc::strong_count(&worker) != 2 {
             continue;
         }
 
@@ -1233,7 +1268,9 @@ async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
                         // `entries_older_than` owns the only reference besides the cache.
                         && Arc::strong_count(current) == 2
                         // The cached ActiveAgent must be the Worker's only strong owner.
-                        && Arc::strong_count(&current.primary) == 1
+                        && current
+                            .resolved_primary()
+                            .is_some_and(|worker| Arc::strong_count(&worker) == 3)
                         // Fence entity work only after all final removal checks pass while
                         // concurrent cache lookups are excluded by the cache entry lock.
                         && current.try_fence_idle_entity_bodies().is_some()
@@ -1269,7 +1306,9 @@ pub(crate) async fn eligible_loaded_idle_filesystem_pressure_victims<Ctx: Worker
 ) -> Vec<FilesystemPressureVictim<Ctx>> {
     let mut candidates = Vec::new();
     for (agent_id, active_agent) in active_agents.agents.iter().await {
-        let worker = active_agent.primary();
+        let Some(worker) = active_agent.resolved_primary() else {
+            continue;
+        };
         if is_loaded_idle_filesystem_pressure_candidate(worker.eviction_class().await) {
             let Some(eligibility) = worker.filesystem_pressure_eligibility().await else {
                 continue;
@@ -1420,7 +1459,9 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
 
     let mut candidates = Vec::new();
     for (owned_agent_id, active_agent) in agents.iter().await {
-        let worker = active_agent.primary();
+        let Some(worker) = active_agent.resolved_primary() else {
+            continue;
+        };
         if let Some(class) = worker.eviction_class().await
             && class == target_class
             && let Ok(mem) = worker.memory_requirement().await

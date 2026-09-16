@@ -14,13 +14,13 @@
 
 use crate::config::Config;
 use crate::config::{
-    ApplicationEnvironmentConfig, AuthenticationConfig, AuthenticationConfigWithSource,
-    AuthenticationSource, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
+    AuthenticationConfig, AuthenticationConfigWithSource, AuthenticationSource,
+    OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
 use crate::log::{log_warn_action, logln};
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use colored::Colorize;
 use golem_client::Security;
 use golem_client::api::{
@@ -132,30 +132,24 @@ impl Auth {
     ) -> anyhow::Result<()> {
         match auth_source {
             AuthenticationSource::Profile(profile_name) => {
-                let named_profile =
-                    Config::get_profile(config_dir, profile_name)?.ok_or(anyhow!(
+                let found = Config::update_profile(profile_name, config_dir, |profile| {
+                    profile.auth = AuthenticationConfig::from_token_with_secret(token);
+                })
+                .with_context(|| format!("Failed to save auth token for profile {profile_name}"))?;
+                if !found {
+                    bail!(
                         "Can't find profile {} in config",
                         profile_name.0.log_color_highlight()
-                    ))?;
-                let mut profile = named_profile.profile;
-                profile.auth = AuthenticationConfig::from_token_with_secret(token);
-                Config::set_profile(profile_name.clone(), profile, config_dir).with_context(
-                    || format!("Failed to save auth token for profile {profile_name}"),
-                )?;
+                    );
+                }
             }
             AuthenticationSource::ApplicationEnvironment(app_env_id) => {
-                let mut config = Config::get_application_environment(config_dir, app_env_id)?
-                    .unwrap_or(ApplicationEnvironmentConfig {
-                        auth: OAuth2AuthenticationConfig { data: None },
-                    });
-                config.auth = OAuth2AuthenticationConfig::from_token_with_secret(token);
-                Config::set_application_environment(app_env_id, config, config_dir).with_context(
-                    || {
-                        format!(
-                            "Failed to save auth token for application environment: {app_env_id}"
-                        )
-                    },
-                )?;
+                Config::update_application_environment(app_env_id, config_dir, |config| {
+                    config.auth = OAuth2AuthenticationConfig::from_token_with_secret(token);
+                })
+                .with_context(|| {
+                    format!("Failed to save auth token for application environment: {app_env_id}")
+                })?;
             }
         }
 
