@@ -40,6 +40,7 @@ use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
 pub mod canonical;
+pub mod constraints;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
