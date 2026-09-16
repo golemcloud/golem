@@ -21,7 +21,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
@@ -721,6 +721,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
+        // Creation validates this naming invariant against the persisted kind. Rendering plugin
+        // descriptions needs no authority or status reconstruction; Create uses its own kind below.
+        let owner_kind = if OwnerKind::is_reserved_instance_name(&owned_agent_id.agent_id.agent_id)
+        {
+            OwnerKind::EphemeralExternalTool
+        } else {
+            OwnerKind::ComponentAgent
+        };
         match value {
             OplogEntry::Create {
                 timestamp,
@@ -747,8 +755,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let initial_plugins = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let initial_plugins = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .unwrap_or_default()
                     .iter()
                     .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
@@ -1166,8 +1175,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1194,8 +1204,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1347,8 +1358,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()

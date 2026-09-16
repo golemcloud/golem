@@ -164,6 +164,13 @@ pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
     "permission card transfer payload conflict";
 pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerCreationMode {
+    ExistingOnly,
+    ComponentAgent,
+    EphemeralExternalTool,
+}
+
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
 #[derive(Clone)]
@@ -958,7 +965,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn new<T: HasAll<Ctx>>(
+    pub(crate) async fn new<T: HasAll<Ctx>>(
         deps: &T,
         card_interest_index: Arc<CardInterestIndex>,
         owned_agent_id: OwnedAgentId,
@@ -969,7 +976,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
-        existing_only: bool,
+        creation_mode: WorkerCreationMode,
     ) -> Result<Self, WorkerExecutorError> {
         let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
@@ -990,7 +997,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_agent_config,
             parent,
             freshness_disposition,
-            existing_only,
+            creation_mode,
         )
         .await
         {
@@ -2048,6 +2055,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+            self.ensure_component_agent_ingress("regular invocation")?;
+        }
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Classification uses the in-memory component snapshot - no metadata
@@ -2602,6 +2612,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
+    fn ensure_component_agent_ingress(&self, operation: &str) -> Result<(), WorkerExecutorError> {
+        if self.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "{operation} is not supported for an external tool owner"
+            )));
+        }
+        Ok(())
+    }
+
     /// Enqueue attempting an update.
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
@@ -2628,6 +2647,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
+        self.ensure_component_agent_ingress("manual update")?;
         self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
             .await
     }
@@ -2830,6 +2850,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_id = self.owned_agent_id.component_id();
         let current_revision = metadata.last_known_status.component_revision;
         let current_size = metadata.last_known_status.component_size;
+        if self.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return startup_component_requirement(component_id, current_revision, 0, 0, 0);
+        }
 
         // Mirror create_instance: a queued pending update is applied by loading
         // its target revision, so charge against that revision rather than the
@@ -2926,7 +2949,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         (
             self.owned_agent_id.component_id(),
             metadata.last_known_status.component_revision,
-            metadata.last_known_status.component_size,
+            if self.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                0
+            } else {
+                metadata.last_known_status.component_size
+            },
         )
     }
 
@@ -5459,6 +5486,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
     ) -> Result<(), WorkerExecutorError> {
+        self.ensure_component_agent_ingress("revert")?;
         match target {
             RevertWorkerTarget::RevertToOplogIndex(target) => {
                 if resolved_revert.is_some() {
@@ -6312,9 +6340,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
         freshness_disposition: InvocationFreshnessDisposition,
-        existing_only: bool,
+        creation_mode: WorkerCreationMode,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
+
+        if creation_mode == WorkerCreationMode::ComponentAgent {
+            OwnerKind::ComponentAgent
+                .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        }
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
         // idempotency key at invocation ingress. All other paths retain the checked lookup.
@@ -6422,21 +6456,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })
             }
             None => {
-                if existing_only {
-                    return Err(WorkerExecutorError::invalid_request(
-                        "external tool invocation owner does not exist",
+                if creation_mode == WorkerCreationMode::ExistingOnly {
+                    return Err(WorkerExecutorError::worker_not_found(
+                        owned_agent_id.agent_id(),
                     ));
                 }
                 // Create and initialize a new worker.
-                OwnerKind::ComponentAgent
-                    .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-                    .map_err(WorkerExecutorError::invalid_request)?;
                 let component = this
                     .component_service()
                     .get_metadata(component_id, component_revision)
                     .await?;
 
-                let agent_id = if component.metadata.is_agent() {
+                let virtual_owner = creation_mode == WorkerCreationMode::EphemeralExternalTool;
+                let owner_kind = if virtual_owner {
+                    OwnerKind::EphemeralExternalTool
+                } else {
+                    OwnerKind::ComponentAgent
+                };
+                owner_kind
+                    .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                if virtual_owner && component.environment_id != owned_agent_id.environment_id {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "owner environment does not match the component environment",
+                    ));
+                }
+
+                let agent_id = if !virtual_owner && component.metadata.is_agent() {
                     let agent_id = ParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &component.metadata,
@@ -6453,6 +6499,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_mode,
                     snapshot_policy,
                 } = resolve_agent_properties(this, agent_id.as_ref(), &component.metadata);
+                let (agent_mode, snapshot_policy) = if virtual_owner {
+                    (AgentMode::Ephemeral, SnapshotPolicy::Disabled)
+                } else {
+                    (agent_mode, snapshot_policy)
+                };
 
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
@@ -6488,12 +6539,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
-                    total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
-                    active_plugins: agent_id
-                        .as_ref()
-                        .and_then(|agent_id| {
-                            component.metadata.agent_type_plugins(&agent_id.agent_type)
-                        })
+                    total_linear_memory_size: if virtual_owner {
+                        0
+                    } else {
+                        component.metadata.initial_linear_memory_bytes()
+                    },
+                    active_plugins: component
+                        .metadata
+                        .owner_plugins(owner_kind, agent_id.as_ref().map(|agent| &agent.agent_type))
                         .unwrap_or_default()
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
@@ -6513,7 +6566,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
-                    owner_kind: OwnerKind::ComponentAgent,
+                    owner_kind,
                     env: worker_env,
                     config: initial_agent_config,
                     environment_id: component.environment_id,
@@ -6628,7 +6681,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
-        component_charge: WorkerComponentCharge,
+        component_charge: Option<WorkerComponentCharge>,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -6915,18 +6968,24 @@ impl WaitingWorker {
             // concurrency slot above; otherwise one account could exhaust the
             // memory headroom with workers that are not allowed to run yet.
             let phase_start = std::time::Instant::now();
-            let (memory_grant, component_charge) = parent
-                .active_agents()
-                .acquire_with_component_charge(
-                    memory_requirement,
-                    requirement.component_id,
-                    requirement.component_revision,
-                    requirement.module_bytes,
-                )
-                // Not spanned, for the same reason as the charge resolution above:
-                // `acquire_memory` retries on the same 500ms delay and logs once per
-                // attempt. Its duration is recorded as a metric instead.
-                .await;
+            let (memory_grant, component_charge) =
+                if parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                    (parent.active_agents().acquire_memory(0).await, None)
+                } else {
+                    // Not spanned, for the same reason as the charge resolution above:
+                    // `acquire_memory` retries on the same 500ms delay and logs once per
+                    // attempt. Its duration is recorded as a metric instead.
+                    let (memory, component) = parent
+                        .active_agents()
+                        .acquire_with_component_charge(
+                            memory_requirement,
+                            requirement.component_id,
+                            requirement.component_revision,
+                            requirement.module_bytes,
+                        )
+                        .await;
+                    (memory, Some(component))
+                };
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::Memory,
                 phase_start.elapsed(),
@@ -7120,7 +7179,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 }
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
-    instance: Instance,
+    instance: Option<Instance>,
     store: async_lock::Mutex<Store<Ctx>>,
 }
 
@@ -7178,7 +7237,7 @@ impl RunningWorker {
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
-        component_charge: WorkerComponentCharge,
+        component_charge: Option<WorkerComponentCharge>,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -7296,7 +7355,17 @@ impl RunningWorker {
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
-        let (pending_update, component, component_metadata) = {
+        let host_only = worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool;
+        let (pending_update, component, component_metadata) = if host_only {
+            let metadata = parent
+                .component_service()
+                .get_metadata(
+                    component_id,
+                    Some(worker_metadata.last_known_status.component_revision),
+                )
+                .await?;
+            (None, None, metadata)
+        } else {
             let pending_update_ref = worker_metadata
                 .last_known_status
                 .pending_updates
@@ -7334,7 +7403,7 @@ impl RunningWorker {
                         }
                         None => None,
                     };
-                    Ok((pending_update, component, component_metadata))
+                    Ok((pending_update, Some(component), component_metadata))
                 }
                 Err(error) => {
                     if component_revision != worker_metadata.last_known_status.component_revision {
@@ -7360,7 +7429,7 @@ impl RunningWorker {
             }?
         };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        if !host_only && component_metadata.metadata.has_shared_linear_memory() {
             return Err(shared_linear_memory_error(&parent).into());
         }
 
@@ -7436,14 +7505,12 @@ impl RunningWorker {
                     .await?
             };
 
-        let agent_effective_surface = match &parent.parsed_agent_id {
-            Some(agent_id) => agent_effective_surface_from_component_metadata(
+        let agent_effective_surface =
+            crate::durable_host::owner_effective_surface_from_component_metadata(
                 &component_metadata_for_replay,
                 &parent.owned_agent_id,
-                agent_id,
-            )?,
-            None => golem_common::model::card::EffectiveSurface::default(),
-        };
+                &parent.owner_context,
+            )?;
 
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
@@ -7477,7 +7544,17 @@ impl RunningWorker {
                     .get(&agent_id.agent_type)
             })
             .map(|config| config.files.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                if host_only {
+                    component_metadata_for_replay
+                        .metadata
+                        .component_provision_config()
+                        .files
+                        .clone()
+                } else {
+                    Vec::new()
+                }
+            });
         let limits = filesystems
             .resolved_limits(parent.resource_entry.max_disk_space_limit())
             .map_err(|error| CreateWorkerInstanceError {
@@ -7695,21 +7772,26 @@ impl RunningWorker {
             // the same durability suppression as snapshot loading, without consuming the tail.
             context.begin_call_snapshotting_function();
         }
-        let mut hosted = match instance_host.instantiate(context, &component).await {
-            Ok(hosted) => hosted,
+        let runtime = async {
+            match component {
+                Some(component) => {
+                    let mut hosted = instance_host.instantiate(context, &component).await?;
+                    instance_host.reconcile_linear_memories(&mut hosted).await?;
+                    let (instance, store) = hosted.into_parts();
+                    Ok((Some(instance), store))
+                }
+                None => Ok((None, instance_host.create_store(context)?)),
+            }
+        }
+        .await;
+        let (instance, mut store) = match runtime {
+            Ok(runtime) => runtime,
             Err(error) => {
                 return Err(
                     cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
                 );
             }
         };
-        if let Err(error) = instance_host.reconcile_linear_memories(&mut hosted).await {
-            drop(hosted);
-            return Err(
-                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-            );
-        }
-        let (instance, mut store) = hosted.into_parts();
         if last_snapshot_index.is_some() {
             store.data_mut().end_call_snapshotting_function();
         }
@@ -7719,8 +7801,12 @@ impl RunningWorker {
                 active_agent.reopen_entity_admission_if_generation(generation);
             }
         }
-        let prepare_result =
-            Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
+        let prepare_result = Ctx::prepare_instance(
+            &parent.owned_agent_id.agent_id,
+            instance.as_ref(),
+            &mut store,
+        )
+        .await;
         let decision = match prepare_result {
             Ok(decision) => decision,
             Err(error) => {

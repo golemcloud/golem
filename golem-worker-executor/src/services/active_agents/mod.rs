@@ -50,7 +50,6 @@ use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::worker::Worker;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
 };
@@ -64,9 +63,11 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
+use crate::worker::{Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::OwnerKind;
 use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -76,7 +77,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -735,7 +736,53 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             invocation_context_stack,
             principal,
             freshness_disposition,
-            false,
+            WorkerCreationMode::ComponentAgent,
+        )
+        .await
+    }
+
+    /// Creates or returns the virtual owner reserved for one native external-tool invocation.
+    pub async fn get_or_add_ephemeral_external_tool<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        // Establish the component's authoritative environment before touching the owner cache or
+        // durable owner state.
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, None)
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool owner environment does not match the component environment",
+            ));
+        }
+        let owned_agent_id = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
+            },
+        );
+        self.get_or_add_internal(
+            deps,
+            &owned_agent_id,
+            None,
+            Vec::new(),
+            Some(component.revision),
+            None,
+            invocation_context_stack,
+            principal,
+            InvocationFreshnessDisposition::MayExist,
+            WorkerCreationMode::EphemeralExternalTool,
         )
         .await
     }
@@ -762,7 +809,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
-            true,
+            WorkerCreationMode::ExistingOnly,
         )
         .await
     }
@@ -778,11 +825,16 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
-        existing_only: bool,
+        creation_mode: WorkerCreationMode,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        if creation_mode == WorkerCreationMode::ComponentAgent {
+            OwnerKind::ComponentAgent
+                .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        }
         let owned_agent_id = owned_agent_id.clone();
         let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
@@ -802,7 +854,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         &invocation_context_stack,
                         principal,
                         freshness_disposition,
-                        existing_only,
+                        creation_mode,
                     )
                     .in_current_span()
                     .await;

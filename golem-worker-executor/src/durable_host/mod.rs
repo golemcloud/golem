@@ -931,7 +931,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         let component_metadata = executable_component;
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        let host_only_primary = matches!(runtime, OwnerRuntime::Agent)
+            && matches!(owner_context, ResolvedOwnerContext::ComponentBaseline);
+
+        if !host_only_primary && component_metadata.metadata.has_shared_linear_memory() {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 SHARED_LINEAR_MEMORY_ERROR,
@@ -939,7 +942,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
-        if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
+        if !host_only_primary && initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 format!(
@@ -3683,7 +3686,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         let load_result = invoke_observed_and_traced(
                             lowered,
                             store,
-                            instance,
+                            Some(instance),
                             InvocationMode::Replay,
                         )
                         .await;
@@ -3949,7 +3952,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .begin_call_snapshotting_function();
 
         let load_result =
-            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+            invoke_observed_and_traced(lowered, store, Some(instance), InvocationMode::Replay)
+                .await;
 
         store
             .as_context_mut()
@@ -5712,7 +5716,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
-                            instance,
+                            Some(instance),
                             InvocationMode::Replay,
                         )
                         .instrument(span)
@@ -5999,14 +6003,50 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
     async fn prepare_instance(
         agent_id: &AgentId,
-        instance: &Instance,
+        instance: Option<&Instance>,
         store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
+        let prepare_result = if instance.is_none() {
+            if store.as_context().data().agent_mode() != AgentMode::Ephemeral {
+                return Err(WorkerExecutorError::failed_to_resume_worker(
+                    agent_id.clone(),
+                    WorkerExecutorError::runtime(
+                        "Host-only primary runtime requires an ephemeral agent",
+                    ),
+                ));
+            }
+            if !matches!(
+                store.as_context().data().durable_ctx().owner_context(),
+                ResolvedOwnerContext::ComponentBaseline
+            ) {
+                return Err(WorkerExecutorError::failed_to_resume_worker(
+                    agent_id.clone(),
+                    WorkerExecutorError::runtime(
+                        "Host-only primary runtime requires explicit component-baseline ownership",
+                    ),
+                ));
+            }
+
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .switch_to_live()
+                .await?;
+            store
+                .as_context_mut()
+                .data_mut()
+                .get_public_state()
+                .oplog()
+                .add(OplogEntry::restart())
+                .await;
+            Ok(None)
+        } else if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
+            let instance = instance.expect("component instance checked above");
             // Ephemeral workers cannot be recovered
 
             // We have to replay the initialize call for agents:
@@ -6036,6 +6076,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 replay_decision
             }
         } else {
+            let instance = instance.expect("component instance checked above");
             let pending_update = store
                 .as_context_mut()
                 .data_mut()

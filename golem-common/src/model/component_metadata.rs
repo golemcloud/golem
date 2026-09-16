@@ -22,7 +22,7 @@ use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysisFailure, AnalysisResult, TopLevelExport};
-use crate::model::agent::AgentTypeName;
+use crate::model::agent::{AgentTypeName, OwnerKind};
 use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
 use crate::model::tool::{ToolDeploymentMetadata, ToolName};
@@ -314,6 +314,19 @@ impl ComponentMetadata {
     pub fn agent_type_plugins(&self, name: &AgentTypeName) -> Option<&[InstalledPlugin]> {
         self.agent_type_provision_config(name)
             .map(|config| config.plugins.as_slice())
+    }
+
+    pub fn owner_plugins(
+        &self,
+        owner_kind: OwnerKind,
+        agent_type: Option<&AgentTypeName>,
+    ) -> Option<&[InstalledPlugin]> {
+        match owner_kind {
+            OwnerKind::ComponentAgent => agent_type.and_then(|name| self.agent_type_plugins(name)),
+            OwnerKind::EphemeralExternalTool => {
+                Some(self.component_provision_config().plugins.as_slice())
+            }
+        }
     }
 
     pub fn is_agent(&self) -> bool {

@@ -154,7 +154,7 @@ use golem_worker_executor::services::worker_enumeration::WorkerEnumerationServic
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
+use golem_worker_executor::services::{HasActiveAgents, HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
@@ -590,6 +590,33 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Exercises creation and lookup of the virtual owner used by native external-tool ingress.
+    /// The returned worker is only valid while this executor's service graph is alive.
+    pub async fn get_or_add_ephemeral_external_tool(
+        &self,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        services
+            .active_agents()
+            .get_or_add_ephemeral_external_tool(
+                services,
+                component_id,
+                environment_id,
+                idempotency_key,
+                invocation_context,
+                principal,
+            )
+            .await
+    }
+
     /// Exercises executor-internal external-tool admission without introducing a public transport.
     /// Resolves only an already-persisted owner, including when it is cold after an executor
     /// restart; unlike ordinary invocation ingress, this cannot create a missing owner.
@@ -1533,6 +1560,8 @@ type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> A
     + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapComponentServiceFn =
+    dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
@@ -1548,6 +1577,7 @@ pub struct TestExecutorOverrides {
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
     /// agents this executor owns. Everything that gates on ownership reads it,
@@ -1913,7 +1943,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn prepare_instance(
         agent_id: &AgentId,
-        instance: &Instance,
+        instance: Option<&Instance>,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
@@ -2673,12 +2703,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.overrides.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(

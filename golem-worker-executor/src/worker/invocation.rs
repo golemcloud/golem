@@ -85,7 +85,7 @@ pub enum InvocationMode {
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
+    instance: Option<&wasmtime::component::Instance>,
     mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -136,7 +136,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
 async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
+    instance: Option<&wasmtime::component::Instance>,
     mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -491,17 +491,24 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
 /// typed result into an [`InvokeResult`].
 async fn dispatch_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    instance: &wasmtime::component::Instance,
+    instance: Option<&wasmtime::component::Instance>,
     call: PreparedCall,
     display_name: &str,
 ) -> Result<InvokeResult, WorkerExecutorError> {
+    let guest_instance = || {
+        instance.ok_or_else(|| {
+            WorkerExecutorError::runtime(format!(
+                "Guest invocation {display_name} requires a component instance"
+            ))
+        })
+    };
     match call {
         PreparedCall::Initialize {
             agent_type,
             input,
             principal,
         } => {
-            let guest = load_agent_guest(store, instance)?;
+            let guest = load_agent_guest(store, guest_instance()?)?;
             prepare_guest_call(store, display_name).await;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
@@ -533,7 +540,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             principal,
             expected_output,
         } => {
-            let guest = load_agent_guest(store, instance)?;
+            let guest = load_agent_guest(store, guest_instance()?)?;
             prepare_guest_call(store, display_name).await;
             let result = if expected_output.uses_streams() {
                 let result = store
@@ -578,7 +585,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             }
         }
         PreparedCall::SaveSnapshot => {
-            let guest = load_save_snapshot_guest(store, instance)?;
+            let guest = load_save_snapshot_guest(store, guest_instance()?)?;
             prepare_guest_call(store, display_name).await;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
@@ -601,7 +608,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             }
         }
         PreparedCall::LoadSnapshot { snapshot } => {
-            let guest = load_load_snapshot_guest(store, instance)?;
+            let guest = load_load_snapshot_guest(store, guest_instance()?)?;
             prepare_guest_call(store, display_name).await;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
@@ -631,7 +638,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             first_entry_index,
             entries,
         } => {
-            let guest = load_oplog_processor_guest(store, instance)?;
+            let guest = load_oplog_processor_guest(store, guest_instance()?)?;
             prepare_guest_call(store, display_name).await;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest

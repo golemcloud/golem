@@ -22,7 +22,9 @@ use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentTypeName, GolemUserPrincipal, OwnerKind, Principal,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -5704,6 +5706,434 @@ async fn native_external_tool_scalar_admission(
         AgentInvocationResult::ExternalTool { result: Ok(_) }
     ));
     assert_eq!(native_order_requests.load(Ordering::SeqCst), 2);
+
+    Ok(())
+}
+
+struct MetadataOnlyOwnerComponentService {
+    inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
+    owner_loads: Arc<AtomicUsize>,
+    http_port: u16,
+}
+
+#[async_trait::async_trait]
+impl golem_worker_executor::services::component::ComponentService
+    for MetadataOnlyOwnerComponentService
+{
+    async fn get(
+        &self,
+        engine: &wasmtime::Engine,
+        id: golem_common::model::component::ComponentId,
+        revision: ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        let metadata = self.inner.get_metadata(id, Some(revision)).await?;
+        if metadata.component_name.0 == "virtual-native-policy" {
+            self.owner_loads.fetch_add(1, Ordering::SeqCst);
+            return Err(
+                golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "primary executable is unavailable",
+                ),
+            );
+        }
+        self.inner.get(engine, id, revision).await
+    }
+
+    async fn get_metadata(
+        &self,
+        id: golem_common::model::component::ComponentId,
+        revision: Option<ComponentRevision>,
+    ) -> Result<
+        golem_service_base::model::component::Component,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        use golem_common::model::component_metadata::{
+            ComponentMetadata, ComponentProvisionConfig, LinearMemory,
+        };
+        let mut component = self.inner.get_metadata(id, revision).await?;
+        if component.component_name.0 == "virtual-native-policy" {
+            let permissions = component
+                .metadata
+                .agent_type_provision_configs()
+                .get(&AgentTypeName("ToolStreamingCaller".to_string()))
+                .unwrap()
+                .initial_permissions
+                .clone();
+            component.metadata = ComponentMetadata::from_parts(
+                Default::default(),
+                vec![LinearMemory {
+                    initial: u64::MAX / 2,
+                    maximum: None,
+                    shared: true,
+                }],
+                None,
+                None,
+                Vec::new(),
+                BTreeMap::new(),
+            )
+            .with_component_config(
+                Default::default(),
+                ComponentProvisionConfig {
+                    initial_permissions: permissions,
+                    env: BTreeMap::from([(
+                        "NATIVE_ORDER_HTTP_PORT".to_string(),
+                        self.http_port.to_string(),
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+        Ok(component)
+    }
+
+    async fn resolve_component(
+        &self,
+        reference: String,
+        environment: golem_common::model::environment::EnvironmentId,
+        application: golem_common::model::application::ApplicationId,
+        account: AccountId,
+    ) -> Result<
+        Option<golem_common::model::component::ComponentId>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .resolve_component(reference, environment, application, account)
+            .await
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        self.inner.all_cached_metadata().await
+    }
+
+    async fn invalidate_all_metadata_for_environment(
+        &self,
+        environment: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_all_metadata_for_environment(environment)
+            .await
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let (http_port, _server, effects) = start_native_order_http_server().await;
+    let owner_loads = Arc::new(AtomicUsize::new(0));
+    let loads = owner_loads.clone();
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_component_service: Some(Arc::new(move |inner| {
+            Arc::new(MetadataOnlyOwnerComponentService {
+                inner,
+                owner_loads: loads.clone(),
+                http_port,
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy")
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    let agent_owner = ToolBindingOwner::AgentType {
+        agent_type_name: AgentTypeName("ToolStreamingCaller".to_string()),
+    };
+    let mut bindings = deployment
+        .tool_bindings
+        .remove(&agent_owner)
+        .expect("caller bindings");
+    let baseline_owner = ToolBindingOwner::ComponentBaseline {
+        component_id: caller_component.id,
+    };
+    for binding in bindings.values_mut() {
+        binding.owner = baseline_owner.clone();
+    }
+    deployment.tool_bindings.insert(baseline_owner, bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let key = IdempotencyKey::fresh();
+    let invocation_context = InvocationContextStack::fresh();
+    let (first, second) = tokio::join!(
+        executor.get_or_add_ephemeral_external_tool(
+            caller_component.id,
+            context.default_environment_id,
+            &key,
+            &invocation_context,
+            principal.clone(),
+        ),
+        executor.get_or_add_ephemeral_external_tool(
+            caller_component.id,
+            context.default_environment_id,
+            &key,
+            &invocation_context,
+            principal.clone(),
+        )
+    );
+    let first = first?;
+    let second = second?;
+    assert!(Arc::ptr_eq(&first, &second));
+    let owner_id = first.agent_id();
+    assert_eq!(
+        owner_id.agent_id,
+        OwnerKind::external_tool_instance_name(&key)
+    );
+    let owner_metadata = first.get_latest_worker_metadata().await;
+    assert_eq!(owner_metadata.owner_kind, OwnerKind::EphemeralExternalTool);
+    assert_eq!(owner_metadata.agent_mode, AgentMode::Ephemeral);
+    assert_eq!(owner_metadata.last_known_status.total_linear_memory_size, 0);
+    assert_eq!(
+        owner_metadata.fingerprint,
+        second.get_latest_worker_metadata().await.fingerprint
+    );
+
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("native-order".to_string())],
+        },
+    );
+    let invoke = || {
+        executor.invoke_external_tool(
+            &owner_id,
+            owner_metadata.fingerprint,
+            key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+    };
+    let (output, retry) = tokio::join!(invoke(), invoke());
+    let output = output?;
+    assert_eq!(output, retry?);
+    let AgentInvocationResult::ExternalTool { result: Ok(result) } = output.result else {
+        anyhow::bail!("expected successful baseline external tool result, got {output:?}");
+    };
+    let Some(SchemaValue::String(value)) = result.result.map(|value| value.into_parts().1) else {
+        anyhow::bail!("expected baseline external tool string result");
+    };
+    assert_eq!(value, "no-stream:native-order");
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
+    assert_eq!(first.memory_requirement().await?, 0);
+    let oplog = executor.get_oplog(&owner_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1
+    );
+
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted = executor
+        .get_or_add_ephemeral_external_tool(
+            caller_component.id,
+            context.default_environment_id,
+            &interrupted_key,
+            &InvocationContextStack::fresh(),
+            principal.clone(),
+        )
+        .await?;
+    let interrupted_id = interrupted.agent_id();
+    let interrupted_fingerprint = interrupted.get_latest_worker_metadata().await.fingerprint;
+    let mut interrupted_gate = executor.gate_next_entity_body_start(&interrupted_id);
+    let interrupted_call = || {
+        executor.invoke_external_tool(
+            &interrupted_id,
+            interrupted_fingerprint,
+            interrupted_key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+    };
+    let crash = async {
+        interrupted_gate.entered().await;
+        executor.simulated_crash(&interrupted_id).await
+    };
+    let (interrupted_result, crash_result) =
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(interrupted_call(), crash)
+        })
+        .await
+        .expect("losing a host-only Store must terminate its accepted invocation");
+    crash_result?;
+    interrupted_result.expect_err("ephemeral execution cannot restart after losing its Store");
+    interrupted_call()
+        .await
+        .expect_err("same-key retry must not restart the lost host-only Store");
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    executor.delete_worker(&interrupted_id).await?;
+    drop(interrupted_gate);
+    drop(interrupted);
+
+    let fresh_key = IdempotencyKey::fresh();
+    let fresh = executor
+        .get_or_add_ephemeral_external_tool(
+            caller_component.id,
+            context.default_environment_id,
+            &fresh_key,
+            &InvocationContextStack::fresh(),
+            principal.clone(),
+        )
+        .await?;
+    assert_ne!(fresh.agent_id(), owner_id);
+
+    // The component is a policy owner only: there is no agent schema to use for a constructor.
+    first
+        .enqueue_manual_update(caller_component.revision)
+        .await
+        .expect_err("virtual owners cannot update a primary guest");
+    first
+        .clone()
+        .invoke(golem_common::model::AgentInvocation::ManualUpdate {
+            target_revision: caller_component.revision,
+        })
+        .await
+        .err()
+        .expect("regular ingress cannot execute a primary guest on a virtual owner");
+
+    let lost_id = fresh.agent_id();
+    let lost_fingerprint = fresh.get_latest_worker_metadata().await.fingerprint;
+    let mut body_gate = executor.gate_next_entity_body_start(&lost_id);
+    {
+        let pending = executor.invoke_external_tool(
+            &lost_id,
+            lost_fingerprint,
+            fresh_key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        );
+        tokio::pin!(pending);
+        tokio::select! {
+            () = body_gate.entered() => {},
+            result = &mut pending => anyhow::bail!("invocation ended before body gate: {result:?}"),
+        }
+        let update_error = executor
+            .auto_update_worker(&lost_id, ComponentRevision::new(1000).unwrap(), false)
+            .await
+            .expect_err("automatic update must not interrupt a virtual owner's invocation");
+        assert!(
+            update_error
+                .to_string()
+                .contains("Ephemeral workers cannot be updated")
+        );
+        assert!(
+            fresh
+                .get_latest_worker_metadata()
+                .await
+                .last_known_status
+                .pending_updates
+                .is_empty()
+        );
+        executor.commit_oplog(&lost_id).await?;
+    }
+    drop(first);
+    drop(second);
+    drop(fresh);
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let observed = executor
+        .invoke_external_tool(
+            &owner_id,
+            owner_metadata.fingerprint,
+            key,
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+        .await?;
+    assert!(matches!(
+        observed.result,
+        AgentInvocationResult::ExternalTool { result: Ok(_) }
+    ));
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
+
+    let failed = executor
+        .invoke_external_tool(
+            &lost_id,
+            lost_fingerprint,
+            fresh_key,
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input,
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await
+        .expect_err("accepted ephemeral execution must not restart after executor loss");
+    assert!(failed.to_string().contains("ephemeral"), "{failed}");
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
+    executor.delete_worker(&lost_id).await?;
+    executor.delete_worker(&owner_id).await?;
+    drop(body_gate);
 
     Ok(())
 }

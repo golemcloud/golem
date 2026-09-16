@@ -29,6 +29,24 @@ dispatcher again and reconstructs completed bodies before checking the invocatio
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 
+Virtual owners persist `OwnerKind::EphemeralExternalTool` and use a reserved name derived from the
+idempotency key, scoped by the actual component and environment. They use the resolved component
+baseline, never an arbitrary exported agent schema. `RunningWorker::create_instance` reads owner
+metadata and creates the primary Store through `InstanceHost::create_store` without loading its
+executable or creating an Instance. There is no primary guest memory/module reservation; normal
+filesystem accounting and concurrent-agent admission still apply. Tool and middleware Stores
+retain their own executable memory checks and charges. Host-only `prepare_instance` publishes live
+state and performs normal lifecycle initialization, without guest initialization or replay.
+
+Virtual owners follow ordinary ephemeral admission, unloading and retention: one accepted key,
+concurrent same-key convergence, and no restart of accepted incomplete work after Store or executor
+loss. Before unloading a host-only Store, the invocation loop turns recovery decisions into a
+terminal interruption and closes the owner rather than starting an empty replacement Store.
+Reconstructed owners exist only for observation. Updates, guest snapshots and revert are rejected;
+delete, interrupt and result lookup use exact-existing access rather than creating a guest agent.
+`ComponentMetadata::owner_plugins` selects baseline or agent-type installations using the persisted
+kind, including for oplog forwarding and public plugin descriptions.
+
 Secret-bearing success and custom-error responses pass through the durable
 `GolemToolResponseSecretHoldAdmission` read. Completed replay restores its recorded allow/deny
 decision rather than consulting current permissions; incomplete admission checks permissions

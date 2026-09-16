@@ -117,19 +117,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        component_revision: Option<ComponentRevision>,
         principal: Principal,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::get_or_create_suspended(
+        Self::get_exact_existing_suspended(
             deps,
             owned_agent_id,
-            None,
-            Vec::new(),
-            component_revision,
-            None,
             &InvocationContextStack::fresh(),
             principal,
         )
@@ -145,7 +140,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
 
         info!("Interrupting worker before deletion");
         worker
@@ -197,7 +192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             _ => {}
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         let interrupt_kind = match decision {
             InterruptDecision::Interrupt => InterruptKind::Interrupt(Timestamp::now_utc()),
             InterruptDecision::Restart => InterruptKind::Restart,
@@ -257,17 +252,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ),
                     _ => unreachable!(),
                 }
-                Self::get_or_create_running(
-                    deps,
-                    owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
+                let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+                Self::start_if_needed(worker).await?;
                 Ok(())
             }
             ResumeDecision::Reject => Err(WorkerExecutorError::invalid_request(format!(
@@ -296,22 +282,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let component_metadata = deps
-            .component_service()
-            .get_metadata(
-                owned_agent_id.agent_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        if let Ok(agent_id) = ParsedAgentId::parse(
-            &owned_agent_id.agent_id.agent_id,
-            &component_metadata.metadata,
-        ) && let Some(agent_type) = component_metadata
-            .metadata
-            .find_agent_type_by_name_ref(&agent_id.agent_type)
-            && agent_type.mode == AgentMode::Ephemeral
-        {
+        if metadata.agent_mode == AgentMode::Ephemeral {
             return Err(WorkerExecutorError::invalid_request(
                 "Ephemeral workers cannot be updated",
             ));
@@ -386,19 +357,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 warn!("Attempted updating worker which already exited");
             }
             (UpdateMode::Automatic, decision) => {
-                let current_revision = metadata.last_known_status.component_revision;
-                let component_revision = match decision {
-                    UpdateDecision::Queue | UpdateDecision::QueueAndStart => Some(current_revision),
-                    UpdateDecision::QueueAndRestart => None,
-                    UpdateDecision::Ignore => unreachable!(),
-                };
-                let worker = Self::get_existing_suspended(
-                    deps,
-                    owned_agent_id,
-                    component_revision,
-                    principal,
-                )
-                .await?;
+                let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
 
                 debug!("Enqueuing update");
                 worker
@@ -422,8 +381,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
             (UpdateMode::Manual, decision) => {
-                let worker =
-                    Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+                let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
                 worker.enqueue_manual_update(target_revision).await?;
 
                 match decision {
@@ -452,7 +410,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -550,9 +508,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         let agent_type =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-        let grant_id = agent_type
-            .as_ref()
-            .and_then(|agent_type| component_metadata.metadata.agent_type_plugins(agent_type))
+        let grant_id = component_metadata
+            .metadata
+            .owner_plugins(metadata.owner_kind, agent_type.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -578,7 +536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         if activate {
             worker.activate_plugin_internal(grant_id).await
         } else {
