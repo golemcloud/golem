@@ -21,6 +21,10 @@ use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
+#[cfg(feature = "full")]
+use crate::model::entity::{
+    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+};
 use crate::model::tool_release::{ToolReleaseId, ToolReleaseReference};
 use crate::schema::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -348,6 +352,146 @@ pub struct CompiledToolBinding {
     #[cfg_attr(feature = "full", desert(default))]
     pub filesystem_access: ToolFilesystemAccess,
     pub source: ToolSource,
+}
+
+/// The exact registration and binding accepted for a tool invocation.
+///
+/// Persisting this value with the invocation pins execution and replay to the accepted
+/// deployment rather than resolving whichever deployment happens to be current later.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, desert_rust::BinaryCodec)]
+#[desert(evolution())]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActivationSnapshot {
+    pub registered_tool: RegisteredTool,
+    pub binding: CompiledToolBinding,
+    pub filesystem: FilesystemCapability,
+}
+
+#[cfg(feature = "full")]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolDispatchTarget {
+    Component(EntityActivation),
+    Host {
+        host_tool_id: HostToolId,
+        implementation_version: String,
+        deployment_revision: DeploymentRevision,
+        provision: ToolProvisionConfig,
+        binding: Box<CompiledToolBinding>,
+        filesystem: FilesystemCapability,
+    },
+}
+
+#[cfg(feature = "full")]
+impl ToolActivationSnapshot {
+    pub fn registered_tool(&self) -> &RegisteredTool {
+        &self.registered_tool
+    }
+
+    pub fn binding(&self) -> &CompiledToolBinding {
+        &self.binding
+    }
+
+    pub fn filesystem(&self) -> FilesystemCapability {
+        self.filesystem
+    }
+
+    pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, String> {
+        match self.registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => EntityActivation::new(
+                ExecutableTarget::new(component_id, component_revision),
+                self.registered_tool.deployment_revision,
+                EntityActivationPolicy::Tool {
+                    provision: self.registered_tool.provision,
+                    binding: Box::new(self.binding),
+                },
+                self.filesystem,
+            )
+            .map(ToolDispatchTarget::Component),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => Ok(ToolDispatchTarget::Host {
+                host_tool_id,
+                implementation_version,
+                deployment_revision: self.registered_tool.deployment_revision,
+                provision: self.registered_tool.provision,
+                binding: Box::new(self.binding),
+                filesystem: self.filesystem,
+            }),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", content = "value")]
+pub enum SerializableToolError {
+    InvalidToolName(String),
+    InvalidCommandPath(Vec<String>),
+    InvalidInput(String),
+    ConstraintViolation(String),
+    InvalidResult(String),
+    CustomError(Box<crate::schema::TypedSchemaValue>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", content = "value")]
+pub enum SerializableToolRpcError {
+    ProtocolError(String),
+    Denied(String),
+    NotFound(String),
+    RemoteInternalError(String),
+    RemoteToolError(Box<SerializableToolError>),
+    Cancelled,
+    ResourceExhausted(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct SerializableToolInvocationResult {
+    pub result: Option<crate::schema::TypedSchemaValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

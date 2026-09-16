@@ -13,6 +13,29 @@ of environment state; authorization is enforced before any backend runs.
 accepted call becomes an `OwnerToolOperation` (`prepare_tool_call`) and is executed by
 `execute_accepted_tool_call` as a `ToolSidecarInvocation` driven by a `ToolExecutionTask`.
 
+Native external calls use `AgentInvocation::ExternalTool`, not a synthetic guest method.
+`Worker::invoke_external_tool` fences the owner fingerprint and resolves a coherent
+`ToolActivationSnapshot` before ordinary queue admission. The snapshot is stored in the invocation
+payload; retries attach to the accepted key before consulting deployment state. New admissions
+use the revision folded from oplog status, even when the owner's Store is not loaded. An update
+queued ahead of a tool does not change the binding already pinned at admission.
+
+`worker/invocation.rs` drives `invoke_native_tool` through a registered `NativeToolTask` under
+the same invocation start, deadline, principal/scope, tail settlement and committed completion as
+methods. Registering the task lets Wasmtime account for pending host I/O rather than reporting an
+idle-store deadlock. Native dispatch uses the same entity boundary without an outer call-tool
+`Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
+dispatcher again and reconstructs completed bodies before checking the invocation result.
+An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
+the body may have mutated owner state before returning that error.
+
+Secret-bearing success and custom-error responses pass through the durable
+`GolemToolResponseSecretHoldAdmission` read. Completed replay restores its recorded allow/deny
+decision rather than consulting current permissions; incomplete admission checks permissions
+after returning to live. This accessor call is cancellable because the guest-facing tool APIs
+also use it. Guest cancellation must record a cancellation terminal, not abandon an admission
+`Start` as incomplete work. Responses without secrets need no admission call.
+
 Entity bodies (tool sidecars, middleware chains) run in their own Wasmtime `Store` but have **no
 oplog of their own**. `durable_host/entity.rs` is the "durable owner-oplog boundary for transient
 entity bodies": `EntityInvocationDurability` wraps a `DurableCallSession<GolemEntityInvoke,
@@ -94,4 +117,3 @@ deterministic_stream_crash_checkpoint_matrix,
 capable_terminal_lane_return_and_delayed_publication_survive_crash}` and
 `tests/tool_discovery.rs`. These use an in-process tokio crash-checkpoint server
 (`start_crash_checkpoint_server`), so they stay within the no-external-process rule.
-

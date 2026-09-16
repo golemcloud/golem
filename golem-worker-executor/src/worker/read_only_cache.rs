@@ -151,6 +151,7 @@ pub fn classify_invocation(
             _ => InvocationEffect::UnknownAssumeMutating,
         },
         AgentInvocation::AgentInitialization { .. }
+        | AgentInvocation::ExternalTool { .. }
         | AgentInvocation::ManualUpdate { .. }
         | AgentInvocation::LoadSnapshot { .. }
         | AgentInvocation::SaveSnapshot { .. }

@@ -32,7 +32,7 @@ pub use operation::{
 
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
@@ -58,7 +58,7 @@ use crate::preview2::golem::tool::host::{
 };
 use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_exports;
 use crate::services::environment_state::{
-    ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
+    ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryError, ToolDispatchTarget,
 };
 use crate::services::{HasActiveAgents, HasWorker};
 use crate::worker::instance::EntityInvocationBody;
@@ -81,7 +81,9 @@ use golem_common::model::entity::{
     ToolInvocationRejectedIdentity,
 };
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
+use golem_common::model::oplog::host_functions::{
+    GolemToolGetAllTools, GolemToolGetTool, GolemToolResponseSecretHoldAdmission,
+};
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolError, SerializableToolInvocationResult,
     SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
@@ -89,8 +91,9 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemToolGetTool, HostRequestGolemToolInvocationRejected,
-    HostRequestNoInput, HostResponseEntityInvocation, HostResponseGolemToolTool,
-    HostResponseGolemToolTools,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestNoInput,
+    HostResponseEntityInvocation, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools,
 };
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
@@ -431,17 +434,18 @@ impl ToolStdoutWriterEntry {
     }
 }
 
-type ToolInvokeResponse = Result<SerializableToolInvocationResult, SerializableToolRpcError>;
+pub(crate) type ToolInvokeResponse =
+    Result<SerializableToolInvocationResult, SerializableToolRpcError>;
 
 async fn admit_tool_response_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
-) -> Result<ToolInvokeResponse, WorkerExecutorError>
+) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let targets = accessor.with(|mut access| {
+    let (value, targets) = accessor.with(|mut access| {
         let ctx = access.get();
         let value = match &response {
             Ok(result) => result.result.as_ref(),
@@ -452,20 +456,46 @@ where
             _ => None,
         };
         match value {
-            Some(value) => secret_hold_targets_for_value(ctx, value.value()),
-            None => Ok(Vec::new()),
+            Some(value) => Ok::<_, WorkerExecutorError>((
+                Some(value.clone()),
+                secret_hold_targets_for_value(ctx, value.value())?,
+            )),
+            None => Ok((None, Vec::new())),
         }
     })?;
     if targets.is_empty() {
         return Ok(response);
     }
-    match authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &targets)
-        .await?
-    {
-        Ok(_) => Ok(response),
-        Err(_) => Ok(Err(SerializableToolRpcError::Denied(
+
+    let request = HostRequestGolemToolResponseSecretHoldAdmission {
+        value: value.expect("secret hold targets require a response value"),
+        targets: targets.clone(),
+    };
+    let admission =
+        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+            accessor,
+            accessor.getter(),
+            request,
+            DurableFunctionType::ReadLocal,
+            async || {
+                Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
+                    admitted: authorize_live_permissions_at_serialized_access(
+                        accessor,
+                        accessor.getter(),
+                        &targets,
+                    )
+                    .await?
+                    .is_ok(),
+                })
+            },
+        )
+        .await?;
+    if admission.admitted {
+        Ok(response)
+    } else {
+        Ok(Err(SerializableToolRpcError::Denied(
             "permission denied".to_string(),
-        ))),
+        )))
     }
 }
 
@@ -1405,6 +1435,8 @@ async fn prepare_tool_call<U, Ctx>(
     stdin: Option<Resource<ToolStdinEntry>>,
     stdout_requested: bool,
     call_mode: EntityCallMode,
+    pinned_activation: Option<Arc<ToolActivationSnapshot>>,
+    principal: Option<Principal>,
 ) -> anyhow::Result<ToolCallPreparation>
 where
     U: Send + 'static,
@@ -1460,57 +1492,61 @@ where
         }
     };
 
-    let activation_snapshot = match environment_state_service
-        .get_tool_activation(
-            rpc.owner.owner_id.environment_id,
-            owner_component_id,
-            owner_component_revision,
-            &binding_owner,
-            &rpc.tool_name,
-        )
-        .await
-    {
-        Ok(ToolActivationOutcome::Ready(activation)) => *activation,
-        Ok(ToolActivationOutcome::NotBound) => {
-            return Ok(rejected_tool_call(
-                &rpc,
-                attempt_ordinal,
-                &command_path,
-                Some(input),
-                None,
-                has_stdin,
-                stdout_requested,
-                call_mode,
-                SerializableToolRpcError::Denied(format!(
-                    "tool '{}' is not bound to owner '{binding_owner:?}'",
-                    rpc.tool_name
-                )),
-                stdin,
-            ));
-        }
-        Ok(ToolActivationOutcome::NotRegistered) => {
-            return Ok(rejected_tool_call(
-                &rpc,
-                attempt_ordinal,
-                &command_path,
-                Some(input),
-                None,
-                has_stdin,
-                stdout_requested,
-                call_mode,
-                SerializableToolRpcError::NotFound(format!(
-                    "tool '{}' is not registered",
-                    rpc.tool_name
-                )),
-                stdin,
-            ));
-        }
-        Err(error) => {
-            let kind = classify_tool_discovery_error(&error);
-            return Err(anyhow::Error::new(ClassifiedHostError {
-                kind,
-                message: error.to_string(),
-            }));
+    let activation_snapshot = if let Some(activation) = pinned_activation {
+        (*activation).clone()
+    } else {
+        match environment_state_service
+            .get_tool_activation(
+                rpc.owner.owner_id.environment_id,
+                owner_component_id,
+                owner_component_revision,
+                &binding_owner,
+                &rpc.tool_name,
+            )
+            .await
+        {
+            Ok(ToolActivationOutcome::Ready(activation)) => *activation,
+            Ok(ToolActivationOutcome::NotBound) => {
+                return Ok(rejected_tool_call(
+                    &rpc,
+                    attempt_ordinal,
+                    &command_path,
+                    Some(input),
+                    None,
+                    has_stdin,
+                    stdout_requested,
+                    call_mode,
+                    SerializableToolRpcError::Denied(format!(
+                        "tool '{}' is not bound to owner '{binding_owner:?}'",
+                        rpc.tool_name
+                    )),
+                    stdin,
+                ));
+            }
+            Ok(ToolActivationOutcome::NotRegistered) => {
+                return Ok(rejected_tool_call(
+                    &rpc,
+                    attempt_ordinal,
+                    &command_path,
+                    Some(input),
+                    None,
+                    has_stdin,
+                    stdout_requested,
+                    call_mode,
+                    SerializableToolRpcError::NotFound(format!(
+                        "tool '{}' is not registered",
+                        rpc.tool_name
+                    )),
+                    stdin,
+                ));
+            }
+            Err(error) => {
+                let kind = classify_tool_discovery_error(&error);
+                return Err(anyhow::Error::new(ClassifiedHostError {
+                    kind,
+                    message: error.to_string(),
+                }));
+            }
         }
     };
     let registered_tool = activation_snapshot.registered_tool().clone();
@@ -1574,6 +1610,7 @@ where
             ));
         }
         Err(error) => {
+            let error = ToolDiscoveryError::InconsistentSnapshot { details: error };
             let kind = classify_tool_discovery_error(&error);
             return Err(anyhow::Error::new(ClassifiedHostError {
                 kind,
@@ -1649,7 +1686,7 @@ where
     });
     let operation = accessor.with(|mut access| {
         let ctx = access.get();
-        let principal = ctx.invocation_principal();
+        let principal = principal.unwrap_or_else(|| ctx.invocation_principal());
         ctx.owner_execution
             .tool_operations()
             .create(operation::OwnerToolOperationContext {
@@ -3297,21 +3334,21 @@ where
     }
 }
 
-async fn dispatch_tool_call<U, Ctx>(
+async fn dispatch_tool_attempt<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    rpc: ToolRpcEntry,
+    attempt: ToolInvocationAttempt,
     command_path: Vec<String>,
-    input: TypedSchemaValue,
     stdin: Option<Resource<ToolStdinEntry>>,
     has_stdout: bool,
     call_mode: EntityCallMode,
+    pinned_activation: Option<Arc<ToolActivationSnapshot>>,
+    principal: Option<Principal>,
 ) -> anyhow::Result<ToolCallDispatch>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
     let has_stdin = stdin.is_some();
-    let attempt = read_tool_attempt(accessor, rpc, input)?;
     if accessor.with(|mut access| !access.get().state.is_live()) {
         let identity = attempt.claim_identity(&command_path, has_stdin, has_stdout, call_mode);
         match EntityInvocationDurability::replay_tool_access(
@@ -3368,6 +3405,8 @@ where
         stdin,
         has_stdout,
         call_mode,
+        pinned_activation,
+        principal,
     )
     .await?
     {
@@ -3407,6 +3446,33 @@ where
             })))
         }
     }
+}
+
+async fn dispatch_tool_call<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    rpc: ToolRpcEntry,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<Resource<ToolStdinEntry>>,
+    has_stdout: bool,
+    call_mode: EntityCallMode,
+) -> anyhow::Result<ToolCallDispatch>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    let attempt = read_tool_attempt(accessor, rpc, input)?;
+    dispatch_tool_attempt(
+        accessor,
+        attempt,
+        command_path,
+        stdin,
+        has_stdout,
+        call_mode,
+        None,
+        None,
+    )
+    .await
 }
 
 async fn release_capable_tool_cohort<U, D, Ctx>(
@@ -3528,6 +3594,120 @@ where
     }
     drop(guards);
     Ok(projected)
+}
+
+/// Invokes a component-backed tool directly from the owner invocation driver.
+///
+/// The activation is already resolved and pinned by the caller. This entry point intentionally
+/// has no attachment parameters: native invocation currently supports scalar inputs and outputs
+/// only.
+pub(crate) async fn invoke_native_tool<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    activation: Arc<ToolActivationSnapshot>,
+    tool_name: ToolName,
+    command_path: Vec<String>,
+    input: ModelTypedSchemaValue,
+    principal: Principal,
+) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
+    run_guest_call_settled(
+        store,
+        async move |accessor| -> anyhow::Result<ToolInvokeResponse> {
+            let accessor =
+                accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(|ctx| ctx.durable_ctx_mut());
+            let (result, receiver) = oneshot::channel();
+            accessor.spawn(NativeToolTask {
+                activation,
+                tool_name,
+                command_path,
+                input,
+                principal,
+                result,
+            });
+            receiver
+                .await
+                .map_err(|_| anyhow!("native tool task ended without a result"))
+        },
+    )
+    .await
+}
+
+struct NativeToolTask {
+    activation: Arc<ToolActivationSnapshot>,
+    tool_name: ToolName,
+    command_path: Vec<String>,
+    input: ModelTypedSchemaValue,
+    principal: Principal,
+    result: oneshot::Sender<ToolInvokeResponse>,
+}
+
+impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
+    for NativeToolTask
+{
+    async fn run(
+        self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let Self {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            principal,
+            result,
+        } = self;
+        let (rpc, parent, attempt_ordinal) = accessor
+            .with(|mut access| {
+                let ctx = access.get();
+                let rpc = tool_rpc_for_current_owner(ctx, tool_name)?;
+                let parent = ctx.owner_invocation_id()?;
+                let next_ordinal = ctx
+                    .state
+                    .tool_invocation_attempt_ordinals
+                    .entry(parent.clone())
+                    .or_default();
+                let attempt_ordinal = *next_ordinal;
+                *next_ordinal = next_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
+                Ok::<_, anyhow::Error>((rpc, parent, attempt_ordinal))
+            })
+            .map_err(wasmtime::Error::from_anyhow)?;
+        let dispatch = dispatch_tool_attempt(
+            accessor,
+            ToolInvocationAttempt {
+                rpc,
+                input: Ok(input),
+                parent,
+                attempt_ordinal,
+            },
+            command_path,
+            None,
+            false,
+            EntityCallMode::Synchronous,
+            Some(activation),
+            Some(principal),
+        )
+        .await
+        .map_err(wasmtime::Error::from_anyhow)?;
+        let response = match dispatch {
+            ToolCallDispatch::Rejected { response, stdin } => {
+                debug_assert!(stdin.is_none());
+                *response
+            }
+            ToolCallDispatch::Accepted(accepted) => {
+                execute_accepted_tool_call(accessor, *accepted, None, None, None)
+                    .await
+                    .map_err(wasmtime::Error::from_anyhow)?
+            }
+        };
+        let response = admit_tool_response_secret_holds(accessor, response)
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
+        result
+            .send(response)
+            .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))?;
+        Ok(())
+    }
 }
 
 pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
@@ -3819,9 +3999,7 @@ where
             }
         },
     };
-    admit_tool_response_secret_holds(accessor, response)
-        .await
-        .map_err(Into::into)
+    admit_tool_response_secret_holds(accessor, response).await
 }
 
 fn project_underlying_tool_response<U, Ctx>(

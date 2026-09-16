@@ -49,18 +49,19 @@ use golem_common::model::oplog::public_oplog_entry::{
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
-    HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    AgentMethodInvocationParameters, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
+    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicSnapshotData, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -1843,6 +1844,27 @@ async fn agent_invocation_to_public(
                 },
             ))
         }
+        AgentInvocation::ExternalTool {
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            invocation_context,
+            ..
+        } => {
+            let span_data = invocation_context.to_oplog_data();
+            Ok(PublicAgentInvocation::ExternalTool(
+                ExternalToolInvocationParameters {
+                    idempotency_key,
+                    tool_name: tool_name.into_inner(),
+                    command_path,
+                    input,
+                    trace_id: invocation_context.trace_id.clone(),
+                    trace_states: invocation_context.trace_states.clone(),
+                    invocation_context: encode_span_data(&span_data),
+                },
+            ))
+        }
         AgentInvocation::ManualUpdate { target_revision } => Ok(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
@@ -1912,6 +1934,14 @@ async fn agent_invocation_result_to_public(
                 AgentInvocationOutputParameters { output },
             ))
         }
+        AgentInvocationResult::ExternalTool { result } => Ok(
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: match result {
+                    Ok(result) => PublicExternalToolResult::Success(result),
+                    Err(error) => PublicExternalToolResult::Failure(error),
+                },
+            }),
+        ),
         AgentInvocationResult::ManualUpdate => {
             Ok(PublicAgentInvocationResult::ManualUpdate(Empty {}))
         }

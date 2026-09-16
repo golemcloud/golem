@@ -126,6 +126,7 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
@@ -138,6 +139,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
@@ -792,6 +794,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
+    /// Resolves an already-created owner. Unlike ordinary invocation ingress, this path cannot
+    /// create or recreate an owner and is therefore suitable for authority carrying an expected
+    /// owner fingerprint.
+    pub async fn get_exact_existing_suspended<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Self>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        deps.active_agents()
+            .get_existing(deps, owned_agent_id, invocation_context_stack, principal)
+            .await
+    }
+
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
@@ -950,6 +969,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        existing_only: bool,
     ) -> Result<Self, WorkerExecutorError> {
         let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
@@ -970,6 +990,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_agent_config,
             parent,
             freshness_disposition,
+            existing_only,
         )
         .await
         {
@@ -2164,6 +2185,94 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         Ok(result)
+    }
+
+    /// Admits a native external-tool invocation for this exact owner.
+    ///
+    /// The caller is trusted to have authenticated the supplied principal and context at its
+    /// ingress boundary. This method preserves ordinary invocation queue, idempotency, scope-card,
+    /// result, and cache-invalidation semantics; it does not establish a separate permission
+    /// boundary.
+    pub async fn invoke_external_tool(
+        self: Arc<Self>,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        if self.initial_worker_metadata.fingerprint != expected_fingerprint {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool invocation owner fingerprint does not match",
+            ));
+        }
+
+        // A retry attaches to the already accepted payload/result. In particular it must not
+        // resolve the tool against a newer environment deployment.
+        if self.lookup_invocation_result(&idempotency_key).await != LookupResult::New {
+            return self.await_enqueued_invocation(idempotency_key).await;
+        }
+
+        if let Some(scope_card) = &scope_card {
+            crate::services::card::validate_scope_card(self.card_service().as_ref(), scope_card)
+                .await?;
+        }
+        // The resident component snapshot starts at the CREATE revision and is only refreshed by
+        // instance startup. Admission can happen while the owner is cold, so resolve against the
+        // revision folded from the authoritative oplog status instead.
+        let component_revision = self.last_known_status.load().component_revision;
+        let component = self
+            .component_service()
+            .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
+            .await?;
+        let owner = match &self.owner_context {
+            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                agent_type_name: agent.agent_type.clone(),
+            },
+            ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
+                component_id: component.id,
+            },
+        };
+        let activation = match self
+            .environment_state_service()
+            .get_tool_activation(
+                self.owned_agent_id.environment_id,
+                component.id,
+                component_revision,
+                &owner,
+                &tool_name,
+            )
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        {
+            crate::services::environment_state::ToolActivationOutcome::Ready(activation) => {
+                activation
+            }
+            crate::services::environment_state::ToolActivationOutcome::NotBound => {
+                return Err(WorkerExecutorError::permission_denied(format!(
+                    "tool '{tool_name}' is not bound to owner '{owner:?}'"
+                )));
+            }
+            crate::services::environment_state::ToolActivationOutcome::NotRegistered => {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "tool '{tool_name}' is not registered"
+                )));
+            }
+        };
+        self.invoke_and_await(AgentInvocation::ExternalTool {
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            activation,
+            invocation_context,
+            principal,
+            scope_card,
+        })
+        .await
     }
 
     /// Invokes the worker and awaits for a result.
@@ -3479,11 +3588,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: &AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = invocation
-        else {
-            return Ok(());
+        let idempotency_key = match invocation {
+            AgentInvocation::AgentMethod {
+                idempotency_key, ..
+            }
+            | AgentInvocation::ExternalTool {
+                idempotency_key, ..
+            } => idempotency_key,
+            _ => return Ok(()),
         };
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
@@ -6200,6 +6312,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
         freshness_disposition: InvocationFreshnessDisposition,
+        existing_only: bool,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
 
@@ -6309,6 +6422,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })
             }
             None => {
+                if existing_only {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "external tool invocation owner does not exist",
+                    ));
+                }
                 // Create and initialize a new worker.
                 OwnerKind::ComponentAgent
                     .validate_instance_name(&owned_agent_id.agent_id.agent_id)

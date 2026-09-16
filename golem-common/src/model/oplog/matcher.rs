@@ -184,6 +184,16 @@ impl PublicOplogEntry {
                                     query,
                                 )
                         }
+                        PublicAgentInvocation::ExternalTool(inv_params) => {
+                            Self::string_match("external-tool", &[], query_path, query)
+                                || Self::string_match(&inv_params.tool_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &inv_params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
                         PublicAgentInvocation::SaveSnapshot(_) => {
                             Self::string_match("save-snapshot", &[], query_path, query)
                         }
@@ -260,6 +270,10 @@ impl PublicOplogEntry {
                                     query_path,
                                     query,
                                 )
+                        }
+                        PublicAgentInvocation::ExternalTool(params) => {
+                            Self::string_match("external-tool", &[], query_path, query)
+                                || Self::string_match(&params.tool_name, &[], query_path, query)
                         }
                         PublicAgentInvocation::SaveSnapshot(_) => {
                             Self::string_match("save-snapshot", &[], query_path, query)

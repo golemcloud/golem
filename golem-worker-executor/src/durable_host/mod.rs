@@ -4812,7 +4812,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let stack = self.get_current_invocation_context().await;
 
             let scope_card = match &invocation {
-                AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                AgentInvocation::AgentMethod { scope_card, .. }
+                | AgentInvocation::ExternalTool { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
             let scope_root_cards = if let Some(scope_card) = &scope_card {
@@ -4830,6 +4831,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let input = match &invocation {
                 AgentInvocation::AgentInitialization { input, .. }
                 | AgentInvocation::AgentMethod { input, .. } => Some(input),
+                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
                 _ => None,
             };
             if let Some(input) = input
@@ -4846,6 +4848,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     *invocation_context = stack;
                 }
                 AgentInvocation::AgentMethod {
+                    invocation_context, ..
+                }
+                | AgentInvocation::ExternalTool {
                     invocation_context, ..
                 } => {
                     *invocation_context = stack;
@@ -5155,7 +5160,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 | AgentInvocationResult::ManualUpdate
                 | AgentInvocationResult::LoadSnapshot { .. }
                 | AgentInvocationResult::SaveSnapshot { .. }
-                | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                | AgentInvocationResult::ProcessOplogEntries { .. }
+                | AgentInvocationResult::ExternalTool { .. } => true,
             };
 
             // Only `AgentMethod` results need the method name persisted so the
@@ -5625,10 +5631,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             invocation_payload,
                             invocation_context.clone(),
                         );
-                        let scope_card = match &agent_invocation {
-                            AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
-                            _ => None,
-                        };
+                        let scope_card = agent_invocation.scope_card().cloned();
                         let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);

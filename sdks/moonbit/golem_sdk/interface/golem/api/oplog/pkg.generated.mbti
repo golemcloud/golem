@@ -19,6 +19,25 @@ pub(all) suberror OplogReadError {
   InternalError(String)
 } derive(Eq, @debug.Debug)
 
+pub(all) suberror ToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+  CustomError(@types.TypedSchemaValue)
+} derive(Eq, @debug.Debug)
+
+pub(all) suberror ToolRpcError {
+  ProtocolError(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternalError(String)
+  RemoteToolError(ToolError)
+  Cancelled
+  ResourceExhausted(String)
+} derive(Eq, @debug.Debug)
+
 pub(all) suberror WorkerError {
   Unknown(String)
   InvalidRequest(String)
@@ -56,6 +75,7 @@ pub(all) struct AgentInitializationParameters {
 pub(all) enum AgentInvocation {
   AgentInitialization(AgentInitializationParameters)
   AgentMethodInvocation(AgentMethodInvocationParameters)
+  ExternalTool(ExternalToolInvocationParameters)
   SaveSnapshot
   LoadSnapshot(LoadSnapshotParameters)
   ProcessOplogEntries(ProcessOplogEntriesParameters)
@@ -77,6 +97,7 @@ pub(all) struct AgentInvocationOutputParameters {
 pub(all) enum AgentInvocationResult {
   AgentInitialization(AgentInvocationOutputParameters)
   AgentMethod(AgentInvocationOutputParameters)
+  ExternalTool(ExternalToolResultParameters)
   ManualUpdate
   LoadSnapshot(FallibleResultParameters)
   SaveSnapshot(SaveSnapshotResultParameters)
@@ -265,6 +286,20 @@ pub(all) struct ErrorParameters {
 
 pub(all) struct ExternalSpanData {
   span_id : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolInvocationParameters {
+  idempotency_key : String
+  tool_name : String
+  command_path : Array[String]
+  input : @types.TypedSchemaValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolResultParameters {
+  result : Result[ToolInvocationResult, ToolRpcError]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FailedUpdateParameters {
@@ -809,6 +844,10 @@ pub(all) struct SuccessfulUpdateParameters {
 
 pub(all) struct Timestamp {
   timestamp : @system-clock.Instant
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolInvocationResult {
+  result : @types.TypedSchemaValue?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum UpdateDescription {

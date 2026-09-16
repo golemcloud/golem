@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+pub use crate::base_model::tool::{
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::AttributeValue;
@@ -2214,43 +2217,6 @@ pub enum SerializableRpcError {
 #[derive(
     Debug,
     Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableToolError {
-    InvalidToolName(String),
-    InvalidCommandPath(Vec<String>),
-    InvalidInput(String),
-    ConstraintViolation(String),
-    InvalidResult(String),
-    CustomError(Box<TypedSchemaValue>),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableToolRpcError {
-    ProtocolError(String),
-    Denied(String),
-    NotFound(String),
-    RemoteInternalError(String),
-    RemoteToolError(Box<SerializableToolError>),
-    Cancelled,
-    ResourceExhausted(String),
-}
-
-#[derive(
-    Debug,
-    Clone,
     Copy,
     PartialEq,
     Eq,
@@ -2319,19 +2285,6 @@ pub struct SerializableToolStructuredResult {
 pub struct SerializableToolOperationTerminal {
     pub body_execution: SerializableEntityBodyExecution,
     pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub struct SerializableToolInvocationResult {
-    pub result: Option<TypedSchemaValue>,
 }
 
 #[derive(

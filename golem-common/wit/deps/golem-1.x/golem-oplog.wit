@@ -361,9 +361,20 @@ interface oplog {
         target-revision: component-revision,
     }
 
+    record external-tool-invocation-parameters {
+        idempotency-key: string,
+        tool-name: string,
+        command-path: list<string>,
+        input: typed-schema-value,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<list<span-data>>,
+    }
+
     variant agent-invocation {
         agent-initialization(agent-initialization-parameters),
         agent-method-invocation(agent-method-invocation-parameters),
+        external-tool(external-tool-invocation-parameters),
         save-snapshot,
         load-snapshot(load-snapshot-parameters),
         process-oplog-entries(process-oplog-entries-parameters),
@@ -373,10 +384,38 @@ interface oplog {
     variant agent-invocation-result {
         agent-initialization(agent-invocation-output-parameters),
         agent-method(agent-invocation-output-parameters),
+        external-tool(external-tool-result-parameters),
         manual-update,
         load-snapshot(fallible-result-parameters),
         save-snapshot(save-snapshot-result-parameters),
         process-oplog-entries(fallible-result-parameters),
+    }
+
+    record external-tool-result-parameters {
+        %result: result<tool-invocation-result, tool-rpc-error>,
+    }
+
+    record tool-invocation-result {
+        %result: option<typed-schema-value>,
+    }
+
+    variant tool-error {
+        invalid-tool-name(string),
+        invalid-command-path(list<string>),
+        invalid-input(string),
+        constraint-violation(string),
+        invalid-result(string),
+        custom-error(typed-schema-value),
+    }
+
+    variant tool-rpc-error {
+        protocol-error(string),
+        denied(string),
+        not-found(string),
+        remote-internal-error(string),
+        remote-tool-error(tool-error),
+        cancelled,
+        resource-exhausted(string),
     }
 
     record agent-invocation-output-parameters {

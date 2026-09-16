@@ -19,14 +19,12 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::entity::{
-    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
-};
+use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+pub use golem_common::model::tool::{ToolActivationSnapshot, ToolDispatchTarget};
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, ToolBindingOwner, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
 };
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
@@ -165,75 +163,10 @@ pub struct ToolDiscoverySnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolActivationSnapshot {
-    registered_tool: RegisteredTool,
-    binding: CompiledToolBinding,
-    filesystem: FilesystemCapability,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum ToolActivationOutcome {
     Ready(Box<ToolActivationSnapshot>),
     NotBound,
     NotRegistered,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ToolDispatchTarget {
-    Component(EntityActivation),
-    Host {
-        host_tool_id: HostToolId,
-        implementation_version: String,
-        deployment_revision: golem_common::model::deployment::DeploymentRevision,
-        provision: ToolProvisionConfig,
-        binding: Box<CompiledToolBinding>,
-        filesystem: FilesystemCapability,
-    },
-}
-
-impl ToolActivationSnapshot {
-    pub fn registered_tool(&self) -> &RegisteredTool {
-        &self.registered_tool
-    }
-
-    pub fn binding(&self) -> &CompiledToolBinding {
-        &self.binding
-    }
-
-    pub fn filesystem(&self) -> FilesystemCapability {
-        self.filesystem
-    }
-
-    pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, ToolDiscoveryError> {
-        match self.registered_tool.source {
-            ToolSource::Component {
-                component_id,
-                component_revision,
-                ..
-            } => EntityActivation::new(
-                ExecutableTarget::new(component_id, component_revision),
-                self.registered_tool.deployment_revision,
-                EntityActivationPolicy::Tool {
-                    provision: self.registered_tool.provision,
-                    binding: Box::new(self.binding),
-                },
-                self.filesystem,
-            )
-            .map(ToolDispatchTarget::Component)
-            .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details }),
-            ToolSource::Host {
-                host_tool_id,
-                implementation_version,
-            } => Ok(ToolDispatchTarget::Host {
-                host_tool_id,
-                implementation_version,
-                deployment_revision: self.registered_tool.deployment_revision,
-                provision: self.registered_tool.provision,
-                binding: Box::new(self.binding),
-                filesystem: self.filesystem,
-            }),
-        }
-    }
 }
 
 pub fn get_tool_activation_from_deployment(
@@ -803,6 +736,23 @@ mod tests {
             ToolActivationOutcome::Ready(activation) => *activation,
             outcome => panic!("expected ready activation, got {outcome:?}"),
         }
+    }
+
+    #[test]
+    fn accepted_tool_activation_snapshot_round_trip_preserves_binding_identity() {
+        let (deployment, agent, _) = deployment_state();
+        let tool_name = ToolName::try_from("alpha").unwrap();
+        let activation = ready_activation(&deployment, &agent, &tool_name);
+        let expected_revision = activation.binding().deployment_revision;
+        let expected_metadata_digest = activation.binding().metadata_digest.clone();
+
+        let encoded = golem_common::serialization::serialize(&activation).unwrap();
+        let decoded: ToolActivationSnapshot =
+            golem_common::serialization::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded, activation);
+        assert_eq!(decoded.binding().deployment_revision, expected_revision);
+        assert_eq!(decoded.binding().metadata_digest, expected_metadata_digest);
     }
 
     #[test]

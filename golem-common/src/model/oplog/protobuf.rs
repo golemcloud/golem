@@ -15,18 +15,19 @@
 use super::public_oplog_entry::CardExpiredParams;
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
+    AgentMethodInvocationParameters, AgentResourceId, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, ManualUpdateParameters, MultipartPartData,
     MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
     ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicExternalToolResult, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicRetryPolicyState, PublicSnapshotData, PublicSpanData,
+    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
@@ -50,6 +51,9 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
+};
+use crate::model::oplog::payload::types::{
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -2227,6 +2231,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                     },
                 ))
             }
+            Invocation::ExternalTool(tool) => {
+                let input = tool.input.ok_or("Missing input field")?.try_into()?;
+                let invocation_context = encode_public_span_data(tool.invocation_context)?;
+                Ok(PublicAgentInvocation::ExternalTool(
+                    ExternalToolInvocationParameters {
+                        idempotency_key: tool
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input,
+                        trace_id: TraceId::from_string(tool.trace_id)?,
+                        trace_states: tool.trace_states,
+                        invocation_context,
+                    },
+                ))
+            }
             Invocation::SaveSnapshot(_) => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
             Invocation::LoadSnapshot(load) => {
                 let snapshot = load.snapshot.ok_or("Missing snapshot field")?;
@@ -2322,6 +2344,20 @@ impl TryFrom<PublicAgentInvocation>
                         function_input: Some(method.function_input.try_into()?),
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
+                        invocation_context,
+                    },
+                )
+            }
+            PublicAgentInvocation::ExternalTool(tool) => {
+                let invocation_context = decode_public_span_data(&tool.invocation_context, 0);
+                Invocation::ExternalTool(
+                    golem_api_grpc::proto::golem::worker::PublicExternalToolInvocation {
+                        idempotency_key: Some(tool.idempotency_key.into()),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input: Some(tool.input.try_into()?),
+                        trace_id: tool.trace_id.to_string(),
+                        trace_states: tool.trace_states,
                         invocation_context,
                     },
                 )
@@ -2441,6 +2477,18 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     AgentInvocationOutputParameters { output },
                 ))
             }
+            ProtoResult::ExternalTool(tool) => Ok(PublicAgentInvocationResult::ExternalTool(
+                ExternalToolResultParameters {
+                    result: match tool.result.ok_or("Missing external tool result")? {
+                        golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Success(success) =>
+                            PublicExternalToolResult::Success(SerializableToolInvocationResult {
+                                result: success.result.map(TryInto::try_into).transpose()?,
+                            }),
+                        golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Error(error) =>
+                            PublicExternalToolResult::Failure(tool_rpc_error_from_proto(error)?),
+                    },
+                },
+            )),
             ProtoResult::ManualUpdate(_) => Ok(PublicAgentInvocationResult::ManualUpdate(Empty {})),
             ProtoResult::LoadSnapshot(opt_err) => Ok(PublicAgentInvocationResult::LoadSnapshot(
                 FallibleResultParameters {
@@ -2518,6 +2566,23 @@ impl TryFrom<PublicAgentInvocationResult>
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
                 ProtoResult::AgentMethodOutput(output.output.try_into()?)
+            }
+            PublicAgentInvocationResult::ExternalTool(tool) => {
+                let result = match tool.result {
+                    PublicExternalToolResult::Success(result) => golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Success(
+                        golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
+                            result: result.result.map(TryInto::try_into).transpose()?,
+                        },
+                    ),
+                    PublicExternalToolResult::Failure(error) => golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Error(
+                        tool_rpc_error_to_proto(error)?,
+                    ),
+                };
+                ProtoResult::ExternalTool(
+                    golem_api_grpc::proto::golem::worker::PublicExternalToolResult {
+                        result: Some(result),
+                    },
+                )
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
@@ -2608,6 +2673,78 @@ impl TryFrom<PublicAgentInvocationResult>
             },
         )
     }
+}
+
+fn tool_rpc_error_from_proto(
+    value: golem_api_grpc::proto::golem::worker::PublicToolRpcError,
+) -> Result<SerializableToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    Ok(match value.error.ok_or("Missing tool RPC error")? {
+        RpcError::ProtocolError(value) => SerializableToolRpcError::ProtocolError(value),
+        RpcError::Denied(value) => SerializableToolRpcError::Denied(value),
+        RpcError::NotFound(value) => SerializableToolRpcError::NotFound(value),
+        RpcError::RemoteInternalError(value) => {
+            SerializableToolRpcError::RemoteInternalError(value)
+        }
+        RpcError::Cancelled(_) => SerializableToolRpcError::Cancelled,
+        RpcError::ResourceExhausted(value) => SerializableToolRpcError::ResourceExhausted(value),
+        RpcError::RemoteToolError(value) => SerializableToolRpcError::RemoteToolError(Box::new(
+            match value.error.ok_or("Missing remote tool error")? {
+                ToolError::InvalidToolName(value) => SerializableToolError::InvalidToolName(value),
+                ToolError::InvalidCommandPath(value) => {
+                    SerializableToolError::InvalidCommandPath(value.values)
+                }
+                ToolError::InvalidInput(value) => SerializableToolError::InvalidInput(value),
+                ToolError::ConstraintViolation(value) => {
+                    SerializableToolError::ConstraintViolation(value)
+                }
+                ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
+                ToolError::CustomError(value) => {
+                    SerializableToolError::CustomError(Box::new(value.try_into()?))
+                }
+            },
+        )),
+    })
+}
+
+fn tool_rpc_error_to_proto(
+    value: SerializableToolRpcError,
+) -> Result<golem_api_grpc::proto::golem::worker::PublicToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    let error = match value {
+        SerializableToolRpcError::ProtocolError(value) => RpcError::ProtocolError(value),
+        SerializableToolRpcError::Denied(value) => RpcError::Denied(value),
+        SerializableToolRpcError::NotFound(value) => RpcError::NotFound(value),
+        SerializableToolRpcError::RemoteInternalError(value) => {
+            RpcError::RemoteInternalError(value)
+        }
+        SerializableToolRpcError::Cancelled => {
+            RpcError::Cancelled(golem_api_grpc::proto::golem::common::Empty {})
+        }
+        SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
+        SerializableToolRpcError::RemoteToolError(value) => {
+            let error = match *value {
+                SerializableToolError::InvalidToolName(value) => ToolError::InvalidToolName(value),
+                SerializableToolError::InvalidCommandPath(values) => ToolError::InvalidCommandPath(
+                    golem_api_grpc::proto::golem::worker::StringList { values },
+                ),
+                SerializableToolError::InvalidInput(value) => ToolError::InvalidInput(value),
+                SerializableToolError::ConstraintViolation(value) => {
+                    ToolError::ConstraintViolation(value)
+                }
+                SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
+                SerializableToolError::CustomError(value) => {
+                    ToolError::CustomError((*value).try_into()?)
+                }
+            };
+            RpcError::RemoteToolError(golem_api_grpc::proto::golem::worker::PublicToolError {
+                error: Some(error),
+            })
+        }
+    };
+    Ok(golem_api_grpc::proto::golem::worker::PublicToolRpcError { error: Some(error) })
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
@@ -3575,6 +3712,14 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentMethod(params) => {
             Ok(AgentInvocationResult::AgentMethod {
                 output: params.output.into_parts().1,
+            })
+        }
+        PublicAgentInvocationResult::ExternalTool(params) => {
+            Ok(AgentInvocationResult::ExternalTool {
+                result: match params.result {
+                    PublicExternalToolResult::Success(result) => Ok(result),
+                    PublicExternalToolResult::Failure(error) => Err(error),
+                },
             })
         }
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
@@ -5139,6 +5284,71 @@ mod successful_update_proto_tests {
         let roundtrip: OplogEntry = proto.try_into().unwrap();
 
         assert_eq!(roundtrip, original);
+    }
+}
+
+#[cfg(test)]
+mod public_tool_result_proto_tests {
+    use crate::base_model::oplog::{
+        ExternalToolResultParameters, PublicAgentInvocationResult, PublicExternalToolResult,
+    };
+    use crate::base_model::tool::{
+        SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+    };
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use test_r::test;
+
+    fn typed(value: &str) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(value.to_string()),
+        )
+    }
+
+    fn assert_roundtrip(result: PublicExternalToolResult) {
+        let original =
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters { result });
+        let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult =
+            original.clone().try_into().unwrap();
+        let decoded = PublicAgentInvocationResult::try_from(proto).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn public_external_tool_result_protobuf_preserves_success_and_every_error_variant() {
+        assert_roundtrip(PublicExternalToolResult::Success(
+            SerializableToolInvocationResult {
+                result: Some(typed("output")),
+            },
+        ));
+        for error in [
+            SerializableToolRpcError::ProtocolError("protocol".into()),
+            SerializableToolRpcError::Denied("denied".into()),
+            SerializableToolRpcError::NotFound("missing".into()),
+            SerializableToolRpcError::RemoteInternalError("internal".into()),
+            SerializableToolRpcError::Cancelled,
+            SerializableToolRpcError::ResourceExhausted("quota".into()),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidToolName("name".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidCommandPath(vec!["a".into(), "b".into()]),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidInput("input".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::ConstraintViolation("constraint".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidResult("result".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::CustomError(Box::new(typed("custom"))),
+            )),
+        ] {
+            assert_roundtrip(PublicExternalToolResult::Failure(error));
+        }
     }
 }
 

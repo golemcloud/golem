@@ -29,6 +29,7 @@ use futures::FutureExt;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
+use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
@@ -36,6 +37,7 @@ use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
@@ -661,6 +663,51 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
+        PreparedCall::ExternalTool {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            principal,
+        } => {
+            prepare_guest_call(store, display_name).await;
+            let result = crate::durable_host::tool::invoke_native_tool(
+                store,
+                activation,
+                tool_name,
+                command_path,
+                input,
+                principal,
+            )
+            .await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(result)) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::ExternalTool { result },
+                }),
+                Ok(Err(error)) => {
+                    let retry_from = store.data().get_current_retry_point().await;
+                    let in_atomic_region = store.data().current_in_atomic_region();
+                    let atomic_region_had_side_effects =
+                        store.data().current_atomic_region_had_side_effects();
+                    Ok(InvokeResult::from_error::<Ctx>(
+                        consumed_fuel,
+                        &error,
+                        retry_from,
+                        in_atomic_region,
+                        atomic_region_had_side_effects,
+                        store.data().agent_mode(),
+                    ))
+                }
+                Err(GuestCallSettlementError::Interrupted(error))
+                | Err(GuestCallSettlementError::Trap(error)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, error).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
+            }
+        }
     }
 }
 
@@ -1136,6 +1183,13 @@ enum LoweredCall {
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
     },
+    ExternalTool {
+        activation: Box<ToolActivationSnapshot>,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        principal: golem_common::model::agent::Principal,
+    },
 }
 
 /// A [`LoweredCall`] whose schema-native inputs have been materialized into the
@@ -1168,6 +1222,13 @@ enum PreparedCall {
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
     },
+    ExternalTool {
+        activation: std::sync::Arc<ToolActivationSnapshot>,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        principal: golem_common::model::agent::Principal,
+    },
 }
 
 impl PreparedCall {
@@ -1176,6 +1237,7 @@ impl PreparedCall {
             Self::Initialize { principal, .. } | Self::Invoke { principal, .. } => {
                 Some(principal.clone().into())
             }
+            Self::ExternalTool { principal, .. } => Some(principal.clone()),
             Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
                 None
             }
@@ -1253,6 +1315,19 @@ fn materialize_call<Ctx: WorkerCtx>(
             metadata,
             first_entry_index,
             entries,
+        },
+        LoweredCall::ExternalTool {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            principal,
+        } => PreparedCall::ExternalTool {
+            activation: std::sync::Arc::from(activation),
+            tool_name,
+            command_path,
+            input,
+            principal,
         },
     })
 }
@@ -1332,6 +1407,24 @@ pub fn lower_invocation(
                 },
             })
         }
+        AgentInvocation::ExternalTool {
+            tool_name,
+            command_path,
+            input,
+            activation,
+            principal,
+            ..
+        } => Ok(LoweredInvocation {
+            display_name: format!("{tool_name}:{}", command_path.join("/")),
+            read_only_method: None,
+            call: LoweredCall::ExternalTool {
+                activation,
+                tool_name,
+                command_path,
+                input,
+                principal,
+            },
+        }),
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),

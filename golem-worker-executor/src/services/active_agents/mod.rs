@@ -725,6 +725,64 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        self.get_or_add_internal(
+            deps,
+            owned_agent_id,
+            worker_env,
+            worker_agent_config,
+            component_revision,
+            parent,
+            invocation_context_stack,
+            principal,
+            freshness_disposition,
+            false,
+        )
+        .await
+    }
+
+    /// Loads an existing owner into the active set without creating it when its durable record is
+    /// absent. This is the admission path for requests whose authority is tied to an exact owner.
+    pub async fn get_existing<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        self.get_or_add_internal(
+            deps,
+            owned_agent_id,
+            None,
+            Vec::new(),
+            None,
+            None,
+            invocation_context_stack,
+            principal,
+            InvocationFreshnessDisposition::MayExist,
+            true,
+        )
+        .await
+    }
+
+    async fn get_or_add_internal<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        parent: Option<AgentId>,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
+        existing_only: bool,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
         let owned_agent_id = owned_agent_id.clone();
         let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
@@ -744,6 +802,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         &invocation_context_stack,
                         principal,
                         freshness_disposition,
+                        existing_only,
                     )
                     .in_current_span()
                     .await;

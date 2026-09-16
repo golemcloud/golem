@@ -18,6 +18,7 @@ use golem_common::base_model::oplog::{
 };
 use golem_common::model::card::CardId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -30,12 +31,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -74,6 +75,41 @@ fn encode_untyped_schema_value(value: SchemaValue) -> Result<wire::SchemaValueTr
 
 fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<SchemaValue, String> {
     decode_value(&value).map_err(|e| e.to_string())
+}
+
+fn encode_tool_error(error: SerializableToolError) -> Result<oplog::ToolError, String> {
+    Ok(match error {
+        SerializableToolError::InvalidToolName(error) => oplog::ToolError::InvalidToolName(error),
+        SerializableToolError::InvalidCommandPath(path) => {
+            oplog::ToolError::InvalidCommandPath(path)
+        }
+        SerializableToolError::InvalidInput(error) => oplog::ToolError::InvalidInput(error),
+        SerializableToolError::ConstraintViolation(error) => {
+            oplog::ToolError::ConstraintViolation(error)
+        }
+        SerializableToolError::InvalidResult(error) => oplog::ToolError::InvalidResult(error),
+        SerializableToolError::CustomError(value) => {
+            oplog::ToolError::CustomError(encode_public_typed_schema_value(*value)?)
+        }
+    })
+}
+
+fn encode_tool_rpc_error(error: SerializableToolRpcError) -> Result<oplog::ToolRpcError, String> {
+    Ok(match error {
+        SerializableToolRpcError::ProtocolError(error) => oplog::ToolRpcError::ProtocolError(error),
+        SerializableToolRpcError::Denied(error) => oplog::ToolRpcError::Denied(error),
+        SerializableToolRpcError::NotFound(error) => oplog::ToolRpcError::NotFound(error),
+        SerializableToolRpcError::RemoteInternalError(error) => {
+            oplog::ToolRpcError::RemoteInternalError(error)
+        }
+        SerializableToolRpcError::RemoteToolError(error) => {
+            oplog::ToolRpcError::RemoteToolError(encode_tool_error(*error)?)
+        }
+        SerializableToolRpcError::Cancelled => oplog::ToolRpcError::Cancelled,
+        SerializableToolRpcError::ResourceExhausted(error) => {
+            oplog::ToolRpcError::ResourceExhausted(error)
+        }
+    })
 }
 
 fn card_id_to_wit(card_id: CardId) -> oplog::CardId {
@@ -824,6 +860,21 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                         .collect(),
                 })
             }
+            PublicAgentInvocation::ExternalTool(params) => {
+                Self::ExternalTool(oplog::ExternalToolInvocationParameters {
+                    idempotency_key: params.idempotency_key.value,
+                    tool_name: params.tool_name,
+                    command_path: params.command_path,
+                    input: encode_public_typed_schema_value(params.input)?,
+                    trace_id: params.trace_id.to_string(),
+                    trace_states: params.trace_states,
+                    invocation_context: params
+                        .invocation_context
+                        .into_iter()
+                        .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                        .collect(),
+                })
+            }
             PublicAgentInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
             PublicAgentInvocation::LoadSnapshot(params) => {
                 let (data, mime_type) = match params.snapshot {
@@ -869,6 +920,18 @@ impl TryFrom<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
             }) => Self::AgentMethod(oplog::AgentInvocationOutputParameters {
                 output: encode_public_typed_schema_value(output)?,
             }),
+            PublicAgentInvocationResult::ExternalTool(params) => {
+                let result = match params.result {
+                    PublicExternalToolResult::Success(result) => Ok(oplog::ToolInvocationResult {
+                        result: result
+                            .result
+                            .map(encode_public_typed_schema_value)
+                            .transpose()?,
+                    }),
+                    PublicExternalToolResult::Failure(error) => Err(encode_tool_rpc_error(error)?),
+                };
+                Self::ExternalTool(oplog::ExternalToolResultParameters { result })
+            }
             PublicAgentInvocationResult::ManualUpdate(Empty {}) => Self::ManualUpdate,
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => {
                 Self::LoadSnapshot(oplog::FallibleResultParameters { error })

@@ -10,8 +10,9 @@ use golem_rust::golem_agentic::golem::tool::host::{
 };
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
+    read_only,
 };
-use std::io::Write;
+use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
@@ -59,6 +60,9 @@ struct RawCapableInput {
 pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
+    fn record_native_order(&self, marker: String) -> String;
+    #[read_only]
+    fn read_owner_file(&self, path: String) -> String;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
@@ -354,6 +358,24 @@ async fn wait_at_crash_checkpoint(name: &str) {
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
     fn new(_name: String) -> Self {
         Self
+    }
+
+    fn record_native_order(&self, marker: String) -> String {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/native-tool-order.log")
+            .and_then(|mut file| file.write_all(marker.as_bytes()))
+            .expect("append native tool invocation order");
+        marker
+    }
+
+    fn read_owner_file(&self, path: String) -> String {
+        let mut contents = String::new();
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_to_string(&mut contents))
+            .expect("read owner file");
+        contents
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {

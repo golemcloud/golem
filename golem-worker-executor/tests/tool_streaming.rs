@@ -25,6 +25,7 @@ use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
@@ -40,7 +41,7 @@ use golem_common::schema::{
 };
 use golem_common::{
     data_value,
-    model::{AgentStatus, OwnedAgentId, RetryConfig},
+    model::{AgentInvocationResult, AgentStatus, IdempotencyKey, OwnedAgentId, RetryConfig},
 };
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::tool::{
@@ -176,7 +177,7 @@ fn deployment_state(
     let bindings = registered_tools
         .iter()
         .map(|(name, tool)| {
-            let filesystem_access = if name.as_str() == "capable-streaming" {
+            let filesystem_access = if matches!(name.as_str(), "capable-streaming" | "streaming") {
                 ToolFilesystemAccess::Allowed
             } else {
                 ToolFilesystemAccess::Unset
@@ -432,6 +433,34 @@ async fn start_gated_http_server() -> (
             .expect("serve gated HTTP requests");
     });
     (port, task, first_rx, complete_rx)
+}
+
+async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind native-order HTTP server");
+    let port = listener
+        .local_addr()
+        .expect("native-order HTTP address")
+        .port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let route_requests = requests.clone();
+    let app = Router::new().route(
+        "/",
+        post(move || {
+            let requests = route_requests.clone();
+            async move {
+                requests.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve native-order HTTP requests");
+    });
+    (port, task, requests)
 }
 
 async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
@@ -5330,5 +5359,536 @@ async fn moonbit_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(explicit_failure, "resource-exhausted:ok");
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn native_external_tool_scalar_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (native_order_port, _native_order_server, native_order_requests) =
+        start_native_order_http_server().await;
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment.clone()),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "native-external-tool");
+    let env = HashMap::from([(
+        "NATIVE_ORDER_HTTP_PORT".to_string(),
+        native_order_port.to_string(),
+    )]);
+    let worker_id = executor
+        .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "record_native_order",
+            data_value!("A"),
+        )
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let key = IdempotencyKey::fresh();
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("native-order".to_string())],
+        },
+    );
+
+    let missing_id = golem_common::model::AgentId {
+        component_id: caller_component.id,
+        agent_id: agent_id!("ToolStreamingCaller", "missing-native-owner").to_string(),
+    };
+    executor
+        .invoke_external_tool(
+            &missing_id,
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+            IdempotencyKey::fresh(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+        .await
+        .expect_err("native admission must not create a missing owner");
+    assert!(
+        executor.get_worker_metadata(&missing_id).await.is_err(),
+        "failed native admission created a durable owner"
+    );
+
+    let wrong_fingerprint = golem_common::model::AgentFingerprint(uuid::Uuid::new_v4());
+    let error = executor
+        .invoke_external_tool(
+            &worker_id,
+            wrong_fingerprint,
+            IdempotencyKey::fresh(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+        .await
+        .expect_err("wrong owner fingerprint must be rejected");
+    assert!(error.to_string().contains("fingerprint does not match"));
+
+    let output = executor
+        .invoke_external_tool(
+            &worker_id,
+            fingerprint,
+            key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result: Ok(result) } = output.result else {
+        anyhow::bail!("expected successful scalar external tool result, got {output:?}");
+    };
+    let Some(SchemaValue::String(scalar)) = result.result.map(|value| value.into_parts().1) else {
+        anyhow::bail!("expected string scalar tool result");
+    };
+    assert_eq!(scalar, "no-stream:native-order");
+    assert_eq!(native_order_requests.load(Ordering::SeqCst), 1);
+
+    executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "record_native_order",
+            data_value!("B"),
+        )
+        .await?;
+    let order: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/native-tool-order.log"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(order, "ATB");
+
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        None,
+    );
+    let cached = executor
+        .invoke_external_tool(
+            &worker_id,
+            fingerprint,
+            key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result: Ok(result) } = cached.result else {
+        anyhow::bail!("expected cached scalar external tool result, got {cached:?}");
+    };
+    let Some(SchemaValue::String(scalar)) = result.result.map(|value| value.into_parts().1) else {
+        anyhow::bail!("expected cached string scalar tool result");
+    };
+    assert_eq!(scalar, "no-stream:native-order");
+    assert_eq!(
+        native_order_requests.load(Ordering::SeqCst),
+        1,
+        "completed replay must not repeat the external HTTP effect"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // This is intentionally the first ingress after restart: native admission must cold-load an
+    // existing owner, and the completed tool effect must replay rather than execute a second time.
+    let restarted = executor
+        .invoke_external_tool(
+            &worker_id,
+            fingerprint,
+            key,
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result: Ok(result) } = restarted.result else {
+        anyhow::bail!("expected restarted scalar external tool result, got {restarted:?}");
+    };
+    let Some(SchemaValue::String(scalar)) = result.result.map(|value| value.into_parts().1) else {
+        anyhow::bail!("expected restarted string scalar tool result");
+    };
+    assert_eq!(scalar, "no-stream:native-order");
+    assert_eq!(
+        native_order_requests.load(Ordering::SeqCst),
+        1,
+        "completed replay after executor restart must not repeat the external HTTP effect"
+    );
+
+    let reconstructed_order: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/native-tool-order.log"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(reconstructed_order, "ATB");
+    assert_eq!(
+        reconstructed_order.matches('T').count(),
+        1,
+        "completed replay must not duplicate the tool side effect"
+    );
+    assert_eq!(
+        native_order_requests.load(Ordering::SeqCst),
+        1,
+        "owner reconstruction with the deployment removed must replay the recorded HTTP result instead of running the effect live"
+    );
+
+    // Warm the read-only cache: once populated, a cache hit adds no invocation entries.
+    let cache_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let before = executor.oplog_max_index(&worker_id).await?;
+        let _: String = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "read_owner_file",
+                data_value!("/native-tool-order.log"),
+            )
+            .await?
+            .into_typed()?;
+        if executor.oplog_max_index(&worker_id).await? == before {
+            break;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < cache_deadline,
+            "read_owner_file did not become cacheable"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let error_input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("native-error".to_string())],
+        },
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let failed_mutation = executor
+        .invoke_external_tool(
+            &worker_id,
+            fingerprint,
+            IdempotencyKey::fresh(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            error_input,
+            InvocationContextStack::fresh(),
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: context.account_id,
+            }),
+            None,
+        )
+        .await?;
+    assert!(matches!(
+        failed_mutation.result,
+        AgentInvocationResult::ExternalTool { result: Err(_) }
+    ));
+
+    let before_read = executor.oplog_max_index(&worker_id).await?;
+    let final_order: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/native-tool-order.log"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(final_order, "ATBE");
+    assert!(
+        executor.oplog_max_index(&worker_id).await? > before_read,
+        "a mutating tool error must invalidate the read-only cache"
+    );
+
+    let fresh = executor
+        .invoke_external_tool(
+            &worker_id,
+            fingerprint,
+            IdempotencyKey::fresh(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input,
+            InvocationContextStack::fresh(),
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: context.account_id,
+            }),
+            None,
+        )
+        .await?;
+    assert!(matches!(
+        fresh.result,
+        AgentInvocationResult::ExternalTool { result: Ok(_) }
+    ));
+    assert_eq!(native_order_requests.load(Ordering::SeqCst), 2);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn native_tool_secret_permissions_and_completed_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_common::model::oplog::payload::types::SerializableToolError;
+    use golem_common::schema::{NamedFieldType, SecretValuePayload};
+    use golem_service_base::model::agent_secret::AgentSecret;
+
+    for denied in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let environment_state = Arc::new(TestEnvironmentStateService::default());
+        let secret_id = AgentSecretId::new();
+        let path = vec!["nativeSecret".to_string()];
+        environment_state.set_agent_secret(AgentSecret {
+            id: secret_id,
+            environment_id: context.default_environment_id,
+            path: CanonicalAgentSecretPath(path.clone()),
+            revision: AgentSecretRevision::INITIAL,
+            secret_type: SchemaGraph::anonymous(SchemaType::string()),
+            secret_value: Some(SchemaValue::String("not-revealed".to_string())),
+        });
+        let overrides = TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let provider_component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, caller)
+            .update_agent_provision_config("ToolStreamingCaller", |config| {
+                if denied {
+                    config.initial_permissions.lower_bound.negative.push(
+                        golem_common::model::card::parse_polymorphic_permission(
+                            "secret(?env) @ * : hold : nativeSecret",
+                        )
+                        .unwrap(),
+                    );
+                }
+            })
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            Some(deployment_state(
+                context.account_id,
+                provider_component.id,
+                provider_component.revision,
+                "golem-it:tool-streaming-rust-provider",
+                "ToolStreamingCaller",
+                metadata.tools,
+            )),
+        );
+        let agent = agent_id!("ToolStreamingCaller", "native-secret");
+        let worker_id = executor
+            .start_agent(&caller_component.id, agent.clone())
+            .await?;
+        let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+        // This is trusted executor ingress: the reference names a provisioned, versioned secret,
+        // rather than accepting a capability supplied as public JSON.
+        let secret = SchemaValue::Secret(SecretValuePayload {
+            secret_id: secret_id.0,
+            config_key: Some(path),
+            version: 0,
+            resolved_at: chrono::Utc::now(),
+            category: None,
+        });
+        for fail in [false, true] {
+            let input = TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![
+                    NamedFieldType {
+                        name: "value".to_string(),
+                        body: SchemaType::secret(Default::default()),
+                        metadata: Default::default(),
+                    },
+                    NamedFieldType {
+                        name: "fail".to_string(),
+                        body: SchemaType::bool(),
+                        metadata: Default::default(),
+                    },
+                ])),
+                SchemaValue::Record {
+                    fields: vec![secret.clone(), SchemaValue::Bool(fail)],
+                },
+            );
+            let output = executor
+                .invoke_external_tool(
+                    &worker_id,
+                    fingerprint,
+                    IdempotencyKey::fresh(),
+                    ToolName::try_from("streaming").unwrap(),
+                    vec!["echo-secret".to_string()],
+                    input,
+                    InvocationContextStack::fresh(),
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    }),
+                    None,
+                )
+                .await;
+            if denied {
+                assert!(matches!(output, Err(golem_service_base::error::worker_executor::WorkerExecutorError::PermissionDenied { .. })));
+                break;
+            }
+            match output?.result {
+                AgentInvocationResult::ExternalTool { result: Ok(result) } if !fail => {
+                    assert_eq!(result.result.unwrap().value(), &secret);
+                }
+                AgentInvocationResult::ExternalTool {
+                    result: Err(SerializableToolRpcError::RemoteToolError(error)),
+                } if fail => assert!(matches!(
+                    error.as_ref(),
+                    SerializableToolError::CustomError(_)
+                )),
+                other => anyhow::bail!(
+                    "unexpected secret tool result: {:?}",
+                    other.redacted_debug()
+                ),
+            }
+        }
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        if denied {
+            assert!(!oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+                        || params.function_name == "golem::tool::internal::response-secret-hold-admission"
+            )));
+            continue;
+        }
+        assert_eq!(oplog.iter().filter(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::Start(params)
+            if params.function_name == "golem::tool::internal::response-secret-hold-admission"
+    )).count(), 2);
+
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            None,
+        );
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let after: String = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "record_native_order",
+                data_value!("R"),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(after, "R");
+        let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(replayed.iter().filter(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::Start(params)
+            if params.function_name == "golem::tool::internal::response-secret-hold-admission"
+    )).count(), 2);
+        assert_eq!(environment_state.agent_secret_revision_calls(), 0);
+    }
     Ok(())
 }

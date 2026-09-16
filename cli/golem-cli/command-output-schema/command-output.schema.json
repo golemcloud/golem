@@ -5307,6 +5307,7 @@
       "oneOf": [
         { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
         { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
+        { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
@@ -5325,14 +5326,27 @@
       "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
+    "PublicAgentInvocationExternalTool": {
+      "type": "object",
+      "required": ["type", "idempotencyKey", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "ExternalTool" }, "idempotencyKey": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "additionalProperties": false
+    },
     "PublicAgentInvocationResult": {
       "oneOf": [
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentInitialization" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentMethod" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "ExternalTool" }, "result": { "$ref": "#/definitions/PublicExternalToolResult" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ManualUpdate" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "LoadSnapshot" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "SaveSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ProcessOplogEntries" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false }
+      ]
+    },
+    "PublicExternalToolResult": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "Success" }, "result": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Failure" }, "value": {} }, "additionalProperties": false }
       ]
     },
     "PublicInvocationContext": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanData" } } },

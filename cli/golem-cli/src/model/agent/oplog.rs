@@ -21,8 +21,9 @@ use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttributeValue, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationOperation, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
+    PublicEntityInvocation, PublicEntityInvocationOperation, PublicExternalToolResult,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription,
+    StringAttributeValue,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -244,6 +245,7 @@ impl TextOutput for PublicOplogEntry {
                 let variant_label = match &params.result {
                     PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
                     PublicAgentInvocationResult::AgentMethod(_) => "method",
+                    PublicAgentInvocationResult::ExternalTool(_) => "external tool",
                     PublicAgentInvocationResult::ManualUpdate(_) => "manual update",
                     PublicAgentInvocationResult::LoadSnapshot(_) => "load snapshot",
                     PublicAgentInvocationResult::SaveSnapshot(_) => "save snapshot",
@@ -268,6 +270,17 @@ impl TextOutput for PublicOplogEntry {
                         logln(format!("{pad}output:"));
                         log_typed_schema_value(pad, &output.output);
                     }
+                    PublicAgentInvocationResult::ExternalTool(result) => match &result.result {
+                        PublicExternalToolResult::Success(output) => {
+                            if let Some(output) = &output.result {
+                                logln(format!("{pad}output:"));
+                                log_typed_schema_value(pad, output);
+                            }
+                        }
+                        PublicExternalToolResult::Failure(_) => {
+                            logln(format!("{pad}result:            failed"));
+                        }
+                    },
                     PublicAgentInvocationResult::ManualUpdate(_) => {}
                     PublicAgentInvocationResult::LoadSnapshot(fallible) => {
                         log_optional_error(pad, &fallible.error);
@@ -1020,6 +1033,19 @@ fn render_agent_invocation(
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
         }
+        PublicAgentInvocation::ExternalTool(params) => {
+            lines.push(format!("{pad}tool:              {}", params.tool_name));
+            lines.push(format!(
+                "{pad}command:           {}",
+                params.command_path.join("/")
+            ));
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+            lines.push(format!("{pad}input:"));
+            lines.push(render_typed_schema_value_line(pad, &params.input));
+        }
         PublicAgentInvocation::SaveSnapshot(_) => {}
         PublicAgentInvocation::LoadSnapshot(params) => {
             lines.extend(render_snapshot_data_lines(pad, &params.snapshot));
@@ -1063,6 +1089,13 @@ fn render_agent_invocation_header(
                 format_id(&params.method_name)
             )
         }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE EXTERNAL TOOL"),
+                format_id(&params.tool_name)
+            )
+        }
         (AgentInvocationRenderKind::Started, PublicAgentInvocation::SaveSnapshot(_)) => {
             format!(
                 "{} {}",
@@ -1102,6 +1135,13 @@ fn render_agent_invocation_header(
                 "{} {}",
                 format_message_highlight("ENQUEUED INVOCATION"),
                 format_id(&params.method_name)
+            )
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("ENQUEUED EXTERNAL TOOL"),
+                format_id(&params.tool_name)
             )
         }
         (AgentInvocationRenderKind::Pending, PublicAgentInvocation::SaveSnapshot(_)) => {
