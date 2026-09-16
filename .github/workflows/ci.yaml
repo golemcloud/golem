@@ -186,6 +186,10 @@ jobs:
       - name: Enable worker crash diagnostics
         if: matrix.group.name == 'group3'
         run: |
+          if ! command -v gdb >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
           mkdir -p "$RUNNER_TEMP/golem-cores"
           sudo sysctl -w "kernel.core_pattern=$RUNNER_TEMP/golem-cores/core.%p"
       - name: Worker Executor integration tests
@@ -204,10 +208,6 @@ jobs:
           cores=("$RUNNER_TEMP"/golem-cores/core.*)
           if (( ${#cores[@]} == 0 )); then
             exit 0
-          fi
-          if ! command -v gdb >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y gdb
           fi
           binary=$(sed -n 's/.*binary_path: "\([^"]*\)".*/\1/p' "$RUNNER_TEMP/worker-tests.log" | head -n 1)
           test -x "$binary"
