@@ -198,6 +198,7 @@ impl ResolvedEnvironmentIdentity {
                 name: summary.environment.name,
                 diff_model_version: summary.environment.diff_model_version,
                 compatibility_check: summary.environment.compatibility_check,
+                tool_compatibility_mode: summary.environment.tool_compatibility_mode,
                 version_check: summary.environment.version_check,
                 security_overrides: summary.environment.security_overrides,
                 owner_account_id: summary.account.id,

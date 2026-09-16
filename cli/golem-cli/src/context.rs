@@ -1036,6 +1036,7 @@ mod test {
                 cli: None,
                 deployment: None,
                 version: None,
+                tools: None,
             },
         }
     }

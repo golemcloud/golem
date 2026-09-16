@@ -191,7 +191,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         assertTrue(
           unit == Right(ToolInvokeResult(None, Some(out))),
           copied == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("copied/Anonymous")), Some(out))),
-          failed == Left(ToolInvokeError.Tool(IntoSchema[String].toTyped("bad"))),
+          failed == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("bad"))),
           new String(out.bytes.toArray, "UTF-8") == "αstdindiagnostic:bad",
           body.stdout.exists(_.required),
           body.stdin.exists(_.required),
@@ -224,7 +224,9 @@ object ToolInvokerSpec extends ZIOSpecDefault {
             anonymous
           )
         )
-        assertTrue(result == Left(ToolInvokeError.Tool(IntoSchema[String].toTyped("nope"))))
+        assertTrue(
+          result == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("nope")))
+        )
       },
       test("Principal parameters are injected and excluded from the schema") {
         val idx    = echoTool.commandIndexByPath(List("whoami")).get

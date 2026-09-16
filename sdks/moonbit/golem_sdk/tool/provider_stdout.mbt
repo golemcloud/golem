@@ -302,7 +302,7 @@ pub async fn invoke_with_stdout(
         }
         Err(@toolCommon.ToolError::CustomError(payload)) if error
           is @async-core.Cancelled::Cancelled => {
-          match @toolCore.decode_typed_value(payload, "tool error") {
+          match @toolCore.decode_typed_value(payload.payload, "tool error") {
             Ok(decoded) => @model.drop_owned_capabilities(decoded.value)
             Err(_) => ()
           }

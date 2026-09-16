@@ -32,7 +32,7 @@ object ToolInvokeErrorSpec extends ZIOSpecDefault {
         ToolInvokeError.InvalidInput("bad input"),
         ToolInvokeError.ConstraintViolation("denied"),
         ToolInvokeError.InvalidResult("bad result"),
-        ToolInvokeError.Tool(payload)
+        ToolInvokeError.UnknownToolError("failure", payload)
       )
 
       assertTrue(errors.forall(error => ToolInvokeError.fromWire(ToolInvokeError.toWire(error)) == error))

@@ -678,7 +678,10 @@ describe("typed tool middleware", () => {
             ),
         },
       })
-      const custom = { tag: "custom-error", val: wire(failure, { reason: "declined" }) } as const
+      const custom = {
+        tag: "custom-error",
+        val: { name: "rejected", payload: wire(failure, { reason: "declined" }) },
+      } as const
       const metadata = toolMiddlewareGuest.getToolMiddleware(`decode-${carrier}`)
       const result = await toolMiddlewareGuest.invokeToolMiddleware(
         `decode-${carrier}`,

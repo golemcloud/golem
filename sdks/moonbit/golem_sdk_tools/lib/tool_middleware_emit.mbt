@@ -38,6 +38,8 @@ fn emit_universal_tool_middleware_registration(
   buf.write_string(
     "    @toolMiddleware.register_tool_middleware(\n      {\n        name: \"" +
     escape_string_lit(middleware.name) +
+    "\",\n        version: \"" +
+    escape_string_lit(middleware.version) +
     "\",\n        aliases: " +
     emit_strings(middleware.aliases) +
     ",\n        doc: " +
@@ -136,7 +138,7 @@ fn emit_middleware_protocol_helpers(buf : StringBuilder) -> Unit {
       #|    @toolCommon.ToolError::ConstraintViolation(message) => Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
       #|    @toolCommon.ToolError::InvalidResult(message) => Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
       #|    @toolCommon.ToolError::CustomError(value) => {
-      #|      @model.drop_wit_capabilities(value.value)
+      #|      @model.drop_wit_capabilities(value.payload.value)
       #|      Err(@toolMiddleware.ToolInvokeError::InvalidResult("canonical field decoding returned a custom tool error"))
       #|    }
       #|  } noraise {
@@ -193,11 +195,9 @@ fn emit_expected_underlying_method(
     }
   }
   let decode_custom_error = if middleware_is_infallible(surface) {
-    "fn(_) { Err(\"underlying returned a custom error for an infallible command\") }"
+    "fn(_, _) { None }"
   } else {
-    "fn(__golem_error) { " +
-    emit_type(surface.error_type) +
-    "::from_error_payload_value(__golem_error) }"
+    "fn(__golem_name, __golem_error) { @tool.decode_named_tool_error(__golem_name, __golem_error) }"
   }
   let decode_result = if surface.has_stdout {
     if middleware_value_type(surface) is Some(_) {
@@ -385,15 +385,17 @@ fn emit_monomorphic_tool_middleware_registration(
   buf.write_string(
     "    @toolMiddleware.register_tool_middleware(\n      {\n        name: \"" +
     escape_string_lit(middleware.name) +
+    "\",\n        version: \"" +
+    escape_string_lit(middleware.version) +
     "\",\n        aliases: " +
     emit_strings(middleware.aliases) +
     ",\n        doc: " +
     emit_doc(middleware.description, []) +
     ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({\n          presented: " +
     descriptor_name(monomorphic.presented, "middleware") +
-    "().to_tool(),\n          expected: " +
+    "().to_tool(),\n          expected: Some(" +
     descriptor_name(monomorphic.expected, "middleware") +
-    "().to_tool(),\n        }),\n      },\n      " +
+    "().to_tool()),\n        }),\n      },\n      " +
     monomorphic_invoker_name(middleware) +
     ",\n    )\n",
   )
