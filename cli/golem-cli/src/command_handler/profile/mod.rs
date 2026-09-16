@@ -93,9 +93,10 @@ impl ProfileCommandHandler {
         let (name, profile, set_active) = match name {
             Some(name) => {
                 if name.is_builtin() {
-                    log_error(
+                    log_error(format!(
                         "The requested profile name {} is a builtin profile. Please choose another profile name!",
-                    );
+                        name.0.log_color_error_highlight()
+                    ));
                     bail!(NonSuccessfulExit);
                 }
 

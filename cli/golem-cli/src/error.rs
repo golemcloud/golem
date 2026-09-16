@@ -34,6 +34,7 @@ impl Error for PipedExitCode {}
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
+    ProfileNew,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages

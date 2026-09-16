@@ -2825,6 +2825,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
+        ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
     }
 }
 

@@ -15,7 +15,7 @@
 use crate::app::template::AppTemplateName;
 use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
-use crate::error::NonSuccessfulExit;
+use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
 use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
@@ -380,19 +380,37 @@ impl InteractiveHandler {
         )
     }
 
+    /// Interactive `profile new` wizard, used when no profile name was given. Without an
+    /// interactive terminal the wizard cannot run, which is a usage error: the name (and the
+    /// other options) must be passed as arguments.
     pub fn create_profile(&self) -> anyhow::Result<(ProfileName, Profile, bool)> {
-        if !self.confirm(
-            true,
-            concat!(
-                "Do you want to create a new profile interactively?\n",
-                "If not, please specify the profile name as a command argument."
-            ),
-            None,
-        )? {
-            bail!(NonSuccessfulExit);
+        fn profile_name_required() -> HintError {
+            HintError::ShowClapHelp {
+                target: ShowClapHelpTarget::ProfileNew,
+                error: "In non-interactive mode, NAME must be specified".to_string(),
+            }
         }
 
-        let profile_name = Text::new("Profile Name: ")
+        if self.ctx.yes() {
+            self.confirm(
+                true,
+                "Do you want to create a new profile interactively?",
+                None,
+            )?;
+        } else {
+            match Confirm::new("Do you want to create a new profile interactively?")
+                .with_help_message("If not, please specify the profile name as a command argument.")
+                .with_default(true)
+                .prompt()
+                .none_if_not_interactive()?
+            {
+                Some(true) => {}
+                Some(false) => bail!(NonSuccessfulExit),
+                None => bail!(profile_name_required()),
+            }
+        }
+
+        let Some(profile_name) = Text::new("Profile Name: ")
             .with_validator(|value: &str| {
                 if ProfileName::from(value).is_builtin() {
                     return Ok(Validation::Invalid(ErrorMessage::from(
@@ -401,7 +419,11 @@ impl InteractiveHandler {
                 }
                 Ok(Validation::Valid)
             })
-            .prompt()?;
+            .prompt()
+            .none_if_not_interactive()?
+        else {
+            bail!(profile_name_required());
+        };
 
         let registry_service_url = CustomType::<Url>::new("Registry service URL:").prompt()?;
 
@@ -446,8 +468,8 @@ impl InteractiveHandler {
 
     /// Prompts (masked) for a required static authentication token, used when a
     /// profile is created with `--auth static` but no `--static-token`. In a
-    /// non-interactive environment there is no way to ask, so it fails with a
-    /// hint to pass the token directly.
+    /// non-interactive environment there is no way to ask, so it is reported as a
+    /// usage error pointing at `--static-token`.
     pub fn prompt_static_token(&self) -> anyhow::Result<String> {
         let token = Password::new("Static authentication token:")
             .with_display_mode(PasswordDisplayMode::Masked)
@@ -467,12 +489,11 @@ impl InteractiveHandler {
 
         match token {
             Some(token) => Ok(token),
-            None => {
-                log_error(
-                    "Cannot prompt for a static token in a non-interactive environment. Pass --static-token <TOKEN> instead.",
-                );
-                bail!(NonSuccessfulExit)
-            }
+            None => bail!(HintError::ShowClapHelp {
+                target: ShowClapHelpTarget::ProfileNew,
+                error: "In non-interactive mode, --auth static requires --static-token <TOKEN>"
+                    .to_string(),
+            }),
         }
     }
 

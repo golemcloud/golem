@@ -62,6 +62,61 @@ async fn app_new_without_input_in_non_interactive_mode_shows_help_on_stderr(_tra
     assert_eq!(outputs.stdout().count(), 0);
 }
 
+/// `profile new` without a name starts an interactive wizard; in non-interactive mode that is a
+/// usage error reported like clap does, with or without `--yes`. The same goes for
+/// `--auth static` without a token.
+#[test]
+async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    for args in [
+        vec![cmd::PROFILE, cmd::NEW],
+        vec![flag::YES, cmd::PROFILE, cmd::NEW],
+    ] {
+        let outputs = ctx.cli(args).await;
+        assert_eq!(outputs.exit_code(), Some(2));
+        assert!(outputs.stderr_contains("NAME must be specified"));
+        assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+        assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    }
+
+    let outputs = ctx
+        .cli([cmd::PROFILE, cmd::NEW, "my-profile", "--auth", "static"])
+        .await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("--auth static requires --static-token"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+
+    // Creating and then re-creating the same profile is refused
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("already exists"));
+}
+
 #[test]
 async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
     let app_name = "test-app-help-no-upgrade";

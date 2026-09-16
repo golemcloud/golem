@@ -19,7 +19,7 @@ use crate::command::{
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
-use crate::log::{LogColorize, Output, log_action, log_error, logln, set_log_output};
+use crate::log::{LogColorize, log_action, log_error, logln};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
@@ -293,11 +293,11 @@ impl ErrorHandler {
                 Ok(ExitCode::FAILURE)
             }
             HintError::ShowClapHelp { target, error } => {
-                // Reported like clap reports a usage error: message and help on stderr, exit
-                // code 2 (see `USAGE_ERROR_EXIT_CODE`). `print_long_help` is hardcoded to
-                // stdout, so the help is rendered and written manually, keeping clap's styling
-                // when the CLI output is colorized.
-                set_log_output(Output::Stderr);
+                // Reported like clap reports a usage error: message and help on stderr (the
+                // log output is already switched to stderr for hint errors), exit code 2 (see
+                // `USAGE_ERROR_EXIT_CODE`). `print_long_help` is hardcoded to stdout, so the
+                // help is rendered and written manually, keeping clap's styling when the CLI
+                // output is colorized.
                 logln("");
                 log_error(error);
 
@@ -312,6 +312,7 @@ impl ErrorHandler {
                     ShowClapHelpTarget::AppNew => {
                         self.ctx.app_handler().log_languages_help();
                     }
+                    ShowClapHelpTarget::ProfileNew => {}
                 }
                 Ok(ExitCode::from(USAGE_ERROR_EXIT_CODE))
             }
