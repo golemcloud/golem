@@ -148,7 +148,9 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
-Explicit interruption retires the cached owner and fences its replacement startup. If the worker
+Explicit interruption retires the cached owner and fences its replacement startup. Automatic
+shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
+updates; an executor restart or shard move is not a request to resume them. If the worker
 has already unloaded (for example during OOM backoff), the retiring owner must commit an unclaimed
 terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
 terminal interrupt already claimed by the invocation loop is not recorded again, and a completed

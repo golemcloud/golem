@@ -1840,6 +1840,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p>An explicit interrupt retires the cached owner and fences replacement startup. If the worker already unloaded for OOM backoff or permit acquisition, the retiring owner commits the still-unclaimed <code>Interrupted</code> marker and notifies invocation waiters before removal. It does not need a new Store to do this. An interrupt already handled by the invocation loop is not recorded twice, and completed or failed invocations retain their outcome.</p>
 
+<p>Automatic shard-assignment recovery leaves <code>Interrupted</code> workers stopped, even with queued invocations or updates. An executor restart or shard move is not a request to resume them.</p>
+
 <p>A simulated crash (<code>recover_immediately = true</code>) requests <code>Restart</code> for Running, Suspended and Retrying workers; it never permanently interrupts a parked invocation. If no invocation loop remains, the existing promise, scheduler or permit wakeup starts reconstruction. The pending restart neither appends <code>Interrupted</code> nor fails the invocation waiter.</p>
 
 <p>Environment and application deletion invalidate component metadata, environment state and agent type caches before awaiting owner retirement. New metadata lookups see deletion rather than admitting requests against a retiring cached owner.</p>
