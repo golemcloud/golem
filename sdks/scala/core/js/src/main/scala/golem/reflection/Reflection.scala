@@ -61,6 +61,21 @@ final case class ParsedAgentId(value: String) {
     definition: AgentClientDefinition[Capability, Constructor, Config]
   )(implicit canBind: CanBindAgentClient[Capability]): Either[GolemReflectError, CallerCodecAgentClient] =
     definition.bind(this)
+
+  def clientWithOverrides[Capability <: AgentClientCapability, Constructor, Config](
+    definition: AgentClientDefinition[Capability, Constructor, Config],
+    overrides: List[ConfigOverride]
+  )(implicit canBind: CanBindAgentClient[Capability]): Either[GolemReflectError, CallerCodecAgentClient] =
+    definition.bindWithOverrides(this, overrides)
+
+  def clientWithConfig[Capability <: AgentClientCapability, Constructor, Config](
+    definition: AgentClientDefinition[Capability, Constructor, Config],
+    config: Config
+  )(implicit
+    complete: Capability <:< Complete,
+    canBind: CanBindAgentClient[Capability]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    definition.bindWithConfig(this, config)
 }
 
 final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
@@ -243,10 +258,9 @@ object Reflection {
           inputRef(graph, decoded, raw.constructor.inputSchema),
           methods,
           raw.config.toList.map { declaration =>
-            val root = SchemaWire
+            val rooted = SchemaWire
               .schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = declaration.valueType))
-              .root
-            ReflectedConfigDeclaration(declaration.path.toList, declaration.source, SchemaRef(decoded, root))
+            ReflectedConfigDeclaration(declaration.path.toList, declaration.source, SchemaRef(rooted))
           }
         )
       )
