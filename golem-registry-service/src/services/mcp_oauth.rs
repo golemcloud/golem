@@ -26,7 +26,6 @@ use golem_mcp_import::oauth::{self, AuthorizationServer, OAuthClient};
 use golem_mcp_import::transport::{HttpSend, TransportError};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use http::HeaderMap;
 use oauth2::{AuthorizationCode, PkceCodeVerifier, RefreshToken, TokenResponse};
 use std::sync::Arc;
 use std::time::Duration;
@@ -189,13 +188,12 @@ impl McpOAuthService {
         })
     }
 
-    /// `challenge` must come from an unauthenticated probe of this exact import,
-    /// not from the operator's request. The sender admits each discovery target.
+    /// Probe the selected import without credentials before OAuth discovery.
+    /// The sender admits every resource and provider request in this chain.
     pub async fn begin<S: HttpSend<Error = McpOAuthError> + Send>(
         &self,
         source: &McpImportSource,
         auth: &AuthCtx,
-        challenge: &HeaderMap,
         sender: &mut S,
     ) -> Result<Url, McpOAuthError> {
         let resolved = self.resolve(source).await?;
@@ -205,14 +203,32 @@ impl McpOAuthService {
             .provider_type
             .issuer_url()
             .map_err(|_| TransportError::Configuration("invalid OAuth issuer".into()))?;
-        let discovery = oauth::discover(
-            sender,
+        oauth::authorization_metadata_urls(issuer.as_str())?;
+        oauth::https_url(&key.resource_url)?;
+        let transport = golem_mcp_import::transport::Client::new(
             &key.resource_url,
-            issuer.as_str(),
-            challenge,
-            self.limits,
-        )
-        .await?;
+            resolved.import.version.as_deref(),
+            golem_mcp_import::transport::Limits {
+                timeout: self.limits.timeout,
+                request_bytes: self.limits.request_bytes,
+                ..Default::default()
+            },
+        )?;
+        let discovery = tokio::time::timeout(self.limits.timeout, async {
+            let challenge = transport
+                .authorization_challenge(sender, self.limits.challenge_bytes)
+                .await?;
+            oauth::discover(
+                sender,
+                &key.resource_url,
+                issuer.as_str(),
+                &challenge,
+                self.limits,
+            )
+            .await
+        })
+        .await
+        .map_err(|_| TransportError::Timeout)??;
         let scopes = if scheme.scopes.is_empty() {
             discovery.scopes
         } else {

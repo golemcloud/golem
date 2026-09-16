@@ -312,7 +312,8 @@ pub fn authorization_metadata_urls(issuer: &str) -> Result<Vec<Url>, TransportEr
     Ok(result)
 }
 
-fn https_url(value: &str) -> Result<Url, TransportError> {
+/// Validate resources and provider URLs before any OAuth network request.
+pub fn https_url(value: &str) -> Result<Url, TransportError> {
     let url = Url::parse(value).map_err(|_| invalid("invalid OAuth URL"))?;
     if value.bytes().any(|byte| byte.is_ascii_control())
         || value.trim() != value

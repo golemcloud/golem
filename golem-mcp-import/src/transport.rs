@@ -213,6 +213,42 @@ impl Client {
         Ok(())
     }
 
+    /// Probe only for OAuth discovery. Never sends configured credentials or
+    /// consumes a listing body; this response is not a tool observation.
+    pub async fn authorization_challenge<S: HttpSend>(
+        &self,
+        sender: &mut S,
+        maximum: usize,
+    ) -> Result<http::HeaderMap, S::Error> {
+        tokio::time::timeout(self.limits.timeout, async {
+            let _permit = self
+                .permits
+                .acquire()
+                .await
+                .map_err(|_| TransportError::Network)?;
+            let (_, mut request) = self.request("tools/list", json!({}), &[])?;
+            request.headers_mut().remove(header::AUTHORIZATION);
+            let response = sender.send(request).await?;
+            match response.status() {
+                StatusCode::OK => Ok(http::HeaderMap::new()),
+                StatusCode::UNAUTHORIZED => {
+                    let mut headers = http::HeaderMap::new();
+                    let mut remaining = maximum;
+                    for value in response.headers().get_all(header::WWW_AUTHENTICATE) {
+                        remaining = remaining
+                            .checked_sub(value.len())
+                            .ok_or_else(|| limit("OAuth challenge bytes"))?;
+                        headers.append(header::WWW_AUTHENTICATE, value.clone());
+                    }
+                    Ok(headers)
+                }
+                status => Err(TransportError::HttpStatus(status.as_u16()).into()),
+            }
+        })
+        .await
+        .map_err(|_| TransportError::Timeout)?
+    }
+
     /// Publishes only complete observations. Unsupported-version errors are
     /// returned: the tested set currently has no second version to negotiate.
     pub async fn list_tools<S: HttpSend>(&self, sender: &mut S) -> Result<Listing, S::Error> {
@@ -310,14 +346,12 @@ impl Client {
         .map_err(|_| TransportError::Timeout)?
     }
 
-    async fn post<S: HttpSend>(
+    fn request(
         &self,
-        sender: &mut S,
         method: &str,
         mut params: Value,
         headers: &[(String, String)],
-        remaining: usize,
-    ) -> Result<(Value, usize), S::Error> {
+    ) -> Result<(i64, Request<Bytes>), TransportError> {
         let request_id = self
             .next_request_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -351,6 +385,18 @@ impl Client {
         let request = request
             .body(Bytes::from(bytes))
             .map_err(|_| TransportError::InvalidInput("invalid request header".into()))?;
+        Ok((request_id, request))
+    }
+
+    async fn post<S: HttpSend>(
+        &self,
+        sender: &mut S,
+        method: &str,
+        params: Value,
+        headers: &[(String, String)],
+        remaining: usize,
+    ) -> Result<(Value, usize), S::Error> {
+        let (request_id, request) = self.request(method, params, headers)?;
         let response = sender.send(request).await?;
         let status = response.status();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {

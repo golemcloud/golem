@@ -1017,8 +1017,22 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   build caches it reached an existing `collapsible_if` lint in
   `golem-common/src/base_model/mcp_import.rs`. Package-only linting is clean; the
   broader lint remains for final validation rather than being silently suppressed.
+- Consent now owns the unauthenticated probe: one credential-free `tools/list`
+  POST to the exact deployed endpoint, using the shared request builder. Only
+  bounded `WWW-Authenticate` values from 401 are used; 200 supplies no challenge,
+  other statuses fail without retry, and no probe body is consumed or advertised
+  as tool metadata. Probe plus metadata discovery share one deadline. HTTPS and
+  protocol validation run before traffic, using the same OAuth URL validator as
+  discovery. A failed probe preserves the existing grant.
+- Probe verification: the request-builder extraction first passed all **81**
+  existing import tests before adding behavior. The expanded import suite now
+  passes **83 tests** and registry OAuth/store suite **16 tests**. Both packages'
+  all-target strict Clippy with `--no-deps`, scoped format and diff checks pass.
+  Oracle found no blockers; applied its shared-validator and pre-traffic test
+  suggestions. Separate probe bug-finder run 1 returned **no bugs found**, clean
+  terminal with no checkpoint. Production request-policy wiring remains untested.
 - Remaining step-4 work: production registry HTTP policy/accounting and service
-  configuration; initial unauthenticated probe; bootstrap/internal RPC and
+  configuration; bootstrap/internal RPC and
   operator API/CLI wiring, including callback parsing and status; resource-401
   feedback and cache invalidation; provider fixtures and combined validation.
   PostgreSQL execution remains unverified. The coordinator is an intermediate

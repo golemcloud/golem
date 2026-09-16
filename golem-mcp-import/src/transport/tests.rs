@@ -792,3 +792,108 @@ async fn validates_configuration_and_separates_credentials() {
         "Bearer bob-token"
     );
 }
+
+#[test]
+async fn oauth_probe_is_unauthenticated_bounded_and_does_not_poll_response_body() {
+    let challenges = [
+        "Basic realm=other",
+        "Bearer resource_metadata=\"https://tools.example/meta\"",
+    ];
+    let size: usize = challenges.iter().map(|s| s.len()).sum();
+    for maximum in [size - 1, size] {
+        let unread_body = StreamBody::new(stream::poll_fn(
+            |_| -> std::task::Poll<Option<Result<Frame<Bytes>, TransportError>>> {
+                panic!("OAuth probe must not poll a response body")
+            },
+        ))
+        .boxed_unsync();
+        let mut response = Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("set-cookie", "private-cookie")
+            .body(unread_body)
+            .unwrap();
+        for value in challenges {
+            response
+                .headers_mut()
+                .append(header::WWW_AUTHENTICATE, HeaderValue::from_static(value));
+        }
+        let mut upstream = Upstream {
+            responses: VecDeque::from([response]),
+            ..Default::default()
+        };
+        let client = client(Limits::default())
+            .with_bearer("private-credential")
+            .unwrap();
+        let result = client.authorization_challenge(&mut upstream, maximum).await;
+        if maximum == size {
+            let headers = result.unwrap();
+            assert!(!headers.contains_key("set-cookie"));
+            assert_eq!(
+                headers
+                    .get_all(header::WWW_AUTHENTICATE)
+                    .iter()
+                    .map(|h| h.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                challenges
+            );
+        } else {
+            assert_eq!(result.unwrap_err(), limit("OAuth challenge bytes"));
+        }
+        assert_eq!(upstream.requests.len(), 1);
+        let request = &upstream.requests[0];
+        assert_eq!(request.method(), http::Method::POST);
+        assert_eq!(request.headers()["Mcp-Method"], "tools/list");
+        assert!(!request.headers().contains_key(header::AUTHORIZATION));
+        assert!(!request.headers().contains_key("cookie"));
+        let payload: Value = serde_json::from_slice(request.body()).unwrap();
+        assert_eq!(payload["method"], "tools/list");
+        assert_eq!(
+            payload["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
+            PROTOCOL_VERSION
+        );
+    }
+}
+
+#[test]
+async fn oauth_probe_only_uses_401_challenges_and_never_retries_status_or_admission_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::FOUND,
+        StatusCode::FORBIDDEN,
+        StatusCode::BAD_GATEWAY,
+    ] {
+        let mut response = raw_json("not a tool observation".into(), status);
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer realm=ignored"),
+        );
+        let mut upstream = Upstream {
+            responses: VecDeque::from([response]),
+            ..Default::default()
+        };
+        let result = client(Limits::default())
+            .authorization_challenge(&mut upstream, 0)
+            .await;
+        if status == StatusCode::OK {
+            assert!(result.unwrap().is_empty());
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                TransportError::HttpStatus(status.as_u16())
+            );
+        }
+        assert_eq!(upstream.requests.len(), 1);
+    }
+    let mut upstream = Upstream {
+        rejection: Some(TransportError::QuotaExhausted),
+        ..Default::default()
+    };
+    assert_eq!(
+        client(Limits::default())
+            .authorization_challenge(&mut upstream, 100)
+            .await
+            .unwrap_err(),
+        TransportError::QuotaExhausted
+    );
+    assert_eq!(upstream.requests.len(), 1);
+}

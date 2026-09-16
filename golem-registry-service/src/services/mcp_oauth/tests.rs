@@ -141,10 +141,10 @@ impl Fixture {
         let mut sender = Queue::discovery();
         let url = self
             .service
-            .begin(&self.source, &self.operator, &HeaderMap::new(), &mut sender)
+            .begin(&self.source, &self.operator, &mut sender)
             .await
             .unwrap();
-        assert_eq!(sender.requests.len(), 2);
+        assert_eq!(sender.requests.len(), 3);
         assert!(
             sender
                 .requests
@@ -203,7 +203,14 @@ impl Fixture {
 
 struct Queue {
     requests: Vec<Request<Bytes>>,
-    responses: VecDeque<Value>,
+    responses: VecDeque<Response<Full<Bytes>>>,
+}
+
+fn json_response(value: Value) -> Response<Full<Bytes>> {
+    Response::builder()
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(value.to_string())))
+        .unwrap()
 }
 
 impl Queue {
@@ -211,9 +218,10 @@ impl Queue {
         Self {
             requests: vec![],
             responses: VecDeque::from([
+                json!({"tools":[]}),
                 json!({"resource":"https://resource.example/mcp", "authorization_servers":["https://issuer.example"]}),
                 json!({"issuer":"https://issuer.example", "authorization_endpoint":"https://issuer.example/authorize", "token_endpoint":"https://issuer.example/token", "response_types_supported":["code"], "code_challenge_methods_supported":["S256"], "authorization_response_iss_parameter_supported":true}),
-            ]),
+            ].map(json_response)),
         }
     }
 
@@ -222,7 +230,7 @@ impl Queue {
             requests: vec![],
             responses: VecDeque::from([
                 json!({"access_token":"issued", "refresh_token":"rotating", "token_type":"Bearer", "expires_in":3600}),
-            ]),
+            ].map(json_response)),
         }
     }
 
@@ -240,11 +248,9 @@ impl HttpSend for Queue {
 
     async fn send(&mut self, request: Request<Bytes>) -> Result<Response<Self::Body>, Self::Error> {
         self.requests.push(request);
-        let response = self.responses.pop_front().ok_or(TransportError::Network)?;
-        Ok(Response::builder()
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(response.to_string())))
-            .unwrap())
+        self.responses
+            .pop_front()
+            .ok_or(TransportError::Network.into())
     }
 }
 
@@ -688,7 +694,7 @@ async fn consent_rechecks_operator_and_scheme_before_exchange() {
             assert!(matches!(
                 fixture
                     .service
-                    .begin(&fixture.source, &auth, &HeaderMap::new(), &mut sender)
+                    .begin(&fixture.source, &auth, &mut sender)
                     .await,
                 Err(McpOAuthError::Unauthorized(_))
             ));
@@ -735,5 +741,90 @@ async fn refreshed_tokens_preserve_omitted_refresh_and_scopes_but_replace_presen
         )
         .unwrap();
         assert!(tokens(response, now, previous.session.clone(), Some(&previous)).is_err());
+    }
+}
+
+#[test]
+async fn consent_probes_deployed_resource_and_uses_its_challenge_metadata_url() {
+    let fixture = Fixture::new().await;
+    let mut sender = Queue::discovery();
+    let probe = sender.responses.front_mut().unwrap();
+    *probe.status_mut() = http::StatusCode::UNAUTHORIZED;
+    probe.headers_mut().insert(
+        http::header::WWW_AUTHENTICATE,
+        http::HeaderValue::from_static(
+            "Bearer resource_metadata=\"https://resource.example/custom-discovery\"",
+        ),
+    );
+    fixture
+        .service
+        .begin(&fixture.source, &fixture.operator, &mut sender)
+        .await
+        .unwrap();
+    assert_eq!(sender.requests.len(), 3);
+    assert_eq!(sender.requests[0].uri(), "https://resource.example/mcp");
+    assert_eq!(sender.requests[0].headers()["Mcp-Method"], "tools/list");
+    assert_eq!(
+        sender.requests[1].uri(),
+        "https://resource.example/custom-discovery"
+    );
+    assert_eq!(sender.requests[1].method(), http::Method::GET);
+    assert!(
+        sender
+            .requests
+            .iter()
+            .all(|r| !r.headers().contains_key("authorization"))
+    );
+}
+
+#[test]
+async fn failed_probe_does_not_discover_or_supersede_an_existing_grant() {
+    let fixture = Fixture::new().await;
+    let key = fixture.grant().await;
+    let original = fixture.service.grants.load(&key).await.unwrap().unwrap();
+    let mut sender = Queue::discovery();
+    *sender.responses.front_mut().unwrap().status_mut() = http::StatusCode::SERVICE_UNAVAILABLE;
+    assert!(matches!(
+        fixture
+            .service
+            .begin(&fixture.source, &fixture.operator, &mut sender)
+            .await,
+        Err(McpOAuthError::Transport(TransportError::HttpStatus(503)))
+    ));
+    assert_eq!(sender.requests.len(), 1);
+    let stored = fixture.service.grants.load(&key).await.unwrap().unwrap();
+    assert_eq!(stored.generation, original.generation);
+    assert_eq!(stored.status, McpOAuthGrantStatus::Granted);
+}
+
+#[test]
+async fn invalid_oauth_resource_or_protocol_is_rejected_before_probe() {
+    let fixture = Fixture::new().await;
+    for (url, version) in [
+        ("http://resource.example/mcp", None),
+        (" https://resource.example/mcp ", None),
+        ("https://resource.example/mcp", Some("1999-01-01")),
+    ] {
+        let mut import = fixture
+            .service
+            .resolve(&fixture.source)
+            .await
+            .unwrap()
+            .import;
+        import.url = url.into();
+        import.version = version.map(str::to_owned);
+        fixture.pool.with_rw("oauth-service-test", "invalid-import").execute(
+            sqlx::query("UPDATE deployment_mcp_imports SET import_config = $1 WHERE environment_id = $2")
+                .bind(Blob::new(import)).bind(fixture.source.environment_id.0)
+        ).await.unwrap();
+        let mut sender = Queue::empty();
+        assert!(matches!(
+            fixture
+                .service
+                .begin(&fixture.source, &fixture.operator, &mut sender)
+                .await,
+            Err(McpOAuthError::Transport(TransportError::Configuration(_)))
+        ));
+        assert!(sender.requests.is_empty());
     }
 }
