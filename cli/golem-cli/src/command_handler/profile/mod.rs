@@ -17,17 +17,20 @@ pub mod config;
 use crate::command::profile::{ProfileAuthMode, ProfileSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::{
-    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileName,
+    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileDeletion,
+    ProfileName,
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{LogColorize, log_action};
+use crate::log::{LogColorize, log_action, logln};
 use crate::model::config::ProfileView;
 use crate::model::config::profile::{
     ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
 use crate::model::format::Format;
+use crate::model::help::AvailableProfileNamesHelp;
+use crate::model::text_format::log_text_view;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -128,7 +131,14 @@ impl ProfileCommandHandler {
                 ),
             );
         }
-        Config::add_profile(name.clone(), profile, set_active, self.ctx.config_dir())?;
+        let added = Config::add_profile(name.clone(), profile, set_active, self.ctx.config_dir())?;
+        if !added {
+            log_error(format!(
+                "Profile {} already exists. Delete it first, or choose another profile name!",
+                name.0.log_color_error_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        }
 
         self.ctx.log_handler().log_output(ProfileCreateResult {
             created: true,
@@ -256,13 +266,26 @@ impl ProfileCommandHandler {
 
         // The active profile cannot be deleted; the check is part of the locked update, so a
         // concurrent switch cannot slip in between the check and the delete.
-        let deleted = Config::delete_inactive_profile(&profile_name, self.ctx.config_dir())?;
-        if !deleted {
-            log_error(format!(
-                "Cannot delete currently active profile: {}. Switch to another profile first.",
-                profile_name.0.log_color_error_highlight()
-            ));
-            bail!(NonSuccessfulExit);
+        match Config::delete_inactive_profile(&profile_name, self.ctx.config_dir())? {
+            ProfileDeletion::Deleted => {}
+            ProfileDeletion::Active => {
+                log_error(format!(
+                    "Cannot delete currently active profile: {}. Switch to another profile first.",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                bail!(NonSuccessfulExit);
+            }
+            ProfileDeletion::NotFound => {
+                log_error(format!(
+                    "Profile {} not found",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
+                bail!(NonSuccessfulExit);
+            }
         }
 
         self.ctx.log_handler().log_output(ProfileDeleteView {

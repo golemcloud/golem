@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::{File, OpenOptions, create_dir_all};
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
@@ -229,6 +229,28 @@ pub struct ProfileConfig {
 const STORE_FILE_REPLACE_ATTEMPTS: usize = 5;
 const STORE_FILE_REPLACE_RETRY_DELAY: Duration = Duration::from_millis(20);
 
+/// How long a config update waits for the lock held by another CLI process, see
+/// `Config::with_locked`.
+const LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCK_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Result of a locked config update, see `Config::with_locked`.
+enum ConfigUpdate<R> {
+    /// The config was modified and has to be written back.
+    Changed(R),
+    /// The config was left as it was, nothing is written.
+    Unchanged(R),
+}
+
+/// Outcome of deleting a profile, see `Config::delete_inactive_profile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileDeletion {
+    Deleted,
+    NotFound,
+    /// The profile is the active one and was not deleted.
+    Active,
+}
+
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
         config_dir.join("config-v4.json")
@@ -300,15 +322,23 @@ impl Config {
                 config_dir.display()
             )
         })?;
-        serde_json::to_writer_pretty(temporary.as_file_mut(), self)
-            .map_err(|err| anyhow!("Can't save config to file: {err}"))?;
+        {
+            let mut writer = BufWriter::new(temporary.as_file_mut());
+            serde_json::to_writer_pretty(&mut writer, self)
+                .map_err(|err| anyhow!("Can't save config to file: {err}"))?;
+            writer
+                .flush()
+                .map_err(|err| anyhow!("Can't save config to file: {err}"))?;
+        }
         temporary
             .as_file_mut()
             .sync_all()
             .map_err(|err| anyhow!("Can't flush config file: {err}"))?;
 
-        // On Windows the replace fails while another process has the config file open (e.g. a
-        // concurrent read), so it is retried a few times.
+        // On Windows the replace fails while a foreign process (e.g. an editor or a virus
+        // scanner) holds the config file open without delete sharing, so it is retried a few
+        // times. The CLI's own reads do not block it, and the retries happen under the config
+        // lock, so no other writer can interleave.
         let mut attempt = 0;
         loop {
             match temporary.persist(&config_path) {
@@ -332,10 +362,12 @@ impl Config {
     /// Runs a read-modify-write of the config file under a lock shared by all CLI processes
     /// using the same config directory, so concurrent invocations (e.g. two commands logging in
     /// at the same time) do not lose each other's changes. The lock is a separate file, as the
-    /// config file itself is replaced on every write.
+    /// config file itself is replaced on every write; it is released by the OS when the process
+    /// exits, so it cannot go stale, but the wait for it is bounded in case another process is
+    /// stuck while holding it. The config is only written back when `f` reports a change.
     fn with_locked<R>(
         config_dir: &Path,
-        f: impl FnOnce(&mut Config) -> anyhow::Result<R>,
+        f: impl FnOnce(&mut Config) -> anyhow::Result<ConfigUpdate<R>>,
     ) -> anyhow::Result<R> {
         create_dir_all(config_dir)
             .map_err(|err| anyhow!("Can't create config directory: {err}"))?;
@@ -349,14 +381,31 @@ impl Config {
             .open(&lock_path)
             .map_err(|err| anyhow!("Can't open config lock file {}: {err}", lock_path.display()))?;
         let mut lock = fd_lock::RwLock::new(lock_file);
-        let _guard = lock
-            .write()
-            .map_err(|err| anyhow!("Can't lock config file {}: {err}", lock_path.display()))?;
+        let wait_started = std::time::Instant::now();
+        let _guard = loop {
+            match lock.try_write() {
+                Ok(guard) => break guard,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if wait_started.elapsed() >= LOCK_WAIT_TIMEOUT {
+                        bail!(
+                            "Timed out waiting for the config file lock {}, another golem process may be holding it",
+                            lock_path.display()
+                        );
+                    }
+                    std::thread::sleep(LOCK_WAIT_POLL_INTERVAL);
+                }
+                Err(err) => bail!("Can't lock config file {}: {err}", lock_path.display()),
+            }
+        };
 
         let mut config = Self::from_dir(config_dir)?;
-        let result = f(&mut config)?;
-        config.store_file(config_dir)?;
-        Ok(result)
+        match f(&mut config)? {
+            ConfigUpdate::Changed(result) => {
+                config.store_file(config_dir)?;
+                Ok(result)
+            }
+            ConfigUpdate::Unchanged(result) => Ok(result),
+        }
     }
 
     pub fn set_active_profile_name(
@@ -372,7 +421,7 @@ impl Config {
             };
 
             config.default_profile = Some(profile_name);
-            Ok(())
+            Ok(ConfigUpdate::Changed(()))
         })
     }
 
@@ -398,18 +447,22 @@ impl Config {
     }
 
     /// Creates a new profile and optionally makes it the active one, as one locked write.
+    /// Returns `Ok(false)` without writing when a profile with the same name already exists.
     pub fn add_profile(
         name: ProfileName,
         profile: Profile,
         set_active: bool,
         config_dir: &Path,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         Self::with_locked(config_dir, |config| {
+            if config.profiles.contains_key(&name) {
+                return Ok(ConfigUpdate::Unchanged(false));
+            }
             config.profiles.insert(name.clone(), profile);
             if set_active {
                 config.default_profile = Some(name);
             }
-            Ok(())
+            Ok(ConfigUpdate::Changed(true))
         })
     }
 
@@ -423,21 +476,26 @@ impl Config {
         Self::with_locked(config_dir, |config| match config.profiles.get_mut(name) {
             Some(profile) => {
                 f(profile);
-                Ok(true)
+                Ok(ConfigUpdate::Changed(true))
             }
-            None => Ok(false),
+            None => Ok(ConfigUpdate::Unchanged(false)),
         })
     }
 
-    /// Deletes a profile unless it is the active one, in which case `Ok(false)` is returned
-    /// and nothing is written.
-    pub fn delete_inactive_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<bool> {
+    /// Deletes a profile unless it is the active one or does not exist, in which case nothing
+    /// is written.
+    pub fn delete_inactive_profile(
+        name: &ProfileName,
+        config_dir: &Path,
+    ) -> anyhow::Result<ProfileDeletion> {
         Self::with_locked(config_dir, |config| {
             if config.default_profile_name() == *name {
-                return Ok(false);
+                return Ok(ConfigUpdate::Unchanged(ProfileDeletion::Active));
             }
-            config.profiles.remove(name);
-            Ok(true)
+            match config.profiles.remove(name) {
+                Some(_) => Ok(ConfigUpdate::Changed(ProfileDeletion::Deleted)),
+                None => Ok(ConfigUpdate::Unchanged(ProfileDeletion::NotFound)),
+            }
         })
     }
 
@@ -469,7 +527,7 @@ impl Config {
                 .application_environments
                 .entry(env_id.to_hashed_key())
                 .or_default());
-            Ok(())
+            Ok(ConfigUpdate::Changed(()))
         })
     }
 }
@@ -683,6 +741,134 @@ mod tests {
             .collect::<Vec<_>>();
         entries.sort();
         assert_eq!(entries, vec!["config-v4.json", "config-v4.json.lock"]);
+    }
+
+    fn config_file_state(config_dir: &Path) -> (std::time::SystemTime, String) {
+        let config_path = Config::config_path(config_dir);
+        (
+            std::fs::metadata(&config_path).unwrap().modified().unwrap(),
+            std::fs::read_to_string(&config_path).unwrap(),
+        )
+    }
+
+    #[test]
+    fn add_profile_refuses_existing_names() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let name = ProfileName("my-profile".to_string());
+        let profile = Profile {
+            custom_url: Some(Url::parse("http://first:1").unwrap()),
+            ..Profile::default()
+        };
+
+        assert!(Config::add_profile(name.clone(), profile, true, config_dir.path()).unwrap());
+        assert!(
+            !Config::add_profile(name.clone(), Profile::default(), false, config_dir.path())
+                .unwrap()
+        );
+
+        let config = Config::from_dir(config_dir.path()).unwrap();
+        assert_eq!(
+            config.profiles[&name].custom_url.as_ref().unwrap().as_str(),
+            "http://first:1/"
+        );
+        assert_eq!(config.default_profile_name(), name);
+    }
+
+    #[test]
+    fn update_profile_of_missing_profile_does_not_write() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let name = ProfileName("my-profile".to_string());
+        assert!(Config::add_profile(name, Profile::default(), false, config_dir.path()).unwrap());
+        let state_before = config_file_state(config_dir.path());
+
+        let found = Config::update_profile(
+            &ProfileName("missing".to_string()),
+            config_dir.path(),
+            |profile| profile.config.default_format = Format::Json,
+        )
+        .unwrap();
+
+        assert!(!found);
+        assert_eq!(config_file_state(config_dir.path()), state_before);
+    }
+
+    #[test]
+    fn update_profile_changes_the_profile() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let name = ProfileName("my-profile".to_string());
+        assert!(
+            Config::add_profile(name.clone(), Profile::default(), false, config_dir.path())
+                .unwrap()
+        );
+
+        let found = Config::update_profile(&name, config_dir.path(), |profile| {
+            profile.config.default_format = Format::Json
+        })
+        .unwrap();
+
+        assert!(found);
+        let config = Config::from_dir(config_dir.path()).unwrap();
+        assert_eq!(config.profiles[&name].config.default_format, Format::Json);
+    }
+
+    #[test]
+    fn delete_inactive_profile_distinguishes_active_and_missing_profiles() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let active = ProfileName("active".to_string());
+        let other = ProfileName("other".to_string());
+        assert!(
+            Config::add_profile(active.clone(), Profile::default(), true, config_dir.path())
+                .unwrap()
+        );
+        assert!(
+            Config::add_profile(other.clone(), Profile::default(), false, config_dir.path())
+                .unwrap()
+        );
+
+        assert_eq!(
+            Config::delete_inactive_profile(&active, config_dir.path()).unwrap(),
+            ProfileDeletion::Active
+        );
+        assert_eq!(
+            Config::delete_inactive_profile(&ProfileName("missing".to_string()), config_dir.path())
+                .unwrap(),
+            ProfileDeletion::NotFound
+        );
+        assert_eq!(
+            Config::delete_inactive_profile(&other, config_dir.path()).unwrap(),
+            ProfileDeletion::Deleted
+        );
+
+        let config = Config::from_dir(config_dir.path()).unwrap();
+        assert!(config.profiles.contains_key(&active));
+        assert!(!config.profiles.contains_key(&other));
+    }
+
+    #[test]
+    fn update_application_environment_creates_missing_entries() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let env_id = ApplicationEnvironmentConfigId {
+            application_name: ApplicationName("my-app".to_string()),
+            environment_name: EnvironmentName("staging".to_string()),
+            server_url: Url::parse("http://custom-server:1234").unwrap(),
+        };
+
+        assert!(
+            Config::get_application_environment(config_dir.path(), &env_id)
+                .unwrap()
+                .is_none()
+        );
+
+        Config::update_application_environment(&env_id, config_dir.path(), |config| {
+            config.auth = OAuth2AuthenticationConfig { data: None };
+        })
+        .unwrap();
+
+        assert!(
+            Config::get_application_environment(config_dir.path(), &env_id)
+                .unwrap()
+                .is_some()
+        );
     }
 }
 

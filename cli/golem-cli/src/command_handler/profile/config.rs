@@ -49,13 +49,6 @@ impl ProfileConfigCommandHandler {
     }
 
     fn cmd_set_format(&self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
-        log_action(
-            "Updating",
-            format!(
-                "profile's default format for {} to {}",
-                profile_name, format
-            ),
-        );
         let found = Config::update_profile(&profile_name, self.ctx.config_dir(), |profile| {
             profile.config.default_format = format;
         })?;
@@ -69,7 +62,13 @@ impl ProfileConfigCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        log_action("Updated", "");
+        log_action(
+            "Updated",
+            format!(
+                "profile's default format for {} to {}",
+                profile_name, format
+            ),
+        );
 
         self.ctx
             .log_handler()
