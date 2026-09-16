@@ -1196,11 +1196,15 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
     use golem_common::base_model::tool::ToolName;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1213,6 +1217,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1223,6 +1229,45 @@ pub mod tool {
             #[command(subcommand)]
             subcommand: ToolGrantSubcommand,
         },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh host-only invocation owner
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Native tool command path
+        pub command_path: Vec<String>,
+        /// Typed input JSON (`schema` and `value`), or @PATH. Defaults to an empty record.
+        #[arg(long, conflicts_with = "lookup")]
+        pub input: Option<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -2921,6 +2966,40 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin"
+            ]))
+            .is_ok()
+        );
     }
 
     #[test]

@@ -113,8 +113,14 @@ struct PendingOperation {
     request: PublicClientMessage,
 }
 
-struct CliSessionRequestProvider {
+pub(crate) struct CliSessionRequestProvider {
     ctx: Arc<Context>,
+}
+
+impl CliSessionRequestProvider {
+    pub(crate) fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
 }
 
 #[async_trait::async_trait]
@@ -420,7 +426,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         checkpoint: Mutex::new(checkpoint),
         path: checkpoint_path,
     });
-    let request_provider = Arc::new(CliSessionRequestProvider { ctx: ctx.clone() });
+    let request_provider = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
     let mut session = tokio::select! {
         biased;
         _ = interrupt.cancelled() => bail!(PipedExitCode(130)),

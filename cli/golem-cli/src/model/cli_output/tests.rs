@@ -130,6 +130,12 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_agent_interrupt_result
     ),
     registry_entry!("InvokeResultView", "agent.invoke", arb_agent_invoke_result),
+    registry_entry!("ToolInvokeView", "tool.invoke", arb_tool_invoke_result),
+    registry_entry!(
+        "ToolInvocationSessionView",
+        "tool.invoke-session",
+        arb_tool_invoke_session_result
+    ),
     registry_entry!(
         "AgentInvocationSessionEvent",
         "agent.invoke-session",
@@ -2889,6 +2895,52 @@ fn arb_agent_invoke_result() -> OutputDocumentStrategy {
                 is_void_result: shape == 0,
             })
             .expect("generated invoke result should serialize")
+        })
+        .boxed()
+}
+
+fn arb_tool_invoke_result() -> OutputDocumentStrategy {
+    use golem_client::model::NativeToolInvocationResponse;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+
+    arb_small_string()
+        .prop_map(|key| {
+            to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
+                response: NativeToolInvocationResponse {
+                    agent_id: AgentId {
+                        component_id: ComponentId(uuid::Uuid::nil()),
+                        agent_id: "agent".into(),
+                    },
+                    idempotency_key: key,
+                    result: None,
+                    status: None,
+                    component_revision: None,
+                    agent_fingerprint: None,
+                    oplog_index: None,
+                },
+            })
+            .expect("generated tool invoke result should serialize")
+        })
+        .boxed()
+}
+
+fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::invocation_session_public::{
+        PublicInvocationResult, PublicNativeToolTarget,
+    };
+
+    arb_small_string()
+        .prop_map(|key| {
+            to_structured_output_value(crate::model::tool_invoke::ToolInvocationSessionView {
+                target: PublicNativeToolTarget::Component {
+                    component_id: uuid::Uuid::nil(),
+                },
+                idempotency_key: IdempotencyKey::new(key),
+                result: PublicInvocationResult::ToolSuccess { result: None },
+            })
+            .expect("generated tool invocation session result should serialize")
         })
         .boxed()
 }

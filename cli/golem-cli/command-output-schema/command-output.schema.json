@@ -223,6 +223,12 @@
       "$ref": "#/definitions/tool.list"
     },
     {
+      "$ref": "#/definitions/tool.invoke"
+    },
+    {
+      "$ref": "#/definitions/tool.invoke-session"
+    },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
@@ -6484,6 +6490,101 @@
       },
       "additionalProperties": false
     },
+    "tool.invoke": {
+      "type": "object",
+      "description": "Native external-tool invocation result, including its idempotency key and schema-typed success or custom error.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "response"],
+      "properties": {
+        "$type": { "const": "tool.invoke" },
+        "response": {
+          "type": "object",
+          "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
+          "properties": {
+            "agentId": { "type": "object" },
+            "idempotencyKey": { "type": "string" },
+            "result": { "type": ["object", "null"] },
+            "status": {},
+            "componentRevision": {},
+            "agentFingerprint": {},
+            "oplogIndex": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "tool.invoke-session": {
+      "type": "object",
+      "description": "Result of a live native external-tool invocation session, with its resolved target and idempotency key.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "target", "idempotencyKey", "result"],
+      "properties": {
+        "$type": { "const": "tool.invoke-session" },
+        "target": { "$ref": "#/definitions/PublicNativeToolTarget" },
+        "idempotencyKey": { "type": "string" },
+        "result": { "$ref": "#/definitions/PublicToolInvocationResult" }
+      },
+      "additionalProperties": false
+    },
+    "PublicNativeToolTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "componentId", "agentId"],
+          "properties": {
+            "kind": { "const": "agent" },
+            "componentId": { "type": "string", "format": "uuid" },
+            "agentId": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "componentId"],
+          "properties": {
+            "kind": { "const": "component" },
+            "componentId": { "type": "string", "format": "uuid" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicTypedValue": {
+      "type": "object",
+      "required": ["schema", "value"],
+      "properties": {
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "PublicToolInvocationResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "result"],
+          "properties": {
+            "kind": { "const": "toolsuccess" },
+            "result": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "code", "message", "custom_error"],
+          "properties": {
+            "kind": { "const": "toolfailure" },
+            "code": { "type": "string" },
+            "message": { "type": ["string", "null"] },
+            "custom_error": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "deploy.environment-setup-plan": {
       "type": "object",
       "description": "May be emitted by `golem deploy` when planning environment setup entries. Other deploy output documents may also appear in the same command run.",
@@ -8632,6 +8733,14 @@
     {
       "type": "tool.list",
       "rustType": "DeployedToolListView"
+    },
+    {
+      "type": "tool.invoke",
+      "rustType": "ToolInvokeView"
+    },
+    {
+      "type": "tool.invoke-session",
+      "rustType": "ToolInvocationSessionView"
     },
     {
       "type": "deploy.environment-setup-plan",
