@@ -7173,6 +7173,136 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     ));
 }
 
+pub async fn test_mcp_http_policy(deps: &Deps) {
+    use golem_common::model::card::owner::EmptyOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        ClassPermissionPattern, EffectiveSurface, EnvironmentSecuritySchemeResourcePattern,
+        EnvironmentSecuritySchemeVerb, NetworkResourcePattern, NetworkVerb, PortPattern,
+    };
+    use golem_common::model::environment::Environment;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_mcp_import::transport::TransportError;
+    use golem_mcp_import::transport::sender::HttpPolicy;
+    use golem_registry_service::services::account_usage::error::AccountUsageError;
+    use golem_registry_service::services::mcp_oauth::McpOAuthError;
+    use golem_registry_service::services::mcp_oauth::http_policy::McpHttpPolicy;
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::repo::SqlDateTime;
+
+    let owner = deps.create_account().await;
+    let operator = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let app = deps.create_application(owner_id.0).await;
+    let environment: Environment = deps
+        .create_env(app.revision.application_id)
+        .await
+        .try_into()
+        .unwrap();
+    let usage = Arc::new(deps.account_usage_service());
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&owner.revision.email),
+    };
+    let network = PermissionPattern::Network(ClassPermissionPattern {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        recipient: recipient.clone(),
+        resource: NetworkResourcePattern::host_port("allowed.example", PortPattern::single(443)),
+    });
+    let auth = AuthCtx::agent_with_effective_surface(
+        owner_id,
+        AccountEmail::new(&owner.revision.email),
+        EffectiveSurface::from_grants(&[network], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut runtime = McpHttpPolicy::runtime(auth.clone(), &environment, usage.clone()).unwrap();
+    let allowed = "https://Allowed.Example./mcp".parse().unwrap();
+    for denied in [
+        "https://other.example/mcp",
+        "https://allowed.example:8443/mcp",
+    ] {
+        assert!(matches!(
+            runtime.admit(&denied.parse().unwrap()).await,
+            Err(McpOAuthError::Transport(TransportError::Denied))
+        ));
+    }
+    runtime.authorize(&allowed).unwrap();
+    runtime.authorize(&allowed).unwrap();
+    let mut stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(stored.add_change(UsageType::MonthlyHttpCalls, 4998));
+    deps.account_usage_repo.add(&stored).await.unwrap();
+    runtime.admit(&allowed).await.unwrap();
+
+    // Collaborator consent needs scheme Update, not an agent network grant.
+    let scheme = SecuritySchemeName("oauth".into());
+    assert!(McpHttpPolicy::operator(&auth, &environment, &scheme, usage.clone()).is_err());
+    let operator_id = AccountId(operator.revision.account_id);
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&operator.revision.email),
+    };
+    let grant = PermissionPattern::EnvironmentSecurityScheme(ClassPermissionPattern {
+        verb: Some(EnvironmentSecuritySchemeVerb::Update),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: AccountEmail::new(&owner.revision.email),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        recipient: recipient.clone(),
+        resource: EnvironmentSecuritySchemeResourcePattern::Any,
+    });
+    let operator_auth = AuthCtx::agent_with_effective_surface(
+        operator_id,
+        AccountEmail::new(&operator.revision.email),
+        EffectiveSurface::from_grants(&[grant], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut consent =
+        McpHttpPolicy::operator(&operator_auth, &environment, &scheme, usage.clone()).unwrap();
+    consent
+        .admit(&"https://issuer.example/token".parse().unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        McpHttpPolicy::runtime(operator_auth, &environment, usage.clone()),
+        Err(McpOAuthError::OwnerMismatch)
+    ));
+    assert!(matches!(
+        McpHttpPolicy::runtime(AuthCtx::System, &environment, usage.clone()),
+        Err(McpOAuthError::Transport(TransportError::Denied))
+    ));
+    for policy in [&mut runtime, &mut consent] {
+        assert!(matches!(
+            policy.admit(&allowed).await,
+            Err(McpOAuthError::AccountUsage(
+                AccountUsageError::LimitExceeded(_)
+            ))
+        ));
+    }
+    let stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 5000);
+    assert_eq!(stored.usage(UsageType::MonthlyRpcCalls), 0);
+    let stored = deps
+        .account_usage_repo
+        .get(operator_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(matches!(
+        usage.record_http_call(AccountId::new()).await,
+        Err(AccountUsageError::AccountNotfound(_))
+    ));
+}
+
 pub async fn test_update_http_call_counts(deps: &Deps) {
     use golem_common::model::account::AccountId;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;

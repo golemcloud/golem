@@ -15,6 +15,7 @@ use crate::repo::model::mcp_oauth::{
 };
 use crate::repo::model::security_scheme::SecuritySchemeRepoError;
 use crate::repo::security_scheme::SecuritySchemeRepo;
+use crate::services::account_usage::error::AccountUsageError;
 use crate::services::security_scheme::authorize_security_scheme_permission;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
@@ -30,6 +31,8 @@ use oauth2::{AuthorizationCode, PkceCodeVerifier, RefreshToken, TokenResponse};
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
+
+pub mod http_policy;
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpOAuthError {
@@ -57,6 +60,8 @@ pub enum McpOAuthError {
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
+    AccountUsage(#[from] AccountUsageError),
+    #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -74,6 +79,7 @@ impl SafeDisplay for McpOAuthError {
         match self {
             Self::InternalError(_) => "Internal error".into(),
             Self::Unauthorized(error) => error.to_safe_string(),
+            Self::AccountUsage(error) => error.to_safe_string(),
             _ => self.to_string(),
         }
     }
@@ -453,8 +459,20 @@ impl McpOAuthService {
                         Ok(credential)
                     }
                     .await;
-                    if result.is_err() {
-                        self.grants.fail_refresh(&key, claim.generation).await?;
+                    if let Err(error) = &result {
+                        if matches!(
+                            error,
+                            McpOAuthError::Transport(TransportError::Denied)
+                                | McpOAuthError::AccountUsage(_)
+                        ) {
+                            // These errors are raised by admission before dispatch.
+                            // Restore the unused token under the claim's CAS fence.
+                            self.grants
+                                .publish_refresh(&key, claim.generation, claim.tokens)
+                                .await?;
+                        } else {
+                            self.grants.fail_refresh(&key, claim.generation).await?;
+                        }
                     }
                     return result;
                 }

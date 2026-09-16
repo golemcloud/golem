@@ -488,6 +488,89 @@ async fn ambiguous_exchange_and_refresh_are_not_repeated() {
     );
 }
 
+struct RejectedToken {
+    error: Option<McpOAuthError>,
+    revoke: Option<(Arc<dyn McpOAuthGrantRepo>, McpOAuthGrantKey)>,
+}
+
+impl HttpSend for RejectedToken {
+    type Body = Full<Bytes>;
+    type Error = McpOAuthError;
+
+    async fn send(
+        &mut self,
+        _request: Request<Bytes>,
+    ) -> Result<Response<Self::Body>, Self::Error> {
+        if let Some((repo, key)) = &self.revoke {
+            repo.revoke(key).await.unwrap();
+        }
+        Err(self.error.take().expect("only one attempt"))
+    }
+}
+
+#[test]
+async fn rejected_refresh_preserves_unused_token_without_undoing_revocation() {
+    use crate::services::account_usage::error::LimitExceededError;
+
+    for denied in [true, false] {
+        for revoked in [true, false] {
+            let fixture = Fixture::new().await;
+            let key = fixture.grant().await;
+            fixture.expire(&key).await;
+            let prior = fixture.service.grants.load(&key).await.unwrap().unwrap();
+            let mut sender = RejectedToken {
+                error: Some(if denied {
+                    TransportError::Denied.into()
+                } else {
+                    AccountUsageError::LimitExceeded(LimitExceededError {
+                        limit_name: "MonthlyHttpCalls".into(),
+                        limit_value: 1,
+                        current_value: 1,
+                    })
+                    .into()
+                }),
+                revoke: revoked.then(|| (fixture.service.grants.clone(), key.clone())),
+            };
+            let result = fixture
+                .service
+                .credential(&fixture.source, fixture.owner, &mut sender)
+                .await;
+            if denied {
+                assert!(matches!(
+                    result,
+                    Err(McpOAuthError::Transport(TransportError::Denied))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(McpOAuthError::AccountUsage(
+                        AccountUsageError::LimitExceeded(_)
+                    ))
+                ));
+            }
+            let next = fixture.service.grants.load(&key).await.unwrap().unwrap();
+            assert_ne!(next.generation, prior.generation);
+            if revoked {
+                assert_eq!(next.status, McpOAuthGrantStatus::Revoked);
+                assert!(next.tokens.is_none());
+            } else {
+                assert_eq!(next.status, McpOAuthGrantStatus::Granted);
+                assert_eq!(
+                    serde_json::to_value(next.tokens).unwrap(),
+                    serde_json::to_value(prior.tokens).unwrap()
+                );
+                let mut token = Queue::token();
+                fixture
+                    .service
+                    .credential(&fixture.source, fixture.owner, &mut token)
+                    .await
+                    .unwrap();
+                assert_eq!(token.requests.len(), 1);
+            }
+        }
+    }
+}
+
 struct BlockedToken {
     entered: Arc<tokio::sync::Notify>,
     resume: Arc<tokio::sync::Notify>,

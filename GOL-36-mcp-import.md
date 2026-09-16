@@ -452,6 +452,36 @@ consent while a tool call is pending. Completed MCP replay does not require a
 currently valid upstream token. Implement disconnect and reauthorization operations,
 invalidating affected sessions and caches without changing historical replay data.
 
+#### HTTP accounting boundary
+
+Each process charges requests immediately before its own dispatch. Registry-owned
+discovery, refresh and consent traffic uses the credential owner's monthly HTTP
+ledger, including when a collaborator authorizes the import. Runtime requests
+carry the agent's captured effective permission surface and use the same canonical
+network target as executor HTTP. Operator consent requires scheme `Update`, not
+an additional agent Network grant. Denials do not consume quota; cache hits and
+coalesced waiters do not charge a request that they did not dispatch.
+
+The runtime surface must permit the actual OAuth token endpoint as well as the
+MCP resource endpoint. A configured issuer does not broaden the agent's Network
+grant. Document the necessary provider-host grant alongside import authorization
+in the operator guidance. A permission or accounting rejection before a refresh
+POST restores the unused token under the existing generation/status fence;
+concurrent revocation or reauthorization wins. Network errors, response loss and
+cancellation remain ambiguous and never release a potentially consumed token.
+
+Registry traffic does not consume an executor per-invocation HTTP counter;
+executor-dispatched `tools/call` uses both that counter and monthly accounting.
+Registry discovery is bounded independently by service page/timeout/concurrency
+policy. This accounting distinction and charging operator consent to the owner
+are implementation choices to highlight in final review. They avoid forwarding
+stale monthly balances or reconciling counts after a lost registry response.
+Monthly admission reuses the registry's checked usage update and atomic additive
+write; like existing connection admission/executor batching, concurrent checks can
+slightly exceed the limit. Monthly exhaustion must retain its typed error through
+internal RPC and become the existing executor monthly-budget suspension trap,
+not an automatic transient retry or a permanent tool failure.
+
 ### Projection and transport implementation boundaries
 
 - Cover the mappings required by §5.7.3 using Golem's existing schema graph,
@@ -1031,12 +1061,31 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   Oracle found no blockers; applied its shared-validator and pre-traffic test
   suggestions. Separate probe bug-finder run 1 returned **no bugs found**, clean
   terminal with no checkpoint. Production request-policy wiring remains untested.
-- Remaining step-4 work: production registry HTTP policy/accounting and service
-  configuration; bootstrap/internal RPC and
+- Registry HTTP admission now shares canonical network-target derivation with the
+  executor. Runtime policy accepts only an agent surface bound to the environment
+  owner, checks each actual target before charging, and preserves typed monthly
+  quota errors. Operator policy requires scheme `Update` and bills the environment
+  owner, including collaborator consent. Cache authorization is non-charging.
+- Oracle confirmed the dispatch-local accounting design and the implementation.
+  Its refresh follow-up is implemented using the existing `publish_refresh` CAS:
+  known permission/accounting rejection restores unused tokens without undoing
+  concurrent revocation. Ambiguous failures and cancellation remain fenced.
+  Provider network permission is intentionally required for runtime token POSTs;
+  the operator guidance must explain this, rather than silently broadening grants.
+- Verification: **4** shared normalization tests, **17** OAuth/store tests, and
+  **6** policy/accounting repository tests passed (SQLite, PostgreSQL, PostgreSQL
+  TLS). Executor library check passed with three existing warnings; registry
+  all-target strict Clippy (`--no-deps`), scoped formatting and diff checks passed.
+  Bug-finder returned **no bugs found**, clean terminal with no checkpoint.
+  Disk-full linker and later PostgreSQL setup failures were recovered by removing
+  obsolete build caches; the final unchanged DB tests passed on all three variants.
+  PostgreSQL migrations now execute successfully, but grant-state transition tests
+  still run only against SQLite. No production endpoint is wired yet.
+- Remaining step-4 work: service configuration; policy/bootstrap/internal RPC and
   operator API/CLI wiring, including callback parsing and status; resource-401
   feedback and cache invalidation; provider fixtures and combined validation.
-  PostgreSQL execution remains unverified. The coordinator is an intermediate
-  checkpoint, not completion of step 4 or evidence of end-to-end OAuth operation.
+  The coordinator is an intermediate checkpoint, not completion of step 4 or
+  evidence of end-to-end OAuth operation.
 
 ## Review and decision history
 
