@@ -959,6 +959,25 @@ describe('RPC client', () => {
     );
   });
 
+  it('rejects an unexpected wire value for a declared unit output', async () => {
+    const def = defineAgentClient({
+      name: 'UnitOutputAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.void() }) },
+    });
+    const client = def.client.get({});
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
+      metadata: { agentId: 'UnitOutputAgent()', idempotencyKey: 'unit' },
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
+        cancel: vi.fn(),
+      },
+    });
+    await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
+  });
+
   it('rejects a wire value whose schema tag does not match the declared output', async () => {
     const def = defineAgent({
       name: 'MismatchedSingleOutputAgent',
@@ -1069,6 +1088,18 @@ describe('RPC client', () => {
     def.client.get({}, {});
 
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
+  });
+
+  it('rejects undeclared config override paths before creating the RPC', () => {
+    const def = defineAgentClient({
+      name: 'StrictConfigClientAgent',
+      id: {},
+      config: {},
+      methods: { ping: method({ input: {}, returns: z.void() }) },
+    });
+    const creates = vi.mocked(WasmRpc).mock.calls.length;
+    expect(() => def.client.get({}, { extra: 1 } as never)).toThrow("Unknown config path 'extra'");
+    expect(vi.mocked(WasmRpc).mock.calls).toHaveLength(creates);
   });
 
   it('rejects a non-object while traversing a nested RPC config override', () => {

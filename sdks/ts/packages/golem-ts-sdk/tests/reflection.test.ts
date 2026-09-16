@@ -211,17 +211,48 @@ describe('agent reflection', () => {
       metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'missing' },
       future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
     });
-    await expect(client.method('echo').invokeValue(v.record([]))).rejects.toBeInstanceOf(
-      RemoteOutputError,
-    );
+    await expect(
+      client.method('echo').invokeValue(v.record([v.string('input')])),
+    ).rejects.toBeInstanceOf(RemoteOutputError);
 
     rpc.asyncInvokeAndAwait.mockReturnValueOnce({
       metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'malformed' },
       future: { get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(1))), cancel: vi.fn() },
     });
-    await expect(client.method('echo').invokeValue(v.record([]))).rejects.toBeInstanceOf(
-      RemoteOutputError,
+    await expect(
+      client.method('echo').invokeValue(v.record([v.string('input')])),
+    ).rejects.toBeInstanceOf(RemoteOutputError);
+  });
+
+  it('rejects malformed schema-native inputs before opening an RPC call', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const client = getAgentType('ReflectedEcho')!.client.get({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    const method = client.method('echo');
+    expect(() => method.triggerValue(v.record([]))).toThrow(/Invalid input/);
+    expect(() => method.scheduleValue({ seconds: 1n, nanoseconds: 0 }, v.record([]))).toThrow(
+      /Invalid input/,
     );
+    expect(rpc.invoke).not.toHaveBeenCalled();
+    expect(rpc.scheduleCancelableInvocation).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unexpected value for a reflected unit output', async () => {
+    const registered = registeredType();
+    registered.agentType.methods[0].outputSchema = { tag: 'unit' };
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);
+    const client = getAgentType('ReflectedEcho')!.client.get({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
+      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'unit' },
+      future: {
+        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
+        cancel: vi.fn(),
+      },
+    });
+    await expect(
+      client.method('echo').invokeValue(v.record([v.string('input')])),
+    ).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
   it('looks up the current schema for a concrete agent instance', () => {

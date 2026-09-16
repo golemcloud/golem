@@ -66,8 +66,11 @@ export function fromCanonicalJson(
       if (value < 0) fail(path, 'expected an unsigned integer');
       return { tag: 'u64', value: BigInt(value) };
     }
-    case 'f32':
-      return { tag: 'f32', value: Math.fround(expectNumber(json, path)) };
+    case 'f32': {
+      const value = Math.fround(expectNumber(json, path));
+      if (!Number.isFinite(value)) fail(path, 'number is outside the f32 range');
+      return { tag: 'f32', value };
+    }
     case 'f64':
       return { tag: 'f64', value: expectNumber(json, path) };
     case 'char': {
@@ -241,6 +244,7 @@ export function toCanonicalJson(
     case 'u32':
     case 'f32':
     case 'f64':
+      if (!Number.isFinite(value.value)) fail(path, 'expected a finite JSON number');
       return value.value;
     case 's64':
     case 'u64': {
@@ -550,9 +554,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
             attachMetadata(renderSchema(graph, field.body), field.metadata),
           ]),
         ),
-        required: body.fields
-          .filter((field) => resolve(graph, field.body).body.tag !== 'option')
-          .map((field) => field.name),
+        required: body.fields.map((field) => field.name),
         additionalProperties: false,
       };
       break;

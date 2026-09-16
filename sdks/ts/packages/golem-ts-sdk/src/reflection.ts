@@ -119,6 +119,9 @@ export class AgentType {
 
   /** Construct an agent identity from an already packed constructor value. */
   agentIdValue(input: SchemaValue, phantomId?: Uuid): ParsedAgentId {
+    if (!this.constructorInput.validateValue(input).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
+    }
     return ParsedAgentId.create({
       typeName: this.name,
       constructorValue: input,
@@ -135,6 +138,9 @@ export class AgentType {
       throw new TypeError(
         `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
       );
+    }
+    if (!this.constructorInput.validateValue(parts.constructorValue).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
     }
     return new ReflectedAgentClient(
       this,
@@ -192,6 +198,11 @@ export class ReflectedAgentClientFactory {
   }
 
   private create(input: SchemaValue, phantomId?: Uuid): ReflectedAgentClient {
+    if (!this.agentType.constructorInput.validateValue(input).success) {
+      throw new TypeError(
+        `Invalid constructor value for reflected agent type '${this.agentType.name}'`,
+      );
+    }
     return new ReflectedAgentClient(
       this.agentType,
       resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
@@ -233,17 +244,27 @@ export class ReflectedAgentMethod {
     signal?: AbortSignal,
   ): Promise<ReflectedInvocation<JsonValue>> {
     const result = await this.invokeValue(this.definition.input.packJson(input), signal);
-    return {
-      metadata: result.metadata,
-      value:
-        result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
-    };
+    try {
+      return {
+        metadata: result.metadata,
+        value:
+          result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
+      };
+    } catch (error) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned invalid canonical JSON`,
+        { cause: error },
+      );
+    }
   }
 
   async invokeValue(
     input: SchemaValue,
     signal?: AbortSignal,
   ): Promise<ReflectedInvocation<SchemaValue>> {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     const result = await this.remote.invokeAndAwaitWithMetadata(
       this.definition.name,
       input,
@@ -252,6 +273,11 @@ export class ReflectedAgentMethod {
     if (this.definition.output !== undefined && result.value === undefined) {
       throw new RemoteOutputError(
         `Remote agent ${this.remote.agentId}.${this.definition.name} returned no value for a non-unit output`,
+      );
+    }
+    if (this.definition.output === undefined && result.value !== undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned a value for a unit output`,
       );
     }
     if (this.definition.output !== undefined && result.value !== undefined) {
@@ -270,6 +296,9 @@ export class ReflectedAgentMethod {
   }
 
   triggerValue(input: SchemaValue): InvocationMetadata {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     return this.remote.invokeWithMetadata(this.definition.name, input);
   }
 
@@ -278,6 +307,9 @@ export class ReflectedAgentMethod {
   }
 
   scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     return this.remote.scheduleCancelableWithMetadata(at, this.definition.name, input);
   }
 }

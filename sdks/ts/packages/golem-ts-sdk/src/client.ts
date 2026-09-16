@@ -355,6 +355,33 @@ function encodeConfigOverrides(
   declarations: ConfigDeclaration[],
   overrides: Record<string, unknown>,
 ): AgentConfigEntry[] {
+  const paths = declarations.map((decl) => decl.path);
+  const checkPaths = (value: unknown, prefix: string[]): void => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError(`Expected object at config path '${prefix.join('.')}'`);
+    }
+    for (const [key, child] of Object.entries(value)) {
+      const path = [...prefix, key];
+      if (
+        paths.some(
+          (declared) =>
+            declared.length === path.length && declared.every((part, i) => part === path[i]),
+        )
+      ) {
+        continue;
+      }
+      if (
+        !paths.some(
+          (declared) =>
+            declared.length > path.length && path.every((part, i) => declared[i] === part),
+        )
+      ) {
+        throw new TypeError(`Unknown config path '${path.join('.')}'`);
+      }
+      checkPaths(child, path);
+    }
+  };
+  checkPaths(overrides, []);
   const out: AgentConfigEntry[] = [];
   for (const decl of declarations) {
     const found = getAtPath(overrides, decl.path);
@@ -394,7 +421,14 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
   remote: ReturnType<typeof resolveRemoteAgentFallibly>,
 ): RemoteClient<Methods, Mode> {
   const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown => {
-    if (method.output.tag === 'unit') return undefined;
+    if (method.output.tag === 'unit') {
+      if (value !== undefined) {
+        throw new RemoteOutputError(
+          `Remote agent ${remote.agentId}.${method.name} returned a value for a unit output`,
+        );
+      }
+      return undefined;
+    }
     if (value === undefined) {
       throw new RemoteOutputError(
         `Remote agent ${remote.agentId}.${method.name} returned no value for a non-unit output`,

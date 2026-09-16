@@ -102,8 +102,10 @@ describe("reflection", () => {
         found?.method("walk")?.input.validateJson({ node: { label: "x", next: null } }),
       ).toMatchObject({ success: true })
       expect(Object.isFrozen(found?.methods)).toBe(true)
-      expect(found?.constructorInput.graph).toBe(found?.method("walk")?.input.graph)
-      expect(found?.constructorInput.graph).toBe(found?.method("walk")?.output?.graph)
+      expect(found?.constructorInput.graph.defs).toBe(found?.method("walk")?.input.graph.defs)
+      expect(found?.constructorInput.graph.root).toBe(found?.constructorInput.root)
+      expect(found?.method("walk")?.output?.graph.root).toBe(found?.method("walk")?.output?.root)
+      expect(found?.constructorInput.graph.defs).toBe(found?.method("walk")?.output?.graph.defs)
     }).pipe(Effect.provide(hostLayer())),
   )
 

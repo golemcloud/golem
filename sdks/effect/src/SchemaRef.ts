@@ -38,7 +38,7 @@ export class SchemaRef {
   static fromImmutableGraph(graph: SchemaGraph, root: SchemaType): SchemaRef {
     const ref = Object.create(SchemaRef.prototype) as SchemaRef
     Object.defineProperties(ref, {
-      graph: { value: graph, enumerable: true },
+      graph: { value: Object.freeze({ defs: graph.defs, root }), enumerable: true },
       root: { value: root, enumerable: true },
     })
     return Object.freeze(ref)

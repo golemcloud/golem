@@ -28,6 +28,18 @@ function schema(root: SchemaGraph['root']): SchemaRef {
 }
 
 describe('SchemaRef canonical JSON', () => {
+  it('requires an explicit null for an absent option in a record', () => {
+    const ref = schema(t.record([field('maybe', t.option(t.string()))]));
+    expect(ref.validateJson({}).success).toBe(false);
+    expect(ref.packJson({ maybe: null })).toEqual(v.record([v.option()]));
+  });
+
+  it('rejects finite JSON numbers that overflow f32 after narrowing', () => {
+    expect(schema(t.f32()).validateJson(1e100).success).toBe(false);
+    expect(() => schema(t.f32()).unpackJson(v.f32(Infinity))).toThrow(/finite JSON number/);
+    expect(() => schema(t.f64()).unpackJson(v.f64(-Infinity))).toThrow(/finite JSON number/);
+  });
+
   it('uses the canonical object representation for text', () => {
     const ref = schema(
       schemaType({
@@ -151,7 +163,7 @@ describe('SchemaRef JSON Schema', () => {
             name: { type: 'string', description: 'Display name', examples: ['Ada'] },
             nickname: { oneOf: [{ type: 'null' }, { type: 'string' }] },
           },
-          required: ['name'],
+          required: ['name', 'nickname'],
           additionalProperties: false,
         },
       },
