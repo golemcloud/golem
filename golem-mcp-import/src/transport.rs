@@ -95,6 +95,8 @@ pub enum TransportError {
     Limit(String),
     #[error("MCP upstream authorization required (HTTP {0})")]
     AuthorizationRequired(u16),
+    #[error("MCP OAuth grant rejected; reauthorization required")]
+    OAuthGrantRejected,
     #[error("MCP upstream HTTP status {0}")]
     HttpStatus(u16),
     #[error("invalid MCP response: {0}")]

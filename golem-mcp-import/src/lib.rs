@@ -16,6 +16,7 @@
 
 pub mod content;
 mod limits;
+pub mod oauth;
 pub mod schema;
 pub mod tool;
 pub mod transport;

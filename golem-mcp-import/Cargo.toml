@@ -18,10 +18,12 @@ futures = { workspace = true }
 glob-match = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
+http-auth = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
+oauth2 = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { workspace = true }
 serde = { workspace = true }

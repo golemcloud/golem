@@ -4049,12 +4049,14 @@ dependencies = [
  "golem-schema",
  "headers",
  "http 1.5.0",
+ "http-auth",
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.0",
  "hyper-util",
  "jsonschema",
  "mime",
+ "oauth2",
  "reqwest 0.13.4",
  "rmcp",
  "serde",
@@ -4912,6 +4914,15 @@ checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
 dependencies = [
  "bytes",
  "itoa",
+]
+
+[[package]]
+name = "http-auth"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "150fa4a9462ef926824cf4519c84ed652ca8f4fbae34cb8af045b5cbcaf98822"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

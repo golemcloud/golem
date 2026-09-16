@@ -927,13 +927,47 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   conservatively treated as ambiguous, including connection failures. The native
   handler owns `&mut Ctx`, so its internal durable live arm can use the current
   adapter; an accessor-side implementation would instead need serialized access.
+- OAuth protocol helpers now implement RFC 9728 protected-resource discovery,
+  challenge-first/path/root fallback, ordered RFC 8414/OIDC issuer discovery,
+  exact resource/issuer binding, advertised S256 verification, and the RFC 9207
+  callback issuer matrix. Discovery URLs use the RFC trailing-slash transformation
+  without normalizing the recorded issuer; resource queries are preserved.
+  `oauth2` constructs PKCE, authorization, code and refresh requests. A private
+  client binds validated issuer/callback/resource; both token requests include
+  the resource indicator and use the policy-aware single-attempt sender.
+- `http-auth` parses challenge boundaries and quoted escapes; the SDK's helper
+  only searches parameter substrings and cannot safely select Bearer challenges.
+  Ambiguous/malformed challenges fail closed, including unsupported token68
+  challenges; no hand-written alternative parser is introduced. Metadata fallback
+  is limited to 404; malformed successful metadata or binding mismatch is terminal.
+  OAuth requires HTTPS resources/providers; loopback HTTP is permitted only for
+  the operator callback. Pre-registered security-scheme clients are the supported
+  registration path, with Basic, POST-secret, or advertised public authentication.
+- OAuth defaults bound each document to 1 MiB, request body to 64 KiB and challenge
+  headers to 16 KiB, with one 60-second discovery-chain deadline. Token exchanges
+  also bound response streaming and duration. No redirects, decoding, or retry is
+  added. Malformed responses, client configuration failures, and rejected grants
+  have distinct diagnostic categories; none permits retrying a claimed exchange.
+  Provider error descriptions, extension error codes and malformed token bodies
+  are never rendered; host quota/authorization errors retain their types.
+- Oracle requested error classification changes; implemented and confirmed with
+  no remaining blockers. Its follow-up also prompted handling the RFC-required
+  HTTP 401 `invalid_client` response and documenting refresh failure policy.
+  Separate OAuth-protocol bug-finder run 1 returned **no bugs found**, clean
+  terminal with no checkpoint. Full import suite **81 passed**; strict all-target
+  Clippy, scoped formatting and diff checks passed. These are protocol fixtures,
+  not end-to-end operator or registry integration evidence.
+- Callback integration must persist the validated issuer metadata (including the
+  `iss` requirement and token authentication method) with state/PKCE and rebuild
+  from that record, never rediscover on callback. Validate `iss` on error callbacks
+  before interpreting provider errors too. The serializable metadata accessor
+  supports this; shared-store claiming and effective-context rechecks remain with
+  the registry credential service.
 - Remaining step-4 work: registry credential service/policy and accounting;
-  service configuration; OAuth protected-resource and issuer discovery, consent,
-  callback validation, token exchange/refresh integration, disconnect and CLI/API
-  operations; provider fixtures and combined validation. Implement mandatory
-  exact issuer comparisons, advertised S256 verification and resource indicators
-  from the 2026-07-28 authorization spec. The existing inbound OIDC client is not
-  a substitute. A sender and grant repository do not satisfy those requirements.
+  service configuration; initial unauthenticated probe, consent, callback/state
+  and token exchange/refresh integration, disconnect and CLI/API operations;
+  provider fixtures and combined validation. The existing inbound OIDC client is
+  not a substitute. Protocol helpers and a grant repository do not complete step 4.
 
 ## Review and decision history
 
