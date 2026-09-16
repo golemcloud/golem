@@ -152,6 +152,34 @@ open-oplog cache entries only for the generation being deleted. A stale `Arc<Wor
 cannot continue deletion against, or evict cache state belonging to, a replacement with the same
 `AgentId`.
 
+The bounded unload result and final cleanup completion are separate facts. An unload timeout
+permanently fails that deletion attempt, while module-owned cleanup continues. A later explicit
+delete joins the retained completion, or retries a failed filesystem deletion through the owning
+filesystem generation. Durable storage and cache authority remain fenced until verified cleanup
+succeeds; old attempt handles retain their original error. Cleanup with no verifiable
+owning-component repair remains a failure: successful filesystem deletion cannot erase an
+unverified metering settlement, including `ObserverLost` during startup rollback.
+
+Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
+lifecycle guard. Fork reads persisted source history without constructing an absent source;
+target construction and rollback are not atomic and are not protected across executor ownership
+changes. Archival is routed through the existing worker owner. No lifecycle lock is taken for
+individual stream items, oplog reads, or replay steps.
+
+`Oplog::stop_and_wait` closes admission and joins work associated with the actual open oplog
+generation, including tasks belonging to older worker shells removed from the active cache.
+Transport roots are cancelled and their children joined without waiting for client IO. Invocation
+loops are joined, not cancelled: their final commits, state destruction, and panic cleanup must finish.
+Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
+cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
+queries. Attachment queries may spawn every time. Worker-state actors register once at construction
+and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
+drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+An error is reported only after all owned work finishes. Deletion records that completion separately
+so an explicit retry can remove storage without reusing a retained stop error; the original attempt
+keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped
+generation's error.
+
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.

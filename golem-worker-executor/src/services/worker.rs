@@ -18,7 +18,7 @@ use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::durable_host::durable_session::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
@@ -309,7 +309,11 @@ pub trait WorkerService: Send + Sync {
     ///
     /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
     /// a retry would re-run the oplog delete, so the error is reported instead.
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
+    async fn remove(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
     /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
@@ -1282,13 +1286,20 @@ impl WorkerService for DefaultWorkerService {
         Ok(result)
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+    async fn remove(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? {
-            self.oplog_service.delete(owned_agent_id, agent_mode).await;
+            self.oplog_service
+                .delete(lifecycle, owned_agent_id, agent_mode)
+                .await;
         }
         self.remove_cached_status(owned_agent_id).await?;
         self.stream_session_index
@@ -1888,6 +1899,10 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
+            unreachable!()
+        }
+
         fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
             self.stream_index.set(index).unwrap();
         }
@@ -1898,6 +1913,7 @@ mod tests {
 
         async fn create(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -1910,6 +1926,7 @@ mod tests {
 
         async fn create_fresh(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -1922,6 +1939,7 @@ mod tests {
 
         async fn open(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
@@ -1944,7 +1962,12 @@ mod tests {
                 .unwrap_or(OplogIndex::NONE)
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            _lifecycle: &mut OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
             unreachable!()
         }
 
@@ -2880,6 +2903,10 @@ mod tests {
 
     #[async_trait]
     impl OplogService for FakeOplogService {
+        async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
+            unreachable!()
+        }
+
         fn set_stream_session_index(&self, _index: Arc<StreamSessionIndexService>) {}
 
         fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
@@ -2888,6 +2915,7 @@ mod tests {
 
         async fn create_fresh(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -2900,6 +2928,7 @@ mod tests {
 
         async fn create(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -2912,6 +2941,7 @@ mod tests {
 
         async fn open(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
@@ -2930,7 +2960,12 @@ mod tests {
             unreachable!()
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            _lifecycle: &mut OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
             unreachable!()
         }
 
@@ -3125,7 +3160,15 @@ mod tests {
             "expected the cached status delete failure to surface"
         );
         assert!(
-            service.remove(&owned_agent_id).await.is_err(),
+            service
+                .remove(
+                    &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                        .lock_lifecycle(&owned_agent_id.agent_id)
+                        .await,
+                    &owned_agent_id
+                )
+                .await
+                .is_err(),
             "expected the delete failure to surface"
         );
     }

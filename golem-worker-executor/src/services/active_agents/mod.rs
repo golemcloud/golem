@@ -1003,7 +1003,13 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 continue;
             };
 
-            worker.queue_card_revocations(&affected_card_ids).await;
+            let scope = crate::worker::tasks::TaskScope::default();
+            if scope.bind(&worker.tasks).is_err() {
+                continue;
+            }
+            scope
+                .run(worker.queue_card_revocations(&affected_card_ids))
+                .await;
         }
     }
 

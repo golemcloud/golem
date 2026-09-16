@@ -4073,48 +4073,58 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
 
     wasmtime_wasi::runtime::spawn(
         async move {
-            let result = if let Some(retry_params) = retry_params {
-                let execution_status = retry_params.execution_status;
-                let current_retry_policy_state = retry_params
-                    .worker
-                    .get_attached_last_known_status()
-                    .await
-                    .current_retry_state
-                    .get(&retry_params.retry_point)
-                    .cloned();
-                let task_ctx = crate::durable_host::durability::TaskRetryContext {
-                    retry_point: retry_params.retry_point,
-                    entity_parent_start_index: retry_params.entity_parent_start_index,
-                    environment_state_service: retry_params.environment_state_service,
-                    environment_id: retry_params.environment_id,
-                    default_retry_policy: retry_params.default_retry_policy,
-                    agent_config_retry_policies: retry_params.agent_config_retry_policies,
-                    runtime_retry_policy_mutations: retry_params.runtime_retry_policy_mutations,
-                    max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
-                    current_retry_policy_state,
-                    retry_properties: retry_params.retry_properties,
-                    worker: retry_params.worker,
-                };
-                crate::durable_host::durability::in_task_retry_loop(
-                    task_ctx,
-                    classify_rpc_task_error,
-                    invoke,
-                    || {
-                        execution_status
-                            .read()
-                            .unwrap()
-                            .create_await_interrupt_signal()
-                    },
-                )
-                .await
-            } else {
-                invoke().await
-            };
-            match result {
-                Ok(result) => Ok(Ok(result)),
-                Err(RpcTaskError::Rpc(err)) => Ok(Err(err)),
-                Err(RpcTaskError::Host(err)) => Err(err),
+            let scope = crate::worker::tasks::TaskScope::default();
+            if let Some(params) = &retry_params {
+                scope.bind(&params.worker.tasks).map_err(Error::msg)?;
             }
+            scope
+                .run(async move {
+                    let result = if let Some(retry_params) = retry_params {
+                        let execution_status = retry_params.execution_status;
+                        let current_retry_policy_state = retry_params
+                            .worker
+                            .get_attached_last_known_status()
+                            .await
+                            .current_retry_state
+                            .get(&retry_params.retry_point)
+                            .cloned();
+                        let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                            retry_point: retry_params.retry_point,
+                            entity_parent_start_index: retry_params.entity_parent_start_index,
+                            environment_state_service: retry_params.environment_state_service,
+                            environment_id: retry_params.environment_id,
+                            default_retry_policy: retry_params.default_retry_policy,
+                            agent_config_retry_policies: retry_params.agent_config_retry_policies,
+                            runtime_retry_policy_mutations: retry_params
+                                .runtime_retry_policy_mutations,
+                            max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
+                            current_retry_policy_state,
+                            retry_properties: retry_params.retry_properties,
+                            worker: retry_params.worker,
+                        };
+                        crate::durable_host::durability::in_task_retry_loop(
+                            task_ctx,
+                            classify_rpc_task_error,
+                            invoke,
+                            || {
+                                execution_status
+                                    .read()
+                                    .unwrap()
+                                    .create_await_interrupt_signal()
+                            },
+                        )
+                        .await
+                    } else {
+                        invoke().await
+                    };
+                    match result {
+                        Ok(result) => Ok(Ok(result)),
+                        Err(RpcTaskError::Rpc(err)) => Ok(Err(err)),
+                        Err(RpcTaskError::Host(err)) => Err(err),
+                    }
+                })
+                .await
+                .unwrap_or_else(|| Err(Error::msg("Worker is being deleted")))
         }
         .instrument(retry_span),
     )
@@ -4203,68 +4213,77 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     let agent_id = ctx.agent_id().clone();
     let stack = ctx.clone_as_inherited_stack(span_id);
     wasmtime_wasi::runtime::spawn(async move {
-        let _demand = if let Some(target_activation) = deferred_activation {
-            Some(
-                activate_rpc_target(
-                    rpc.as_ref(),
-                    &remote_agent_id,
-                    &method_name,
-                    created_by,
-                    &agent_id,
-                    &target_activation.env,
-                    stack.clone(),
-                    target_activation.config,
-                    &auth_ctx,
-                    target_activation.target_fingerprint,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        let result = rpc
-            .invoke_and_await_streaming(
-                &remote_agent_id,
-                idempotency_key,
-                method_name,
-                params.input,
-                params.input_mappings,
-                params.expected_callee_fingerprint,
-                params.attempt_id,
-                created_by,
-                &agent_id,
-                &env,
-                stack,
-                config,
-                &auth_ctx,
-                scope_card,
-            )
-            .await;
-        let result = match result {
-            Ok(result) => {
-                let mappings = result
-                    .output_mappings
-                    .into_iter()
-                    .map(durable_stream_mapping_from_proto)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|details| InternalRpcError::ProtocolError { details });
-                match mappings {
-                    Ok(mappings) => params
-                        .streams
-                        .materialize_remote_result(
-                            result.value,
-                            mappings,
-                            &params.output_graph,
-                            &params.output_root,
+        let scope = crate::worker::tasks::TaskScope::default();
+        scope
+            .bind(params.streams.producer.tasks())
+            .map_err(Error::msg)?;
+        scope
+            .run(async move {
+                let _demand = if let Some(target_activation) = deferred_activation {
+                    Some(
+                        activate_rpc_target(
+                            rpc.as_ref(),
+                            &remote_agent_id,
+                            &method_name,
+                            created_by,
+                            &agent_id,
+                            &target_activation.env,
+                            stack.clone(),
+                            target_activation.config,
+                            &auth_ctx,
+                            target_activation.target_fingerprint,
                         )
-                        .await
-                        .map_err(|details| InternalRpcError::ProtocolError { details }),
+                        .await?,
+                    )
+                } else {
+                    None
+                };
+                let result = rpc
+                    .invoke_and_await_streaming(
+                        &remote_agent_id,
+                        idempotency_key,
+                        method_name,
+                        params.input,
+                        params.input_mappings,
+                        params.expected_callee_fingerprint,
+                        params.attempt_id,
+                        created_by,
+                        &agent_id,
+                        &env,
+                        stack,
+                        config,
+                        &auth_ctx,
+                        scope_card,
+                    )
+                    .await;
+                let result = match result {
+                    Ok(result) => {
+                        let mappings = result
+                            .output_mappings
+                            .into_iter()
+                            .map(durable_stream_mapping_from_proto)
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|details| InternalRpcError::ProtocolError { details });
+                        match mappings {
+                            Ok(mappings) => params
+                                .streams
+                                .materialize_remote_result(
+                                    result.value,
+                                    mappings,
+                                    &params.output_graph,
+                                    &params.output_root,
+                                )
+                                .await
+                                .map_err(|details| InternalRpcError::ProtocolError { details }),
+                            Err(error) => Err(error),
+                        }
+                    }
                     Err(error) => Err(error),
-                }
-            }
-            Err(error) => Err(error),
-        };
-        Ok(result)
+                };
+                Ok(result)
+            })
+            .await
+            .unwrap_or_else(|| Err(Error::msg("Worker is being deleted")))
     })
 }
 

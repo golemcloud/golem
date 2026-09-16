@@ -421,12 +421,17 @@ type LocalCardTransferDelivery = dyn Fn(
     + Send
     + Sync;
 
+type LocalWorkerResume = dyn Fn(AgentId, bool, AuthCtx) -> BoxFuture<'static, Result<(), WorkerProxyError>>
+    + Send
+    + Sync;
+
 struct RecordingWorkerProxy {
     inner: Arc<dyn WorkerProxy>,
     transfers: Arc<Mutex<Vec<RecordedCardTransfer>>>,
     forward_transfers: bool,
     lost_response_transfer_ids: Arc<Mutex<HashSet<uuid::Uuid>>>,
     local_delivery: Option<Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>>,
+    local_resume: Option<Arc<Mutex<Option<Arc<LocalWorkerResume>>>>>,
 }
 
 #[async_trait]
@@ -579,6 +584,14 @@ impl WorkerProxy for RecordingWorkerProxy {
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
+        if let Some(resume) = &self.local_resume {
+            let resume = resume
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("local resume connected");
+            return resume(owned_agent_id.clone(), force, auth_ctx.clone()).await;
+        }
         self.inner.resume(owned_agent_id, force, auth_ctx).await
     }
 
@@ -1288,6 +1301,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                     forward_transfers: false,
                     lost_response_transfer_ids: lost_response_transfer_ids.clone(),
                     local_delivery: None,
+                    local_resume: None,
                 })
             }
         })),
@@ -1538,6 +1552,7 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
                     forward_transfers: true,
                     lost_response_transfer_ids: Arc::new(Mutex::new(HashSet::new())),
                     local_delivery: Some(local_delivery.clone()),
+                    local_resume: None,
                 })
             }
         })),
@@ -1665,6 +1680,7 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
                     forward_transfers: true,
                     lost_response_transfer_ids: lost_response_transfer_ids.clone(),
                     local_delivery: Some(local_delivery.clone()),
+                    local_resume: None,
                 })
             }
         })),
@@ -3340,6 +3356,340 @@ async fn delete_nonexistent_worker(
         executor.oplog_service_call_count(&worker_id, "read_exact"),
         0
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fork_missing_source_does_not_construct_either_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "missing-fork-source").to_string(),
+    };
+    let target = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "missing-fork-target").to_string(),
+    };
+    let error = executor
+        .fork_worker(&source, &target.agent_id, OplogIndex::from_u64(2))
+        .await
+        .expect_err("fork must not create a missing source");
+    assert!(format!("{error:?}").contains("AgentNotFound"));
+    for agent in [&source, &target] {
+        assert!(
+            !executor
+                .worker_is_cached(&OwnedAgentId::new(context.default_environment_id, agent))
+                .await
+        );
+        assert!(executor.get_worker_metadata(agent).await.is_err());
+        for api in ["create", "create_fresh", "open", "commit"] {
+            assert_eq!(executor.oplog_service_call_count(agent, api), 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::{HasOplog, HasOplogService};
+
+    let context = TestContext::new(last_unique_id);
+    let local_resume: Arc<Mutex<Option<Arc<LocalWorkerResume>>>> = Arc::new(Mutex::new(None));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_worker_proxy: Some(Arc::new({
+                let local_resume = local_resume.clone();
+                move |inner| {
+                    Arc::new(RecordingWorkerProxy {
+                        inner,
+                        transfers: Arc::new(Mutex::new(Vec::new())),
+                        forward_transfers: true,
+                        lost_response_transfer_ids: Arc::new(Mutex::new(HashSet::new())),
+                        local_delivery: None,
+                        local_resume: Some(local_resume.clone()),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let client = executor.client.clone();
+    let environment_id = context.default_environment_id;
+    *local_resume.lock().unwrap() = Some(Arc::new(move |agent_id, force, auth_ctx| {
+        let mut client = client.clone();
+        Box::pin(async move {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                ResumeWorkerRequest, resume_worker_response,
+            };
+            let response = client
+                .resume_worker(ResumeWorkerRequest {
+                    agent_id: Some(agent_id.into()),
+                    force: Some(force),
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.into()),
+                    principal: None,
+                })
+                .await?
+                .into_inner();
+            match response.result {
+                Some(resume_worker_response::Result::Success(_)) => Ok(()),
+                Some(resume_worker_response::Result::Failure(error)) => {
+                    Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::try_from(error).map_err(|error| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(error))
+                        })?,
+                    ))
+                }
+                None => Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::unknown("local resume returned no result"),
+                )),
+            }
+        })
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_name = agent_id!("Counter", "fork-source-locked");
+    let source = executor
+        .start_agent(&component.id, source_name.clone())
+        .await?;
+    for expected in [1, 2] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+    }
+    let owned = OwnedAgentId::new(context.default_environment_id, &source);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let cut = worker.oplog().current_oplog_index().await;
+    let target_name = agent_id!("Counter", "fork-target-locked");
+    let target = AgentId {
+        component_id: component.id,
+        agent_id: target_name.to_string(),
+    };
+    let service = worker.oplog_service();
+    let target_guard = service.lock_lifecycle(&target).await;
+    let fork = tokio::spawn({
+        let executor = executor.clone();
+        let source = source.clone();
+        let target = target.clone();
+        async move { executor.fork_worker(&source, &target.agent_id, cut).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if tokio::time::timeout(Duration::from_millis(10), service.lock_lifecycle(&source))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            assert!(
+                !fork.is_finished(),
+                "fork exited before holding its source guard"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let mut deleting = tokio::spawn({
+        let executor = executor.clone();
+        let source = source.clone();
+        async move { executor.delete_worker(&source).await }
+    });
+    hook.wait_until_gated().await;
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut deleting)
+            .await
+            .is_err()
+    );
+    assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    drop(target_guard);
+    fork.await??;
+    deleting.await??;
+    assert!(executor.get_worker_metadata(&source).await.is_err());
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target_name, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocationPayload;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{OplogEntry, OplogPayload};
+    use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::worker::Worker;
+
+    for drop_old_shell in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let faults = KeyValueStorageFaults::default();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_key_value_storage: Some(Arc::new({
+                    let faults = faults.clone();
+                    move |storage| {
+                        Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+                    }
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let agent = agent_id!("Counter", "removed-shell-status");
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let old = executor.active_agent(&owned).await.unwrap().primary();
+        let all = old.all().clone();
+        let old_oplog = old.oplog();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while executor.worker_is_loaded(&owned).await {
+                if executor.stop_worker_if_idle(&owned).await? {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+
+        faults.apply_before_failing();
+        let gate = faults.gate_next(
+            "add",
+            KeyValueStorageError::Other("injected late recovery-index write failure".into()),
+        );
+        let pending = tokio::spawn({
+            let old = old.clone();
+            async move {
+                old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                    IdempotencyKey::fresh(),
+                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+                    TraceId::generate(),
+                    Vec::new(),
+                    Vec::new(),
+                ))
+                .await
+            }
+        });
+        gate.entered().await;
+        executor.retire_unloaded_worker(&owned).await?;
+        let new = Worker::get_or_create_suspended(
+            &all,
+            &owned,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert!(std::ptr::eq(
+            old_oplog.task_owner().unwrap(),
+            new.oplog().task_owner().unwrap(),
+        ));
+        let old_weak = Arc::downgrade(&old);
+        pending.abort();
+        assert!(pending.await.unwrap_err().is_cancelled());
+        let mut retained_old = Some(old);
+        if drop_old_shell {
+            drop(retained_old.take());
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while old_weak.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+        }
+
+        let hook = Arc::new(DeletionStageHook::new(owned.clone(), None, None));
+        executor.set_worker_deletion_hook(hook.clone());
+        let mut deleting = tokio::spawn({
+            let executor = executor.clone();
+            let worker_id = worker_id.clone();
+            async move { executor.delete_worker(&worker_id).await }
+        });
+        hook.wait_for_claims(1).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut deleting)
+                .await
+                .is_err()
+        );
+        assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+        gate.release();
+        let failure = deleting.await?.unwrap_err().to_string();
+        assert!(failure.contains("status"), "{failure}");
+        assert!(executor.worker_is_cached(&owned).await);
+        executor.get_worker_metadata(&worker_id).await?;
+
+        // The old attempt keeps its error, but all old writes have finished. An explicit retry
+        // can now remove the persisted generation without a late actor restoring its index.
+        executor.delete_worker(&worker_id).await?;
+        assert!(!executor.worker_is_cached(&owned).await);
+        assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
+        // Keeping the old shell alive retains its failed stop result across the explicit retry.
+        assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
+        drop(retained_old);
+    }
     Ok(())
 }
 

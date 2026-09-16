@@ -3913,6 +3913,10 @@ impl Oplog for TestOplog {
         self.oplog.retire();
     }
 
+    fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {
+        self.oplog.task_owner()
+    }
+
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         self.pause_before_agent_initialization_enqueue(&entry).await;
         if Self::is_consume_body_scope_start(&entry)

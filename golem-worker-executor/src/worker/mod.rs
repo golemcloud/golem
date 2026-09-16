@@ -26,6 +26,7 @@ mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
+pub(crate) mod tasks;
 
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
@@ -70,7 +71,10 @@ use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
+use crate::services::oplog::{
+    CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogLifecycleGuard, OplogOps,
+    downcast_oplog,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
 use crate::services::worker::{
@@ -468,6 +472,7 @@ pub enum WorkerDeletionStage {
     BarriersClosed,
     RuntimeStopped,
     StreamsCleaned,
+    OwnedWorkJoined,
     DurableStateRemoved,
     CacheRemoved,
 }
@@ -568,6 +573,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
+    pub(crate) tasks: tasks::WorkerTasks,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
 
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
@@ -1165,8 +1171,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let principal = principal.clone();
             let build = async move {
                 let start = std::time::Instant::now();
+                let mut lifecycle = worker
+                    .deps
+                    .oplog_service()
+                    .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                    .await;
                 let metadata = Self::get_or_create_worker_metadata(
                     &worker.deps,
+                    &mut lifecycle,
                     &worker.owned_agent_id,
                     component_revision,
                     worker_env,
@@ -1199,13 +1211,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker = self.clone();
         let build = async move {
             let start = std::time::Instant::now();
-            let metadata = Self::get_existing_worker_metadata(&worker.deps, &worker.owned_agent_id)
-                .await
-                .and_then(|metadata| {
-                    metadata.ok_or_else(|| {
-                        WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
-                    })
-                });
+            let mut lifecycle = worker
+                .deps
+                .oplog_service()
+                .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                .await;
+            let metadata = Self::get_existing_worker_metadata(
+                &worker.deps,
+                &mut lifecycle,
+                &worker.owned_agent_id,
+            )
+            .await
+            .and_then(|metadata| {
+                metadata.ok_or_else(|| {
+                    WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
+                })
+            });
             worker
                 .finish_construction(
                     start,
@@ -1411,6 +1432,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let worker = ResolvedWorkerData {
             parsed_agent_id: agent_id.clone(),
+            tasks: oplog
+                .task_owner()
+                .cloned()
+                .unwrap_or_default()
+                .for_worker(self.clone()),
             oplog,
             worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
@@ -1889,6 +1915,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub(crate) async fn archive_oplog(
+        self: &Arc<Self>,
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        let _lifecycle = self
+            .oplog_service()
+            .lock_lifecycle(&self.owned_agent_id.agent_id)
+            .await;
+        let instance = self.instance.lock().await;
+        if instance.ensure_not_deleting().is_err() || self.oplog.is_retired() {
+            return Ok(None);
+        }
+        if !self.active_agents().contains_worker_generation(self).await {
+            return Err(WorkerExecutorError::runtime(
+                "Archival worker left the active cache; retry with the current owner",
+            ));
+        }
+        drop(instance);
+        if self
+            .oplog_service()
+            .get_last_index(&self.owned_agent_id, self.agent_mode())
+            .await
+            != last_oplog_index
+        {
+            return Ok(None);
+        }
+        let result = match MultiLayerOplog::try_archive(&self.oplog).await {
+            Some(more) => Some(more),
+            None => EphemeralOplog::try_archive(&self.oplog).await,
+        };
+        if result == Some(false) {
+            self.worker_service()
+                .remove_cached_status(&self.owned_agent_id)
+                .await?;
+        }
+        Ok(result)
+    }
+
     /// Atomically claims worker-owned deletion and starts an executor-owned attempt. Overlapping
     /// callers share the retained result; after failure, the next explicit call claims one retry.
     pub(crate) async fn start_deletion(
@@ -2024,6 +2088,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 PendingLiveInvocationDisposition::Fail,
             )
             .await;
+            self.tasks.stop_roots_and_wait().await;
             self.durable_stream_attachment_reconciler.stop().await;
             let cleanup_error = {
                 let instance = self.instance.lock().await;
@@ -2097,8 +2162,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.before_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await?;
-            self.worker_service().remove(&self.owned_agent_id).await?;
-            self.oplog.retire();
+            let mut lifecycle = self
+                .oplog_service()
+                .lock_lifecycle(&self.owned_agent_id.agent_id)
+                .await;
+            if !self
+                .deletion_stage_completed(WorkerDeletionStage::OwnedWorkJoined)
+                .await
+            {
+                self.before_deletion_stage(WorkerDeletionStage::OwnedWorkJoined)
+                    .await?;
+                let result = self.oplog.stop_and_wait().await;
+                // An error is returned only after every owner has finished. Preserve it on
+                // this attempt, but do not make its cached result poison explicit retries.
+                self.complete_deletion_stage(WorkerDeletionStage::OwnedWorkJoined)
+                    .await;
+                result.map_err(WorkerExecutorError::runtime)?;
+            }
+            self.worker_service()
+                .remove(&mut lifecycle, &self.owned_agent_id)
+                .await?;
             self.complete_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await;
         }
@@ -5229,6 +5312,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                producer.set_worker_tasks(self.tasks.clone());
                 Ok(producer)
             })
             .await
@@ -5288,7 +5372,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let owner = self.owned_agent_id.clone();
         let mode = self.agent_mode();
         let fingerprint = self.initial_worker_metadata.fingerprint;
-        let sessions = tokio::spawn(async move {
+        let refresh = tokio::spawn(async move {
             let mut cache = cache.lock().await;
             cache
                 .refresh(oplog.as_ref(), service.as_ref(), &owner, mode, fingerprint)
@@ -5306,10 +5390,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map(|control| (key.clone(), control.clone()))
                 })
                 .collect::<Vec<_>>())
-        })
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .map_err(WorkerExecutorError::runtime)?;
+        });
+        let sessions = self
+            .tasks
+            .finish_on_drop(refresh)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .map_err(WorkerExecutorError::runtime)?;
         let mut recoverable = Vec::new();
         for (key, metadata) in sessions {
             let topologies = metadata
@@ -5645,6 +5732,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {
         let worker = Arc::downgrade(this);
         let shutdown = this.durable_stream_attachment_reconciler.shutdown.clone();
+        // This periodic task must not pin an idle worker; its active iterations own their
+        // worker separately. The root still belongs to the shared oplog generation.
+        let owner = this.oplog.task_owner().cloned().unwrap_or_default();
+        let scope = tasks::TaskScope::default();
+        if scope.bind(&owner).is_err() {
+            return;
+        }
         let interval_duration = this
             .deps
             .config()
@@ -5652,38 +5746,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .renewal_interval
             .min(this.deps.config().durable_stream.reconciliation_interval);
         let handle = tokio::spawn(async move {
-            tokio::task::yield_now().await;
-            let mut interval = tokio::time::interval(interval_duration);
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => break,
-                    _ = interval.tick() => {}
-                }
-                if shutdown.is_cancelled() {
-                    break;
-                }
-                let Some(worker) = worker.upgrade() else {
-                    break;
-                };
-                if worker.cache_retirement_in_progress() {
-                    continue;
-                }
-                if let Err(error) = worker.recover_durable_stream_topologies().await {
-                    warn!(
-                        agent_id = %worker.agent_id(),
-                        error = %error,
-                        "Failed to recover durable stream topology"
-                    );
-                }
-                if let Err(error) = worker.reconcile_durable_stream_attachments().await {
-                    warn!(
-                        agent_id = %worker.agent_id(),
-                        error = %error,
-                        "Failed to reconcile durable stream attachments"
-                    );
-                }
-            }
+            scope
+                .run(async move {
+                    tokio::task::yield_now().await;
+                    let mut interval = tokio::time::interval(interval_duration);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => break,
+                            _ = interval.tick() => {}
+                        }
+                        if shutdown.is_cancelled() {
+                            break;
+                        }
+                        let Some(worker) = worker.upgrade() else {
+                            break;
+                        };
+                        if worker.cache_retirement_in_progress() {
+                            continue;
+                        }
+                        if let Err(error) = worker.recover_durable_stream_topologies().await {
+                            warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to recover durable stream topology"
+                            );
+                        }
+                        if let Err(error) = worker.reconcile_durable_stream_attachments().await {
+                            warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to reconcile durable stream attachments"
+                            );
+                        }
+                    }
+                })
+                .await;
         });
         this.durable_stream_attachment_reconciler.start(handle);
     }
@@ -6774,16 +6872,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Self::start_if_needed_internal(this, oom_retry_count, start_attempt).await
     }
 
-    async fn get_existing_worker_metadata<
+    pub(crate) async fn get_existing_worker_metadata<
         T: HasWorkerService + HasComponentService + HasOplogService + HasConfig + Sync,
     >(
         this: &T,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetOrCreateWorkerResult>, WorkerExecutorError> {
         let Some(metadata) = this.worker_service().get(owned_agent_id).await? else {
             return Ok(None);
         };
-        Self::hydrate_existing_worker_metadata(this, owned_agent_id, metadata)
+        Self::hydrate_existing_worker_metadata(this, lifecycle, owned_agent_id, metadata)
             .await
             .map(Some)
     }
@@ -6792,6 +6891,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasWorkerService + HasComponentService + HasOplogService + HasConfig + Sync,
     >(
         this: &T,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         metadata: GetWorkerMetadataResult,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
@@ -6844,6 +6944,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let oplog = this
             .oplog_service()
             .open(
+                lifecycle,
                 owned_agent_id,
                 agent_mode,
                 None,
@@ -6875,6 +6976,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             + Sync,
     >(
         this: &T,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
@@ -6889,7 +6991,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let existing = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else {
-            Self::get_existing_worker_metadata(this, owned_agent_id).await?
+            Self::get_existing_worker_metadata(this, lifecycle, owned_agent_id).await?
         };
 
         match existing {
@@ -7033,6 +7135,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let oplog = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                     oplog_service
                         .create_fresh(
+                            lifecycle,
                             owned_agent_id,
                             agent_mode,
                             initial_oplog_entry,
@@ -7044,6 +7147,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } else {
                     oplog_service
                         .create(
+                            lifecycle,
                             owned_agent_id,
                             agent_mode,
                             initial_oplog_entry,
@@ -7062,10 +7166,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // Cold path (worker creation): no previously cached status to diff against.
                 let initial_status_value = initial_status.load_full().as_ref().clone();
-                this.worker_service()
+                if let Err(error) = this
+                    .worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value.clone())
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
+                {
+                    oplog
+                        .stop_and_wait()
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+                    return Err(WorkerExecutorError::runtime(error));
+                }
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
@@ -7119,8 +7230,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
                 crate::metrics::workers::dec_worker_waiting_for_memory();
-                crate::metrics::workers::inc_worker_memory_resident();
-                *instance_guard = WorkerInstance::Running(running);
+                match running {
+                    Ok(running) => {
+                        crate::metrics::workers::inc_worker_memory_resident();
+                        *instance_guard = WorkerInstance::Running(running);
+                    }
+                    Err(error) => {
+                        this.complete_startup(start_attempt, Err(error.clone()));
+                        *instance_guard = WorkerInstance::Unloaded {
+                            startup_failure: Some(error),
+                        };
+                    }
+                }
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
@@ -7638,7 +7759,11 @@ impl RunningWorker {
         oom_retry_count: u32,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
-    ) -> Self {
+    ) -> Result<Self, WorkerExecutorError> {
+        let completion = tasks::TaskScope::default();
+        completion
+            .bind(&parent.tasks)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::WorkAvailable).unwrap();
 
@@ -7686,6 +7811,9 @@ impl RunningWorker {
             drop((memory_grant_registration, component_charge));
         };
         let handle = invocation_loops.spawn(async move {
+            // Join-only ownership: interruption must finish the loop's commits and unload,
+            // not cancel its future. Release after both the loop and panic cleanup finish.
+            let _completion = completion;
             run_invocation_loop_task(
                 invocation_loop_task,
                 move |error: WorkerExecutorError| async move {
@@ -7704,7 +7832,7 @@ impl RunningWorker {
             .await;
         });
 
-        RunningWorker {
+        Ok(RunningWorker {
             handle: Some(handle),
             sender,
             queue,
@@ -7716,7 +7844,7 @@ impl RunningWorker {
             interrupt_signal,
             resume_replay_pending,
             start_attempt,
-        }
+        })
     }
 
     pub fn stop(mut self, unload_request: UnloadRequest) -> JoinHandle<()> {
@@ -9955,15 +10083,15 @@ pub enum ResultOrSubscription {
     Pending(EventsSubscription),
 }
 
-struct GetOrCreateWorkerResult {
-    initial_worker_metadata: AgentMetadata,
-    current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+pub(crate) struct GetOrCreateWorkerResult {
+    pub(crate) initial_worker_metadata: AgentMetadata,
+    pub(crate) current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
     /// The status value currently persisted in the live cache, used as the first delta baseline.
     persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
-    oplog: Arc<dyn Oplog>,
+    pub(crate) oplog: Arc<dyn Oplog>,
     /// Loaded during `get_or_create_worker_metadata` and stored on the
     /// [`Worker`] so the read-only cache can resolve metadata without a new
     /// `component_service` lookup.

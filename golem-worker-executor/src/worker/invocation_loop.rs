@@ -890,7 +890,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     fn archive_ephemeral_oplog(&self) {
         let oplog = self.parent.oplog.clone();
-        tokio::spawn(async move {
+        self.parent.tasks.spawn(async move {
             let _ = EphemeralOplog::try_archive_background(&oplog).await;
         });
     }

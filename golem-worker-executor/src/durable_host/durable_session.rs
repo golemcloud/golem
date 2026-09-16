@@ -1128,7 +1128,10 @@ impl DurableSessionStreams {
                 continue;
             }
             let streams = self.clone();
-            tokio::spawn(async move { streams.refresh_control_metadata().await })
+            self.producer
+                .tasks()
+                .spawn_metadata(async move { streams.refresh_control_metadata().await })
+                .map_err(str::to_string)?
                 .await
                 .map_err(|error| format!("durable session metadata refresh failed: {error}"))??;
         }
@@ -2289,9 +2292,9 @@ impl DurableSessionStreams {
         if !drains.is_empty() {
             let streams = self.clone();
             let graph = Arc::new(graph.clone());
-            tokio::spawn(async move {
+            self.producer.tasks().spawn(async move {
                 let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
-                let mut tasks = tokio::task::JoinSet::new();
+                let mut tasks = streams.producer.tasks().children();
                 for drain in drains {
                     let streams = streams.clone();
                     let graph = graph.clone();
@@ -2527,7 +2530,7 @@ impl DurableSessionStreams {
         if !drains.is_empty() {
             let graph = Arc::new(graph.clone());
             let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
-            let mut tasks = tokio::task::JoinSet::new();
+            let mut tasks = self.producer.tasks().children();
             for drain in drains {
                 let streams = self.clone();
                 let graph = graph.clone();

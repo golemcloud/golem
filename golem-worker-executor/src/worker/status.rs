@@ -3347,6 +3347,10 @@ mod test {
 
     #[async_trait]
     impl OplogService for TestCase {
+        async fn lock_lifecycle(&self, _: &AgentId) -> crate::services::oplog::OplogLifecycleGuard {
+            unreachable!()
+        }
+
         fn set_stream_session_index(
             &self,
             _: Arc<crate::services::stream_session_index::StreamSessionIndexService>,
@@ -3362,6 +3366,7 @@ mod test {
 
         async fn create(
             &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -3374,6 +3379,7 @@ mod test {
 
         async fn create_fresh(
             &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -3386,6 +3392,7 @@ mod test {
 
         async fn open(
             &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
@@ -3404,7 +3411,12 @@ mod test {
             OplogIndex::from_u64(self.entries.len() as u64)
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
             unreachable!()
         }
 
