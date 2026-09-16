@@ -319,7 +319,11 @@ pub trait IndexedStorage: Debug + Sync {
     /// key has none.
     ///
     /// Monotonic rather than a plain overwrite so that a writer holding a stale epoch cannot walk
-    /// the record backwards and un-fence itself against the current owner.
+    /// the record backwards and un-fence itself against the current owner. That holds only for a
+    /// key that already has a record. A key with none accepts any epoch, whether it was never
+    /// written, removed by [`Self::delete_oplog_metadata`], or written before the record existed.
+    /// For such a key the fence cannot tell a stale executor's first open from the owner's; only
+    /// the lease's admission check bounds that window.
     ///
     /// The default does nothing and accepts everything: a backend that cannot fence has no record
     /// to keep.
@@ -337,6 +341,9 @@ pub trait IndexedStorage: Debug + Sync {
     /// Forgets the epoch recorded for the given key. Called when the oplog itself is deleted, and
     /// before its entries are, so that a writer still holding the old epoch is fenced by the
     /// absent record rather than appending to an oplog that is being removed.
+    ///
+    /// Removing the record also forgets its epoch. A writer that already has the oplog open is
+    /// fenced by the absent record, but a later open at any epoch writes a new one.
     ///
     /// Idempotent. The default does nothing.
     async fn delete_oplog_metadata(

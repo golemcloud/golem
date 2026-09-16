@@ -31,14 +31,14 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplog, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
-use crate::worker::{RelinquishReason, Worker, WorkerUpdateMode};
+use crate::worker::{RelinquishReason, Worker, WorkerUpdateMode, relinquished_by_assignment};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
@@ -1095,7 +1095,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     /// The one receipt path for a delivered shard set, whichever way it came:
     /// a registration, an `AssignShards` push, or a renewal reply that
-    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// corrected the set. Sweeps the agents whose shard went away or came back
+    /// at a higher epoch, then hands
     /// the executor the new set to recover agents for. The sweep runs for
     /// every path, because a renewal can narrow the set as well as widen it:
     /// a path without it would leave agents running on shards this executor
@@ -1117,15 +1118,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
         let ticket = this.shard_manager_service().recovery_deferred();
-        // Pure set membership on purpose: a lapsed lease must not give up every running agent -
-        // a lapsed lease refuses new work and leaves running work alone.
+        // Membership and epochs, never the lease: a lapsed lease must not give up every running
+        // agent - a lapsed lease refuses new work and leaves running work alone.
         //
         // Given up rather than restarted: a narrowing delivery means these shards have another
-        // owner now, and a restart in place would reopen their oplogs at the stale epoch.
-        let shard_service = this.shard_service();
+        // owner now, and a restart in place would reopen their oplogs at the stale epoch. A
+        // delivery that raises the epoch of a shard this executor kept means the shard left and
+        // came back, so another executor may have written to its agents. Those are given up the
+        // same way, and the recovery below or their next invocation reopens them at the new epoch.
+        //
+        // The epochs come from one snapshot and the assignment from one read, both taken just
+        // before the sweep selects. An agent created after the snapshot read its epoch from the
+        // delivered assignment, so only membership applies to it. An agent given up and reopened
+        // at the new epoch between the snapshot and the selection is given up once more, which
+        // the same reopen repairs.
+        let held_epochs: HashMap<AgentId, Option<ShardEpoch>> = this
+            .active_agents()
+            .snapshot()
+            .await
+            .into_iter()
+            .map(|(agent_id, worker)| (agent_id, worker.oplog().shard_epoch()))
+            .collect();
+        let assignment = this.shard_service().try_get_current_assignment();
         this.active_agents()
             .relinquish_matching(RelinquishReason::ShardNotAssigned, |agent_id| {
-                shard_service.check_worker(agent_id).is_err()
+                relinquished_by_assignment(
+                    assignment.as_ref(),
+                    agent_id,
+                    held_epochs.get(agent_id).copied().flatten(),
+                )
             })
             .await;
 

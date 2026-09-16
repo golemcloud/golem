@@ -134,8 +134,8 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ShardEpoch, ShardId, Timestamp,
-    TimestampedAgentInvocation,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ShardAssignment, ShardEpoch,
+    ShardId, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -735,16 +735,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or_else(|| "-".to_string())
     }
 
-    /// Records that this executor is giving the agent up. Idempotent; the first reason wins.
+    /// Records that this executor is giving the agent up. Idempotent; the first reason wins and is
+    /// the only one logged.
     ///
     /// Synchronous and lock-free on purpose: the stop path calls it while holding the instance
-    /// lock, where anything that could take that lock again would deadlock.
+    /// lock, where anything that could take that lock again would deadlock. Logging takes no
+    /// instance lock.
     pub(crate) fn mark_relinquished(&self, reason: RelinquishReason) -> bool {
-        self.relinquishment.set(reason).is_ok()
+        let first = self.relinquishment.set(reason).is_ok();
+        if first && let Some(reason) = self.relinquishment.get() {
+            // Debug rather than warn: the oplog that latched a fence has already warned with both
+            // epochs, and a revoke or reassignment is logged by the sweep that gives agents up.
+            debug!(
+                agent_id = %self.owned_agent_id,
+                ?reason,
+                "Giving the agent up: this executor no longer owns its shard"
+            );
+        }
+        first
     }
 
     pub(crate) fn is_relinquished(&self) -> bool {
         self.relinquishment.get().is_some()
+    }
+
+    /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
+    /// the stop through an arbitrary handle, and a handle kept past its generation is exactly what
+    /// the tests using this need.
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_stop(&self) {
+        self.stop_internal(
+            false,
+            None,
+            UnloadRequest::ordinary(UnloadReason::ExplicitStop),
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            PendingLiveInvocationDisposition::Fail,
+        )
+        .await;
     }
 
     /// What anyone waiting on this agent is told. Every variant is one the worker service answers
@@ -756,6 +786,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_or(WorkerExecutorError::ShardingNotReady, |reason| {
                 reason.to_error()
             })
+    }
+
+    /// What entity bodies are torn down with once this agent has been given up; `None` while it is
+    /// still this executor's.
+    pub(crate) fn relinquished_owner_failure(&self) -> Option<OwnerFailureWinner> {
+        self.relinquishment
+            .get()
+            .map(RelinquishReason::owner_failure)
     }
 
     /// Give the agent up: stop it here without writing to its oplog or its status, and drop it
@@ -784,13 +822,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await;
     }
 
+    /// Whether `cell` is this worker's published status. Each generation shares its cell with its
+    /// own worker-state actor and nothing else, so the cell identifies the generation to code that
+    /// holds it but not the worker.
+    pub(crate) fn shares_status_cell(
+        &self,
+        cell: &Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    ) -> bool {
+        Arc::ptr_eq(&self.last_known_status, cell)
+    }
+
     pub(crate) async fn remove_from_active_agents(&self) {
         match self.relinquishment.get() {
+            // Scoped to this generation: a relinquished agent passes through here more than once,
+            // and no repeat pass may evict the generation that replaced it.
             Some(reason) => {
                 self.deps
                     .active_agents()
-                    .remove_with(&self.owned_agent_id, reason.owner_failure())
-                    .await
+                    .remove_generation(self, reason.owner_failure())
+                    .await;
             }
             None => self.deps.active_agents().remove(&self.owned_agent_id).await,
         }
@@ -3874,7 +3924,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             producer
                 .append_session_record(StreamSessionRecordV1::Prepared(prepared.clone()))
                 .await
-                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+                .map_err(|error| {
+                    error.into_worker_executor_error(WorkerExecutorError::invalid_request)
+                })?;
             prepared
         } else {
             let pending = self
@@ -3913,7 +3965,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 )
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
             attached_during_prepare = true;
             prepared
         };
@@ -4287,7 +4339,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 accepted_epoch,
             })
             .await
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            .map_err(|error| match self.oplog.fence() {
+                // The attempt reports its errors as text. A refused append behind one has already
+                // latched the fence, which is reported as such so the caller reroutes to the owner.
+                Some(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+                None => WorkerExecutorError::invalid_request(error),
+            })?;
 
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         for mapping in &mappings {
@@ -5211,6 +5268,50 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    /// Adds and commits an entry that gates a side effect - a durable scope `Start` or a remote
+    /// transaction's begin - and reports it as fenced when the storage refused it.
+    ///
+    /// `add_and_commit_oplog` cannot be used for these. Below the commit threshold an add only
+    /// buffers, so it answers with an index even on an oplog whose fence has latched, and the
+    /// status actor answers the refused commit that follows by spawning the relinquish rather
+    /// than failing. The caller would run its side effect for an entry that never reached the
+    /// storage, and the shard's new owner, finding no `Start`, would run it again.
+    ///
+    /// Every other storage failure keeps the fail-stop behaviour of `add_to_oplog_or_relinquish`.
+    pub async fn add_and_commit_oplog_or_fenced(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, OplogError> {
+        let index = match self.oplog.add(entry).await {
+            Ok(index) => index,
+            Err(OplogError::Fenced(fence)) => {
+                self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
+                return Err(OplogError::Fenced(fence));
+            }
+            Err(error) => panic!("oplog write: {error}"),
+        };
+        self.commit_oplog_or_fenced(CommitLevel::Always).await?;
+        Ok(index)
+    }
+
+    /// Commits the buffered entries, reporting a refused commit as fenced; for a commit a side
+    /// effect waits on (see [`Self::add_and_commit_oplog_or_fenced`]).
+    ///
+    /// The fence is read from the oplog's latch rather than from the commit, which swallows it.
+    /// That read is not early: the refused append latches the fence before the status actor
+    /// replies, and this awaits the reply.
+    pub async fn commit_oplog_or_fenced(
+        &self,
+        commit_level: CommitLevel,
+    ) -> Result<OplogIndex, OplogError> {
+        let index = self.commit_oplog_and_update_state(commit_level).await;
+        let written = written_unless_fenced(index, self.oplog.fence());
+        if let Err(OplogError::Fenced(fence)) = &written {
+            self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
+        }
+        written
+    }
+
     pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
         self.queue_card_revocations(&[card_id])
             .await
@@ -5313,6 +5414,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
+        // A refused entry is not delivered: the sender learns the shard moved instead of treating
+        // a transfer this oplog never recorded as received.
         self.state_actor
             .append_and_commit_attached(
                 OplogEntry::card_event_queued(
@@ -5323,7 +5426,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 instance_guard,
                 boundary_guard,
             )
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -5826,10 +5929,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.handle_stop_result(stop_result).await;
 
-        // The single removal point. Every loop exit and every external stop passes through here,
-        // so a relinquished agent is dropped from this executor exactly once - and only after the
-        // loop has actually gone, so the new owner cannot recover it while it is still running.
-        if self.is_relinquished() {
+        // The removal point. Every loop exit and every external stop passes through here, so a
+        // relinquished agent arrives more than once: from its own loop, again from the relinquish
+        // that waited for that loop, and from any stop that arrives through a handle kept past its
+        // generation. Everything below is scoped to this generation; a pass that finds the entry
+        // gone or holding a newer generation does nothing. It runs only after the loop has gone, so
+        // the new owner cannot recover the agent while it is still running here.
+        //
+        // Waiters are failed here as well, in memory only. An agent given up from inside its own
+        // loop - a fence refused in a host call traps with `ShardLost` - stops without failing
+        // anyone, and while this executor's assignment still names the shard their ownership
+        // re-check keeps passing. The relinquish spawned by the loop's exit commit answers them
+        // only if it still finds this generation cached, and the loop's own removal can get there
+        // first. Failing them before the removal, while this generation still holds the entry,
+        // keeps the failure away from a newer generation's waiters, which match by agent id. Keys
+        // that already have a result keep it. A generation that left the cache some other way
+        // first (an idle expiry, an environment unload) is not reached here.
+        if self.is_relinquished() && self.deps.active_agents().is_cached_generation(self).await {
+            self.fail_pending_invocations(self.relinquish_error()).await;
             self.remove_from_active_agents().await;
         }
 
@@ -6304,10 +6421,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         // Captured once, here, and cached for the life of the oplog. One live oplog is one
-        // ownership generation: a renewal never moves an epoch, and when one does move this
-        // executor is the side that lost the shard, so re-reading it per write would only let a
-        // losing executor talk itself back into ownership.
-        let shard_epoch = owned_shard_epoch(this, &owned_agent_id.agent_id);
+        // ownership generation. Re-reading the epoch per write would only let a losing executor
+        // talk itself back into ownership. A renewal never moves an epoch. A delivery that raises
+        // the epoch of a shard this executor kept means the shard left and came back: the
+        // assignment sweep gives the agent up and the open-oplog cache declines the old handle, so
+        // the next open claims the new epoch. Read before anything else, so a worker whose shard
+        // has already left the assignment is refused without touching storage.
+        let shard_epoch = owned_shard_epoch(this, &owned_agent_id.agent_id)?;
         let component_id = owned_agent_id.component_id();
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
@@ -6948,15 +7068,98 @@ struct PendingWorkerInterrupt {
     unload_request: UnloadRequest,
 }
 
-/// The shard epoch this executor currently holds for the agent's shard, if it holds one.
+/// Whether an entry the oplog answered with `index` was written, given the fence the oplog has
+/// latched by the time its commit returned. A latched fence means the commit was refused, whatever
+/// the add answered, so the index is not handed to a caller about to run a side effect.
+fn written_unless_fenced(
+    index: OplogIndex,
+    latched: Option<OplogFence>,
+) -> Result<OplogIndex, OplogError> {
+    match latched {
+        Some(fence) => Err(OplogError::Fenced(fence)),
+        None => Ok(index),
+    }
+}
+
+/// The shard epoch the agent's oplog is opened to assert, read from this executor's current
+/// assignment. See [`shard_epoch_to_assert`].
+fn owned_shard_epoch<T: HasShardService>(
+    this: &T,
+    agent_id: &AgentId,
+) -> Result<Option<ShardEpoch>, WorkerExecutorError> {
+    shard_epoch_to_assert(
+        this.shard_service().try_get_current_assignment().as_ref(),
+        agent_id,
+    )
+}
+
+/// The shard epoch an oplog opened for `agent_id` asserts under `assignment`.
 ///
-/// `None` only when there is no assignment at all yet (before registration), or when the agent's
-/// shard is not in it - in which case admission has already refused the work, and an oplog opened
-/// without an epoch simply asserts nothing.
-fn owned_shard_epoch<T: HasShardService>(this: &T, agent_id: &AgentId) -> Option<ShardEpoch> {
-    let assignment = this.shard_service().try_get_current_assignment()?;
+/// `Ok(None)` only when there is no assignment at all, before the first registration.
+///
+/// An assignment that does not hold the agent's shard is refused with `ShardingNotReady`, which
+/// the worker service answers by refreshing its routing and retrying. It does not map to `None`,
+/// because admission and this read take separate locks. A revoke can land between them, and its
+/// sweep cannot see a worker that is still being built. That worker would otherwise open an oplog
+/// that asserts nothing and stay cached, unfenced, across a later re-grant of the shard.
+///
+/// The same refusal covers a cleared assignment (lapsed lease, deregistration), which holds no
+/// shards at all.
+fn shard_epoch_to_assert(
+    assignment: Option<&ShardAssignment>,
+    agent_id: &AgentId,
+) -> Result<Option<ShardEpoch>, WorkerExecutorError> {
+    let Some(assignment) = assignment else {
+        return Ok(None);
+    };
     let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
-    assignment.epoch_of(&shard_id)
+    assignment
+        .epoch_of(&shard_id)
+        .map(Some)
+        .ok_or(WorkerExecutorError::ShardingNotReady)
+}
+
+/// Whether an agent whose oplog asserts `held` has been superseded by a delivery that assigns its
+/// shard at `assigned`.
+///
+/// - A shard's epoch rises only when it changed owner in between. A kept shard at a higher epoch
+///   therefore means another executor may have written to the agent.
+/// - An equal epoch is the same ownership generation.
+/// - A lower epoch never comes from a newer owner, because the shard manager never lowers an
+///   epoch. Giving the agent up would only reopen it below the epoch its oplog row already holds.
+/// - `None` on either side is not this rule's business. An ephemeral handle asserts nothing, and
+///   an absent shard is the membership check's to handle.
+pub(crate) fn epoch_superseded(held: Option<ShardEpoch>, assigned: Option<ShardEpoch>) -> bool {
+    matches!((held, assigned), (Some(held), Some(assigned)) if held < assigned)
+}
+
+/// Whether a delivered `assignment` takes `agent_id` away from this executor. `held` is the epoch
+/// the agent's oplog asserts, `None` when it asserts none or the agent has no oplog yet.
+///
+/// True when either:
+/// - the assignment does not hold the agent's shard. No assignment at all holds nothing, the same
+///   answer `ShardService::check_worker` gives.
+/// - it holds the shard at a higher epoch than `held`, per [`epoch_superseded`]. The shard left and
+///   came back, so another executor may have written to the agent in between.
+///
+/// Every sweep of a delivered assignment selects with this one predicate. A caller that checks
+/// agents still being created passes `None`, which leaves only the membership test.
+///
+/// Membership and epochs only, never the lease. A lapsed lease refuses new work and leaves running
+/// work alone.
+pub(crate) fn relinquished_by_assignment(
+    assignment: Option<&ShardAssignment>,
+    agent_id: &AgentId,
+    held: Option<ShardEpoch>,
+) -> bool {
+    let Some(assignment) = assignment else {
+        return true;
+    };
+    let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
+    match assignment.epoch_of(&shard_id) {
+        None => true,
+        assigned => epoch_superseded(held, assigned),
+    }
 }
 
 /// Why this executor is giving an agent up: it no longer owns the agent's shard.
@@ -6971,7 +7174,9 @@ pub(crate) enum RelinquishReason {
     Fenced(Option<Box<OplogFence>>),
     /// The shard manager revoked the shard.
     ShardRevoked,
-    /// A delivered assignment no longer contains the agent's shard.
+    /// A delivered assignment no longer holds the agent's shard, or holds it at a higher epoch
+    /// than the agent's oplog asserts. In the second case the shard came back to this executor,
+    /// and the agent is reopened here at the new epoch.
     ShardNotAssigned,
 }
 
@@ -8385,6 +8590,106 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    /// The add that buffered a side effect's entry answered with an index. A fence latched by the
+    /// commit must win over that answer, or the side effect runs for an entry nobody can see.
+    #[test]
+    fn a_latched_fence_refuses_an_entry_its_add_accepted() {
+        let fence = OplogFence {
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "gated".to_string(),
+            },
+            expected_epoch: ShardEpoch(8),
+            actual_epoch: Some(ShardEpoch(9)),
+        };
+        let index = OplogIndex::from_u64(5);
+
+        assert_eq!(written_unless_fenced(index, None), Ok(index));
+        assert_eq!(
+            written_unless_fenced(index, Some(fence.clone())),
+            Err(OplogError::Fenced(fence))
+        );
+    }
+
+    /// Admission and the epoch read are not atomic. An agent whose shard left the assignment in
+    /// between must be refused, not handed an oplog that asserts nothing.
+    #[test]
+    fn an_agent_whose_shard_left_the_assignment_is_refused_an_epoch() {
+        let agent = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "fenced".to_string(),
+        };
+
+        assert!(matches!(shard_epoch_to_assert(None, &agent), Ok(None)));
+        assert!(matches!(
+            shard_epoch_to_assert(
+                Some(&ShardAssignment::unexpiring(1, [ShardId::new(0)])),
+                &agent
+            ),
+            Ok(Some(ShardEpoch(0)))
+        ));
+        assert!(matches!(
+            shard_epoch_to_assert(Some(&ShardAssignment::unexpiring(1, [])), &agent),
+            Err(WorkerExecutorError::ShardingNotReady)
+        ));
+    }
+
+    #[test]
+    fn a_kept_shard_supersedes_an_agent_only_when_its_epoch_rose() {
+        assert!(epoch_superseded(Some(ShardEpoch(0)), Some(ShardEpoch(1))));
+        assert!(!epoch_superseded(Some(ShardEpoch(1)), Some(ShardEpoch(1))));
+        // An equal-revision redelivery carrying a lower epoch must not give up a newer handle.
+        assert!(!epoch_superseded(Some(ShardEpoch(1)), Some(ShardEpoch(0))));
+        assert!(!epoch_superseded(None, Some(ShardEpoch(1))));
+        assert!(!epoch_superseded(Some(ShardEpoch(0)), None));
+    }
+
+    #[test]
+    fn a_delivery_relinquishes_agents_off_its_shards_or_behind_their_shards_epoch() {
+        let agent = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "swept".to_string(),
+        };
+        let at_epoch = |epoch: u64| ShardAssignment {
+            shard_epochs: HashMap::from([(ShardId::new(0), ShardEpoch(epoch))]),
+            ..ShardAssignment::unexpiring(1, [])
+        };
+
+        // Membership: no assignment, or one without the shard, gives the agent up whatever its
+        // oplog asserts.
+        for held in [None, Some(ShardEpoch(0))] {
+            assert!(relinquished_by_assignment(None, &agent, held));
+            assert!(relinquished_by_assignment(
+                Some(&ShardAssignment::unexpiring(1, [])),
+                &agent,
+                held
+            ));
+        }
+
+        // A kept shard gives the agent up only when its epoch rose past the one the oplog asserts.
+        assert!(!relinquished_by_assignment(
+            Some(&at_epoch(1)),
+            &agent,
+            Some(ShardEpoch(1))
+        ));
+        assert!(relinquished_by_assignment(
+            Some(&at_epoch(1)),
+            &agent,
+            Some(ShardEpoch(0))
+        ));
+        assert!(!relinquished_by_assignment(
+            Some(&at_epoch(0)),
+            &agent,
+            Some(ShardEpoch(1))
+        ));
+        // An agent asserting nothing, such as one still being created, is judged by membership.
+        assert!(!relinquished_by_assignment(
+            Some(&at_epoch(1)),
+            &agent,
+            None
+        ));
+    }
 
     #[test]
     fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {

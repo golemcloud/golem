@@ -350,121 +350,127 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
 ) {
     let storage = storage.get_indexed_storage().await;
     let value = Bytes::from_static(&[0, 255, 17, 3]);
-    for ns in [primary, compressed] {
-        storage
-            .append_many(
-                "svc",
-                "api",
-                "entity",
-                &ns.ns,
-                "singleton",
-                Arc::from([]),
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(
-            !storage
-                .exists("svc", "api", ns.ns.clone(), "singleton")
-                .await
-                .unwrap()
-        );
-        storage
-            .append_many(
-                "svc",
-                "api",
-                "entity",
-                &ns.ns,
-                "singleton",
-                Arc::from([(17, value.clone())]),
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .read("svc", "api", "entity", ns.ns.clone(), "singleton", 0, 100)
-                .await
-                .unwrap(),
-            vec![(17, value.to_vec())]
-        );
-        assert_eq!(
-            storage
-                .length("svc", "api", ns.ns.clone(), "singleton")
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            storage
-                .last("svc", "api", "entity", ns.ns.clone(), "singleton")
-                .await
-                .unwrap(),
-            Some((17, value.to_vec()))
-        );
-        let (_, keys) = storage
-            .scan(
-                "svc",
-                "api",
-                ns.meta.clone(),
-                Some("singleton"),
-                ScanCursor::default(),
-                10,
-            )
-            .await
-            .unwrap();
-        assert_eq!(keys, vec!["singleton".to_string()]);
-        assert!(matches!(
+    // Once asserting no epoch, which is a lone autocommit INSERT, and once asserting the recorded
+    // one, which goes through the fenced transaction. A caller must not be able to tell the two
+    // paths apart.
+    for (key, shard_epoch) in [
+        ("singleton", None),
+        ("fenced-singleton", Some(ShardEpoch(1))),
+    ] {
+        for ns in [primary, compressed] {
+            if let Some(epoch) = shard_epoch {
+                storage
+                    .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, epoch)
+                    .await
+                    .unwrap();
+            }
             storage
                 .append_many(
                     "svc",
                     "api",
                     "entity",
                     &ns.ns,
-                    "singleton",
-                    Arc::from([(u64::MAX, value.clone())]),
-                    None,
+                    key,
+                    Arc::from([]),
+                    shard_epoch,
+                )
+                .await
+                .unwrap();
+            assert!(
+                !storage
+                    .exists("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap()
+            );
+            storage
+                .append_many(
+                    "svc",
+                    "api",
+                    "entity",
+                    &ns.ns,
+                    key,
+                    Arc::from([(17, value.clone())]),
+                    shard_epoch,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                storage
+                    .read("svc", "api", "entity", ns.ns.clone(), key, 0, 100)
+                    .await
+                    .unwrap(),
+                vec![(17, value.to_vec())]
+            );
+            assert_eq!(
+                storage
+                    .length("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                storage
+                    .last("svc", "api", "entity", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                Some((17, value.to_vec()))
+            );
+            let (_, keys) = storage
+                .scan(
+                    "svc",
+                    "api",
+                    ns.meta.clone(),
+                    Some(key),
+                    ScanCursor::default(),
+                    10,
+                )
+                .await
+                .unwrap();
+            assert_eq!(keys, vec![key.to_string()]);
+            assert!(matches!(
+                storage
+                    .append_many(
+                        "svc",
+                        "api",
+                        "entity",
+                        &ns.ns,
+                        key,
+                        Arc::from([(u64::MAX, value.clone())]),
+                        shard_epoch,
+                    )
+                    .await,
+                Err(IndexedStorageError::Other(_))
+            ));
+            assert_eq!(
+                storage
+                    .length("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+        assert!(matches!(
+            storage
+                .append_many(
+                    "svc",
+                    "api",
+                    "entity",
+                    &primary.ns,
+                    key,
+                    Arc::from([(17, Bytes::from_static(b"replacement"))]),
+                    shard_epoch,
                 )
                 .await,
-            Err(IndexedStorageError::Other(_))
+            Err(IndexedStorageError::Conflict(_))
         ));
         assert_eq!(
             storage
-                .length("svc", "api", ns.ns.clone(), "singleton")
+                .read("svc", "api", "entity", primary.ns.clone(), key, 0, 100)
                 .await
                 .unwrap(),
-            1
+            vec![(17, value.to_vec())]
         );
     }
-    assert!(matches!(
-        storage
-            .append_many(
-                "svc",
-                "api",
-                "entity",
-                &primary.ns,
-                "singleton",
-                Arc::from([(17, Bytes::from_static(b"replacement"))]),
-                None,
-            )
-            .await,
-        Err(IndexedStorageError::Conflict(_))
-    ));
-    assert_eq!(
-        storage
-            .read(
-                "svc",
-                "api",
-                "entity",
-                primary.ns.clone(),
-                "singleton",
-                0,
-                100
-            )
-            .await
-            .unwrap(),
-        vec![(17, value.to_vec())]
-    );
 }
 
 #[test]
@@ -1674,6 +1680,69 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
 
 #[test]
 #[tracing::instrument]
+async fn an_append_ahead_of_the_recorded_epoch_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let fencing = is.expects_fencing();
+    let is = is.get_indexed_storage().await;
+    let key = "fence-ahead";
+
+    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+
+    // The check is equality, not "at least": a record behind the asserted epoch means the open
+    // that should have raised it never ran, so the write is not ours to make. Both call shapes, so
+    // a single-entry path that parts from the batch path cannot quietly relax the check.
+    let batch = is
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([
+                (1, Bytes::from_static(b"a")),
+                (2, Bytes::from_static(b"b")),
+                (3, Bytes::from_static(b"c")),
+            ]),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    let batch_length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+    let single = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            4,
+            b"d".to_vec(),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+
+    if fencing {
+        assert_fenced(batch, 6, Some(5));
+        assert_eq!(
+            batch_length, 0,
+            "a refused batch must leave no entry behind"
+        );
+        assert_fenced(single, 6, Some(5));
+        assert_eq!(length, 0, "a refused append must leave no entry behind");
+    } else {
+        batch.unwrap();
+        single.unwrap();
+        assert_eq!(length, 4);
+    }
+}
+
+#[test]
+#[tracing::instrument]
 async fn an_append_without_a_recorded_epoch_is_refused(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
@@ -1844,6 +1913,48 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
     } else {
         result.unwrap();
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_deleted_record_does_not_remember_its_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-forgotten";
+
+    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+        .await
+        .unwrap();
+    is.delete_oplog_metadata("svc", "api", ns.ns.clone(), key)
+        .await
+        .unwrap();
+
+    // The documented limit of the fence: the forward-only rule lives on the record, so once the
+    // record is gone a lower epoch than the one it held is recorded and written through. Closing
+    // this needs the delete to keep the epoch, which changes this test on purpose.
+    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        1,
+        b"a".to_vec(),
+        Some(ShardEpoch(8)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        1
+    );
 }
 
 #[test]

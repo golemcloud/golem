@@ -292,6 +292,22 @@ pub enum TrapType {
 }
 
 impl TrapType {
+    /// `ShardLost` once the agent's oplog has latched a fence, whatever the trap was.
+    ///
+    /// A latched oplog refuses every later write, so giving the agent up is the only outcome
+    /// left. It also catches a fence that crossed a `String` boundary on its way to the trap and
+    /// no longer classifies as `ShardLost` by itself.
+    pub fn under_latched_fence(
+        self,
+        latched: Option<&crate::services::oplog::OplogFence>,
+    ) -> TrapType {
+        if latched.is_some() {
+            TrapType::Interrupt(InterruptKind::ShardLost)
+        } else {
+            self
+        }
+    }
+
     pub fn from_worker_executor_error<Ctx: WorkerCtx>(
         error: WorkerExecutorError,
         fallback_retry_from: OplogIndex,
@@ -515,8 +531,19 @@ impl TrapType {
                                 )))
                             }
                             _ => {
-                                // Search the full error chain for ClassifiedHostError
-                                if let Some(classified) = error
+                                // A bare `?` on an oplog write inside an anyhow host function
+                                // carries the `OplogError` itself, not its `WorkerExecutorError`
+                                // form, so the fence is looked for along the chain as well. A
+                                // storage error stays a retriable `Unknown`. After that, search
+                                // the full error chain for ClassifiedHostError.
+                                if error.chain().any(|cause| {
+                                    matches!(
+                                        cause.downcast_ref::<crate::services::oplog::OplogError>(),
+                                        Some(crate::services::oplog::OplogError::Fenced(_))
+                                    )
+                                }) {
+                                    TrapType::Interrupt(InterruptKind::ShardLost)
+                                } else if let Some(classified) = error
                                     .chain()
                                     .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
                                 {
@@ -971,6 +998,105 @@ mod tests {
             !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
             "a transient storage failure must not be treated as a lost shard, got {trap:?}"
         );
+    }
+
+    fn fence_for(agent_id: &str) -> crate::services::oplog::OplogFence {
+        crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+        }
+    }
+
+    /// The same contract for a host function that puts a bare `?` on an oplog write: the error is
+    /// the `OplogError` itself, possibly under context, and still has to read as a lost shard.
+    #[test]
+    fn a_bare_fenced_oplog_error_escaping_a_host_call_classifies_as_shard_lost() {
+        let bare = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(fence_for(
+            "bare-fenced-host-call",
+        )));
+        let with_context = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(
+            fence_for("bare-fenced-host-call"),
+        ))
+        .context("ending atomic region");
+
+        for error in [bare, with_context] {
+            let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+                &error,
+                OplogIndex::INITIAL,
+                false,
+                false,
+                AgentMode::Durable,
+            );
+            assert!(
+                matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+                "a bare fenced oplog error must be an interrupt, got {trap:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_oplog_storage_error_is_not_shard_lost() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(crate::services::oplog::OplogError::Storage(
+                "connection reset".to_string(),
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a bare storage failure must stay a retriable failure, got {trap:?}"
+        );
+    }
+
+    /// Once the oplog has latched a fence nothing more can be written for the agent, so no trap
+    /// may lead to a retry, an exit record or a jump - only to giving the agent up.
+    #[test]
+    fn a_latched_fence_turns_every_trap_into_shard_lost() {
+        let fence = fence_for("latched");
+        let unknown_error = || TrapType::Error {
+            error: AgentError::Unknown("fence flattened into text".to_string()),
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+
+        for trap in [
+            unknown_error(),
+            TrapType::Exit,
+            TrapType::Interrupt(InterruptKind::Jump),
+            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
+        ] {
+            let reclassified = trap.clone().under_latched_fence(Some(&fence));
+            assert!(
+                matches!(reclassified, TrapType::Interrupt(InterruptKind::ShardLost)),
+                "{trap:?} under a latched fence must be a lost shard, got {reclassified:?}"
+            );
+            let decision = crate::durable_host::DurableWorkerCtx::<
+                crate::workerctx::default::Context,
+            >::fixed_decision_for_trap_type(&reclassified);
+            assert_eq!(decision, Some(RetryDecision::None));
+        }
+
+        assert!(matches!(
+            unknown_error().under_latched_fence(None),
+            TrapType::Error {
+                error: AgentError::Unknown(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            TrapType::Interrupt(InterruptKind::Jump).under_latched_fence(None),
+            TrapType::Interrupt(InterruptKind::Jump)
+        ));
     }
 
     #[test]

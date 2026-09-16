@@ -489,9 +489,6 @@ pub type ReservedRawStartBuilder =
 pub type IndexedReservedStartBuilder =
     Box<dyn FnOnce(OplogIndex) -> Result<(Vec<u8>, ReservedRawStartBuilder), String> + Send>;
 
-/// A single oplog append that has already been synchronously enqueued in the oplog's ordering
-/// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
-/// index after the append finishes.
 /// Why an oplog write was refused by the storage: the shard epoch this executor asserted is
 /// behind the one recorded for the oplog, because another executor owns the shard now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -499,6 +496,16 @@ pub struct OplogFence {
     pub agent_id: AgentId,
     pub expected_epoch: ShardEpoch,
     pub actual_epoch: Option<ShardEpoch>,
+}
+
+/// Told of every refusal the storage returns, carrying the epoch recorded on the oplog.
+///
+/// That epoch is evidence of a generation somebody held for the agent's shard, which a shard
+/// manager whose state lost history no longer knows about. The same refusal can be reported more
+/// than once - a refused create, and then the refused open behind it - so an observer merges what
+/// it is told rather than counting it.
+pub trait OplogFenceObserver: Send + Sync {
+    fn fenced(&self, fence: &OplogFence);
 }
 
 /// The one way an oplog write can fail without taking the executor down.
@@ -554,6 +561,9 @@ impl Display for OplogError {
 
 impl std::error::Error for OplogError {}
 
+/// A single oplog append that has already been synchronously enqueued in the oplog's ordering
+/// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
+/// index after the append finishes.
 pub type OplogAddReceipt = BoxFuture<'static, Result<OplogIndex, OplogError>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1143,14 +1153,17 @@ struct OpenOplogEntry {
     /// Identifies this insertion, so that the remover the oplog runs when it is dropped removes
     /// this entry and not a replacement cached under the same agent after it.
     pub token: Arc<()>,
+    /// The epoch the opener that constructed this handle asked it to assert.
+    pub requested_epoch: Option<ShardEpoch>,
 }
 
 impl OpenOplogEntry {
-    pub fn new(oplog: Arc<dyn Oplog>, token: Arc<()>) -> Self {
+    pub fn new(oplog: Arc<dyn Oplog>, token: Arc<()>, requested_epoch: Option<ShardEpoch>) -> Self {
         Self {
             oplog: Arc::downgrade(&oplog),
             initial: Arc::new(AtomicBool::new(true)),
             token,
+            requested_epoch,
         }
     }
 }
@@ -1177,6 +1190,7 @@ impl OpenOplogs {
         agent_id: &AgentId,
         constructor: impl OplogConstructor + 'static,
     ) -> Arc<dyn Oplog> {
+        let requested_epoch = constructor.shard_epoch();
         loop {
             let constructor_clone = constructor.clone();
             let token = Arc::new(());
@@ -1206,7 +1220,7 @@ impl OpenOplogs {
                             Arc::increment_strong_count(ptr);
                             Arc::from_raw(ptr)
                         };
-                        Ok(OpenOplogEntry::new(result, entry_token))
+                        Ok(OpenOplogEntry::new(result, entry_token, requested_epoch))
                     },
                 )
                 .await
@@ -1231,7 +1245,21 @@ impl OpenOplogs {
                 // Only a cache hit is discarded. An oplog refused at open is born fenced, and that
                 // is what its opener asked for: it is handed back so that its writes are refused,
                 // rather than constructed again and again.
-                if !just_constructed && oplog.fence().is_some() {
+                //
+                // Nor is a handle opened for an older ownership generation handed to an opener
+                // that asserts a newer epoch, fenced or not: a fork's unfenced copy, or a handle
+                // still held when the shard left this executor and came back at a higher epoch.
+                // It would go on writing at the epoch it was opened with, and the newer claim
+                // would never be recorded. Only a strictly newer request evicts. An equal or older
+                // one is handed the cached handle, so no second live handle is ever built at the
+                // epoch a handle already asserts. A handle that does not assert the epoch it was
+                // opened with (an ephemeral one) belongs to no generation: opened with an epoch,
+                // it is reused whatever epoch is requested. An evicted handle keeps any background
+                // work it started, such as a layered oplog's archive transfer, until its holder
+                // drops it.
+                let older_generation = requested_epoch > entry.requested_epoch
+                    && oplog.shard_epoch() == entry.requested_epoch;
+                if !just_constructed && (oplog.fence().is_some() || older_generation) {
                     // Removed by its own token, so a replacement cached meanwhile is left alone.
                     self.oplogs
                         .remove_if_cached(agent_id, |cached| {
@@ -1259,4 +1287,10 @@ impl Debug for OpenOplogs {
 #[async_trait]
 pub trait OplogConstructor: Clone + Send {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog>;
+
+    /// The epoch the oplog this constructor builds is asked to assert, or `None` for one opened
+    /// without an ownership claim. The open-oplog cache compares it with the epoch a cached
+    /// handle was opened with, so it has no default: a layer that left it out would hand an
+    /// older generation's handle to every newer opener.
+    fn shard_epoch(&self) -> Option<ShardEpoch>;
 }

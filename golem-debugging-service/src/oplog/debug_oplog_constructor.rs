@@ -17,7 +17,7 @@ use crate::oplog::debug_oplog::DebugOplog;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ShardEpoch};
 use golem_common::read_only_lock;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{Oplog, OplogConstructor, OplogService};
@@ -64,6 +64,11 @@ impl CreateDebugOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateDebugOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        // A debugging session discards every write, so it asserts no epoch.
+        None
+    }
+
     async fn create_oplog(self, _close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner

@@ -562,15 +562,11 @@ impl CreateOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
+    }
+
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let last_oplog_index = match self.last_oplog_index {
-            Some(idx) => idx,
-            None => {
-                self.inner
-                    .get_last_index(&self.owned_agent_id, self.agent_mode)
-                    .await
-            }
-        };
         let inner = if let Some(initial_entry) = self.initial_entry {
             if self.fresh {
                 self.inner
@@ -602,13 +598,20 @@ impl OplogConstructor for CreateOplogConstructor {
                 .open(
                     &self.owned_agent_id,
                     self.agent_mode,
-                    Some(last_oplog_index),
+                    self.last_oplog_index,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
                     self.shard_epoch,
                 )
                 .await
+        };
+        // Taken from the opened inner oplog, not read up front: the inner open claims the shard
+        // epoch, so an index read before it could be behind a losing executor's last commit, and
+        // the forwarding buffer would then label its entries with indexes already in use.
+        let last_oplog_index = match self.last_oplog_index {
+            Some(idx) => idx,
+            None => inner.current_oplog_index().await,
         };
 
         Arc::new(
@@ -1454,6 +1457,14 @@ impl ForwardingOplogState {
     /// Complete ranges are read from the in-memory suffix when available; all other
     /// ranges are read whole from the persisted oplog without splicing sources.
     pub async fn try_flush(&mut self) {
+        // A fenced oplog is finished: nothing may be sent or checkpointed from it again. Without
+        // this, every tick and threshold flush picks the same batch and writes its checkpoint
+        // again, taking an index on an oplog that refuses the commit. The bookkeeping below is
+        // skipped as well, so the mirrored buffer is no longer pruned and the commit count no
+        // longer reset; both last only until the fenced worker is given up.
+        if self.inner.fence().is_some() {
+            return;
+        }
         let status = self.last_known_status.get();
         let flush_set = self.reconcile_plugin_state(&status);
 
@@ -1888,6 +1899,12 @@ impl ForwardingOplogState {
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
     ) -> Result<(), OplogFence> {
+        // Checked here as well as when the flush starts: the worker's own write can latch the
+        // fence while the flush awaits a send or a lookup, and a checkpoint added after that
+        // would still take an index for an entry that is never committed.
+        if let Some(fence) = self.inner.fence() {
+            return Err(fence);
+        }
         let checkpoint = OplogEntry::OplogProcessorCheckpoint {
             timestamp: golem_common::model::Timestamp::now_utc(),
             plugin_grant_id: grant_id,
@@ -1922,8 +1939,9 @@ impl ForwardingOplogState {
         Ok(())
     }
 
-    /// Logs a fenced checkpoint once and hands the fence back to the caller, which stops
-    /// forwarding for this agent.
+    /// Logs the checkpoint that found the fence and hands the fence back to the caller, which
+    /// stops forwarding for this agent. Every flush after it sees the latched fence and returns
+    /// before writing anything.
     fn stop_forwarding(&self, fence: OplogFence) -> OplogFence {
         tracing::info!(
             source_agent = %self.initial_worker_metadata.agent_id,
@@ -1982,6 +2000,10 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
+        // A migration is recorded with a checkpoint, which a fenced oplog no longer takes.
+        if self.inner.fence().is_some() {
+            return;
+        }
         let status = self.last_known_status.get();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
@@ -2568,6 +2590,10 @@ mod tests {
         committed_idx: std::sync::Mutex<OplogIndex>,
         read_exact_count: std::sync::atomic::AtomicUsize,
         read_exact_requests: std::sync::Mutex<Vec<(OplogIndex, u64)>>,
+        /// Refuses the next `commit` as fenced once set. The refusal latches, as it does on the
+        /// primary oplog, so every commit after it is refused and `fence` reports it.
+        armed_fence: std::sync::Mutex<Option<OplogFence>>,
+        latched_fence: std::sync::OnceLock<OplogFence>,
     }
 
     #[allow(dead_code)]
@@ -2579,7 +2605,13 @@ mod tests {
                 committed_idx: std::sync::Mutex::new(OplogIndex::NONE),
                 read_exact_count: std::sync::atomic::AtomicUsize::new(0),
                 read_exact_requests: std::sync::Mutex::new(Vec::new()),
+                armed_fence: std::sync::Mutex::new(None),
+                latched_fence: std::sync::OnceLock::new(),
             }
+        }
+
+        fn arm_fence(&self, fence: OplogFence) {
+            *self.armed_fence.lock().unwrap() = Some(fence);
         }
 
         fn read_exact_count(&self) -> usize {
@@ -2682,6 +2714,13 @@ mod tests {
             &self,
             _level: CommitLevel,
         ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+            if let Some(fence) = self.latched_fence.get() {
+                return Err(OplogError::Fenced(fence.clone()));
+            }
+            if let Some(fence) = self.armed_fence.lock().unwrap().take() {
+                let _ = self.latched_fence.set(fence.clone());
+                return Err(OplogError::Fenced(fence));
+            }
             let entries = self.entries.lock().unwrap();
             let current = *self.current_idx.lock().unwrap();
             let mut committed = self.committed_idx.lock().unwrap();
@@ -2747,6 +2786,10 @@ mod tests {
             _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
+        }
+
+        fn fence(&self) -> Option<OplogFence> {
+            self.latched_fence.get().cloned()
         }
     }
 
@@ -2852,6 +2895,87 @@ mod tests {
             recording_plugin.send_count().await,
             0,
             "No committed entries should not trigger any plugin sends"
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // A fenced checkpoint ends forwarding: the flushes after it write and send nothing
+    // --------------------------------------------------------------------------
+
+    #[test]
+    async fn a_fenced_checkpoint_stops_later_flushes_before_they_write() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+        );
+        let in_memory = Arc::new(InMemoryOplog::new());
+        in_memory.add(grow_memory(1)).await.unwrap();
+        in_memory.add(grow_memory(2)).await.unwrap();
+        in_memory.commit(CommitLevel::Always).await.unwrap();
+        in_memory.arm_fence(OplogFence {
+            agent_id: metadata.agent_id.clone(),
+            expected_epoch: ShardEpoch(1),
+            actual_epoch: Some(ShardEpoch(2)),
+        });
+        let inner: Arc<dyn Oplog> = in_memory.clone();
+
+        // No target yet, so the first write is the checkpoint recording the resolved target. It
+        // is written before the grant is marked as sending, so nothing but the fence stops the
+        // next flush from resolving and writing it again.
+        let mut state = ForwardingOplogState {
+            buffer: None,
+            buffer_start_idx: OplogIndex::from_u64(3),
+            commit_count: 0,
+            last_send: Instant::now(),
+            oplog_plugins: recording_plugin.clone(),
+            initial_worker_metadata: metadata,
+            last_known_status: status_lock,
+            last_oplog_idx: OplogIndex::from_u64(2),
+            last_committed_idx: OplogIndex::from_u64(2),
+            components,
+            inner,
+            plugin_state: HashMap::from([(
+                grant_id,
+                LivePluginState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::NONE,
+                    send_in_progress: false,
+                    last_batch_start: OplogIndex::NONE,
+                },
+            )]),
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
+        };
+
+        state.try_flush().await;
+        assert_eq!(recording_plugin.send_count().await, 0);
+        assert_eq!(
+            in_memory.length().await,
+            3,
+            "the refused checkpoint is the only entry the first flush adds"
+        );
+        let last_oplog_idx = state.last_oplog_idx;
+
+        state.try_flush().await;
+        state.try_flush().await;
+
+        assert_eq!(
+            in_memory.length().await,
+            3,
+            "a flush after the fence must not add another checkpoint"
+        );
+        assert_eq!(state.last_oplog_idx, last_oplog_idx);
+        assert_eq!(recording_plugin.send_count().await, 0);
+        assert_eq!(
+            recording_plugin
+                .resolve_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a flush after the fence must not resolve the target again"
         );
     }
 

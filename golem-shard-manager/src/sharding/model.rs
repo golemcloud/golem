@@ -487,19 +487,66 @@ impl ShardLeaseState {
     /// That case has to be repaired, because [`Self::shard_epochs`] is the only record of it. A
     /// fresh state starts the epochs at zero while the executors, and the oplog rows their writes
     /// are fenced against, still hold higher ones; since an epoch only climbs when a shard changes
-    /// owner, the fence would refuse those agents for good. The renewal carries the executor's
-    /// whole set, so it is the one moment the cluster can tell the manager what it forgot.
+    /// owner, the fence would refuse those agents for good. An executor's whole set reaches the
+    /// manager at two moments, and each repairs one kind of loss. A renewal repairs a state
+    /// restored from a backup that still lists the renewing executor. A state that was wiped or
+    /// replaced does not list it, so the renewal is refused as a lease not found, and the
+    /// re-registration that follows carries the set the executor held under its earlier id. A
+    /// process that restarted holds no set to carry, so a store lost while every executor restarted
+    /// as well is repaired by the first executor refused a write to one of those oplogs, on its
+    /// next renewal - see [`Self::raise_epoch_floor_past`] - and an oplog nobody opens keeps its
+    /// rows until it is opened.
     ///
-    /// Only `executor_id`'s own shards are repaired from its claim; a claim on a shard the
-    /// manager has given to somebody else is corrected by the grant, never adopted.
+    /// `executor_id`'s own shards, and unassigned ones, take the claimed epoch. A claim on a shard
+    /// the manager has given to somebody else is never adopted. At or below the record it is an
+    /// executor that missed a push, and the grant corrects it. Above the record it proves the
+    /// claimant held that epoch before the history was lost - the oplog rows it wrote are fenced
+    /// there, and they refuse the owner's writes at the lower epoch - so the owner is minted one
+    /// past the claim. The owner keeps the shard and the claimant is not given it.
     ///
     /// The assignment moves with the high-water and never apart from it - [`Self::check_invariants`]
-    /// requires the two to agree - and the corrected grant the renewal returns is what tells the
-    /// current owner its new epoch. The value only ever climbs, so this cannot walk an epoch back
-    /// to one a stale writer still holds.
+    /// requires the two to agree. The grant the caller returns tells the claimant its epochs; an
+    /// owner re-minted above another executor's claim hears only from a push, which the caller owes
+    /// it. The value only ever climbs, so this cannot walk an epoch back to one a
+    /// stale writer still holds. Returns every shard whose epoch moved, re-minted ones included.
     pub fn raise_epoch_floor(
         &mut self,
         executor_id: ExecutorId,
+        claimed: &BTreeMap<ShardId, ShardEpoch>,
+    ) -> Vec<ShardId> {
+        self.raise_epoch_floor_for(Some(executor_id), claimed)
+    }
+
+    /// Raises the recorded epoch of every assigned shard `stored` names to one past the stored
+    /// value, and reports the shards that moved.
+    ///
+    /// `stored` is what refused oplog writes found on the rows. Ahead of the record it proves the
+    /// state lost history, exactly as a claim ahead of it does - see [`Self::raise_epoch_floor`] -
+    /// but nothing proves the reporter wrote those rows, so every assigned entry, the reporter's
+    /// own included, is minted one past it: a generation nobody has held. An unassigned shard's
+    /// high-water rises to the stored value, so its next mint lands one past it. At or below the
+    /// record it is the ordinary loser of a shard move - the new owner recorded its epoch and the
+    /// old one was refused - and moves nothing.
+    ///
+    /// It does not commute with [`Self::raise_epoch_floor`] when a claim on the reporter's own
+    /// shard equals the report. Claim first records the claim, and the report then sits at the
+    /// record; report first mints one past it, and the claim is then below the record. Callers
+    /// that hold both apply the report first, so a report at or above the claim always ends one
+    /// past it. A claim that already reached the state in an earlier request is at the record when
+    /// an equal report arrives, and that tie is the equality this cannot tell from a shard move.
+    pub fn raise_epoch_floor_past(
+        &mut self,
+        stored: &BTreeMap<ShardId, ShardEpoch>,
+    ) -> Vec<ShardId> {
+        self.raise_epoch_floor_for(None, stored)
+    }
+
+    /// The one rule behind [`Self::raise_epoch_floor`] and [`Self::raise_epoch_floor_past`]: an
+    /// entry `holder` owns takes the epoch itself, any other assigned entry is minted one past it,
+    /// and an unassigned shard's high-water takes it. `None` holds nothing.
+    fn raise_epoch_floor_for(
+        &mut self,
+        holder: Option<ExecutorId>,
         claimed: &BTreeMap<ShardId, ShardEpoch>,
     ) -> Vec<ShardId> {
         let mut raised = Vec::new();
@@ -509,22 +556,9 @@ impl ShardLeaseState {
             if !self.contains_shard(*shard_id) {
                 continue;
             }
-            // A claim on a shard the manager has given to somebody else is an executor that
-            // missed a push, not evidence about that shard's epoch. Stamping the claim onto the
-            // owner's entry would put two live executors on one `(shard, epoch)` - the pair the
-            // fence cannot tell apart, which is the whole point of the epoch. The grant corrects
-            // that claim instead, like any other stale entry. An unassigned shard has no entry to
-            // corrupt, and raising its high-water only makes the next mint start above the epoch
-            // the claim proves is already in use.
-            if self
-                .shard_assignments
-                .get(shard_id)
-                .is_some_and(|entry| entry.executor_id != executor_id)
-            {
-                continue;
-            }
-            // Against the high-water, so the floor only ever climbs: a value below one this shard
-            // has already reached is not evidence of anything.
+            // Against the high-water, so the floor only ever climbs: a value at or below one this
+            // shard has already reached is not evidence of anything. On a shard somebody else
+            // owns, that is the ordinary missed push, and the grant corrects it.
             if self
                 .shard_epochs
                 .get(shard_id)
@@ -532,9 +566,19 @@ impl ShardLeaseState {
             {
                 continue;
             }
-            self.shard_epochs.insert(*shard_id, *claimed_epoch);
+            // Stamping the claim itself onto another executor's entry would put two live
+            // executors on one `(shard, epoch)` - the pair the fence cannot tell apart, which is
+            // the whole point of the epoch. One past it is a generation nobody has held, and it
+            // clears the claimant's oplog rows. An unassigned shard has no entry to corrupt, and
+            // raising its high-water only makes the next mint start above the epoch the claim
+            // proves is already in use.
+            let epoch = match self.shard_assignments.get(shard_id) {
+                Some(entry) if Some(entry.executor_id) != holder => claimed_epoch.next(),
+                _ => *claimed_epoch,
+            };
+            self.shard_epochs.insert(*shard_id, epoch);
             if let Some(entry) = self.shard_assignments.get_mut(shard_id) {
-                entry.epoch = *claimed_epoch;
+                entry.epoch = epoch;
             }
             raised.push(*shard_id);
         }
@@ -1301,41 +1345,157 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_on_another_executors_shard_never_raises_it() {
-        // Executor 1 holds shard 0; executor 2 missed the push that took it away and still claims
-        // it, at an epoch above the record. Adopting that would stamp executor 2's epoch onto
-        // executor 1's assignment, leaving both of them live on `(shard 0, epoch 9)` - which is
-        // exactly the pair the oplog fence cannot separate.
+    fn a_claim_ahead_on_another_executors_shard_re_mints_its_owner_above_it() {
+        // Executor 1 holds shard 0 at epoch 0 in a state that lost history; executor 2 held it at
+        // epoch 9 before the loss and still claims it. Adopting that would stamp executor 2's
+        // epoch onto executor 1's assignment, leaving both of them live on `(shard 0, epoch 9)` -
+        // exactly the pair the oplog fence cannot separate. Left at 0, executor 1 would have every
+        // write refused by the rows executor 2 wrote at 9. So the owner is minted one past it.
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0]), (2, 2, &[1])]);
         assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
 
-        let poaching = BTreeMap::from([(shard(0), ShardEpoch(9))]);
-        assert!(
-            shard_state
-                .raise_epoch_floor(executor(2), &poaching)
-                .is_empty()
+        let ahead = BTreeMap::from([(shard(0), ShardEpoch(9))]);
+        assert_eq!(
+            shard_state.raise_epoch_floor(executor(2), &ahead),
+            vec![shard(0)]
         );
-        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
         assert_eq!(
             shard_state
                 .shard_assignments
                 .get(&shard(0))
                 .map(|e| e.executor_id),
             Some(executor(1)),
-            "the owner was not changed either"
+            "the claimant was given the shard"
         );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(10)));
         assert_eq!(
             shard_state.shard_epochs.get(&shard(0)),
-            Some(&ShardEpoch(0))
+            Some(&ShardEpoch(10))
         );
-
-        // The owner's own claim at the same epoch is still repaired.
-        assert_eq!(
-            shard_state.raise_epoch_floor(executor(1), &poaching),
-            vec![shard(0)]
-        );
-        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(9)));
         assert!(shard_state.check_invariants().is_ok());
+
+        // A claim at the record is an executor that missed a push, not evidence: nothing moves.
+        let at_record = BTreeMap::from([(shard(0), ShardEpoch(10))]);
+        assert!(
+            shard_state
+                .raise_epoch_floor(executor(2), &at_record)
+                .is_empty()
+        );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(10)));
+
+        // Nor does the owner's own claim at the epoch it was re-minted above.
+        assert!(
+            shard_state
+                .raise_epoch_floor(executor(1), &ahead)
+                .is_empty()
+        );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(10)));
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn a_fenced_epoch_re_mints_every_owner_above_it_the_reporters_own_included() {
+        // Writes were refused by rows at epoch 3 on shards 0, 1 and 2, in a state that lost
+        // history. Nothing says who wrote those rows, so whoever reported them, executor 1's shard
+        // is minted past them like executor 2's: stamping 3 onto an entry could leave its owner on
+        // the rows' `(shard, epoch)`.
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0]), (2, 2, &[1])]);
+        let stored = BTreeMap::from([
+            (shard(0), ShardEpoch(3)),
+            (shard(1), ShardEpoch(3)),
+            (shard(2), ShardEpoch(3)),
+        ]);
+        assert_eq!(
+            shard_state.raise_epoch_floor_past(&stored),
+            vec![shard(0), shard(1), shard(2)]
+        );
+        for (shard_id, owner) in [(0, 1), (1, 2)] {
+            assert_eq!(
+                shard_state
+                    .shard_assignments
+                    .get(&shard(shard_id))
+                    .map(|entry| entry.executor_id),
+                Some(executor(owner)),
+                "a fenced epoch moved a shard"
+            );
+            assert_eq!(
+                shard_state.epoch_for_shard(shard(shard_id)),
+                Some(ShardEpoch(4))
+            );
+            assert_eq!(
+                shard_state.shard_epochs.get(&shard(shard_id)),
+                Some(&ShardEpoch(4))
+            );
+        }
+        // An unassigned shard has no entry to put on the rows' epoch: its high-water takes it, and
+        // the next mint lands one past.
+        assert_eq!(
+            shard_state.shard_epochs.get(&shard(2)),
+            Some(&ShardEpoch(3))
+        );
+        assert_eq!(
+            shard_state.next_epoch_for(executor(1), shard(2)),
+            ShardEpoch(4)
+        );
+        assert!(shard_state.check_invariants().is_ok());
+
+        // Reported again, every epoch is below the record: nothing moves a second time.
+        assert!(shard_state.raise_epoch_floor_past(&stored).is_empty());
+        // At the record is the ordinary loser of a shard move.
+        assert!(
+            shard_state
+                .raise_epoch_floor_past(&BTreeMap::from([(shard(0), ShardEpoch(4))]))
+                .is_empty()
+        );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(4)));
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn a_claim_and_a_fenced_epoch_commute_unless_they_are_equal() {
+        // Executor 1 holds shard 0 at epoch 0. Each case applies a claim on shard 0 and a fenced
+        // epoch on it, in both orders, to its own copy of that state.
+        let base = shard_state_with(4, &[(1, 1, &[0]), (2, 2, &[1])]);
+        let epoch_of_shard_0 = |claimant: u128, claimed: u64, fenced: u64, fenced_first: bool| {
+            let mut shard_state = base.clone();
+            let claimed = BTreeMap::from([(shard(0), ShardEpoch(claimed))]);
+            let fenced = BTreeMap::from([(shard(0), ShardEpoch(fenced))]);
+            if fenced_first {
+                shard_state.raise_epoch_floor_past(&fenced);
+                shard_state.raise_epoch_floor(executor(claimant), &claimed);
+            } else {
+                shard_state.raise_epoch_floor(executor(claimant), &claimed);
+                shard_state.raise_epoch_floor_past(&fenced);
+            }
+            assert!(shard_state.check_invariants().is_ok());
+            assert_eq!(
+                shard_state
+                    .shard_assignments
+                    .get(&shard(0))
+                    .map(|entry| entry.executor_id),
+                Some(executor(1))
+            );
+            shard_state
+                .epoch_for_shard(shard(0))
+                .expect("shard 0 is assigned")
+        };
+
+        for fenced_first in [false, true] {
+            // A claim above the fenced epoch wins.
+            assert_eq!(epoch_of_shard_0(1, 5, 3, fenced_first), ShardEpoch(5));
+            // A fenced epoch above the claim ends one past it.
+            assert_eq!(epoch_of_shard_0(1, 3, 5, fenced_first), ShardEpoch(6));
+            // Another executor's claim and an equal fenced epoch both mint the owner one past.
+            assert_eq!(epoch_of_shard_0(2, 3, 3, fenced_first), ShardEpoch(4));
+        }
+
+        // The pair that does not commute: the owner's own claim equal to the fenced epoch. Claim
+        // first is what happens when the claim reached the state in an earlier request - the
+        // fenced epoch is then at the record, the equality nothing can tell from a shard move.
+        assert_eq!(epoch_of_shard_0(1, 3, 3, false), ShardEpoch(3));
+        // Fenced first is the order a renewal carrying both uses, which is why it uses it: the
+        // owner ends one past the rows' epoch rather than on it.
+        assert_eq!(epoch_of_shard_0(1, 3, 3, true), ShardEpoch(4));
     }
 
     #[test]

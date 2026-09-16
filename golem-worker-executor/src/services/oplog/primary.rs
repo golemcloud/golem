@@ -23,9 +23,9 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
-    PendingUpload, ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor,
-    scan_modes,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogFenceObserver, OplogService,
+    OrderedOplogStart, PendingUpload, ReservedPayload, ReservedRawStartBuilder, cursor_value,
+    next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -299,10 +299,15 @@ async fn retry_oplog_append(
 /// Records the epoch this executor is allowed to write `key` with, and reports the fence when
 /// the stored record is already ahead of it.
 ///
-/// Monotonic on the storage side, so a re-grant at a higher epoch takes the oplog over while an
-/// executor holding a stale one cannot claim it back. Written before the oplog's first entry -
+/// Monotonic on the storage side once a record exists, so a re-grant at a higher epoch takes the
+/// oplog over while an executor holding a stale one cannot claim it back. An oplog with no record
+/// (new, deleted, or from before the record existed) is claimed by whichever epoch opens it
+/// first. Written before the oplog's first entry -
 /// an absent record fences too, which is what closes the window between creating an oplog and
 /// recording who owns it.
+///
+/// A refusal is also handed to `fence_observer`, because the epoch it carries is what a shard
+/// manager whose state lost history has to mint above.
 async fn record_owning_epoch(
     indexed_storage: &(dyn IndexedStorage + Send + Sync),
     retry_config: &RetryConfig,
@@ -310,6 +315,7 @@ async fn record_owning_epoch(
     agent_mode: AgentMode,
     key: &str,
     shard_epoch: ShardEpoch,
+    fence_observer: Option<&dyn OplogFenceObserver>,
 ) -> Option<OplogFence> {
     let outcome = retry_storage_op_fenceable(retry_config, "upsert_oplog_metadata", key, || {
         let ns = IndexedStorageNamespace::OpLog {
@@ -328,11 +334,23 @@ async fn record_owning_epoch(
         Ok(()) => None,
         Err(IndexedStorageError::Fenced {
             expected, actual, ..
-        }) => Some(OplogFence {
-            agent_id: owned_agent_id.agent_id(),
-            expected_epoch: expected,
-            actual_epoch: actual,
-        }),
+        }) => {
+            warn!(
+                agent_id = %owned_agent_id,
+                expected_epoch = expected.0,
+                actual_epoch = ?actual.map(|epoch| epoch.0),
+                "Oplog opened at a stale shard epoch: the shard has a new owner"
+            );
+            let fence = OplogFence {
+                agent_id: owned_agent_id.agent_id(),
+                expected_epoch: expected,
+                actual_epoch: actual,
+            };
+            if let Some(observer) = fence_observer {
+                observer.fenced(&fence);
+            }
+            Some(fence)
+        }
         // `retry_storage_op_fenceable` panics on every other permanent failure.
         Err(other) => unreachable!("unexpected storage error: {other}"),
     }
@@ -367,7 +385,7 @@ async fn read_persisted_oplog_entries(
 ///
 /// Stores and retrieves individual oplog entries from the `IndexedStorage` implementation configured for
 /// the executor.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PrimaryOplogService {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
@@ -378,6 +396,32 @@ pub struct PrimaryOplogService {
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
     stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
+    /// Told of every refusal the storage returns for an oplog this service opened, so the epochs
+    /// the refusals carry can reach the shard manager. `None` reports nothing.
+    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
+}
+
+impl Debug for PrimaryOplogService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimaryOplogService")
+            .field("indexed_storage", &self.indexed_storage)
+            .field("blob_storage", &self.blob_storage)
+            .field("replicas", &self.replicas)
+            .field(
+                "max_operations_before_commit",
+                &self.max_operations_before_commit,
+            )
+            .field(
+                "max_operations_before_commit_ephemeral",
+                &self.max_operations_before_commit_ephemeral,
+            )
+            .field("max_payload_size", &self.max_payload_size)
+            .field("retry_config", &self.retry_config)
+            .field("oplogs", &self.oplogs)
+            .field("stream_session_index", &self.stream_session_index)
+            .field("fence_observer", &self.fence_observer.is_some())
+            .finish()
+    }
 }
 
 impl PrimaryOplogService {
@@ -404,7 +448,15 @@ impl PrimaryOplogService {
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
             stream_session_index: Arc::new(std::sync::OnceLock::new()),
+            fence_observer: None,
         }
+    }
+
+    /// Reports every refusal the storage returns for an oplog this service opens to `observer`,
+    /// with the epoch recorded on the oplog.
+    pub fn with_fence_observer(mut self, observer: Arc<dyn OplogFenceObserver>) -> Self {
+        self.fence_observer = Some(observer);
+        self
     }
 
     fn oplog_key(agent_id: &AgentId) -> String {
@@ -455,6 +507,47 @@ impl PrimaryOplogService {
                 "Initial oplog entry fenced: the shard has a new owner"
             );
         });
+    }
+
+    async fn open_with(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        last_oplog_index: Option<OplogIndex>,
+        initial_worker_metadata: AgentMetadata,
+        shard_epoch: Option<ShardEpoch>,
+        reconcile_last_index: bool,
+    ) -> Arc<dyn Oplog> {
+        record_oplog_call("open");
+
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let max_operations_before_commit = match agent_mode {
+            AgentMode::Durable => self.max_operations_before_commit,
+            AgentMode::Ephemeral => self.max_operations_before_commit_ephemeral,
+        };
+
+        self.oplogs
+            .get_or_open(
+                &owned_agent_id.agent_id,
+                CreateOplogConstructor::new(
+                    shard_epoch,
+                    self.indexed_storage.clone(),
+                    self.blob_storage.clone(),
+                    self.replicas,
+                    max_operations_before_commit,
+                    self.max_payload_size,
+                    self.retry_config.clone(),
+                    key,
+                    last_oplog_index,
+                    reconcile_last_index,
+                    owned_agent_id.clone(),
+                    agent_mode,
+                    initial_worker_metadata.created_by,
+                    self.stream_session_index(),
+                    self.fence_observer.clone(),
+                ),
+            )
+            .await
     }
 
     async fn get_last_index_from_storage(
@@ -575,36 +668,22 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
-        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         record_oplog_call("create");
 
         let key = Self::oplog_key(&owned_agent_id.agent_id);
-        let already_exists: bool = {
-            let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = key.clone();
-            retry_storage_op(&self.retry_config, "create_exists", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { is.with("oplog", "create").exists(ns, &key).await }
-            })
-            .await
-        };
 
-        if already_exists {
-            panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
-        }
-
-        // The record goes in before the first entry. If it is refused, this executor has already
-        // lost the shard: skip the append entirely and let `open` below hand back an oplog that
-        // refuses every write.
+        // The record goes in before the existence probe and the first entry. A probe taken before
+        // the claim can miss a `Create` that an executor at an older epoch lands in between, and
+        // the initial append would then collide with it. If the claim is refused, this executor
+        // has already lost the shard: it writes nothing, so whether the owner created the oplog
+        // first is not its question, and `open` below hands back an oplog that refuses every write.
+        // The refusal is reported here even though the open behind it may report it again: an
+        // unfenced handle this service still holds at the same epoch is handed back without
+        // asking the storage, and then this is the only refusal before a write.
         let fenced_at_create = match shard_epoch {
             Some(epoch) => record_owning_epoch(
                 &*self.indexed_storage,
@@ -613,6 +692,7 @@ impl OplogService for PrimaryOplogService {
                 agent_mode,
                 &key,
                 epoch,
+                self.fence_observer.as_deref(),
             )
             .await
             .is_some(),
@@ -620,6 +700,26 @@ impl OplogService for PrimaryOplogService {
         };
 
         if !fenced_at_create {
+            let already_exists: bool = {
+                let is = self.indexed_storage.clone();
+                let agent_id = owned_agent_id.agent_id();
+                let key = key.clone();
+                retry_storage_op(&self.retry_config, "create_exists", &key, || {
+                    let is = is.clone();
+                    let ns = IndexedStorageNamespace::OpLog {
+                        agent_id: agent_id.clone(),
+                        agent_mode,
+                    };
+                    let key = key.clone();
+                    async move { is.with("oplog", "create").exists(ns, &key).await }
+                })
+                .await
+            };
+
+            if already_exists {
+                panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
+            }
+
             self.append_initial_entry(
                 owned_agent_id,
                 agent_mode,
@@ -631,14 +731,14 @@ impl OplogService for PrimaryOplogService {
             .await;
         }
 
-        self.open(
+        // The claim came before the initial entry, so `INITIAL` is exact and needs no re-read.
+        self.open_with(
             owned_agent_id,
             agent_mode,
             Some(OplogIndex::INITIAL),
             initial_worker_metadata,
-            last_known_status,
-            execution_status,
             shard_epoch,
+            false,
         )
         .await
     }
@@ -649,8 +749,8 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
-        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         record_oplog_call("create_fresh");
@@ -668,6 +768,7 @@ impl OplogService for PrimaryOplogService {
                 agent_mode,
                 &key,
                 epoch,
+                self.fence_observer.as_deref(),
             )
             .await
             .is_some(),
@@ -686,14 +787,15 @@ impl OplogService for PrimaryOplogService {
             .await;
         }
 
-        self.open(
+        // Claimed before the initial entry, so `INITIAL` is exact; not re-reading it keeps a fresh
+        // create free of storage reads.
+        self.open_with(
             owned_agent_id,
             agent_mode,
             Some(OplogIndex::INITIAL),
             initial_worker_metadata,
-            last_known_status,
-            execution_status,
             shard_epoch,
+            false,
         )
         .await
     }
@@ -708,34 +810,17 @@ impl OplogService for PrimaryOplogService {
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
-        record_oplog_call("open");
-
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
-        let max_operations_before_commit = match agent_mode {
-            AgentMode::Durable => self.max_operations_before_commit,
-            AgentMode::Ephemeral => self.max_operations_before_commit_ephemeral,
-        };
-
-        self.oplogs
-            .get_or_open(
-                &owned_agent_id.agent_id,
-                CreateOplogConstructor::new(
-                    shard_epoch,
-                    self.indexed_storage.clone(),
-                    self.blob_storage.clone(),
-                    self.replicas,
-                    max_operations_before_commit,
-                    self.max_payload_size,
-                    self.retry_config.clone(),
-                    key,
-                    last_oplog_index,
-                    owned_agent_id.clone(),
-                    agent_mode,
-                    initial_worker_metadata.created_by,
-                    self.stream_session_index(),
-                ),
-            )
-            .await
+        // An index handed in by a caller was read before this open claims the epoch.
+        let reconcile_last_index = last_oplog_index.is_some();
+        self.open_with(
+            owned_agent_id,
+            agent_mode,
+            last_oplog_index,
+            initial_worker_metadata,
+            shard_epoch,
+            reconcile_last_index,
+        )
+        .await
     }
 
     async fn get_last_index(
@@ -948,11 +1033,15 @@ struct CreateOplogConstructor {
     retry_config: RetryConfig,
     key: String,
     last_oplog_idx: Option<OplogIndex>,
+    /// `last_oplog_idx` was read before this constructor claims the epoch, so it may be behind
+    /// entries an executor at an older epoch committed in between.
+    reconcile_last_index: bool,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     shard_epoch: Option<ShardEpoch>,
+    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
 impl CreateOplogConstructor {
@@ -967,10 +1056,12 @@ impl CreateOplogConstructor {
         retry_config: RetryConfig,
         key: String,
         last_oplog_idx: Option<OplogIndex>,
+        reconcile_last_index: bool,
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
+        fence_observer: Option<Arc<dyn OplogFenceObserver>>,
     ) -> Self {
         Self {
             shard_epoch,
@@ -982,29 +1073,23 @@ impl CreateOplogConstructor {
             retry_config,
             key,
             last_oplog_idx,
+            reconcile_last_index,
             owned_agent_id,
             agent_mode,
             account_id,
             stream_session_index,
+            fence_observer,
         }
     }
 }
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
+    }
+
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let last_oplog_idx = match self.last_oplog_idx {
-            Some(idx) => idx,
-            None => {
-                PrimaryOplogService::get_last_index_from_storage(
-                    &*self.indexed_storage,
-                    &self.owned_agent_id,
-                    self.agent_mode,
-                    &self.retry_config,
-                )
-                .await
-            }
-        };
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
         let fence = match self.shard_epoch {
@@ -1016,10 +1101,35 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.agent_mode,
                     &self.key,
                     shard_epoch,
+                    self.fence_observer.as_deref(),
                 )
                 .await
             }
             None => None,
+        };
+
+        // Read after the claim: once it returns, every writer at an older epoch is refused, so the
+        // read sees every entry that will ever precede this handle's first write. An index a
+        // caller read before the claim can be behind by whatever a losing executor committed in
+        // between, and this handle's first append would collide with it. That index is merged
+        // rather than replaced, because it may count entries this layer no longer holds, such as
+        // ones already moved to an archive.
+        let stored_last_index = || {
+            PrimaryOplogService::get_last_index_from_storage(
+                &*self.indexed_storage,
+                &self.owned_agent_id,
+                self.agent_mode,
+                &self.retry_config,
+            )
+        };
+        let last_oplog_idx = match self.last_oplog_idx {
+            None => stored_last_index().await,
+            Some(idx)
+                if self.reconcile_last_index && self.shard_epoch.is_some() && fence.is_none() =>
+            {
+                OplogIndex::from_u64(idx.as_u64().max(stored_last_index().await.as_u64()))
+            }
+            Some(idx) => idx,
         };
 
         Arc::new(PrimaryOplog::new(
@@ -1037,6 +1147,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.agent_mode,
             self.account_id,
             self.stream_session_index,
+            self.fence_observer,
             close,
         ))
     }
@@ -1198,6 +1309,7 @@ impl PrimaryOplog {
         agent_mode: AgentMode,
         account_id: AccountId,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
+        fence_observer: Option<Arc<dyn OplogFenceObserver>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let account_id_label = account_id.to_string();
@@ -1209,6 +1321,7 @@ impl PrimaryOplog {
         let mut state = PrimaryOplogState {
             shard_epoch,
             fence: fence.clone(),
+            fence_observer,
             indexed_storage,
             blob_storage,
             replicas,
@@ -1384,9 +1497,11 @@ impl PrimaryOplog {
                         let _ = done.send(result);
                     }
                     OplogJob::Flush { done } => {
-                        // The caller gets no error to act on. A fence is latched on the state, so
-                        // every later write fails on it without asking the storage again; a
-                        // transient storage failure is fatal here as everywhere else.
+                        // The job has no error to reply with. A fence is latched on the state,
+                        // where `wait_for_replicas` reads it after this job, so a fenced flush is
+                        // reported as not durable rather than lost; every subsequent write fails on
+                        // it without asking the storage again. A transient storage failure is fatal
+                        // here as everywhere else.
                         match state.commit(CommitLevel::Always).await {
                             Ok(_) | Err(OplogError::Fenced(_)) => {}
                             Err(error) => panic!("oplog write: {error}"),
@@ -1692,6 +1807,9 @@ struct PrimaryOplogState {
     /// now, so there is nothing to be gained by asking the storage again. Shared with the handle,
     /// which answers [`Oplog::fence`] from it without a round trip through the actor.
     fence: Arc<std::sync::OnceLock<OplogFence>>,
+    /// Told of the refusal that sets [`Self::fence`]; the latched fast-fail asks the storage
+    /// nothing and reports nothing.
+    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
 impl PrimaryOplogState {
@@ -1834,9 +1952,23 @@ impl PrimaryOplogState {
         .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err))
         .inspect_err(|err| {
             if let OplogError::Fenced(fence) = err {
-                let _ = self.fence.set(fence.clone());
-                // The drained entries are dropped: this oplog is not ours to write.
-                self.pending_uploads.clear();
+                // The drained entries are dropped: this oplog is not ours to write. Nothing else
+                // is undone - the commit barrier above already awaited every payload the batch
+                // referenced, so those blobs are durable and stay behind with no entry pointing at
+                // them. The epoch the storage holds is reported, so a shard manager whose state
+                // lost history can mint above it. Warned only when it latches: each write after
+                // that fails fast on the latch without reaching the storage.
+                if self.fence.set(fence.clone()).is_ok() {
+                    warn!(
+                        agent_id = %self.owned_agent_id,
+                        expected_epoch = fence.expected_epoch.0,
+                        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                        "Oplog append fenced: the shard has a new owner, refusing further writes"
+                    );
+                }
+                if let Some(observer) = &self.fence_observer {
+                    observer.fenced(fence);
+                }
             }
         })?;
 
@@ -2116,6 +2248,11 @@ impl Oplog for PrimaryOplog {
         record_oplog_call("wait_for_replicas");
 
         self.run_job(|done| OplogJob::Flush { done }).await;
+        // A refused flush reached no replica. The storage would still answer with its replica
+        // count, and passing that on would tell the caller that entries it turned away are durable.
+        if self.fence.get().is_some() {
+            return false;
+        }
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
         match reader

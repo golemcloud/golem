@@ -30,7 +30,7 @@ use crate::worker::invocation::{
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
+    PendingWorkerInterrupt, QueuedWorkerInvocation, RelinquishReason, RetryDecision, RunningAgent,
     RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
     WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
 };
@@ -316,6 +316,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         InterruptKind::ShardLost => {
                             // Nothing is written: the oplog belongs to the shard's new owner
                             // now. Whoever was waiting for this start is told to look there.
+                            //
+                            // A fence found by a host call during instantiation arrives here
+                            // without `relinquish()` having run, so the agent is marked given up
+                            // now: the stop below then tears its entity bodies down as
+                            // `ShardLost`, fails its waiters and removes only this generation. A
+                            // reason `relinquish()` already recorded is kept.
+                            self.parent
+                                .mark_relinquished(RelinquishReason::Fenced(None));
                             self.parent.complete_startup(
                                 self.start_attempt,
                                 Err(WorkerExecutorError::ShardingNotReady),
@@ -565,18 +573,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                let owner_failure = final_interrupt
-                    .map(OwnerFailureWinner::Lifecycle)
-                    .or_else(|| {
-                        recovery_failure
-                            .clone()
-                            .map(OwnerFailureWinner::Infrastructure)
-                    })
-                    .unwrap_or_else(|| {
-                        OwnerFailureWinner::Lifecycle(
-                            InterruptKind::Interrupt(Timestamp::now_utc()),
-                        )
-                    });
+                let owner_failure = exit_owner_failure(
+                    self.parent.relinquished_owner_failure(),
+                    final_interrupt,
+                    recovery_failure.as_ref(),
+                );
                 active_agent.fence_entity_bodies(owner_failure).await;
             }
             if let Some(error) = Self::unload_running_agent(
@@ -802,9 +803,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            let failure = startup_failure.clone().map_or_else(
-                || OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
-                OwnerFailureWinner::Infrastructure,
+            let failure = exit_owner_failure(
+                self.parent.relinquished_owner_failure(),
+                None,
+                startup_failure.as_ref(),
             );
             active_agent.fence_entity_bodies(failure).await;
         }
@@ -2368,6 +2370,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .and_then(|result| result)
                     {
                         tracing::error!(%error, "Failed to complete durable streaming session");
+                        if let Some(reason) =
+                            session_completion_relinquishment(&error, self.parent.oplog.fence())
+                        {
+                            self.parent.mark_relinquished(reason);
+                            let decision = self
+                                .store
+                                .data_mut()
+                                .on_invocation_failure(
+                                    &full_function_name,
+                                    &TrapType::Interrupt(InterruptKind::ShardLost),
+                                )
+                                .await;
+                            return failed_agent_invocation_outcome(
+                                self.parent.agent_mode(),
+                                decision,
+                            );
+                        }
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
@@ -2413,18 +2432,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
             Err(error) => {
+                // The success hook commits `AgentInvocationFinished`; if the storage refused that
+                // commit the oplog has latched the fence, and the failure is a lost shard rather
+                // than an internal error.
+                let trap_type = self
+                    .store
+                    .data()
+                    .durable_ctx()
+                    .trap_type_under_latched_fence(TrapType::Error {
+                        error: AgentError::InternalError(error.to_string()),
+                        retry_from: OplogIndex::INITIAL,
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    });
                 self.store
                     .data_mut()
-                    .on_invocation_failure(
-                        &full_function_name,
-                        &TrapType::Error {
-                            error: AgentError::InternalError(error.to_string()),
-                            retry_from: OplogIndex::INITIAL,
-                            in_atomic_region: false,
-                            atomic_region_had_side_effects: false,
-                            semantic_trap_retry_override: None,
-                        },
-                    )
+                    .on_invocation_failure(&full_function_name, &trap_type)
                     .await;
                 if self.uses_streams {
                     let _ = self
@@ -2482,6 +2506,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )),
             },
         };
+        // A fence that reached the guest through a `String` boundary classifies as an ordinary
+        // failure; the latch still says the oplog is finished, so the agent is given up, not retried.
+        let trap_type = trap_type.map(|trap_type| {
+            self.store
+                .data()
+                .durable_ctx()
+                .trap_type_under_latched_fence(trap_type)
+        });
         let decision = match trap_type {
             Some(trap_type) => {
                 self.store
@@ -2987,6 +3019,30 @@ fn successful_agent_invocation_outcome(
     }
 }
 
+/// The failure a loop's exit tears the agent's entity bodies down with.
+///
+/// A relinquished agent's shard moved, and that wins over any lifecycle interrupt still queued and
+/// over a recovery failure: the bodies must not report an API interrupt or a fault for an agent
+/// that simply has a new owner. A relinquishment first discovered by the stop's own commit, which
+/// runs after this choice, cannot be reflected, because by then the bodies are already torn down;
+/// the fence still holds, and that stop still fails the waiters and removes the generation.
+fn exit_owner_failure(
+    relinquished: Option<OwnerFailureWinner>,
+    final_interrupt: Option<InterruptKind>,
+    recovery_failure: Option<&WorkerExecutorError>,
+) -> OwnerFailureWinner {
+    relinquished
+        .or_else(|| final_interrupt.map(OwnerFailureWinner::Lifecycle))
+        .or_else(|| {
+            recovery_failure
+                .cloned()
+                .map(OwnerFailureWinner::Infrastructure)
+        })
+        .unwrap_or_else(|| {
+            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc()))
+        })
+}
+
 fn failed_agent_invocation_outcome(
     agent_mode: AgentMode,
     decision: RetryDecision,
@@ -2995,6 +3051,24 @@ fn failed_agent_invocation_outcome(
         CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
     } else {
         CommandOutcome::BreakInnerLoop(decision)
+    }
+}
+
+/// Why the agent is given up when its streaming session could not be completed, if it is.
+///
+/// A commit the storage refused reaches the completion as `OplogFenced` or flattened into a
+/// runtime error, and in both cases the oplog has latched the fence. An in-place retry would
+/// reopen the oplog at the epoch that was just refused, so the agent is relinquished instead.
+fn session_completion_relinquishment(
+    error: &WorkerExecutorError,
+    latched: Option<crate::services::oplog::OplogFence>,
+) -> Option<RelinquishReason> {
+    match latched {
+        Some(fence) => Some(RelinquishReason::Fenced(Some(Box::new(fence)))),
+        None if matches!(error, WorkerExecutorError::OplogFenced { .. }) => {
+            Some(RelinquishReason::Fenced(None))
+        }
+        None => None,
     }
 }
 
@@ -3057,13 +3131,14 @@ mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
         ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
-        close_usage_before_delete, coalesce_filesystem_limit_update,
+        close_usage_before_delete, coalesce_filesystem_limit_update, exit_owner_failure,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup,
+        session_completion_relinquishment, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup,
     };
+    use crate::durable_host::tool::operation::OwnerFailureWinner;
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
     use crate::services::agent_filesystem::{
@@ -3076,15 +3151,15 @@ mod tests {
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
         EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
-        PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker,
-        UnloadReason, WorkerCommand, WorkerInstance, complete_stopping_worker,
+        PendingLiveInvocationDisposition, RelinquishReason, RetryDecision, RunningAgent,
+        StoppingWorker, UnloadReason, WorkerCommand, WorkerInstance, complete_stopping_worker,
     };
     use crate::workerctx::default::Context;
     use golem_common::model::AgentInvocationKind;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3140,6 +3215,46 @@ mod tests {
         close(node).await.unwrap();
         control.push_delete_and_verify(Ok(()));
         delete(seal(filesystem)).await.unwrap();
+    }
+
+    #[test]
+    fn exit_owner_failure_prefers_relinquishment() {
+        let shard_lost = || Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost));
+        let recovery_failure = WorkerExecutorError::unknown("recovery failed");
+
+        assert!(matches!(
+            exit_owner_failure(shard_lost(), None, None),
+            OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+        ));
+        // A shard that moved outranks both a queued lifecycle interrupt and a recovery failure:
+        // the agent was neither suspended through the API nor broken, it has a new owner.
+        assert!(matches!(
+            exit_owner_failure(
+                shard_lost(),
+                Some(InterruptKind::Suspend(Timestamp::now_utc())),
+                Some(&recovery_failure),
+            ),
+            OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+        ));
+
+        // Without a relinquishment the previous order stands: the queued interrupt, then the
+        // recovery failure, then an interrupt stamped now.
+        assert!(matches!(
+            exit_owner_failure(
+                None,
+                Some(InterruptKind::Suspend(Timestamp::now_utc())),
+                Some(&recovery_failure),
+            ),
+            OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(_))
+        ));
+        assert!(matches!(
+            exit_owner_failure(None, None, Some(&recovery_failure)),
+            OwnerFailureWinner::Infrastructure(_)
+        ));
+        assert!(matches!(
+            exit_owner_failure(None, None, None),
+            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(_))
+        ));
     }
 
     impl Drop for TestStoreOwner {
@@ -3829,6 +3944,39 @@ mod tests {
             failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
+    }
+
+    /// A session completion that failed on a fence must not take the in-place restart: that
+    /// would reopen the oplog at the epoch the storage just refused.
+    #[test]
+    fn a_fenced_session_completion_relinquishes_instead_of_restarting() {
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(1)),
+            agent_id: "fenced".to_string(),
+        };
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: agent_id.clone(),
+            expected_epoch: golem_common::model::ShardEpoch(3),
+            actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+        };
+        let flattened = WorkerExecutorError::runtime("durable stream commit failed");
+
+        assert!(matches!(
+            session_completion_relinquishment(&flattened, Some(fence.clone())),
+            Some(RelinquishReason::Fenced(Some(latched))) if *latched == fence
+        ));
+        assert!(matches!(
+            session_completion_relinquishment(
+                &WorkerExecutorError::OplogFenced {
+                    agent_id,
+                    expected_epoch: 3,
+                    actual_epoch: Some(4),
+                },
+                None,
+            ),
+            Some(RelinquishReason::Fenced(None))
+        ));
+        assert!(session_completion_relinquishment(&flattened, None).is_none());
     }
 
     #[test]

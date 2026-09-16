@@ -303,15 +303,22 @@ impl MultiLayerOplogService {
             .remove(agent_id)
             .and_then(|transfer_fiber| transfer_fiber.upgrade());
 
-        let transfer_fiber = transfer_fiber.and_then(|transfer_fiber| {
+        if let Some(transfer_fiber) = transfer_fiber {
+            Self::cancel_and_join_transfer(&transfer_fiber).await;
+        }
+    }
+
+    /// Cancels a transfer fiber and returns once its task is gone, so it can start no more work.
+    async fn cancel_and_join_transfer(transfer_fiber: &TransferFiber) {
+        let transfer = {
             let mut transfer_fiber = transfer_fiber.lock().unwrap();
             transfer_fiber.cancelled = true;
             transfer_fiber.transfer_fiber.take()
-        });
+        };
 
-        if let Some(transfer_fiber) = transfer_fiber {
-            transfer_fiber.abort();
-            let _ = transfer_fiber.await;
+        if let Some(transfer) = transfer {
+            transfer.abort();
+            let _ = transfer.await;
         }
     }
 
@@ -423,6 +430,10 @@ impl CreateOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
+    }
+
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let agent_mode = self.agent_mode;
         let last_oplog_index = match self.last_oplog_index {
@@ -1028,6 +1039,24 @@ impl MultiLayerOplog {
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<MultiLayerOplog>(this)?;
         Some(Self::archive(this, true).await)
+    }
+
+    /// Ends this handle's background transfer for good and returns once nothing the transfer
+    /// started is still running. Does nothing for an oplog without archive layers.
+    ///
+    /// Dropping the handle is not enough: a transfer under way holds its own reference to it, and
+    /// goes on to drop the primary's prefix, deleting the primary oplog when that empties it, no
+    /// matter who has opened the agent's oplog since. The entries it did not move stay in the
+    /// primary layer, for the next handle to archive.
+    pub async fn try_abort_transfer(this: &Arc<dyn Oplog>) {
+        let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
+            return;
+        };
+        MultiLayerOplogService::cancel_and_join_transfer(&this.transfer_fiber).await;
+        // A transfer cancelled while it waited for its `drop_prefix` reply has already handed the
+        // job to the primary's actor, which runs it regardless. The actor serves jobs in the order
+        // they were sent, so a reply to a job sent after it means that job has finished.
+        this.primary.current_oplog_index().await;
     }
 
     async fn archive(this: Arc<Self>, blocking: bool) -> bool {

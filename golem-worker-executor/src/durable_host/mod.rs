@@ -628,6 +628,12 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// `trap_type`, or `ShardLost` once this agent's oplog has latched a fence. For the invocation
+    /// loop, which reaches the oplog only through this context.
+    pub(crate) fn trap_type_under_latched_fence(&self, trap_type: TrapType) -> TrapType {
+        trap_type.under_latched_fence(self.state.oplog.fence().as_ref())
+    }
+
     #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.owner_execution
@@ -2777,7 +2783,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     request: None,
                     durable_function_type: function_type.clone(),
                 };
-                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
+                // The scope's side effect runs as soon as this returns. A `Start` the storage
+                // refused has to stop it here: the shard's new owner has no record of the scope,
+                // so nothing would stop it running the effect a second time.
+                let begin_index = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog_or_fenced(entry)
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
                 Ok(begin_index)
             } else {
                 let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
@@ -3101,10 +3115,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
                 .await
                 .map_err(WorkerExecutorError::from)?;
+            // The pair is only buffered until this commit. If the storage refused it, the
+            // transaction must not be handed out, so `tx` is dropped here before any statement
+            // has run through it.
             self.public_state
                 .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .commit_oplog_or_fenced(CommitLevel::Always)
+                .await
+                .map_err(WorkerExecutorError::from)?;
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
@@ -3266,13 +3284,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         end: pending.replay_target().next(), // skipping the Jump entry too
                     };
 
+                    // Checked, like the begin below: a refused jump means the restart is not ours
+                    // to run, and stopping here avoids opening a database transaction first.
                     self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(
+                        .add_and_commit_oplog_or_fenced(OplogEntry::jump(
                             self.entity_parent_start_index(),
                             deleted_region,
                         ))
-                        .await;
+                        .await
+                        .map_err(WorkerExecutorError::from)?;
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
@@ -3280,14 +3301,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.finish_switch_to_live(pending).await?.require_live()?;
 
                     let (tx_id, tx) = handler.create_new().await?;
-                    let _ = self
-                        .public_state
+                    // The restarted transaction runs its statements once this returns, so a
+                    // refused begin has to stop it; `tx` is dropped unused.
+                    self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                        .add_and_commit_oplog_or_fenced(OplogEntry::begin_remote_transaction(
                             tx_id,
                             Some(original_begin_index),
                         ))
-                        .await;
+                        .await
+                        .map_err(WorkerExecutorError::from)?;
 
                     // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
                     // be appended live by the transaction terminal, so do not store the (now
@@ -4806,6 +4829,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         trap_type: &TrapType,
     ) -> RetryDecision {
+        // Covers the callers that hand over a trap and do not branch on it afterwards; the ones
+        // that do reclassify before this call, so they dispatch on the same kind.
+        let trap_type = &self.trap_type_under_latched_fence(trap_type.clone());
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and
@@ -5802,7 +5828,18 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             store.as_context().data().agent_mode(),
                                         ))
                                     }
-                                };
+                                }
+                                // Every arm below dispatches on the kind. Left an `Error`, a fence
+                                // whose type was lost on the way would abandon the snapshot or break
+                                // with `InvocationFailed` into a recovery failure, which unloads the
+                                // agent as failed instead of relinquishing it.
+                                .map(|trap_type| {
+                                    store
+                                        .as_context()
+                                        .data()
+                                        .durable_ctx()
+                                        .trap_type_under_latched_fence(trap_type)
+                                });
                                 let decision = match trap_type {
                                     // A recorded invocation that fails while its entries are still
                                     // being replayed after an automatic snapshot load most likely
@@ -6166,22 +6203,20 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                Worker::get_or_create_running(
-                    this,
+                recovered_restart(
                     &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
-                )
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                    Worker::get_or_create_running(
+                        this,
+                        &owned_agent_id,
+                        None,
+                        Vec::new(),
+                        None,
+                        None,
+                        &InvocationContextStack::fresh(),
+                        Principal::anonymous(),
                     )
-                })?;
+                    .await,
+                )?;
             }
         }
 
@@ -6590,6 +6625,29 @@ fn recovered_status(
         }
         Err(error) => Err(anyhow!(
             "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+        )),
+    }
+}
+
+/// The outcome of restarting one recovered agent, drawing the same line as [`recovered_status`].
+///
+/// `ShardingNotReady` means the agent's shard left this executor's assignment while recovery was
+/// running: a later delivery revoked it, and the worker was refused an epoch rather than opened
+/// unfenced. The agent belongs to the shard's new owner, which recovers it there. This is a skip,
+/// like an oplog that is gone. Failing the whole assignment for it would stop every other agent in
+/// the scan from being resumed. Any other restart failure still fails the assignment.
+fn recovered_restart<W>(
+    owned_agent_id: &OwnedAgentId,
+    restarted: Result<W, WorkerExecutorError>,
+) -> Result<(), anyhow::Error> {
+    match restarted {
+        Ok(_) => Ok(()),
+        Err(WorkerExecutorError::ShardingNotReady) => {
+            debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
+            Ok(())
+        }
+        Err(error) => Err(anyhow!(
+            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
         )),
     }
 }
@@ -8532,6 +8590,31 @@ mod tests {
         assert!(
             error.to_string().contains("cannot be resumed")
                 && error.to_string().contains("redis failover"),
+            "{error}"
+        );
+    }
+
+    /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest
+    /// of the scan is still resumed. Any other restart failure still fails the assignment.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_shard_left_the_assignment() {
+        assert!(recovered_restart(&recovered_agent(), Ok(())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::ShardingNotReady)
+            )
+            .is_ok()
+        );
+
+        let error = recovered_restart::<()>(
+            &recovered_agent(),
+            Err(WorkerExecutorError::runtime("instance failed to start")),
+        )
+        .expect_err("a restart failure other than a lost shard was skipped");
+        assert!(
+            error.to_string().contains("failed to restart")
+                && error.to_string().contains("instance failed to start"),
             "{error}"
         );
     }

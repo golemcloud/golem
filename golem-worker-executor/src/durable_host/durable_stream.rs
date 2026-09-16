@@ -21,7 +21,8 @@ use crate::durable_host::stream_bus::{
 #[cfg(test)]
 use crate::services::oplog::CommitLevel;
 use crate::services::oplog::{
-    DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
+    DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
+    OplogServiceOps,
 };
 use crate::services::rpc::Rpc;
 use crate::services::worker::WorkerService;
@@ -54,6 +55,7 @@ use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -171,8 +173,21 @@ pub(crate) enum DurableStreamProducerError {
     ConsumerJournalAdvanced,
     DeletionBlocked(Vec<StreamAttachmentKeyV1>),
     CorruptHistory(String),
+    Fenced(OplogFence),
     Oplog(String),
     LiveBus(DurableLiveStreamBusError),
+}
+
+/// A refused write keeps its type as `Fenced` instead of joining `Oplog` as text, so the
+/// boundaries can report it as `OplogFenced` - a caller reroutes on that - rather than as a
+/// failure of the request.
+impl From<OplogError> for DurableStreamProducerError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error @ OplogError::Storage(_) => Self::Oplog(error.to_string()),
+        }
+    }
 }
 
 impl std::fmt::Display for DurableStreamProducerError {
@@ -184,6 +199,18 @@ impl std::fmt::Display for DurableStreamProducerError {
 impl std::error::Error for DurableStreamProducerError {}
 
 impl DurableStreamProducerError {
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
+    /// other error is rendered through `otherwise`, which says how that boundary classifies it.
+    pub(crate) fn into_worker_executor_error(
+        self,
+        otherwise: impl FnOnce(String) -> WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match self {
+            Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            error => otherwise(error.to_string()),
+        }
+    }
+
     pub(crate) fn deletion_blocked_evidence(&self) -> Option<String> {
         let Self::DeletionBlocked(dependents) = self else {
             return None;
@@ -2091,12 +2118,28 @@ impl DurableStreamProducer {
         }))
     }
 
-    async fn commit(&self) {
+    async fn commit(&self) -> Result<(), DurableStreamProducerError> {
         (self.commit)(None).await;
+        self.committed_unless_fenced()
     }
 
-    async fn commit_notifying(&self, committed: oneshot::Sender<()>) {
+    async fn commit_notifying(
+        &self,
+        committed: oneshot::Sender<()>,
+    ) -> Result<(), DurableStreamProducerError> {
         (self.commit)(Some(committed)).await;
+        self.committed_unless_fenced()
+    }
+
+    /// The worker's commit swallows a refusal: it only spawns the relinquish. The refused append
+    /// has latched the fence before the commit resolves, so the latch is what tells a persisted
+    /// write from one that must not be indexed, retained or published. A below-threshold add
+    /// answers `Ok` on a latched oplog, so no earlier result can stand in for this check.
+    fn committed_unless_fenced(&self) -> Result<(), DurableStreamProducerError> {
+        match self.oplog.fence() {
+            Some(fence) => Err(DurableStreamProducerError::Fenced(fence)),
+            None => Ok(()),
+        }
     }
 
     fn retain_committed_events(&self, events: &[CommittedProducerStreamEventV1]) {
@@ -2401,11 +2444,11 @@ impl DurableStreamProducer {
                 OplogPayload::Inline(Box::new(record)),
             ))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         if let Some(key) = result_key {
             index.invocation_results.entry(key).or_insert(oplog_index);
         }
-        self.commit().await;
         drop(index);
         self.notify_session_records_changed();
         Ok(())
@@ -2532,8 +2575,8 @@ impl DurableStreamProducer {
                 OplogPayload::Inline(Box::new(record)),
             ))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         self.notify_session_records_changed();
         Ok(false)
     }
@@ -2599,8 +2642,8 @@ impl DurableStreamProducer {
                     OplogPayload::Inline(Box::new(record)),
                 ))
                 .await
-                .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-            self.commit().await;
+                .map_err(DurableStreamProducerError::from)?;
+            self.commit().await?;
             *index = updated;
         }
         drop(index);
@@ -2759,8 +2802,8 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("registration batch returned no oplog entry");
@@ -2912,7 +2955,7 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+            .map_err(DurableStreamProducerError::from)?;
 
         let mut prepared = None;
         let mut registrations = Vec::with_capacity(requests.len());
@@ -2979,7 +3022,7 @@ impl DurableStreamProducer {
             &StreamSessionRecordV1::Prepared(prepared.clone()),
         )?;
 
-        self.commit_notifying(committed).await;
+        self.commit_notifying(committed).await?;
         *index = updated_index;
         self.buses
             .write()
@@ -3110,8 +3153,8 @@ impl DurableStreamProducer {
                     )]
                 }))
                 .await
-                .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-            self.commit().await;
+                .map_err(DurableStreamProducerError::from)?;
+            self.commit().await?;
             let (oplog_index, entry) = entries.pop().ok_or_else(|| {
                 DurableStreamProducerError::CorruptHistory(
                     "empty result registration batch returned no session record".to_string(),
@@ -3240,8 +3283,8 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
 
         let mut handles = Vec::new();
         let mut session_record = None;
@@ -3937,8 +3980,8 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
 
         let mut pending_registrations = Vec::new();
         let mut committed_item = None;
@@ -4048,8 +4091,8 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("resource exhaustion terminal batch returned no oplog entry");
@@ -4187,8 +4230,8 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream end batch returned no oplog entry");
@@ -4321,8 +4364,8 @@ impl DurableStreamProducer {
                 )]
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream cancellation batch returned no oplog entry");
@@ -4655,8 +4698,8 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
 
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
@@ -6112,8 +6155,8 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
@@ -6219,8 +6262,8 @@ impl DurableStreamProducer {
                 OplogPayload::Inline(Box::new(record.clone())),
             ))
             .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
-        self.commit().await;
+            .map_err(DurableStreamProducerError::from)?;
+        self.commit().await?;
         index.apply_session_references(entity_parent_start_index, &record)?;
         index.apply_deletion_record(
             &record,
@@ -6963,6 +7006,11 @@ pub(crate) mod tests {
         entries: BTreeMap<OplogIndex, OplogEntry>,
         committed: OplogIndex,
         commit_count: u64,
+        /// When set, `add` answers the way a primary oplog does when the threshold commit behind
+        /// the add is refused by the storage.
+        refused_adds: Option<crate::services::oplog::OplogFence>,
+        /// The fence a primary oplog latches when the storage refuses one of its commits.
+        fence: Option<crate::services::oplog::OplogFence>,
     }
 
     #[derive(Default)]
@@ -7000,6 +7048,14 @@ pub(crate) mod tests {
                 .cloned()
                 .collect()
         }
+
+        fn refuse_adds(&self, fence: crate::services::oplog::OplogFence) {
+            self.state.lock().unwrap().refused_adds = Some(fence);
+        }
+
+        fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
+            self.state.lock().unwrap().fence = Some(fence);
+        }
     }
 
     #[async_trait]
@@ -7009,6 +7065,9 @@ pub(crate) mod tests {
             entry: OplogEntry,
         ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
             let mut state = self.state.lock().unwrap();
+            if let Some(fence) = &state.refused_adds {
+                return Err(crate::services::oplog::OplogError::Fenced(fence.clone()));
+            }
             let index = state
                 .entries
                 .last_key_value()
@@ -7025,6 +7084,10 @@ pub(crate) mod tests {
                 .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
             state.entries.insert(index, entry);
             Box::pin(async move { Ok(index) })
+        }
+
+        fn fence(&self) -> Option<crate::services::oplog::OplogFence> {
+            self.state.lock().unwrap().fence.clone()
         }
 
         async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -10325,6 +10388,164 @@ pub(crate) mod tests {
         assert_eq!(
             index.apply_session_references(None, &record(mapping(MAX_DURABLE_STREAMS_PER_SESSION))),
             Err(DurableStreamProducerError::StreamLimit)
+        );
+    }
+
+    fn test_fence() -> crate::services::oplog::OplogFence {
+        crate::services::oplog::OplogFence {
+            agent_id: identity().agent_id,
+            expected_epoch: golem_common::model::ShardEpoch(3),
+            actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+        }
+    }
+
+    /// A fence has to reach the worker executor's boundaries as a fence: flattened into
+    /// `InvalidRequest` it is rejected as a validation failure, and the caller never reroutes.
+    #[test]
+    fn a_fenced_oplog_error_keeps_its_type_through_the_producer() {
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+        let fenced = DurableStreamProducerError::from(crate::services::oplog::OplogError::Fenced(
+            test_fence(),
+        ));
+        assert!(matches!(fenced, DurableStreamProducerError::Fenced(_)));
+        assert!(matches!(
+            fenced.into_worker_executor_error(WorkerExecutorError::invalid_request),
+            WorkerExecutorError::OplogFenced { .. }
+        ));
+
+        let storage = DurableStreamProducerError::from(
+            crate::services::oplog::OplogError::Storage("connection reset".to_string()),
+        );
+        assert!(matches!(storage, DurableStreamProducerError::Oplog(_)));
+        assert!(matches!(
+            storage.into_worker_executor_error(WorkerExecutorError::invalid_request),
+            WorkerExecutorError::InvalidRequest { .. }
+        ));
+    }
+
+    #[test]
+    async fn a_fenced_session_record_append_is_reported_as_fenced() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        oplog.refuse_adds(test_fence());
+
+        let result = producer
+            .append_session_record(StreamSessionRecordV1::ConsumerDeleting(
+                StreamConsumerDeletingRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    consumer_environment_id: identity.environment_id,
+                    consumer: identity.agent_id,
+                    consumer_fingerprint: identity.fingerprint,
+                    deleting_at_millis: 100,
+                },
+            ))
+            .await;
+
+        assert!(
+            matches!(result, Err(DurableStreamProducerError::Fenced(_))),
+            "a refused session record append must stay a fence, got {result:?}"
+        );
+    }
+
+    /// A producer committing the way the worker does: a commit refused by a fence is swallowed,
+    /// and only the oplog's latch records it.
+    async fn producer_swallowing_fenced_commits(
+        oplog: Arc<TestOplog>,
+        identity: &TestIdentity,
+    ) -> Arc<DurableStreamProducer> {
+        let commit_oplog = oplog.clone();
+        let commit: DurableStreamCommit = Arc::new(move |committed| {
+            let oplog = commit_oplog.clone();
+            Box::pin(async move {
+                if oplog.fence().is_some() {
+                    return;
+                }
+                oplog
+                    .commit(CommitLevel::Always)
+                    .await
+                    .expect("oplog write");
+                if let Some(committed) = committed {
+                    let _ = committed.send(());
+                }
+            })
+        });
+        DurableStreamProducer::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Items whose commit was refused never reached the oplog: a live reader handed them would
+    /// journal offsets the shard's new owner replays without.
+    #[test]
+    async fn a_fenced_commit_neither_publishes_nor_indexes_stream_items() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let bus = producer.bus(handle.stream_id).unwrap();
+        let mut subscription = bus.subscribe().await.unwrap();
+        let committed_before = oplog.committed_length();
+        oplog.latch_fence(test_fence());
+
+        let result = producer
+            .write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![7]))
+            .await;
+
+        assert!(
+            matches!(result, Err(DurableStreamProducerError::Fenced(_))),
+            "a write whose commit was refused must report the fence, got {result:?}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), subscription.recv())
+                .await
+                .is_err(),
+            "nothing may be published for a write whose commit was refused"
+        );
+        assert_eq!(oplog.committed_length(), committed_before);
+        assert_eq!(
+            producer.index.lock().await.streams[&handle.stream_id].next_sequence,
+            0
+        );
+    }
+
+    #[test]
+    async fn a_fenced_commit_does_not_record_an_attachment_in_the_index() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let key = attachment_key(&identity, handle.stream_id);
+        oplog.latch_fence(test_fence());
+
+        let result = producer.prepare_attachment(key.clone(), 100).await;
+
+        assert!(
+            matches!(result, Err(DurableStreamProducerError::Fenced(_))),
+            "an attachment whose commit was refused must report the fence, got {result:?}"
+        );
+        assert!(
+            producer
+                .inspect_attachments()
+                .await
+                .iter()
+                .all(|view| view.key != key)
         );
     }
 

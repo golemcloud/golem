@@ -48,7 +48,7 @@ use golem_worker_executor::worker::INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, fake_ownership, registry_test_card, start, start_customized,
-    start_with_overrides, start_with_redis_storage,
+    start_with_overrides, start_with_redis_storage, take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -6157,6 +6157,297 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
         rendered.contains("InvalidShardId"),
         "the caller has to be told the shard moved; instead it got: {rendered}"
     );
+    Ok(())
+}
+
+/// A stop that reaches a generation already given up must leave the generation that replaced it
+/// alone.
+///
+/// A relinquished agent passes through the stop's removal more than once - from its own loop and
+/// again from the relinquish that waited for it - and a handle kept past its generation can stop it
+/// once more. Removal used to be keyed by agent id only, so any of those passes evicted whatever
+/// was cached under that id by then: here, the newer generation the shard's return created.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_through_a_relinquished_generation_leaves_the_next_generation_cached(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-stop");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    // The stale generation is already unloaded and relinquished, so this goes straight to the
+    // removal.
+    stale.test_stop().await;
+
+    assert!(
+        executor.worker_is_cached(&owned_agent_id).await,
+        "a stop through the relinquished generation evicted the generation that replaced it"
+    );
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a stop through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A caller awaiting an invocation whose oplog write was refused inside a host call must be told
+/// to reroute.
+///
+/// A fence found in a host call surfaces as a `ShardLost` trap: the agent marks itself
+/// relinquished and its loop stops without failing anyone. The executor's own assignment still
+/// names the shard - this is the zombie, and nobody has told it - so the waiter's ownership
+/// re-check keeps passing. Two things can answer the caller: the relinquish spawned when the loop's
+/// exit commit is refused, and the loop's own stop. The spawned one misses the caller whenever the
+/// loop removes the agent before it looks, and nothing in a test can hold it back, so this pins
+/// the outcome rather than that ordering.
+///
+/// The takeover lands while the guest is parked in `poll` inside `sleep_for`, after
+/// `subscribe_duration` has committed through the status actor. The first write after it is then
+/// the gated monotonic-clock hook's own commit when the guest reads the elapsed time: a refusal in
+/// the host call, not in the status actor.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-inside-a-host-call");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(6.0f64))
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let subscribed = oplog.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => oplog.iter().any(|start| {
+                    start.oplog_index == end.start_index
+                        && matches!(
+                            &start.entry,
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "monotonic_clock::subscribe_duration"
+                        )
+                }),
+                _ => false,
+            });
+            if subscribed {
+                return anyhow::Ok(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the guest never subscribed to its sleep"))??;
+    // Lets `subscribe_duration`'s own commit finish, so the guest is parked in `poll` with about
+    // five seconds of sleep left and nothing else is due to write.
+    sleep(Duration::from_secs(1)).await;
+
+    let mut clock = executor
+        .gate_next_monotonic_clock_start(&owned_agent_id)
+        .await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!(
+                "the caller was never answered, although its agent's oplog has a new owner and \
+                 this executor gave the agent up"
+            );
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error =
+        answer.expect_err("the invocation's writes were refused, so it cannot have a value");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+
+    // The hook signals `entered` only once its commit has succeeded, and by now the agent is gone
+    // from this executor, so a gate that was going to be entered already has been. Silence means
+    // the refusal happened at that commit, inside the host call.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), clock.entered())
+            .await
+            .is_err(),
+        "the gated clock commit went through, so the refusal was not the host call's"
+    );
+    Ok(())
+}
+
+/// An invocation enqueued onto an oplog that has a new owner must be refused, not accepted.
+///
+/// Enqueueing buffers the pending-invocation entry and commits it through the status actor, and
+/// that commit is where the takeover is found. The refusal used to be folded into "status
+/// unchanged", so the enqueue reported success for a key that never reached the status. Neither the
+/// relinquish the refusal spawns nor the stop's removal fails keys the status does not hold, so
+/// nothing ever answered the caller.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accepted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-enqueue");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let idle = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    // The refusal has to come from the enqueue's own commit. Had anything written to the idle
+    // agent first, the relinquish that write spawned could evict it, and the invocation would then
+    // be refused at a fresh generation's open instead, which proves nothing about the enqueue.
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the idle agent left the cache before the enqueue reached it"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&idle, &cached),
+        "the generation that opened the oplog at the old epoch is no longer the cached one"
+    );
+
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64)),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "the caller was never answered: the invocation was accepted onto an oplog whose \
+             pending entry the storage refused"
+        )
+    })?;
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the pending entry was never committed, so there is no value");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
     Ok(())
 }
 

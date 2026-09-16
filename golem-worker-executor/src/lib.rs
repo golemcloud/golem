@@ -828,30 +828,24 @@ pub async fn create_worker_executor_impl<
     }
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
+    // Built once for both shapes, so neither can be left without the observer: without it a
+    // refused write never reaches the shard manager, and a manager whose state lost history goes
+    // on minting below the oplog rows that refuse it.
+    let primary_oplog_service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        golem_config.oplog.max_operations_before_commit,
+        golem_config.oplog.max_operations_before_commit_ephemeral,
+        golem_config.oplog.max_payload_size,
+        golem_config.indexed_storage_retry.clone(),
+    )
+    .await
+    .with_fence_observer(shard_service.clone());
+
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
-        None => Arc::new(
-            PrimaryOplogService::new(
-                indexed_storage.clone(),
-                blob_storage.clone(),
-                golem_config.oplog.max_operations_before_commit,
-                golem_config.oplog.max_operations_before_commit_ephemeral,
-                golem_config.oplog.max_payload_size,
-                golem_config.indexed_storage_retry.clone(),
-            )
-            .await,
-        ),
+        None => Arc::new(primary_oplog_service),
         Some(oplog_archives) => {
-            let primary = Arc::new(
-                PrimaryOplogService::new(
-                    indexed_storage.clone(),
-                    blob_storage.clone(),
-                    golem_config.oplog.max_operations_before_commit,
-                    golem_config.oplog.max_operations_before_commit_ephemeral,
-                    golem_config.oplog.max_payload_size,
-                    golem_config.indexed_storage_retry.clone(),
-                )
-                .await,
-            );
+            let primary = Arc::new(primary_oplog_service);
 
             Arc::new(MultiLayerOplogService::new(
                 primary,
@@ -1063,7 +1057,11 @@ pub async fn create_worker_executor_impl<
 /// Derives a `DbSqliteConfig` for a module that should live in a separate
 /// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
 /// indexed storage its own DB and migration table).
-fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+///
+/// Public so test utilities can open the same file an executor uses without copying the naming
+/// rule.
+#[doc(hidden)]
+pub fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
     let database = match base.database.strip_suffix(".db") {
         Some(stem) => format!("{stem}-{suffix}.db"),
         None => format!("{}-{suffix}", base.database),

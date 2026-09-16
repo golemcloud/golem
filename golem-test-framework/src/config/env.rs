@@ -93,9 +93,6 @@ pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
     pub environment_state_cache_capacity: Option<usize>,
     pub number_of_shards_override: Option<usize>,
-    /// The shard manager's `shard_lease_duration`, for tests that have to watch a lease lapse
-    /// without waiting out the default. `None` keeps the shard manager's own default.
-    pub shard_lease_duration_override: Option<Duration>,
     pub oplog_archive_interval: Option<Duration>,
     pub shared_client: bool,
     pub db_type: DbType,
@@ -240,7 +237,6 @@ impl Default for EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 4,
             environment_state_cache_capacity: None,
             number_of_shards_override: None,
-            shard_lease_duration_override: None,
             oplog_archive_interval: None,
             shared_client: false,
             db_type: DbType::Postgres,
@@ -349,7 +345,6 @@ impl EnvBasedTestDependencies {
                 &config.debug_targets_dirs().join("golem-shard-manager"),
                 &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
-                config.shard_lease_duration_override,
                 9021,
                 9020,
                 rdb,

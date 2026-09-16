@@ -22,6 +22,8 @@ mod tests {
     use bytes::Bytes;
     use golem_api_grpc::proto::golem::worker;
     use golem_client::api::RegistryServiceClient;
+    #[cfg(unix)]
+    use golem_common::model::AgentId;
     use golem_common::model::base64::Base64;
     use golem_common::model::component::ComponentDto;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
@@ -29,7 +31,8 @@ mod tests {
     use golem_common::model::plugin_registration::{
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
-    use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OplogIndex};
+    use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+    #[cfg(unix)]
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
@@ -72,9 +75,6 @@ mod tests {
     pub async fn create_deps() -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
-            // The shortest lease the shard manager accepts, so that a paused executor is seen to
-            // lose its shards well inside a test's timeout.
-            shard_lease_duration_override: Some(Duration::from_secs(30)),
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await
@@ -281,11 +281,13 @@ mod tests {
         chaos.await.unwrap();
     }
 
+    // Pausing an executor is SIGSTOP.
+    #[cfg(unix)]
     #[test]
-    #[timeout(300000)]
+    #[timeout(360000)]
     // Not `#[flaky]`, unlike the scenarios above: what this pins is that a duplicate never
     // happens, and a retry would hide one that only happens some of the time.
-    async fn an_executor_paused_past_its_lease_cannot_finish_the_invocations_it_started(
+    async fn an_executor_paused_until_its_shards_move_cannot_finish_the_invocations_it_started(
         deps: &EnvBasedTestDependencies,
         cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
@@ -313,6 +315,24 @@ mod tests {
                 .await
                 .unwrap();
             agents.push((parsed_agent_id, agent_id));
+        }
+
+        // Read before anything is in flight, so that connecting does not eat into the delay the
+        // executors have to be frozen inside.
+        let pool = match deps.rdb().info() {
+            DbInfo::Postgres(pg) => sqlx::PgPool::connect(&pg.public_connection_string())
+                .await
+                .expect("Failed to connect to Postgres"),
+            _ => panic!("this test only implements reading the stored owning epochs from Postgres"),
+        };
+        let mut initial_epochs = Vec::new();
+        for (parsed_agent_id, agent_id) in &agents {
+            let epoch = stored_owning_epoch(&pool, agent_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("{parsed_agent_id}: the owning epoch is recorded before the first entry")
+                });
+            initial_epochs.push(epoch);
         }
 
         let mut invocations = JoinSet::new();
@@ -350,14 +370,25 @@ mod tests {
             cluster_control.pause(*idx).await;
         }
 
-        // Past the frozen executors' leases, so that their shards are granted to the survivor at a
-        // higher epoch and it recovers and finishes their invocations itself, and past the delay,
-        // so that the frozen executors' own sleeps are over the moment they wake.
-        tokio::time::sleep(Duration::from_secs(45)).await;
+        // Long enough for the shard manager to have taken the frozen executors' shards away and
+        // granted them to the survivor at a higher epoch, so that it recovers and finishes their
+        // invocations itself, and past the delay, so that the frozen executors' own sleeps are over
+        // the moment they wake. What normally moves the shards is the shard manager's health check,
+        // which unregisters an executor once its probes and their retries have gone unanswered,
+        // usually well before its lease runs out; and the worker service's keep-alive drops the
+        // calls stuck on a frozen executor, so that they are retried against the new owner. The
+        // lease is only the upper bound on the move: at the default 60s, renewed every 20s and
+        // reaped on a 20s tick, an unrenewed lease is gone within 80s of the pause. That bound
+        // keeps a thawed executor from waking up as the owner; it does not stretch the callers'
+        // retries, which count on the health check.
+        tokio::time::sleep(Duration::from_secs(90)).await;
 
         // Thawed, the frozen executors carry on from exactly where they stopped, still holding
         // invocations the survivor now owns. For each one, either the executor gives the agent up
         // when it re-registers, or it finishes the sleep first and the fence refuses its write.
+        // Which of the two each agent took is not visible from here, and both are safe only
+        // because the survivor recorded a higher epoch first, which the epoch check below asserts.
+        // The refusal itself is pinned deterministically by golem-worker-executor's oplog tests.
         info!("Resuming worker executors {frozen:?}");
         for idx in frozen {
             cluster_control.resume(*idx).await;
@@ -380,17 +411,28 @@ mod tests {
             );
         }
 
-        // No executor may have died on the way: a write the fence let through would land in an
-        // oplog the survivor is writing too, and a conflicting append there is fatal to the
-        // executor that makes it - which can be the rightful owner. Checked through the health
-        // endpoint rather than process liveness: an aborting process stays "running" until the OS
-        // has finished writing its crash report, which can outlast this test.
-        for idx in cluster_control.started_indices().await {
+        let mut owner_changed = false;
+        for ((parsed_agent_id, agent_id), initial) in agents.iter().zip(&initial_epochs) {
+            let current = stored_owning_epoch(&pool, agent_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("{parsed_agent_id}: the owning epoch is no longer recorded")
+                });
             assert!(
-                cluster_control.is_serving(idx).await,
-                "worker executor {idx} stopped serving during the test"
+                current >= *initial,
+                "{parsed_agent_id}: the stored epoch went down from {initial} to {current}"
             );
+            owner_changed |= current > *initial;
         }
+        pool.close().await;
+        assert!(
+            owner_changed,
+            "no agent's shard changed owner during the test, so the run exercised neither the \
+             relinquish nor the fence"
+        );
+
+        assert_every_started_executor_serves(cluster_control, "while the invocations finished")
+            .await;
 
         for (parsed_agent_id, agent_id) in &agents {
             assert_eq!(
@@ -411,11 +453,53 @@ mod tests {
                 "{parsed_agent_id}: the delayed increment must not have been applied twice"
             );
         }
+
+        // Again after the follow-up calls: they are the first new traffic after the thaw, and the
+        // first chance for a re-registered executor to recover agents on a shard it was given back.
+        assert_every_started_executor_serves(
+            cluster_control,
+            "while the agents were invoked again",
+        )
+        .await;
+    }
+
+    /// Asserts that no started executor has died: a write the fence let through would land in an
+    /// oplog the survivor is writing too, and a conflicting append there is fatal to the executor
+    /// that makes it - which can be the rightful owner. Checked through the health endpoint rather
+    /// than process liveness: an aborting process stays "running" until the OS has finished
+    /// writing its crash report, which can outlast this test. Each call is a single probe, so it
+    /// only covers what happened before it.
+    #[cfg(unix)]
+    async fn assert_every_started_executor_serves(
+        cluster_control: &WorkerExecutorClusterControlStub,
+        during: &str,
+    ) {
+        for idx in cluster_control.started_indices().await {
+            assert!(
+                cluster_control.is_serving(idx).await,
+                "worker executor {idx} stopped serving {during}"
+            );
+        }
+    }
+
+    /// The owning epoch the executors' indexed storage holds for `agent_id`'s oplog. Read from the
+    /// storage itself because the public oplog does not carry the shard epoch.
+    #[cfg(unix)]
+    async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &AgentId) -> Option<i64> {
+        sqlx::query_scalar(
+            "SELECT epoch FROM golem_worker_executor_indexed.oplog_metadata \
+             WHERE namespace = 'durable-worker-oplog' AND key = $1",
+        )
+        .bind(agent_id.to_redis_key())
+        .fetch_optional(pool)
+        .await
+        .expect("Failed to read oplog_metadata")
     }
 
     /// Counts the completions `agent_id`'s oplog records for `method`. Scoped to one method on
     /// purpose: an agent's own initialization completes asynchronously after `start_agent` returns,
     /// so any count taken over every method races it.
+    #[cfg(unix)]
     async fn count_completions_of(user: &impl TestDsl, agent_id: &AgentId, method: &str) -> usize {
         user.get_oplog(agent_id, OplogIndex::INITIAL)
             .await

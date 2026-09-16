@@ -280,9 +280,10 @@ impl IndexedStorage for PostgresIndexedStorage {
         Ok((new_cursor, keys))
     }
 
-    /// Delegates to [`Self::append_many`] so there is exactly one fenced write path: the epoch
-    /// check has to happen in the same transaction as the insert, and a lone `INSERT` is not in
-    /// one. The permit is acquired there, not here.
+    /// Delegates to [`Self::append_many`] so a single entry and a batch share the id validation,
+    /// the permit and the epoch check. An entry that asserts an epoch is checked in the same
+    /// transaction as its insert, like a batch; one that asserts nothing is a single autocommit
+    /// `INSERT`. The permit is acquired there, not here.
     async fn append(
         &self,
         svc_name: &'static str,
@@ -326,6 +327,27 @@ impl IndexedStorage for PostgresIndexedStorage {
         for (id, value) in pairs.iter() {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
             Self::to_i64(*id, "id")?;
+        }
+
+        // With no epoch asserted there is nothing to check atomically with the insert, so a lone
+        // entry is one autocommit `INSERT` rather than a transaction held open around it. An
+        // entry that asserts an epoch takes the transaction below, as a batch does.
+        if let (None, [(id, value)]) = (shard_epoch, pairs.as_ref()) {
+            return self
+                .pool
+                .with_rw(svc_name, api_name)
+                .execute(
+                    sqlx::query(
+                        "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+                    )
+                    .bind(namespace)
+                    .bind(key)
+                    .bind(i64::try_from(*id).expect("validated oplog index"))
+                    .bind(value.as_ref()),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
         }
 
         self.pool
@@ -394,9 +416,10 @@ impl IndexedStorage for PostgresIndexedStorage {
     /// Monotonic compare-and-set on the epoch authorised to write this key.
     ///
     /// The `WHERE` on the conflict path is what makes it monotonic: a lower epoch updates no row,
-    /// so a writer holding a stale epoch cannot walk the record back and un-fence itself against
-    /// the current owner. Postgres reports one row affected for an insert and for an accepted
-    /// update, and zero when the `WHERE` excludes it.
+    /// so while a record exists a writer holding a stale epoch cannot walk it back and un-fence
+    /// itself against the current owner. With no record there is no conflict and any epoch is
+    /// inserted. Postgres reports one row affected for an insert and for an accepted update, and
+    /// zero when the `WHERE` excludes it.
     async fn upsert_oplog_metadata(
         &self,
         svc_name: &'static str,

@@ -1257,6 +1257,184 @@ async fn a_repeated_registration_of_the_same_executor_refreshes_its_lease() {
 }
 
 #[test]
+// A store that was wiped or replaced no longer lists the executor, so its renewal is refused as a
+// lease not found and never reaches the repair a renewal makes. The executor re-registers under a
+// fresh id carrying the set it held, and the oplog rows it wrote are fenced at those epochs: the
+// manager has to mint above them, or every write to those agents is refused for good.
+async fn a_re_registration_after_a_wiped_store_mints_above_the_epochs_it_held() {
+    let restarted_pod = pod(1, 9000);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(ShardLeaseState::new(4), worker_executors.clone()).await;
+
+    let held = BTreeMap::from([
+        (ShardId::new(0), ShardEpoch(2)),
+        (ShardId::new(1), ShardEpoch(2)),
+        (ShardId::new(2), ShardEpoch(5)),
+        (ShardId::new(3), ShardEpoch(2)),
+    ]);
+    let ack = shard_management
+        .register_executor_with_previous_claim(executor(1), restarted_pod.into(), None, held)
+        .await
+        .expect("the registration should have been persisted");
+    // Evidence, not a request: nothing is assigned until the loop's pass.
+    assert!(ack.grant.shard_epochs.is_empty());
+
+    // The pass mints after the registration was stored, so it is the barrier for the epochs.
+    wait_for_local_assignment(&worker_executors, restarted_pod, shard_ids(&[0, 1, 2, 3])).await;
+    wait_for_quiescence(&persistence).await;
+
+    let minted = BTreeMap::from([
+        (ShardId::new(0), ShardEpoch(3)),
+        (ShardId::new(1), ShardEpoch(3)),
+        (ShardId::new(2), ShardEpoch(6)),
+        (ShardId::new(3), ShardEpoch(3)),
+    ]);
+    let after = persistence.latest().await;
+    assert_eq!(
+        claim_of(&after, executor(1)),
+        minted,
+        "the pass minted from a floor the store forgot"
+    );
+    assert!(after.check_invariants().is_ok());
+
+    let pushed = worker_executors
+        .pushes_to(restarted_pod)
+        .await
+        .pop()
+        .expect("the registered executor should have been pushed its set");
+    assert_eq!(pushed.shard_epochs, minted);
+
+    join_set.abort_all();
+}
+
+#[test]
+// The same carried set against a store that kept its history is at or below the record, so it moves
+// nothing: the shards a re-registered executor is given are minted exactly as they are for a
+// registration that carried nothing, one past the record.
+async fn a_re_registration_against_an_intact_store_mints_as_if_it_carried_nothing() {
+    let restarted_pod = pod(1, 9000);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let before = persistence.latest().await;
+    let held = claim_of(&before, executor(1));
+    // The lease is gone, as it is once reaped, so the executor comes back under a fresh id - with
+    // nothing applied locally, as after it cleared its assignment.
+    shard_management
+        .deregister_executor(executor(1), held.clone())
+        .await
+        .expect("the deregistration should have been persisted");
+    worker_executors
+        .set_local_assignment(restarted_pod, &[])
+        .await;
+
+    let ack = shard_management
+        .register_executor_with_previous_claim(
+            executor(3),
+            restarted_pod.into(),
+            Some("worker-executor-0".to_string()),
+            held,
+        )
+        .await
+        .expect("the registration should have been persisted");
+    assert!(ack.grant.shard_epochs.is_empty());
+
+    wait_for_local_assignment(&worker_executors, restarted_pod, shard_ids(&[0, 1])).await;
+    wait_for_quiescence(&persistence).await;
+
+    let after = persistence.latest().await;
+    assert_eq!(
+        claim_of(&after, executor(3)),
+        BTreeMap::from([
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ]),
+        "a carried set at the record moved an epoch"
+    );
+    assert_eq!(
+        claim_of(&after, executor(2)),
+        claim_of(&before, executor(2))
+    );
+    assert!(after.check_invariants().is_ok());
+
+    join_set.abort_all();
+}
+
+#[test]
+// A re-registration's carried set can name a shard the manager has given to another executor. Ahead
+// of the record, it proves the claimant's oplog rows for that shard are fenced above the epoch the
+// owner holds, so the owner is re-minted one past the claim and pushed that epoch at once: the
+// registration's grant does not reach it, and its own renewal could be a third of a lease away.
+async fn a_re_registration_carrying_a_claim_on_another_executors_shard_pushes_its_owner() {
+    let restarted_pod = pod(1, 9000);
+    let owner_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+    assert_eq!(worker_executors.pushes_to(restarted_pod).await.len(), 1);
+    assert_eq!(worker_executors.pushes_to(owner_pod).await.len(), 1);
+
+    let before = persistence.latest().await;
+    let mut held = claim_of(&before, executor(1));
+    held.insert(ShardId::new(2), ShardEpoch(5));
+    let ack = shard_management
+        .register_executor_with_previous_claim(
+            executor(3),
+            restarted_pod.into(),
+            Some("worker-executor-0".to_string()),
+            held,
+        )
+        .await
+        .expect("the registration should have been persisted");
+    // A new instance at a known address inherits its predecessor's shards one past the record; the
+    // claim on the owner's shard does not hand that shard over.
+    assert_eq!(
+        ack.grant.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ])
+    );
+
+    let stored = persistence
+        .state_at(ack.grant.revision)
+        .await
+        .expect("the ack must name a revision the store really held");
+    assert_eq!(
+        stored.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3]))
+    );
+    assert_eq!(stored.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(6)));
+    assert_eq!(stored.epoch_for_shard(ShardId::new(3)), Some(ShardEpoch(0)));
+    assert!(stored.check_invariants().is_ok());
+
+    // Startup pushed once to each executor and the replacement pushes the restarted one, so the
+    // owner's push is the fourth. The tick is a third of a 60s lease away, so only the registration
+    // queueing the owner can send it within the wait.
+    wait_for_pushes(&worker_executors, 4).await;
+    wait_for_quiescence(&persistence).await;
+
+    let owner_pushes = worker_executors.pushes_to(owner_pod).await;
+    assert_eq!(owner_pushes.len(), 2);
+    let pushed = owner_pushes.last().expect("the owner was pushed");
+    assert_eq!(
+        pushed.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(2), ShardEpoch(6)),
+            (ShardId::new(3), ShardEpoch(0)),
+        ])
+    );
+    assert!(
+        pushed.revision >= ack.grant.revision,
+        "the push was read off a state older than the re-mint"
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
 // The loop ends with the error rather than carry on against a store it can no longer trust, so
 // the process restarts and re-reads. On a conflict the cached revision is deliberately not
 // refreshed: it is the fencing token, and the loser of it has to stop.
@@ -2020,9 +2198,10 @@ async fn renewing_twice_with_the_same_epochs_moves_nothing() {
 }
 
 #[test]
-// The claim is what the executor believes it holds, not a condition of the renewal. A wrong epoch,
-// another executor's shard and a released shard are all an executor that missed a push, and
-// refusing its renewal would only hold it on a picture the manager knows is wrong. It is renewed,
+// The claim is what the executor believes it holds, not a condition of the renewal. Another
+// executor's shard and a released shard are an executor that missed a push, and an epoch ahead of
+// the record on another executor's shard is one the manager forgot; refusing either renewal would
+// only hold the executor on a picture the manager knows is wrong. It is renewed,
 // and the grant carries the manager's set: the renewal is the guaranteed second delivery path for a
 // push that was lost. Only an executor the manager has never heard of is refused.
 async fn a_mismatched_claim_is_renewed_and_corrected() {
@@ -2046,26 +2225,49 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         "got {err:?}"
     );
 
-    // a wrong epoch on a shard that belongs to somebody else, alongside claim entries that are
-    // perfectly valid. Corrected and never adopted: an epoch stamped onto another executor's
-    // assignment would leave both of them live on one `(shard, epoch)`, which is the one pair the
-    // oplog fence cannot separate.
-    let mut wrong_epoch = truth.clone();
-    wrong_epoch.insert(ShardId::new(2), ShardEpoch(7));
+    // an epoch ahead of the record on a shard that belongs to somebody else, alongside claim
+    // entries that are perfectly valid. Corrected and never adopted: an epoch stamped onto another
+    // executor's assignment would leave both of them live on one `(shard, epoch)`, which is the one
+    // pair the oplog fence cannot separate. Being ahead, the claim proves the store lost history, so
+    // the owner keeps the shard and is re-minted one past the claim, and the claimant is not given
+    // it.
+    let mut ahead_of_owner = truth.clone();
+    ahead_of_owner.insert(ShardId::new(2), ShardEpoch(7));
     let expiry_before = expiry_of(&persistence.latest().await, executor(1));
     let grant = shard_management
-        .renew_shard_lease(executor(1), wrong_epoch)
+        .renew_shard_lease(executor(1), ahead_of_owner)
         .await
-        .expect("a claim at the wrong epoch is renewed and corrected");
+        .expect("a claim ahead of another executor's shard is renewed and corrected");
     assert_eq!(
         grant.shard_epochs, truth,
         "the grant is the manager's set, not the claim"
     );
     assert!(grant.expires_at > expiry_before, "the lease was extended");
+
+    // The re-mint woke the loop to push the owner its new epoch, and that pass has to finish before
+    // executor 2 deregisters below, or it could re-home the shards the deregistration releases.
+    // Startup pushed once to each executor, so the owner's push is the third.
+    wait_for_pushes(&worker_executors, 3).await;
+    wait_for_quiescence(&persistence).await;
+    let re_minted = persistence.latest().await;
     assert_eq!(
-        persistence.latest().await.epoch_for_shard(ShardId::new(2)),
-        Some(ShardEpoch(0)),
+        re_minted.epoch_for_shard(ShardId::new(2)),
+        Some(ShardEpoch(8)),
+        "the owner was not re-minted one past the claim"
+    );
+    assert_eq!(
+        re_minted.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3])),
         "the claim moved another executor's shard"
+    );
+    assert_eq!(
+        worker_executors
+            .pushes_to(pod(2, 9001))
+            .await
+            .last()
+            .and_then(|push| push.shard_epochs.get(&ShardId::new(2)).copied()),
+        Some(ShardEpoch(8)),
+        "the owner was not pushed its re-minted epoch"
     );
 
     // a shard that belongs to another executor
@@ -2092,12 +2294,14 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         .expect("claiming a released shard is renewed and corrected");
     assert_eq!(grant.shard_epochs, truth);
 
-    // None of the corrections moved anything: executor 1's set and epochs are exactly what they
-    // were, only its lease clock moved, and executor 2's released shards stayed released.
+    // No correction moved executor 1's set or epochs: they are exactly what they were, only its
+    // lease clock moved, and executor 2's released shards stayed released. The one thing that
+    // moved was shard 2's epoch, and its release keeps it as the floor the next owner mints above.
     let after = persistence.latest().await;
     assert_eq!(claim_of(&after, executor(1)), truth);
     assert!(expiry_of(&after, executor(1)) > expiry_before);
     assert_eq!(after.get_unassigned_shards(), shard_ids(&[2, 3]));
+    assert_eq!(after.shard_epochs[&ShardId::new(2)], ShardEpoch(8));
 
     join_set.abort_all();
 }
@@ -2140,6 +2344,324 @@ async fn a_claim_ahead_of_the_record_raises_the_managers_floor() {
         after.shards_for_executor(executor(2)),
         Some(shard_ids(&[2, 3])),
         "repairing an epoch disturbed another executor"
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A claim ahead of the record on a shard the manager has since given to another executor. The store
+// lost history, so the claimant's oplog rows for that shard are fenced above the epoch the owner
+// holds, and every write the owner makes is refused. The owner keeps the shard and is minted one
+// past the claim - never onto it, which would put two live executors on one `(shard, epoch)` - and
+// is pushed that epoch at once rather than left to find out on its own renewal.
+async fn a_higher_claim_on_another_executors_shard_re_mints_and_pushes_its_owner() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+    assert_eq!(worker_executors.pushes_to(pod(1, 9000)).await.len(), 1);
+    assert_eq!(worker_executors.pushes_to(pod(2, 9001)).await.len(), 1);
+
+    let before = persistence.latest().await;
+    let mut ahead_of_owner = claim_of(&before, executor(1));
+    ahead_of_owner.insert(ShardId::new(2), ShardEpoch(7));
+    let grant = shard_management
+        .renew_shard_lease(executor(1), ahead_of_owner)
+        .await
+        .expect("a claim ahead of another executor's shard is renewed, not refused");
+    assert_eq!(
+        grant.shard_epochs,
+        claim_of(&before, executor(1)),
+        "the claimant was given another executor's shard"
+    );
+
+    let after = persistence.latest().await;
+    assert_eq!(
+        after.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3]))
+    );
+    assert_eq!(after.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(8)));
+    assert_eq!(after.epoch_for_shard(ShardId::new(3)), Some(ShardEpoch(0)));
+    assert_eq!(
+        claim_of(&after, executor(1)),
+        claim_of(&before, executor(1))
+    );
+    assert!(after.check_invariants().is_ok());
+
+    // Startup pushed once to each executor, so the owner's push is the third. The tick is a third of
+    // a 60s lease away, so only the renewal waking the loop can send it within the wait.
+    wait_for_pushes(&worker_executors, 3).await;
+    wait_for_quiescence(&persistence).await;
+
+    let owner_pushes = worker_executors.pushes_to(pod(2, 9001)).await;
+    assert_eq!(owner_pushes.len(), 2);
+    let pushed = owner_pushes.last().expect("the owner was pushed");
+    assert_eq!(
+        pushed.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(2), ShardEpoch(8)),
+            (ShardId::new(3), ShardEpoch(0)),
+        ])
+    );
+    assert!(
+        pushed.revision >= grant.revision,
+        "the push was read off a state older than the re-mint"
+    );
+    assert_eq!(
+        worker_executors.pushes_to(pod(1, 9000)).await.len(),
+        1,
+        "the claimant was pushed as well"
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A renewal can carry the epoch an executor's refused oplog write found on the rows. Above the
+// record it proves the store lost history, but not that the reporter wrote those rows, so even the
+// reporter's own shard is minted one past that epoch rather than onto it. When the same renewal also
+// claims that epoch, the fenced epoch is applied first: claim first would record the claim and
+// leave the reporter on the rows' `(shard, epoch)`.
+async fn a_renewal_reporting_a_fenced_epoch_re_mints_the_reporters_own_shard_above_it() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let before = persistence.latest().await;
+    let grant = shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(1),
+            claim_of(&before, executor(1)),
+            BTreeMap::from([(ShardId::new(1), ShardEpoch(3))]),
+        )
+        .await
+        .expect("a renewal reporting a fenced epoch is renewed, not refused");
+    assert_eq!(
+        grant.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(0), ShardEpoch(0)),
+            (ShardId::new(1), ShardEpoch(4)),
+        ]),
+        "the grant does not carry the re-minted epoch"
+    );
+
+    let after = persistence.latest().await;
+    assert_eq!(after.epoch_for_shard(ShardId::new(1)), Some(ShardEpoch(4)));
+    assert_eq!(
+        after.shards_for_executor(executor(1)),
+        Some(shard_ids(&[0, 1])),
+        "re-minting an epoch moved a shard"
+    );
+    assert_eq!(
+        claim_of(&after, executor(2)),
+        claim_of(&before, executor(2)),
+        "a fenced epoch on one executor's shard disturbed another executor"
+    );
+    assert!(after.check_invariants().is_ok());
+
+    // The reporter learns its re-minted epoch from the grant, so nobody is owed a push.
+    wait_for_quiescence(&persistence).await;
+    assert_eq!(worker_executors.pushes_to(pod(1, 9000)).await.len(), 1);
+    assert_eq!(worker_executors.pushes_to(pod(2, 9001)).await.len(), 1);
+    join_set.abort_all();
+
+    // The same epoch claimed and reported in one request.
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+    let grant = shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(1),
+            BTreeMap::from([
+                (ShardId::new(0), ShardEpoch(0)),
+                (ShardId::new(1), ShardEpoch(3)),
+            ]),
+            BTreeMap::from([(ShardId::new(1), ShardEpoch(3))]),
+        )
+        .await
+        .expect("a renewal claiming and reporting one epoch is renewed, not refused");
+    assert_eq!(
+        grant.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(0), ShardEpoch(0)),
+            (ShardId::new(1), ShardEpoch(4)),
+        ]),
+        "the claim was applied before the fenced epoch, leaving the executor on the rows' epoch"
+    );
+    assert_eq!(
+        persistence.latest().await.epoch_for_shard(ShardId::new(1)),
+        Some(ShardEpoch(4))
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A fenced epoch on a shard the manager has given to another executor: the reporter lost the shard
+// and was refused by rows above the owner's recorded epoch, which only a store that lost history can
+// produce. The owner keeps the shard, is minted one past the rows, and is pushed that epoch at once
+// rather than left to find out on its own renewal; the reporter is not given the shard.
+async fn a_fenced_epoch_reported_by_a_non_owner_re_mints_and_pushes_the_owner() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let before = persistence.latest().await;
+    let grant = shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(1),
+            claim_of(&before, executor(1)),
+            BTreeMap::from([(ShardId::new(2), ShardEpoch(7))]),
+        )
+        .await
+        .expect("a renewal reporting a fenced epoch on another executor's shard is renewed");
+    assert_eq!(
+        grant.shard_epochs,
+        claim_of(&before, executor(1)),
+        "the reporter was given another executor's shard"
+    );
+
+    let after = persistence.latest().await;
+    assert_eq!(
+        after.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3]))
+    );
+    assert_eq!(after.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(8)));
+    assert_eq!(after.epoch_for_shard(ShardId::new(3)), Some(ShardEpoch(0)));
+    assert!(after.check_invariants().is_ok());
+
+    // Startup pushed once to each executor, so the owner's push is the third. The tick is a third
+    // of a 60s lease away, so only the renewal waking the loop can send it within the wait.
+    wait_for_pushes(&worker_executors, 3).await;
+    wait_for_quiescence(&persistence).await;
+
+    let owner_pushes = worker_executors.pushes_to(pod(2, 9001)).await;
+    assert_eq!(owner_pushes.len(), 2);
+    let pushed = owner_pushes.last().expect("the owner was pushed");
+    assert_eq!(
+        pushed.shard_epochs,
+        BTreeMap::from([
+            (ShardId::new(2), ShardEpoch(8)),
+            (ShardId::new(3), ShardEpoch(0)),
+        ])
+    );
+    assert!(
+        pushed.revision >= grant.revision,
+        "the push was read off a state older than the re-mint"
+    );
+    assert_eq!(
+        worker_executors.pushes_to(pod(1, 9000)).await.len(),
+        1,
+        "the reporter was pushed as well"
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A fenced epoch at or below the record is the ordinary loser of a shard move - the new owner
+// recorded its epoch, and the old one was refused - and a report the manager already applied is at
+// the record the second time. Neither moves an epoch or owes anyone a push. A renewal the manager
+// refuses applies nothing it carried.
+async fn a_fenced_epoch_at_or_below_the_record_moves_nothing() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    // A restarted instance at executor 1's address inherits its shards at epoch 1, so executor
+    // 1's writes at epoch 0 are what the rows refuse from now on.
+    shard_management
+        .register_executor(
+            executor(3),
+            pod(1, 9000).into(),
+            Some("worker-executor-0".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
+    wait_for_pushes(&worker_executors, 3).await;
+    wait_for_quiescence(&persistence).await;
+    let moved = persistence.latest().await;
+    assert_eq!(
+        claim_of(&moved, executor(3)),
+        BTreeMap::from([
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ])
+    );
+    let pushes = worker_executors.pushes.lock().await.len();
+
+    let grant = shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(2),
+            claim_of(&moved, executor(2)),
+            BTreeMap::from([
+                (ShardId::new(0), ShardEpoch(1)),
+                (ShardId::new(1), ShardEpoch(0)),
+            ]),
+        )
+        .await
+        .expect("a renewal reporting a fenced epoch at the record is renewed");
+    assert_eq!(grant.shard_epochs, claim_of(&moved, executor(2)));
+    let after = persistence.latest().await;
+    assert_eq!(after.shard_epochs, moved.shard_epochs);
+    assert_eq!(after.shard_assignments, moved.shard_assignments);
+    wait_for_quiescence(&persistence).await;
+    assert_eq!(
+        worker_executors.pushes.lock().await.len(),
+        pushes,
+        "a fenced epoch at the record owed somebody a push"
+    );
+
+    // A genuine report re-mints shard 1's owner once. The same report on the next renewal is at the
+    // record, so the state stays exactly as the first one left it.
+    let genuine = BTreeMap::from([(ShardId::new(1), ShardEpoch(5))]);
+    shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(2),
+            claim_of(&moved, executor(2)),
+            genuine.clone(),
+        )
+        .await
+        .expect("a renewal reporting a fenced epoch ahead of the record is renewed");
+    wait_for_pushes(&worker_executors, pushes + 1).await;
+    wait_for_quiescence(&persistence).await;
+    let raised = persistence.latest().await;
+    assert_eq!(raised.epoch_for_shard(ShardId::new(1)), Some(ShardEpoch(6)));
+    let pushes = worker_executors.pushes.lock().await.len();
+
+    shard_management
+        .renew_shard_lease_with_fenced_epochs(executor(2), claim_of(&raised, executor(2)), genuine)
+        .await
+        .expect("a repeated report is renewed");
+    wait_for_quiescence(&persistence).await;
+    let repeated = persistence.latest().await;
+    assert_eq!(repeated.shard_epochs, raised.shard_epochs);
+    assert_eq!(repeated.shard_assignments, raised.shard_assignments);
+    assert_eq!(
+        worker_executors.pushes.lock().await.len(),
+        pushes,
+        "a repeated report re-minted its owner a second time"
+    );
+
+    let err = shard_management
+        .renew_shard_lease_with_fenced_epochs(
+            executor(9),
+            BTreeMap::new(),
+            BTreeMap::from([(ShardId::new(0), ShardEpoch(9))]),
+        )
+        .await
+        .expect_err("an unknown executor holds no lease to renew");
+    assert!(
+        matches!(
+            err,
+            ShardManagerError::ShardLeaseNotFound { executor_id } if executor_id == executor(9)
+        ),
+        "got {err:?}"
+    );
+    assert_eq!(
+        persistence.latest().await.epoch_for_shard(ShardId::new(0)),
+        Some(ShardEpoch(1)),
+        "a refused renewal applied the fenced epoch it carried"
     );
 
     join_set.abort_all();
@@ -2432,9 +2954,9 @@ async fn the_loop_compacts_after_each_pass_and_carries_on_when_compaction_fails(
 }
 
 #[test]
-// The lease paths never wake the loop, so the timer is the only thing that can notice an expiry in
-// a cluster where nothing else is happening. Without it a lapsed lease is held forever and its
-// shards are never re-homed.
+// The lease paths wake the loop only to push an owner a renewal re-minted, so the timer is the only
+// thing that can notice an expiry in a cluster where nothing else is happening. Without it a lapsed
+// lease is held forever and its shards are never re-homed.
 async fn an_expired_lease_is_reclaimed_within_one_tick() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (_shard_management, persistence, mut join_set) = start_shard_management(

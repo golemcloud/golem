@@ -188,25 +188,48 @@ impl SpawnedWorkerExecutor {
 
     #[cfg(unix)]
     fn signal_child(&self, signal: libc::c_int, action: &str) {
-        let child = self.child.lock().unwrap();
-        let child = child.as_ref().unwrap_or_else(|| {
+        // The guard is held across the liveness check and the signal: `is_running` and
+        // `blocking_kill`, the only other reapers of this child, both take the same lock.
+        let mut child_field = self.child.lock().unwrap();
+        let child = child_field.as_mut().unwrap_or_else(|| {
             panic!(
                 "Cannot {action} golem-worker-executor {}: it is not running",
                 self.grpc_port
             )
         });
-        let pid = libc::pid_t::try_from(child.id()).expect("child pid does not fit into pid_t");
-        // SAFETY: `kill` has no memory-safety preconditions. The pid belongs to a child this struct
-        // spawned and has not reaped, so it cannot have been reused by another process.
-        let result = unsafe { libc::kill(pid, signal) };
-        assert_eq!(
-            result,
-            0,
-            "Failed to {action} golem-worker-executor {}: {}",
-            self.grpc_port,
-            std::io::Error::last_os_error()
+        signal_unreaped_child(
+            child,
+            signal,
+            &format!("{action} golem-worker-executor {}", self.grpc_port),
         );
     }
+}
+
+/// Sends `signal` to `child`, refusing to if the child has already been reaped. `what` names the
+/// action and the process for the panic messages.
+///
+/// A reaped child's pid is free for the OS to hand to an unrelated process, and `is_running`'s
+/// `try_wait` reaps an exited child while leaving it in place, so a raw `kill` on `child.id()`
+/// alone could signal a stranger. `Child::kill` has this guard built in; `kill(2)` does not.
+#[cfg(unix)]
+fn signal_unreaped_child(child: &mut Child, signal: libc::c_int, what: &str) {
+    match child.try_wait() {
+        Ok(None) => {}
+        Ok(Some(status)) => panic!("Cannot {what}: it has already exited ({status})"),
+        Err(err) => panic!("Cannot {what}: its state is unknown: {err}"),
+    }
+    let pid = libc::pid_t::try_from(child.id()).expect("child pid does not fit into pid_t");
+    // SAFETY: `kill` has no memory-safety preconditions. `try_wait` has just reported the child
+    // alive, and reaping it needs the `&mut Child` held here, so it has not been reaped and its pid
+    // cannot belong to another process. If it exited since, it is a zombie still holding that pid,
+    // and the signal changes nothing.
+    let result = unsafe { libc::kill(pid, signal) };
+    assert_eq!(
+        result,
+        0,
+        "Failed to {what}: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 #[async_trait]
@@ -291,10 +314,73 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         info!("Resuming golem-worker-executor {}", self.grpc_port);
         self.signal_child(libc::SIGCONT, "resume");
     }
+
+    // Without these the trait default would panic claiming this is not a SpawnedWorkerExecutor,
+    // when the real reason is the platform.
+    #[cfg(not(unix))]
+    async fn pause(&self) {
+        panic!(
+            "Cannot pause golem-worker-executor {}: pausing is SIGSTOP, which this platform does not have",
+            self.grpc_port
+        );
+    }
+
+    #[cfg(not(unix))]
+    async fn resume(&self) {
+        panic!(
+            "Cannot resume golem-worker-executor {}: resuming is SIGCONT, which this platform does not have",
+            self.grpc_port
+        );
+    }
 }
 
 impl Drop for SpawnedWorkerExecutor {
     fn drop(&mut self) {
         self.blocking_kill();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use test_r::test;
+
+    use super::signal_unreaped_child;
+    use std::process::{Child, Command};
+
+    /// Kills and reaps the child when the test ends, also when an assertion panics, so a failing
+    /// run does not leave a stopped process behind.
+    struct KilledOnDrop(Child);
+
+    impl Drop for KilledOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "has already exited")]
+    fn a_child_that_has_been_reaped_is_never_signalled() {
+        let mut child = Command::new("true")
+            .spawn()
+            .expect("failed to spawn `true`");
+        // Records the exit status, exactly as `is_running`'s `try_wait` does for an exited child.
+        child.wait().expect("failed to wait for `true`");
+
+        signal_unreaped_child(&mut child, libc::SIGSTOP, "pause `true`");
+    }
+
+    #[test]
+    fn a_live_child_can_be_stopped_and_continued() {
+        let mut child = KilledOnDrop(
+            Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("failed to spawn `sleep`"),
+        );
+
+        signal_unreaped_child(&mut child.0, libc::SIGSTOP, "pause `sleep`");
+        // `try_wait` does not report a stopped child, so continuing it is not refused as exited.
+        signal_unreaped_child(&mut child.0, libc::SIGCONT, "resume `sleep`");
     }
 }

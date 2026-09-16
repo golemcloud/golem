@@ -21,7 +21,7 @@ use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, MultiLayerOplog, Oplog, OplogOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -624,8 +624,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     },
                 ))),
                 // Unfenced: the target's shard may belong to another executor, and
-                // this is a one-shot copy, not a live oplog. Its owner writes the metadata
-                // row on its first open.
+                // this is a one-shot copy, not a live oplog. The handle is closed, with
+                // any archive transfer it scheduled ended, before the target is resumed
+                // (`close_fork_target_oplog`), and the open-oplog cache never hands a
+                // handle opened without an epoch to an opener that asserts one, so the
+                // owner's first open builds its own handle and writes the metadata row.
                 None,
             )
             .await;
@@ -784,13 +787,19 @@ fn rewrite_forked_oplog_entry(
 ) -> OplogEntry {
     match &mut entry {
         OplogEntry::AgentInvocationStarted {
-            wallet_pin: Some(wallet_pin),
+            wallet_pin,
+            shard_epoch,
             ..
         } => {
-            wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
-                agent_id: target_agent_id.clone(),
-            })
-            .wallet_id_hash();
+            // The source's epoch names a generation of the source's shard. The copy lands in an
+            // oplog opened without an epoch to assert, which the field records as `None`.
+            *shard_epoch = None;
+            if let Some(wallet_pin) = wallet_pin {
+                wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
+                    agent_id: target_agent_id.clone(),
+                })
+                .wallet_id_hash();
+            }
         }
         OplogEntry::CardEventQueued {
             event: QueuedCardEvent::TransferStarted(event),
@@ -824,6 +833,23 @@ fn rewrite_forked_oplog_entry(
     entry
 }
 
+/// Commits the fork target's copied oplog and closes its handle, before the target is resumed.
+///
+/// The handle asserts no epoch, so nothing it started may still be writing once the target's
+/// owner opens the oplog at its own epoch. Dropping it does not ensure that: when the copy reaches
+/// the entry count limit, the final commit schedules an archive transfer that holds its own
+/// reference to the handle and ends by dropping the primary's prefix, and deleting the primary
+/// oplog once that empties it, over whatever the owner appended meanwhile. The transfer is ended
+/// through the handle, not the agent-keyed transfer registry, which the owner's open overwrites.
+pub(crate) async fn close_fork_target_oplog(
+    new_oplog: Arc<dyn Oplog>,
+) -> Result<(), WorkerExecutorError> {
+    new_oplog.commit(CommitLevel::Always).await?;
+    MultiLayerOplog::try_abort_transfer(&new_oplog).await;
+    drop(new_oplog);
+    Ok(())
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
@@ -843,7 +869,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        new_oplog.commit(CommitLevel::Always).await?;
+        close_fork_target_oplog(new_oplog).await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -933,7 +959,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                 .await?;
         }
 
-        new_oplog.commit(CommitLevel::Always).await?;
+        close_fork_target_oplog(new_oplog).await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -995,18 +1021,53 @@ mod tests {
                 pinned_card_ids: Vec::new(),
                 scope_card_id: None,
             }),
-            shard_epoch: None,
+            shard_epoch: Some(7),
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {
             OplogEntry::AgentInvocationStarted {
                 wallet_pin: Some(wallet_pin),
+                shard_epoch,
                 ..
-            } => assert_eq!(
-                wallet_pin.wallet_token.wallet_id_hash,
-                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
-            ),
+            } => {
+                assert_eq!(
+                    wallet_pin.wallet_token.wallet_id_hash,
+                    CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+                );
+                assert_eq!(shard_epoch, None);
+            }
             other => panic!("expected pinned invocation start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fork_clears_the_source_shard_epoch_from_copied_invocations() {
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let entry = OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::new("fork-shard-epoch".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "test".to_string(),
+                input: SchemaValue::Record { fields: Vec::new() },
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: None,
+            shard_epoch: Some(7),
+        };
+
+        // The source's epoch belongs to the source's shard; the target's copy asserts none.
+        match rewrite_forked_oplog_entry(entry, &source, &target) {
+            OplogEntry::AgentInvocationStarted {
+                wallet_pin: None,
+                shard_epoch,
+                ..
+            } => assert_eq!(shard_epoch, None),
+            other => panic!("expected unpinned invocation start, got {other:?}"),
         }
     }
 

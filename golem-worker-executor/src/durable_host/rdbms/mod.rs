@@ -21,6 +21,7 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
     RemoteTransactionHandler,
 };
+use crate::services::oplog::OplogError;
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
 use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
@@ -35,6 +36,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -301,7 +303,17 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => {
+            // The handler's error type flattens the begin's own fence into an `RdbmsError`, so it
+            // is read from the oplog's latch. A refused begin is a lost shard, not a database
+            // failure the guest may catch and work around: it traps, and the agent is given up.
+            if let Some(fence) = ctx.state.oplog.fence() {
+                return Err(anyhow!(WorkerExecutorError::from(OplogError::Fenced(
+                    fence
+                ))));
+            }
+            Ok(Err(error.into()))
+        }
     }
 }
 

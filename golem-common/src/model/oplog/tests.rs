@@ -1286,7 +1286,8 @@ fn shard_epoch_protobuf_roundtrip_and_legacy_default() {
         }
     }
 
-    // And on the raw protobuf, which is the oplog-processor-plugin channel.
+    // And on the raw protobuf, the form oplog-processor batches travel in between services. The
+    // plugin guest itself receives the WIT form, which drops the epoch.
     let entry = started(Some(9));
     let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         entry.clone().try_into().unwrap();
@@ -1311,6 +1312,74 @@ fn shard_epoch_protobuf_roundtrip_and_legacy_default() {
     }
     match OplogEntry::try_from(raw_proto).unwrap() {
         OplogEntry::AgentInvocationStarted { shard_epoch, .. } => {
+            assert_eq!(shard_epoch, None);
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn agent_invocation_started_written_before_shard_epoch_still_decodes() {
+    // Encoded by a6cb8e36a, where this variant's evolution list still ended at `wallet_pin`.
+    // These are the bytes replay reads from an oplog written before the fence. The round trips
+    // above encode and decode with the same evolution list, so they cannot catch a misordered
+    // list; a populated `wallet_pin` and trailing fields decoding intact here can.
+    let bytes = include_bytes!(
+        "../../../tests/fixtures/oplog/agent_invocation_started_before_shard_epoch.bin"
+    );
+    let decoded: OplogEntry = crate::serialization::deserialize(bytes).unwrap();
+
+    match decoded {
+        OplogEntry::AgentInvocationStarted {
+            timestamp,
+            idempotency_key,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin,
+            shard_epoch,
+        } => {
+            assert_eq!(timestamp, Timestamp::from(1_767_323_045_000u64));
+            assert_eq!(
+                idempotency_key,
+                IdempotencyKey::new("shard-epoch-legacy".to_string())
+            );
+            match payload {
+                OplogPayload::SerializedInline { bytes, .. } => {
+                    assert_eq!(
+                        crate::serialization::deserialize::<AgentInvocationPayload>(&bytes)
+                            .unwrap(),
+                        AgentInvocationPayload::AgentMethod {
+                            method_name: "test".to_string(),
+                            input: SchemaValue::Record { fields: Vec::new() },
+                            principal: Principal::anonymous(),
+                            scope_card: None,
+                        }
+                    );
+                }
+                other => panic!("expected an inline payload, got {other:?}"),
+            }
+            assert_eq!(
+                trace_id,
+                TraceId(
+                    std::num::NonZeroU128::new(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210).unwrap()
+                )
+            );
+            assert_eq!(trace_states, vec!["vendor=fixture".to_string()]);
+            assert!(invocation_context.is_empty());
+            assert_eq!(
+                wallet_pin,
+                Some(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0x42; 32],
+                        generation: 73,
+                    },
+                    pinned_card_ids: vec![CardId(Uuid::from_u128(1)), CardId(Uuid::from_u128(2))],
+                    scope_card_id: Some(CardId(Uuid::from_u128(3))),
+                })
+            );
+            // Absent, not epoch zero - zero is a real epoch.
             assert_eq!(shard_epoch, None);
         }
         other => panic!("expected raw invocation-started entry, got {other:?}"),

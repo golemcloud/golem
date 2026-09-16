@@ -112,12 +112,14 @@ enum StatusJob {
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
+    /// Replies with the refusal when the oplog has a new owner, so the caller never reports an
+    /// entry as delivered that was not written.
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
         _card_event_boundary_guard: OwnedMutexGuard<()>,
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), OplogError>>,
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
@@ -238,7 +240,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                let changed = state.commit_and_update_state(level, committed).await;
+                                // The reply keeps its shape: these callers learn of a fence from
+                                // the oplog's latch and from the relinquish the refusal spawned.
+                                let changed = state
+                                    .commit_and_update_state(level, committed)
+                                    .await
+                                    .unwrap_or(false);
                                 let index = state.oplog.current_oplog_index().await;
                                 (index, changed)
                             },
@@ -257,15 +264,20 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             async {
                                 match state.oplog.add(*entry).await {
                                     Ok(_) => {
-                                        state
+                                        if let Err(fence) = state
                                             .commit_and_update_state(CommitLevel::Always, None)
-                                            .await;
+                                            .await
+                                        {
+                                            return Err(OplogError::Fenced(fence));
+                                        }
                                         state.ensure_status_attached().await;
+                                        Ok(())
                                     }
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
-                                        state.relinquish_fenced_agent(fence)
+                                        state.relinquish_fenced_agent(fence.clone());
+                                        Err(OplogError::Fenced(fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
                                 }
@@ -303,9 +315,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     }
                                     return Err(error);
                                 }
-                                state
+                                // The entry is only buffered until this commit, which is where a
+                                // takeover is found. The key has not reached the status, so nothing
+                                // that fails pending invocations can answer its caller: the enqueue
+                                // itself has to be refused.
+                                if let Err(fence) = state
                                     .commit_and_update_state(CommitLevel::Always, None)
-                                    .await;
+                                    .await
+                                {
+                                    return Err(OplogError::Fenced(fence));
+                                }
                                 if let WorkerInstance::Running(running) = &*instance_guard {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
@@ -426,7 +445,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         worker: Arc<Worker<Ctx>>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         card_event_boundary_guard: OwnedMutexGuard<()>,
-    ) {
+    ) -> Result<(), OplogError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
@@ -601,16 +620,23 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// discipline while still dropping the agent from this executor - which a bare
     /// `mark_relinquished` would not do, because on a background path nothing else is unwinding
     /// to carry the stop out.
+    ///
+    /// Only the generation this actor belongs to is given up, identified by the status cell the
+    /// two share. By the time the task runs that generation may be gone and a newer one cached
+    /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
+    /// gives it up, and at a re-granted epoch it is legitimately this executor's.
     fn relinquish_fenced_agent(&self, fence: OplogFence) {
         let active_agents = self.deps.active_agents();
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let owned_agent_id = self.owned_agent_id.clone();
+        let status_cell = self.last_known_status.clone();
         tokio::spawn(async move {
-            active_agents
-                .relinquish_matching(
-                    RelinquishReason::Fenced(Some(Box::new(fence))),
-                    |candidate| candidate == &agent_id,
-                )
-                .await;
+            if let Some(worker) = active_agents.try_get_cached(&owned_agent_id).await
+                && worker.shares_status_cell(&status_cell)
+            {
+                worker
+                    .relinquish(RelinquishReason::Fenced(Some(Box::new(fence))))
+                    .await;
+            }
         });
     }
 
@@ -618,19 +644,23 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// committed entries into the published status or marks the status detached when it can no
     /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
     /// whether the published status (or its detachment) changed.
+    ///
+    /// A commit the storage refused because the shard has a new owner is returned as the fence
+    /// rather than folded into "unchanged": a caller whose entry was only buffered until this
+    /// commit must not report it as written.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
         committed: Option<oneshot::Sender<()>>,
-    ) -> bool {
+    ) -> Result<bool, OplogFence> {
         let new_entries = match self.oplog.commit(commit_level).await {
             Ok(entries) => entries,
             Err(OplogError::Fenced(fence)) => {
                 // Nothing was committed and nothing more can be. The `committed` sender is
                 // dropped rather than signalled: a fenced commit is not a commit, and every
                 // awaiter already reads a dropped sender as "no commit observed".
-                self.relinquish_fenced_agent(fence);
-                return false;
+                self.relinquish_fenced_agent(fence.clone());
+                return Err(fence);
             }
             Err(error) => panic!("oplog write: {error}"),
         };
@@ -703,11 +733,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 .fetch_add(authority_change_count, Ordering::Release);
         }
 
-        changed
+        Ok(changed)
     }
 
     async fn reattach(&self) {
-        self.commit_and_update_state(CommitLevel::Always, None)
+        // A refused commit has already given the agent up; the status is still recomputed from
+        // what was committed before it.
+        let _ = self
+            .commit_and_update_state(CommitLevel::Always, None)
             .await;
 
         self.ensure_status_attached().await;

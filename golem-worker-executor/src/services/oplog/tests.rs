@@ -539,11 +539,22 @@ pub(crate) struct ReadCountingIndexedStorage {
     append_many_attempts: AtomicUsize,
     append_many_batch_ptr: AtomicUsize,
     append_many_batch_changed: AtomicBool,
+    drop_prefix_started: StdMutex<Option<oneshot::Sender<()>>>,
+    release_drop_prefix: Option<Arc<Notify>>,
 }
 
 impl ReadCountingIndexedStorage {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Every `drop_prefix` waits for `release`; the first one signals `started` when it arrives.
+    fn blocking_drop_prefix(started: oneshot::Sender<()>, release: Arc<Notify>) -> Self {
+        Self {
+            drop_prefix_started: StdMutex::new(Some(started)),
+            release_drop_prefix: Some(release),
+            ..Self::default()
+        }
     }
 
     fn discarding_compressed_appends() -> Self {
@@ -908,6 +919,13 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
+        if let Some(release) = &self.release_drop_prefix {
+            let started = self.drop_prefix_started.lock().unwrap().take();
+            if let Some(started) = started {
+                let _ = started.send(());
+            }
+            release.notified().await;
+        }
         self.inner
             .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
             .await
@@ -7675,6 +7693,78 @@ async fn a_fenced_oplog_is_not_handed_out_again_while_it_is_still_held(_tracing:
     );
 }
 
+/// What every write that gates a side effect relies on: an add's answer is no evidence the entry
+/// was written, only the latch read after the commit is. A below-threshold add on a moved shard
+/// buffers and succeeds, before and after the fence latches, and the refused commit is what
+/// latches it.
+#[test]
+async fn a_below_threshold_add_on_a_moved_shard_is_latched_by_the_refused_commit(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "moved".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let executor = fencing_oplog_service(&tempdir, "shared").await;
+    let other_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let open = |service: &PrimaryOplogService, epoch: u64| {
+        let service = service.clone();
+        let agent_id = agent_id.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        async move {
+            service
+                .open(
+                    &owned_agent_id,
+                    AgentMode::Durable,
+                    None,
+                    make_agent_metadata(agent_id, account_id, environment_id),
+                    default_last_known_status(),
+                    default_execution_status(AgentMode::Durable),
+                    Some(ShardEpoch(epoch)),
+                )
+                .await
+        }
+    };
+
+    let stale = open(&executor, 8).await;
+    let owner = open(&other_executor, 9).await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(stale.fence(), None, "nothing has been refused yet");
+
+    stale
+        .add(OplogEntry::exited().rounded())
+        .await
+        .expect("a below-threshold add only buffers, so the moved shard does not refuse it");
+    assert!(matches!(
+        stale.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    let fence = stale
+        .fence()
+        .expect("the refused commit must latch the fence before it returns");
+    assert_eq!(fence.expected_epoch, ShardEpoch(8));
+    assert_eq!(fence.actual_epoch, Some(ShardEpoch(9)));
+
+    stale
+        .add(OplogEntry::exited().rounded())
+        .await
+        .expect("a latched fence does not stop a below-threshold add");
+    assert!(matches!(
+        stale.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(
+        stale.fence(),
+        Some(fence),
+        "the latch keeps the first refusal"
+    );
+}
+
 #[test]
 async fn an_invocation_started_records_the_epoch_its_oplog_asserts(_tracing: &Tracing) {
     let tempdir = tempfile::TempDir::new().unwrap();
@@ -7814,5 +7904,933 @@ async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_writ
         loser.length().await,
         1,
         "the refused entry must not be there"
+    );
+}
+
+#[test]
+async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "flushed".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let losing_executor = fencing_oplog_service(&tempdir, "flushed").await;
+    let owning_executor = fencing_oplog_service(&tempdir, "flushed").await;
+
+    let loser = losing_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(8)),
+        )
+        .await;
+    let owner = owning_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(9)),
+        )
+        .await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    // The guest's `oplog-commit` path: the entry is only buffered, and the flush inside
+    // `wait_for_replicas` is what the storage refuses. The fencing backends have no replicas to
+    // wait for, so a count taken after the refusal would read as a successful commit.
+    loser.add(OplogEntry::exited().rounded()).await.unwrap();
+    assert!(
+        !loser.wait_for_replicas(1, Duration::from_secs(1)).await,
+        "a flush the storage refused must not be reported as durable"
+    );
+    match loser.fence() {
+        Some(fence) => assert_eq!(
+            fence.actual_epoch,
+            Some(golem_common::model::ShardEpoch(9)),
+            "the fence must name the epoch that owns the oplog now"
+        ),
+        None => panic!("the refused flush must latch the fence"),
+    }
+    assert_eq!(
+        owner.length().await,
+        1,
+        "the losing executor must not have appended to the owner's oplog"
+    );
+}
+
+#[test]
+async fn an_opener_at_a_newer_epoch_is_not_handed_the_older_generations_handle(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "came-back".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let executor = fencing_oplog_service(&tempdir, "came-back").await;
+    let open = |epoch: u64| {
+        let service = executor.clone();
+        let agent_id = agent_id.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        async move {
+            service
+                .open(
+                    &owned_agent_id,
+                    AgentMode::Durable,
+                    None,
+                    make_agent_metadata(agent_id, account_id, environment_id),
+                    default_last_known_status(),
+                    default_execution_status(AgentMode::Durable),
+                    Some(ShardEpoch(epoch)),
+                )
+                .await
+        }
+    };
+
+    // The shard left this executor at epoch 5 and came back at 7 while the epoch-5 handle is still
+    // held. Nothing has fenced that handle - nobody has written since - so only the epoch it was
+    // opened with tells the cache it belongs to the older generation.
+    let old = open(5).await;
+    let new = open(7).await;
+    assert!(
+        !Arc::ptr_eq(&new, &old),
+        "the opener at epoch 7 was handed the handle opened at 5"
+    );
+    assert_eq!(new.shard_epoch(), Some(ShardEpoch(7)));
+    new.add(OplogEntry::suspend().rounded()).await.unwrap();
+    new.commit(CommitLevel::Always).await.unwrap();
+
+    let write = async {
+        old.add(OplogEntry::exited().rounded()).await?;
+        old.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(7)));
+        }
+        other => panic!("expected the older generation's write to be fenced, got {other:?}"),
+    }
+
+    // An equal or older request is handed the current handle. Building another would put two
+    // live writers on epoch 7, and they would collide on the oplog's keys.
+    let again = open(7).await;
+    assert!(
+        Arc::ptr_eq(&again, &new),
+        "an opener at the same epoch must share the handle"
+    );
+    let stale = open(5).await;
+    assert!(
+        Arc::ptr_eq(&stale, &new),
+        "an opener at an older epoch must not evict the newer handle"
+    );
+}
+
+#[test]
+async fn an_ephemeral_handle_is_reused_whatever_epoch_is_requested(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let primary = Arc::new(fencing_oplog_service(&tempdir, "ephemeral").await);
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "ephemeral".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let open = |epoch: u64| {
+        let service = service.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let metadata = metadata.clone();
+        async move {
+            service
+                .open(
+                    &owned_agent_id,
+                    AgentMode::Ephemeral,
+                    None,
+                    metadata,
+                    default_last_known_status(),
+                    default_execution_status(AgentMode::Ephemeral),
+                    Some(ShardEpoch(epoch)),
+                )
+                .await
+        }
+    };
+
+    // An ephemeral handle asserts no epoch whatever it was opened with, so it belongs to no
+    // ownership generation and a newer request is no reason to rebuild it.
+    let first = open(5).await;
+    assert_eq!(first.shard_epoch(), None);
+    let second = open(7).await;
+    assert!(
+        Arc::ptr_eq(&second, &first),
+        "an ephemeral handle was rebuilt for a newer epoch"
+    );
+}
+
+#[test]
+async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let primary = Arc::new(fencing_oplog_service(&tempdir, "fork-target").await);
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        1,
+        RetryConfig::default(),
+    ));
+    // Through the layered service, as production opens it: each layer caches its own handle, and
+    // every one of them has to decline the fork's.
+    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fork-target".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Durable,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+
+    // The fork copies into the target through a handle that asserts no epoch, since the target's
+    // shard may belong to another executor. Here that handle is still held when the owner opens
+    // the target.
+    let forked = service
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            create_entry,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    forked.add(OplogEntry::suspend().rounded()).await.unwrap();
+    forked.commit(CommitLevel::Always).await.unwrap();
+
+    let owner = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(4)),
+        )
+        .await;
+    assert!(
+        !Arc::ptr_eq(&owner, &forked),
+        "the owner's first open was handed the fork's unfenced handle"
+    );
+    assert_eq!(owner.shard_epoch(), Some(ShardEpoch(4)));
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    // Another executor takes the shard at epoch 5. The owner's next write is refused only if its
+    // open recorded epoch 4; through the fork's handle it would have recorded nothing and been
+    // accepted.
+    let other_executor = fencing_oplog_service(&tempdir, "fork-target").await;
+    let other = other_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    other.add(OplogEntry::suspend().rounded()).await.unwrap();
+    other.commit(CommitLevel::Always).await.unwrap();
+
+    let write = async {
+        owner.add(OplogEntry::exited().rounded()).await?;
+        owner.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(4));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(5)));
+        }
+        other => panic!("expected the owner's write to be fenced, got {other:?}"),
+    }
+}
+
+#[test]
+async fn an_owner_opening_on_a_stale_last_index_starts_after_the_losers_last_write(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "stale-last-index".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared").await;
+
+    let loser = losing_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+    loser.commit(CommitLevel::Always).await.unwrap();
+
+    // A layer above the primary reads the last index before the primary claims the epoch, as the
+    // layered service does, and the losing executor commits again in that window: the record
+    // still says 5, so the write is accepted.
+    let stale_last_index = owning_executor
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
+    assert_eq!(stale_last_index, OplogIndex::from_u64(1));
+    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+    loser.commit(CommitLevel::Always).await.unwrap();
+
+    let owner = owning_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_last_index),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    // Starting from the stale index, this append would reuse the loser's id and fail-stop the
+    // executor that owns the shard.
+    owner.add(OplogEntry::exited().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(owner.length().await, 3);
+    assert_eq!(owner.current_oplog_index().await, OplogIndex::from_u64(3));
+
+    let write = async {
+        loser.add(OplogEntry::exited().rounded()).await?;
+        loser.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        }
+        other => panic!("expected the losing executor's write to be fenced, got {other:?}"),
+    }
+}
+
+#[test]
+async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fatal(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "created-twice".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let create_entry = || {
+        OplogEntry::create(
+            agent_id.clone(),
+            AgentMode::Durable,
+            ComponentRevision::new(1).unwrap(),
+            Vec::new(),
+            environment_id,
+            account_id,
+            None,
+            100,
+            100,
+            HashSet::new(),
+            Vec::new(),
+            None,
+            Uuid::new_v4(),
+        )
+        .rounded()
+    };
+
+    let owner = owning_executor
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            create_entry(),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    // An executor that lost the shard creates the same agent. Its claim is refused, so it writes
+    // nothing and must not fail-stop over an oplog that belongs to the owner.
+    let stale = losing_executor
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            create_entry(),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    match stale.fence() {
+        Some(fence) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        }
+        None => panic!("the refused create must hand back a fenced oplog"),
+    }
+    let write = async {
+        stale.add(OplogEntry::exited().rounded()).await?;
+        stale.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    assert!(
+        matches!(write, Err(OplogError::Fenced(_))),
+        "expected the stale create's write to be fenced, got {write:?}"
+    );
+    assert_eq!(
+        owner.length().await,
+        2,
+        "the stale create must not have appended to the owner's oplog"
+    );
+}
+
+/// Keeps every fence it is told of, in order.
+#[derive(Default)]
+struct RecordingFenceObserver {
+    fences: StdMutex<Vec<OplogFence>>,
+}
+
+impl RecordingFenceObserver {
+    fn fences(&self) -> Vec<OplogFence> {
+        self.fences.lock().unwrap().clone()
+    }
+}
+
+impl OplogFenceObserver for RecordingFenceObserver {
+    fn fenced(&self, fence: &OplogFence) {
+        self.fences.lock().unwrap().push(fence.clone());
+    }
+}
+
+fn initial_create_entry(
+    agent_id: &AgentId,
+    environment_id: EnvironmentId,
+    account_id: AccountId,
+) -> OplogEntry {
+    OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Durable,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded()
+}
+
+#[test]
+async fn a_refused_open_or_create_reports_the_stored_epoch_to_the_fence_observer(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let recorder = Arc::new(RecordingFenceObserver::default());
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared")
+        .await
+        .with_fence_observer(recorder.clone());
+    let opened = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "opened-by-the-loser".into(),
+    };
+    let created = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "created-by-the-loser".into(),
+    };
+    let expected_fence = |agent_id: &AgentId| OplogFence {
+        agent_id: agent_id.clone(),
+        expected_epoch: ShardEpoch(5),
+        actual_epoch: Some(ShardEpoch(6)),
+    };
+
+    for agent_id in [&opened, &created] {
+        let owner = owning_executor
+            .create(
+                &OwnedAgentId::new(environment_id, agent_id),
+                AgentMode::Durable,
+                initial_create_entry(agent_id, environment_id, account_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(6)),
+            )
+            .await;
+        owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+        owner.commit(CommitLevel::Always).await.unwrap();
+    }
+
+    let stale = losing_executor
+        .open(
+            &OwnedAgentId::new(environment_id, &opened),
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(opened.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    assert!(stale.fence().is_some(), "the stale open was not refused");
+    let reported = recorder.fences();
+    assert!(
+        !reported.is_empty(),
+        "the refused open reported nothing to the observer"
+    );
+    for fence in &reported {
+        assert_eq!(fence, &expected_fence(&opened));
+    }
+
+    // Born fenced, so its writes fail on the latch without asking the storage again.
+    let write = async {
+        stale.add(OplogEntry::exited().rounded()).await?;
+        stale.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    assert!(
+        matches!(write, Err(OplogError::Fenced(_))),
+        "expected the stale open's write to be fenced, got {write:?}"
+    );
+    assert_eq!(
+        recorder.fences().len(),
+        reported.len(),
+        "a write refused by the latch reported a refusal the storage never made"
+    );
+
+    // On a cache miss a refused create is reported twice, by `create` and by the open behind it,
+    // and the observer merges. So what is asserted is what was learned, not how often.
+    let reported_before_create = recorder.fences().len();
+    let stale_create = losing_executor
+        .create(
+            &OwnedAgentId::new(environment_id, &created),
+            AgentMode::Durable,
+            initial_create_entry(&created, environment_id, account_id),
+            make_agent_metadata(created.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    assert!(
+        stale_create.fence().is_some(),
+        "the stale create was not refused"
+    );
+    let reported = recorder.fences().split_off(reported_before_create);
+    assert!(
+        !reported.is_empty(),
+        "the refused create reported nothing to the observer"
+    );
+    for fence in &reported {
+        assert_eq!(fence, &expected_fence(&created));
+    }
+}
+
+#[test]
+async fn a_create_refused_behind_a_cached_handle_still_reports_the_stored_epoch(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "created-again-while-held".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let recorder = Arc::new(RecordingFenceObserver::default());
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared")
+        .await
+        .with_fence_observer(recorder.clone());
+    let create_at_5 = || {
+        losing_executor.create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            initial_create_entry(&agent_id, environment_id, account_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+    };
+
+    // Created while this executor owned the shard, and held without a write.
+    let held = create_at_5().await;
+    assert!(held.fence().is_none());
+    assert!(recorder.fences().is_empty());
+
+    // The shard moves, and its new owner claims the oplog.
+    let owner = owning_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    assert!(owner.fence().is_none());
+
+    // The claim is refused, and the open behind it hands back the held handle without asking the
+    // storage, so the refusal `create` reports is the only one before a write.
+    let again = create_at_5().await;
+    assert!(
+        Arc::ptr_eq(&again, &held),
+        "the held handle was not handed back, so this is not the cache hit under test"
+    );
+    assert_eq!(
+        recorder.fences(),
+        vec![OplogFence {
+            agent_id: agent_id.clone(),
+            expected_epoch: ShardEpoch(5),
+            actual_epoch: Some(ShardEpoch(6)),
+        }]
+    );
+}
+
+#[test]
+async fn a_refused_append_reports_the_stored_epoch_and_the_latch_does_not_report_again(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "appended-by-the-loser".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let recorder = Arc::new(RecordingFenceObserver::default());
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared")
+        .await
+        .with_fence_observer(recorder.clone());
+    let open = |service: &PrimaryOplogService, epoch: u64| {
+        let service = service.clone();
+        let agent_id = agent_id.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        async move {
+            service
+                .open(
+                    &owned_agent_id,
+                    AgentMode::Durable,
+                    None,
+                    make_agent_metadata(agent_id, account_id, environment_id),
+                    default_last_known_status(),
+                    default_execution_status(AgentMode::Durable),
+                    Some(ShardEpoch(epoch)),
+                )
+                .await
+        }
+    };
+
+    let stale = open(&losing_executor, 5).await;
+    assert!(stale.fence().is_none());
+    assert!(recorder.fences().is_empty());
+    let owner = open(&owning_executor, 6).await;
+
+    let write = async {
+        stale.add(OplogEntry::exited().rounded()).await?;
+        stale.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    };
+    let refused = write.await;
+    assert!(
+        matches!(refused, Err(OplogError::Fenced(_))),
+        "expected the losing executor's write to be fenced, got {refused:?}"
+    );
+    let expected = OplogFence {
+        agent_id: agent_id.clone(),
+        expected_epoch: ShardEpoch(5),
+        actual_epoch: Some(ShardEpoch(6)),
+    };
+    assert_eq!(
+        recorder.fences(),
+        vec![expected.clone()],
+        "one refused append is one report"
+    );
+
+    let again = async {
+        stale.add(OplogEntry::exited().rounded()).await?;
+        stale.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    assert!(matches!(again, Err(OplogError::Fenced(_))));
+    assert_eq!(
+        recorder.fences(),
+        vec![expected],
+        "the latched fast-fail asked the storage nothing, so it must report nothing"
+    );
+
+    // The owner, with no observer, writes as before.
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+}
+
+async fn open_unfenced_fork_target(
+    service: &MultiLayerOplogService,
+    owned_agent_id: &OwnedAgentId,
+) -> Arc<dyn Oplog> {
+    service
+        .open(
+            owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(
+                owned_agent_id.agent_id.clone(),
+                AccountId::new(),
+                owned_agent_id.environment_id,
+            ),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await
+}
+
+#[test]
+async fn closing_a_fork_target_ends_the_archive_transfer_its_copy_scheduled(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let (append_started_tx, append_started_rx) = oneshot::channel();
+    let release_append = Arc::new(Notify::new());
+    let append_finished = Arc::new(Notify::new());
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(BlockingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        )),
+        append_started: Arc::new(Mutex::new(Some(append_started_tx))),
+        release_append: release_append.clone(),
+        append_finished: append_finished.clone(),
+    });
+    // A limit below the copy's length, so committing the copy schedules an archive transfer.
+    let service = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![
+            archive,
+            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+                as Arc<dyn OplogArchiveService>
+        ],
+        2,
+        1,
+    );
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "fork-target".to_string(),
+        },
+    );
+    let target = open_unfenced_fork_target(&service, &owned_agent_id).await;
+
+    let copied = 3;
+    for _ in 0..copied {
+        target.add(OplogEntry::no_op(None).rounded()).await.unwrap();
+    }
+    // The transfer's task can run between the fork's final commit and its close; committing
+    // first and waiting for the transfer to reach the archive makes that certain.
+    target.commit(CommitLevel::Always).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), append_started_rx)
+        .await
+        .expect("archive transfer did not start")
+        .expect("archive transfer start signal dropped");
+    let handle = Arc::downgrade(&target);
+
+    crate::services::worker_fork::close_fork_target_oplog(target)
+        .await
+        .unwrap();
+
+    assert!(
+        handle.upgrade().is_none(),
+        "the archive transfer kept the fork target's handle alive past its close"
+    );
+    let append_completed = append_finished.notified();
+    release_append.notify_one();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), append_completed)
+            .await
+            .is_err(),
+        "the archive transfer went on after the fork target's handle was closed"
+    );
+    assert_eq!(
+        primary
+            .read_source(
+                &owned_agent_id,
+                AgentMode::Durable,
+                OplogIndex::INITIAL,
+                copied
+            )
+            .await
+            .len() as u64,
+        copied,
+        "a transfer outliving the close dropped the copied entries from the primary oplog"
+    );
+}
+
+#[test]
+async fn aborting_a_transfer_waits_for_the_prefix_drop_it_handed_to_the_primary(
+    _tracing: &Tracing,
+) {
+    let (drop_prefix_started_tx, drop_prefix_started_rx) = oneshot::channel();
+    let release_drop_prefix = Arc::new(Notify::new());
+    let primary_storage = Arc::new(ReadCountingIndexedStorage::blocking_drop_prefix(
+        drop_prefix_started_tx,
+        release_drop_prefix.clone(),
+    ));
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            primary_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let service = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![
+            Arc::new(CompressedOplogArchiveService::new(
+                Arc::new(InMemoryIndexedStorage::new()),
+                1,
+                RetryConfig::default(),
+            )) as Arc<dyn OplogArchiveService>,
+            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+                as Arc<dyn OplogArchiveService>
+        ],
+        2,
+        1,
+    );
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "fork-target-prefix-drop".to_string(),
+        },
+    );
+    let target = open_unfenced_fork_target(&service, &owned_agent_id).await;
+
+    for _ in 0..3 {
+        target.add(OplogEntry::no_op(None).rounded()).await.unwrap();
+    }
+    target.commit(CommitLevel::Always).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), drop_prefix_started_rx)
+        .await
+        .expect("the transfer did not reach the primary's prefix drop")
+        .expect("prefix drop start signal dropped");
+
+    // The transfer is waiting for the primary's actor, which is inside the prefix drop.
+    let abort = tokio::spawn({
+        let target = target.clone();
+        async move { MultiLayerOplog::try_abort_transfer(&target).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !abort.is_finished(),
+        "the abort returned while the primary was still dropping the transferred prefix"
+    );
+
+    release_drop_prefix.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), abort)
+        .await
+        .expect("the abort did not return once the prefix drop finished")
+        .unwrap();
+    assert!(
+        primary
+            .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .is_empty(),
+        "the abort returned before the primary finished dropping the transferred prefix"
     );
 }

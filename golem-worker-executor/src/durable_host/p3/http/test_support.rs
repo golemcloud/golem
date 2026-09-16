@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OplogFence, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -43,6 +43,9 @@ use wasmtime_wasi_http::{FieldMap, WasiHttpCtx};
 pub(super) struct FrameTestOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     upload_gate: tokio::sync::Semaphore,
+    /// What `fence()` answers. `add` and `enqueue_add` keep succeeding while it is set, as the
+    /// primary oplog's below-threshold adds do after the fence has latched.
+    fence: std::sync::Mutex<Option<OplogFence>>,
 }
 
 impl FrameTestOplog {
@@ -50,6 +53,7 @@ impl FrameTestOplog {
         Arc::new(Self {
             entries: std::sync::Mutex::new(Vec::new()),
             upload_gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
+            fence: std::sync::Mutex::new(None),
         })
     }
 
@@ -59,7 +63,13 @@ impl FrameTestOplog {
         Arc::new(Self {
             entries: std::sync::Mutex::new(Vec::new()),
             upload_gate: tokio::sync::Semaphore::new(0),
+            fence: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Latches `fence`, as a write the storage refused on another path would.
+    pub(super) fn latch_fence(&self, fence: OplogFence) {
+        *self.fence.lock().unwrap() = Some(fence);
     }
 
     pub(super) fn release_uploads(&self, n: usize) {
@@ -208,6 +218,10 @@ impl Oplog for FrameTestOplog {
 
     async fn length(&self) -> u64 {
         self.entries.lock().unwrap().len() as u64
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        self.fence.lock().unwrap().clone()
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

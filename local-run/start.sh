@@ -16,7 +16,9 @@ fi
 
 LOCAL_RUN_DIR="${GOLEM_DIR}/local-run"
 
-rm -rf "${LOCAL_RUN_DIR}/data/shard-manager"
+# Wipe the executor's indexed storage along with the shard manager's state: the oplog epochs it
+# records were minted by that state and are ahead of everything a fresh one mints.
+rm -rf "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor"
 mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor" "${LOCAL_RUN_DIR}/logs"
 
 # start redis

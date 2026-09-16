@@ -121,12 +121,11 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
-    GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
-    ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
-    SchedulerStorageConfig, SnapshotPolicy,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
+    KeyValueStorageConfig, KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig,
+    MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    ResourceUsageMeteringConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
@@ -154,6 +153,8 @@ use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
+use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
@@ -162,7 +163,9 @@ use golem_worker_executor::workerctx::{
     InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
     UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
-use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
+use golem_worker_executor::{
+    Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
+};
 use prometheus::Registry;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1601,6 +1604,41 @@ pub fn scheduler_sqlite_storage_config(
         max_connections: 8,
         foreign_keys: false,
     }
+}
+
+/// Raises the owning epoch stored for `owned_agent_id`'s oplog to `epoch`, as a newer owner
+/// opening it on another executor would. The executor's own shard assignment is left alone, so
+/// its next oplog write is refused: this is the zombie side of a shard move.
+///
+/// Reaches the storage of executors started with the SQLite storage config (`start`,
+/// `start_with_overrides`, `start_customized`), whose indexed storage lives in its own file next to
+/// the key-value one.
+pub async fn take_agent_oplog_over_at_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    epoch: u64,
+) -> anyhow::Result<()> {
+    let storage = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ))
+    .await
+    .map_err(|err| anyhow!(err))?;
+    // The namespace and key the executor's own open records its epoch under.
+    storage
+        .upsert_oplog_metadata(
+            "oplog",
+            "test_take_over",
+            IndexedStorageNamespace::OpLog {
+                agent_id: owned_agent_id.agent_id(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.agent_id.to_redis_key(),
+            ShardEpoch(epoch),
+        )
+        .await?;
+    Ok(())
 }
 
 fn apply_sqlite_storage_config(
@@ -3544,7 +3582,10 @@ impl TestOplog {
                 .has_fire_and_forget_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
                 .await
         {
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog commit failed at the fire-and-forget RPC gate");
             self.additional_test_deps
                 .pause_after_fire_and_forget_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
                 .await;
@@ -5282,6 +5323,23 @@ impl ShardService for FakeOwnership {
 
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.inner.try_get_current_assignment()
+    }
+
+    fn fence_learned_epochs(&self) -> std::collections::BTreeMap<ShardId, ShardEpoch> {
+        self.inner.fence_learned_epochs()
+    }
+
+    fn retire_fence_learned_epochs(
+        &self,
+        reported: &std::collections::BTreeMap<ShardId, ShardEpoch>,
+    ) {
+        self.inner.retire_fence_learned_epochs(reported)
+    }
+}
+
+impl golem_worker_executor::services::oplog::OplogFenceObserver for FakeOwnership {
+    fn fenced(&self, fence: &golem_worker_executor::services::oplog::OplogFence) {
+        self.inner.fenced(fence)
     }
 }
 

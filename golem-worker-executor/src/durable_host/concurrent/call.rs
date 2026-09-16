@@ -2107,8 +2107,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 ScopeReplayRecovery::Default => {}
             }
-            let begin_index =
-                Self::append_access_scope_start(prepared, scope_name, function_type).await;
+            let begin_index = Self::append_access_scope_start(prepared, scope_name, function_type)
+                .await
+                .map_err(|error| {
+                    (
+                        error,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                })?;
             Ok(AccessOpenedScope {
                 begin_index,
                 replay_handle: None,
@@ -2304,7 +2312,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             };
             let Some((begin_index, replay_handle)) = claimed_scope else {
                 let begin_index =
-                    Self::append_access_scope_start(prepared, scope_name, function_type).await;
+                    Self::append_access_scope_start(prepared, scope_name, function_type)
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                 prepared
                     .public_state
                     .worker()
@@ -2470,15 +2487,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Appends the scope `Start` that the call's side effect waits on. A `Start` the storage
+    /// refused is returned as the fence, so the effect never runs for a scope the shard's new
+    /// owner cannot see.
     async fn append_access_scope_start<Ctx: WorkerCtx>(
         prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
         scope_name: HostFunctionName,
         function_type: DurableFunctionType,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         prepared
             .public_state
             .worker()
-            .add_and_commit_oplog(OplogEntry::Start {
+            .add_and_commit_oplog_or_fenced(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
@@ -2488,6 +2508,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 durable_function_type: function_type,
             })
             .await
+            .map_err(WorkerExecutorError::from)
     }
 
     fn finish_access_start<Ctx: WorkerCtx>(

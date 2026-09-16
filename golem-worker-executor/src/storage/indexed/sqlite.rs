@@ -334,8 +334,9 @@ impl IndexedStorage for SqliteIndexedStorage {
     }
 
     /// Monotonic compare-and-set: the `WHERE` on the conflict path means a lower epoch updates no
-    /// row, so a stale writer cannot walk the record back and un-fence itself. The unqualified
-    /// `epoch` there is the existing row's.
+    /// row, so while a record exists a stale writer cannot walk it back and un-fence itself. With
+    /// no record there is no conflict and any epoch is inserted. The unqualified `epoch` there is
+    /// the existing row's.
     async fn upsert_oplog_metadata(
         &self,
         svc_name: &'static str,

@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug};
+use tracing::{Instrument, debug, info};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -826,6 +826,63 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         self.agents.remove(owned_agent_id).await
     }
 
+    /// The worker cached for `owned_agent_id`, without waiting on a creation still in progress.
+    ///
+    /// For callers acting on one particular generation: a pending entry is a newer generation
+    /// being created, never the one they hold, so waiting on it could only delay them.
+    pub(crate) async fn try_get_cached(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<Ctx>>> {
+        self.agents
+            .try_get(owned_agent_id)
+            .await
+            .map(|active_agent| active_agent.primary())
+    }
+
+    /// Whether `worker` is the generation cached for its agent right now.
+    pub(crate) async fn is_cached_generation(&self, worker: &Worker<Ctx>) -> bool {
+        self.try_get_cached(worker.owned_agent_id())
+            .await
+            .is_some_and(|cached| std::ptr::eq(Arc::as_ptr(&cached), worker))
+    }
+
+    /// [`Self::remove_with`] for one generation: tears the entry down and drops it only while it
+    /// still holds `worker`. Returns whether it did.
+    ///
+    /// A relinquished agent reaches its removal more than once - from its own loop's stop, again
+    /// from the relinquish that waited for it, or from a stop through a handle kept past its
+    /// generation - and by then a newer generation may be cached under the same id. Keyed by id
+    /// alone, such a pass evicts that generation and fences its entity bodies while its loop keeps
+    /// running.
+    ///
+    /// The final removal re-checks identity in the same map operation. The teardown before it does
+    /// not: should this generation be removed concurrently and a newer one cached in between,
+    /// clearing card interest reaches the newer one. That window is no wider than the one
+    /// [`Self::remove_with`] has.
+    pub(crate) async fn remove_generation(
+        &self,
+        worker: &Worker<Ctx>,
+        owner_failure: OwnerFailureWinner,
+    ) -> bool {
+        let owned_agent_id = worker.owned_agent_id();
+        let is_this_generation = |active_agent: &Arc<ActiveAgent<Ctx>>| {
+            std::ptr::eq(Arc::as_ptr(&active_agent.primary), worker)
+        };
+        match self.agents.try_get(owned_agent_id).await {
+            Some(active_agent) if is_this_generation(&active_agent) => {
+                active_agent.fence_entity_bodies(owner_failure).await;
+                self.card_interest_index
+                    .set_card_interest(owned_agent_id.clone(), &[])
+                    .await;
+            }
+            _ => return false,
+        }
+        self.agents
+            .remove_if_cached(owned_agent_id, is_this_generation)
+            .await
+    }
+
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
         self.card_interest_index.tracked_card_ids().await
     }
@@ -904,6 +961,14 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .filter(|(agent_id, _)| select(agent_id))
             .map(|(_, worker)| worker)
             .collect();
+
+        if !selected.is_empty() {
+            info!(
+                ?reason,
+                agents = selected.len(),
+                "Giving up agents whose shard has moved"
+            );
+        }
 
         futures::future::join_all(selected.into_iter().map(|worker| {
             let reason = reason.clone();
