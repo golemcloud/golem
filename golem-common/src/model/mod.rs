@@ -1235,6 +1235,7 @@ impl Default for InvocationResultMembership {
 #[desert(evolution())]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
+    pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
@@ -1286,6 +1287,7 @@ impl Default for AgentStatusRecord {
     fn default() -> Self {
         AgentStatusRecord {
             status: AgentStatus::Idle,
+            last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
