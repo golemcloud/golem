@@ -256,19 +256,36 @@ fn SchemaRef::unpack(
     | (@model.SchemaTypeBody::S16(_), @model.SchemaValue::S16(value))
     | (@model.SchemaTypeBody::S32(_), @model.SchemaValue::S32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) =>
+    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) => {
+      guard value >= -9007199254740991L && value <= 9007199254740991L else {
+        raise Json("64-bit integer is outside the safe JSON range")
+      }
       Json::number(value.to_double())
+    }
     (@model.SchemaTypeBody::U8(_), @model.SchemaValue::U8(value)) =>
       Json::number(value.to_int().to_double())
-    (@model.SchemaTypeBody::U16(_), @model.SchemaValue::U16(value))
-    | (@model.SchemaTypeBody::U32(_), @model.SchemaValue::U32(value)) =>
+    (@model.SchemaTypeBody::U16(_), @model.SchemaValue::U16(value)) =>
       Json::number(value.reinterpret_as_int().to_double())
-    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) =>
+    (@model.SchemaTypeBody::U32(_), @model.SchemaValue::U32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::F32(_), @model.SchemaValue::F32(value)) =>
+    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) => {
+      guard value <= 9007199254740991UL else {
+        raise Json("64-bit integer is outside the safe JSON range")
+      }
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::F64(_), @model.SchemaValue::F64(value)) =>
+    }
+    (@model.SchemaTypeBody::F32(_), @model.SchemaValue::F32(value)) => {
+      guard !value.is_nan() && !value.is_inf() else {
+        raise Json("expected a finite JSON number")
+      }
+      Json::number(value.to_double())
+    }
+    (@model.SchemaTypeBody::F64(_), @model.SchemaValue::F64(value)) => {
+      guard !value.is_nan() && !value.is_inf() else {
+        raise Json("expected a finite JSON number")
+      }
       Json::number(value)
+    }
     (@model.SchemaTypeBody::Char, @model.SchemaValue::Char(value)) =>
       Json::string(value.to_string())
     (@model.SchemaTypeBody::String, @model.SchemaValue::String(value)) =>
@@ -456,7 +473,11 @@ fn SchemaRef::pack(
       guard !value.is_nan() && !value.is_inf() else {
         raise Json("expected a finite number")
       }
-      F32(Float::from_double(value))
+      let narrowed = Float::from_double(value)
+      guard !narrowed.is_nan() && !narrowed.is_inf() else {
+        raise Json("number is outside the f32 range")
+      }
+      F32(narrowed)
     }
     F64(_) => {
       let value = json_number(json)

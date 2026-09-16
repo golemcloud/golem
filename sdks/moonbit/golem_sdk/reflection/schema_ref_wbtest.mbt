@@ -20,6 +20,31 @@ test "record JSON round-trips through reflected SchemaValue" {
 }
 
 ///|
+test "unsigned 32-bit JSON preserves values above the signed range" {
+  let schema = test_schema(U32(None))
+  assert_eq(
+    schema.unpack_json(@model.SchemaValue::U32(4294967295U)),
+    Json::number(4294967295.0),
+  )
+}
+
+///|
+test "64-bit JSON rejects values outside the safe integer range" {
+  let signed = test_schema(S64(None))
+  let unsigned = test_schema(U64(None))
+  try signed.unpack_json(@model.SchemaValue::S64(9007199254740992L)) catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected unsafe signed integer to be rejected")
+  }
+  try unsigned.unpack_json(@model.SchemaValue::U64(9007199254740992UL)) catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected unsafe unsigned integer to be rejected")
+  }
+}
+
+///|
 test "flags JSON uses names while SchemaValue uses positions" {
   let schema = test_schema(Flags(["read", "write", "admin"]))
   let input = Json::array([Json::string("write"), Json::string("admin")])
