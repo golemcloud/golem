@@ -59,10 +59,11 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     .await
                     .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
-                // Subdomains are expanded from the manifest's `localServer` ports or their
-                // defaults, so the check applies to any application manifest, with or without
-                // a `localServer` section.
-                if ctx.manifest_environment().is_some() {
+                // Subdomains of the manifest's built-in local environments are expanded from
+                // the `localServer` ports or their defaults, so the check applies whenever the
+                // manifest has such an environment (with or without a `localServer` section);
+                // which environment the CLI has selected is irrelevant to the local server.
+                if ctx.manifest_has_builtin_local_environment() {
                     warn_on_subdomain_port_mismatches(ctx.manifest_local_server(), &startup_ports);
                 }
 

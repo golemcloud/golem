@@ -472,6 +472,23 @@ impl Context {
         self.manifest_local_server.as_ref()
     }
 
+    /// Whether the loaded application manifest has an environment on the built-in local server
+    /// (an unset `server` means the built-in local server), i.e. an environment `golem server
+    /// run` serves. Independent of the selected environment.
+    pub fn manifest_has_builtin_local_environment(&self) -> bool {
+        self.app_context_config
+            .as_ref()
+            .map(|config| {
+                config.environments.values().any(|environment| {
+                    matches!(
+                        environment.server,
+                        None | Some(Server::Builtin(BuiltinServer::Local))
+                    )
+                })
+            })
+            .unwrap_or(false)
+    }
+
     pub fn caches(&self) -> &Caches {
         &self.caches
     }
