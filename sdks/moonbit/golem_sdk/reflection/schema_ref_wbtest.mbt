@@ -45,6 +45,57 @@ test "64-bit JSON rejects values outside the safe integer range" {
 }
 
 ///|
+test "binary JSON round-trips unpadded base64url and MIME type" {
+  let schema = test_schema(
+    Binary({ min_bytes: None, max_bytes: None, mime_types: None, }),
+  )
+  let value = @model.SchemaValue::Binary(
+    ([0, 251, 255] : FixedArray[Byte]),
+    Some("image/png"),
+  )
+  let json = schema.unpack_json(value)
+  assert_eq(
+    json,
+    Json::object({
+      "bytes": Json::string("APv_"),
+      "mimeType": Json::string("image/png"),
+    }),
+  )
+  assert_eq(schema.pack_json(json), value)
+  try schema.pack_json(Json::object({ "bytes": Json::string("APv_=") })) catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected padded base64url to be rejected")
+  }
+}
+
+///|
+test "quantity JSON round-trips within the safe integer range" {
+  let schema = test_schema(
+    Quantity({ base_unit: "kg", allowed_suffixes: [], min: None, max: None, }),
+  )
+  let value = @model.SchemaValue::Quantity({
+    mantissa: 1234L,
+    scale: 2,
+    unit: "kg",
+  })
+  assert_eq(schema.pack_json(schema.unpack_json(value)), value)
+  try
+    schema.unpack_json(
+      @model.SchemaValue::Quantity({
+        mantissa: 9007199254740992L,
+        scale: 0,
+        unit: "kg",
+      }),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected unsafe quantity mantissa to be rejected")
+  }
+}
+
+///|
 test "flags JSON uses names while SchemaValue uses positions" {
   let schema = test_schema(Flags(["read", "write", "admin"]))
   let input = Json::array([Json::string("write"), Json::string("admin")])

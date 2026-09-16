@@ -9,6 +9,7 @@ import {
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "golemcloud/golem_sdk/rpc",
   "moonbitlang/core/string",
+  "moonbitlang/core/encoding/base64",
 }
 
 supported_targets = "+wasm"

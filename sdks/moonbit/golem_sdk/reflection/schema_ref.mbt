@@ -151,6 +151,31 @@ fn required_field(
 }
 
 ///|
+fn binary_to_json(bytes : FixedArray[Byte]) -> String {
+  @base64.encode(Bytes::from_array(bytes).view(), padding=false)
+  .replace_all(old="+", new="-")
+  .replace_all(old="/", new="_")
+}
+
+///|
+fn binary_from_json(encoded : String) -> FixedArray[Byte] raise ReflectError {
+  guard !encoded.contains("=") else {
+    raise Json("binary bytes must be unpadded base64url")
+  }
+  let standard = encoded
+    .replace_all(old="-", new="+")
+    .replace_all(old="_", new="/")
+  let bytes = @base64.decode(standard) catch {
+    _ => raise Json("invalid base64url binary bytes")
+  }
+  let result = bytes.to_fixedarray()
+  guard binary_to_json(result) == encoded else {
+    raise Json("invalid canonical base64url binary bytes")
+  }
+  result
+}
+
+///|
 fn find_string_index(values : Array[String], expected : String) -> Int? {
   for index in 0..<values.length() {
     if values[index] == expected {
@@ -424,10 +449,29 @@ fn SchemaRef::unpack(
         Some(branch) => self.unpack(self.resolve(branch.body), value)
         None => raise Schema("union tag '" + tag + "' is outside the schema")
       }
-    (@model.SchemaTypeBody::Binary(_), @model.SchemaValue::Binary(_, _))
-    | (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(_))
-    | (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(_))
-    | (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(_)) =>
+    (@model.SchemaTypeBody::Binary(_), @model.SchemaValue::Binary(bytes, mime)) => {
+      let fields : Map[String, Json] = {
+        "bytes": Json::string(binary_to_json(bytes)),
+      }
+      match mime {
+        Some(mime) => fields["mimeType"] = Json::string(mime)
+        None => ()
+      }
+      Json::object(fields)
+    }
+    (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(value)) => {
+      guard value.mantissa >= -9007199254740991L &&
+        value.mantissa <= 9007199254740991L else {
+        raise Json("quantity mantissa is outside the safe JSON range")
+      }
+      Json::object({
+        "mantissa": Json::number(value.mantissa.to_double()),
+        "scale": Json::number(value.scale.to_double()),
+        "unit": Json::string(value.unit),
+      })
+    }
+    (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(_))
+    | (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(_)) =>
       raise Json("this rich schema type is not yet supported by the JSON codec")
     (@model.SchemaTypeBody::Secret(_), @model.SchemaValue::Secret(_))
     | (@model.SchemaTypeBody::QuotaToken(_), @model.SchemaValue::QuotaToken(_))
@@ -656,7 +700,37 @@ fn SchemaRef::pack(
       let branch = matching[0]
       Union(branch.tag, self.pack(self.resolve(branch.body), json))
     }
-    Binary(_) | Datetime | Duration | Quantity(_) =>
+    Binary(_) => {
+      let fields = json_object(json)
+      guard fields.length() <= 2 &&
+        (fields.length() == 1 || fields.contains("mimeType")) else {
+        raise Json("unexpected binary JSON field")
+      }
+      Binary(
+        binary_from_json(json_string(required_field(fields, "bytes"))),
+        fields.get("mimeType").map(json_string),
+      )
+    }
+    Quantity(_) => {
+      let fields = json_object(json)
+      guard fields.length() == 3 else {
+        raise Json("quantity JSON requires mantissa, scale, and unit")
+      }
+      Quantity({
+        mantissa: json_integer(
+          required_field(fields, "mantissa"),
+          -9007199254740991.0,
+          9007199254740991.0,
+        ).to_int64(),
+        scale: json_integer(
+          required_field(fields, "scale"),
+          -2147483648.0,
+          2147483647.0,
+        ).to_int(),
+        unit: json_string(required_field(fields, "unit")),
+      })
+    }
+    Datetime | Duration =>
       raise Json("this rich schema type is not yet supported by the JSON codec")
     Secret(_) | QuotaToken(_) | PermissionCard(_) =>
       raise Json("capability values cannot be constructed from JSON")
