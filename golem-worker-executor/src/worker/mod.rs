@@ -91,7 +91,8 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, run_invocation_loop_task,
 };
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
+    calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
+    fold_invocation_result_entries, update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::channel::oneshot;
@@ -5445,16 +5446,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let region_start = last_oplog_index.next();
         let last_known_status = self.get_latest_worker_metadata().await.last_known_status;
+        let dropped_region = OplogRegion {
+            start: region_start,
+            end: region_end,
+        };
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await;
 
-        if last_known_status
-            .skipped_regions
-            .is_in_deleted_region(region_start)
-        {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
-            )))
-        } else if let Some(stream_index) = cut_point::find_stream_history_in_range(
-            |idx| self.oplog.read(idx),
+        if let Some(stream_index) = cut_point::find_stream_history_in_range(
+            |idx| {
+                std::future::ready(
+                    entries
+                        .get(&idx)
+                        .expect("read_exact must return every requested oplog entry")
+                        .clone(),
+                )
+            },
             OplogIndex::INITIAL,
             region_end,
         )
@@ -5463,30 +5472,89 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot revert worker to oplog index {last_oplog_index}: durable stream history exists at oplog index {stream_index}"
             )))
-        } else if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
-            |idx| self.oplog.read(idx),
-            last_oplog_index,
-            region_end,
-            &last_known_status.skipped_regions,
-        )
-        .await
-        {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
-            )))
         } else {
-            let region = OplogRegion {
-                start: region_start,
-                end: region_end,
+            cut_point::validate_snapshot_update_boundaries(
+                &entries,
+                last_oplog_index,
+                &last_known_status.deleted_regions,
+            )
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: {error}"
+                ))
+            })?;
+
+            let validation_regions = calculate_revert_validation_regions(&entries, &dropped_region);
+
+            if validation_regions.is_in_deleted_region(region_start) {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+                )));
+            }
+
+            if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
+                |idx| {
+                    std::future::ready(
+                        entries
+                            .get(&idx)
+                            .expect("read_exact must return every requested oplog entry")
+                            .clone(),
+                    )
+                },
+                last_oplog_index,
+                region_end,
+                &validation_regions,
+            )
+            .await
+            {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
+                )));
+            }
+
+            let mut prospective_entries = entries;
+            prospective_entries.insert(
+                region_end.next(),
+                OplogEntry::revert(dropped_region.clone()),
+            );
+            let retained_status = AgentStatusRecord {
+                invocation_results: self.config().invocation_results.membership(),
+                ..Default::default()
             };
+            let retained_status = update_status_with_new_entries(
+                self.agent_mode(),
+                retained_status,
+                prospective_entries,
+                &self.config().retry,
+            )
+            .map_err(WorkerExecutorError::runtime)?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to reconstruct worker status at oplog index {last_oplog_index}"
+                ))
+            })?;
+
+            let restored_component = self.preflight_revert_restoration(&retained_status).await?;
+
+            let validated_oplog_index = self.oplog.current_oplog_index().await;
+            if validated_oplog_index != region_end {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Oplog changed while validating revert: expected oplog index {region_end}, found {validated_oplog_index}"
+                )));
+            }
 
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
 
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
-            self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region), None)
-                .await;
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::revert(dropped_region),
+                None,
+            )
+            .await;
             self.reattach_worker_status().await;
+            self.current_component.store(Arc::new(restored_component));
 
             if let WorkerInstance::Running(running) = &*instance_guard {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -5494,6 +5562,106 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             drop(instance_guard);
             Ok(())
         }
+    }
+
+    async fn preflight_revert_restoration(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        let pending_update = status.pending_updates.front();
+        let active_revision = pending_update
+            .map(|update| update.target_revision)
+            .unwrap_or(status.component_revision);
+        let (_, active_component) = self
+            .component_service()
+            .get(
+                &self.engine(),
+                self.owned_agent_id.component_id(),
+                active_revision,
+            )
+            .await?;
+
+        if let Some(rejected) = self
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            self.rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
+        let replay_revision = component_revision_for_replay(
+            status,
+            pending_update.is_some(),
+            self.rejected_periodic_snapshot_through
+                .load(Ordering::Acquire),
+        );
+        let replay_component = if active_component.revision == replay_revision {
+            active_component.clone()
+        } else {
+            self.component_service()
+                .get_metadata(self.owned_agent_id.component_id(), Some(replay_revision))
+                .await?
+        };
+
+        if let Some(snapshot_index) = status.last_manual_update_snapshot_index {
+            self.preflight_snapshot_update_payload(snapshot_index)
+                .await?;
+        }
+        if let Some(pending_update) = pending_update
+            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
+        {
+            self.preflight_snapshot_update_payload(pending_update.oplog_index)
+                .await?;
+        }
+
+        let initial_files = self
+            .parsed_agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                replay_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+            })
+            .map(|config| config.files.clone())
+            .unwrap_or_default();
+        prepare_initial_files(
+            &self.file_loader(),
+            self.owned_agent_id.environment_id,
+            &initial_files,
+        )
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+
+        Ok(active_component)
+    }
+
+    async fn preflight_snapshot_update_payload(
+        &self,
+        snapshot_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self.oplog.read(snapshot_index).await {
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { payload, .. },
+                ..
+            } => {
+                self.oplog
+                    .download_payload(payload)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
+            _ => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn wait_for_invocation_result(
@@ -7272,47 +7440,23 @@ impl RunningWorker {
                 .fetch_max(rejected.into(), Ordering::AcqRel);
         }
 
-        let automatic_snapshot = worker_metadata
-            .last_known_status
-            .last_automatic_snapshot_index
-            .zip(
-                worker_metadata
-                    .last_known_status
-                    .last_automatic_snapshot_component_revision,
-            )
-            .filter(|(_, snapshot_revision)| {
-                *snapshot_revision == worker_metadata.last_known_status.component_revision
-            })
-            .filter(|(index, _)| {
-                pending_update.is_none()
-                    && u64::from(*index)
-                        > parent
-                            .rejected_periodic_snapshot_through
-                            .load(Ordering::Acquire)
-                            .max(
-                                parent
-                                    .unavailable_periodic_snapshot_through
-                                    .load(Ordering::Acquire),
-                            )
-            });
-
-        let component_version_for_replay = automatic_snapshot.map_or_else(
-            || {
-                worker_metadata
-                    .last_known_status
-                    .pending_updates
-                    .front()
-                    .and_then(|update| match update.kind {
-                        PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                        PendingUpdateKind::Automatic => None,
-                    })
-                    .unwrap_or(
-                        worker_metadata
-                            .last_known_status
-                            .component_revision_for_replay,
-                    )
-            },
-            |(_, snapshot_revision)| snapshot_revision,
+        let rejected_or_unavailable_snapshot_through = parent
+            .rejected_periodic_snapshot_through
+            .load(Ordering::Acquire)
+            .max(
+                parent
+                    .unavailable_periodic_snapshot_through
+                    .load(Ordering::Acquire),
+            );
+        let automatic_snapshot = automatic_snapshot_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
+        );
+        let component_version_for_replay = component_revision_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
         );
 
         let component_metadata_for_replay =
@@ -8234,6 +8378,45 @@ fn lookup_result_from_cached_result(
     }
 }
 
+fn automatic_snapshot_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_through: u64,
+) -> Option<(OplogIndex, ComponentRevision)> {
+    status
+        .last_automatic_snapshot_index
+        .zip(status.last_automatic_snapshot_component_revision)
+        .filter(|(_, snapshot_revision)| *snapshot_revision == status.component_revision)
+        .filter(|(index, _)| {
+            !has_pending_update && u64::from(*index) > rejected_or_unavailable_through
+        })
+}
+
+fn component_revision_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_snapshot_through: u64,
+) -> ComponentRevision {
+    automatic_snapshot_for_replay(
+        status,
+        has_pending_update,
+        rejected_or_unavailable_snapshot_through,
+    )
+    .map_or_else(
+        || {
+            status
+                .pending_updates
+                .front()
+                .and_then(|update| match update.kind {
+                    PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                    PendingUpdateKind::Automatic => None,
+                })
+                .unwrap_or(status.component_revision_for_replay)
+        },
+        |(_, snapshot_revision)| snapshot_revision,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8255,6 +8438,29 @@ mod tests {
                 target_revision: actual
             } if actual == target_revision
         ));
+    }
+
+    #[test]
+    fn rejected_automatic_snapshot_uses_manual_replay_revision() {
+        let active_revision = ComponentRevision::new(3).unwrap();
+        let replay_revision = ComponentRevision::new(2).unwrap();
+        let snapshot_index = OplogIndex::from_u64(10);
+        let status = AgentStatusRecord {
+            component_revision: active_revision,
+            component_revision_for_replay: replay_revision,
+            last_automatic_snapshot_index: Some(snapshot_index),
+            last_automatic_snapshot_component_revision: Some(active_revision),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index)),
+            replay_revision
+        );
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index) - 1),
+            active_revision
+        );
     }
 
     #[test]

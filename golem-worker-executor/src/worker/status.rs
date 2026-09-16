@@ -900,6 +900,15 @@ fn calculate_skipped_regions(
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
+    calculate_skipped_regions_with_deleted_regions(initial_skipped, deleted_regions, None, entries)
+}
+
+fn calculate_skipped_regions_with_deleted_regions(
+    initial_skipped: DeletedRegions,
+    deleted_regions: &DeletedRegions,
+    ignored_snapshot_update_region: Option<&OplogRegion>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> DeletedRegions {
     let mut skipped_without_override = initial_skipped.clone();
     if skipped_without_override.is_overridden() {
         skipped_without_override.drop_override();
@@ -912,6 +921,18 @@ fn calculate_skipped_regions(
     for (idx, entry) in entries {
         // Skipping deleted regions (by revert) from constructing the skipped regions
         if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        if ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
+            && matches!(
+                entry,
+                OplogEntry::PendingUpdate {
+                    description: UpdateDescription::SnapshotBased { .. },
+                    ..
+                }
+            )
+        {
             continue;
         }
 
@@ -958,6 +979,23 @@ fn calculate_skipped_regions(
     }
 
     new_skipped
+}
+
+/// Reconstructs the skipped regions that remain relevant while validating a prospective revert.
+/// Crossed snapshot-update baselines no longer hide the cut, while genuine jumps and existing
+/// reverts remain protected even when their marker entries will be dropped by the new revert.
+pub(crate) fn calculate_revert_validation_regions(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    dropped_region: &OplogRegion,
+) -> DeletedRegions {
+    let existing_deleted = calculate_deleted_regions(DeletedRegions::new(), entries);
+
+    calculate_skipped_regions_with_deleted_regions(
+        DeletedRegions::new(),
+        &existing_deleted,
+        Some(dropped_region),
+        entries,
+    )
 }
 
 /// Determines whether a pending agent invocation payload is a manual update and, if so, returns
@@ -1727,7 +1765,8 @@ mod test {
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
         calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
-        calculate_total_linear_memory_size, hydrate_initial_pending_evidence, try_fold_status_from,
+        calculate_revert_validation_regions, calculate_total_linear_memory_size,
+        hydrate_initial_pending_evidence, try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -2363,6 +2402,148 @@ mod test {
             .build();
 
         run_test_case(test_case).await;
+    }
+
+    #[test]
+    fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
+        let update = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(10),
+                OplogEntry::jump(
+                    None,
+                    OplogRegion {
+                        start: OplogIndex::from_u64(4),
+                        end: OplogIndex::from_u64(10),
+                    },
+                ),
+            ),
+            (
+                OplogIndex::from_u64(20),
+                OplogEntry::pending_update(update.clone()),
+            ),
+            (
+                OplogIndex::from_u64(21),
+                OplogEntry::successful_update(
+                    *update.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                ),
+            ),
+        ]);
+
+        let regions = calculate_revert_validation_regions(
+            &entries,
+            &OplogRegion {
+                start: OplogIndex::from_u64(7),
+                end: OplogIndex::from_u64(21),
+            },
+        );
+
+        assert!(regions.is_in_deleted_region(OplogIndex::from_u64(7)));
+        assert!(regions.is_in_deleted_region(OplogIndex::from_u64(10)));
+        assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(11)));
+        assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(20)));
+    }
+
+    #[test]
+    fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
+        let update = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let entries =
+            BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::pending_update(update))]);
+
+        let regions = calculate_revert_validation_regions(
+            &entries,
+            &OplogRegion {
+                start: OplogIndex::from_u64(2),
+                end: OplogIndex::from_u64(3),
+            },
+        );
+
+        assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+    }
+
+    #[test]
+    fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
+        let update_two = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let update_three = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(3).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let test_case = TestCase::builder(1)
+            .pending_update(&update_two, |_| {})
+            .successful_update(update_two, 200, &HashSet::new())
+            .revert(OplogIndex::INITIAL)
+            .pending_update(&update_three, |_| {})
+            .successful_update(update_three, 300, &HashSet::new())
+            .build();
+        let entries = test_case
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                (
+                    OplogIndex::from_u64(index as u64 + 1),
+                    entry.oplog_entry.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let physical_prefix = entries
+            .range(..=OplogIndex::from_u64(3))
+            .map(|(idx, entry)| (*idx, entry.clone()))
+            .collect();
+        let physical_prefix_status = update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            physical_prefix,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            physical_prefix_status.component_revision,
+            ComponentRevision::new(2).unwrap()
+        );
+
+        let mut prospective_entries = entries;
+        prospective_entries.insert(
+            OplogIndex::from_u64(7),
+            OplogEntry::revert(OplogRegion {
+                start: OplogIndex::from_u64(4),
+                end: OplogIndex::from_u64(6),
+            }),
+        );
+        let prospective_status = update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            prospective_entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            prospective_status.component_revision,
+            ComponentRevision::new(1).unwrap()
+        );
+        assert!(
+            prospective_status
+                .deleted_regions
+                .is_in_deleted_region(OplogIndex::from_u64(2))
+        );
     }
 
     #[test]
