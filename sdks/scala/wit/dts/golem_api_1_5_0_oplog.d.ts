@@ -162,9 +162,11 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -400,6 +402,78 @@ declare module 'golem:api/oplog@1.5.0' {
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
   };
+  export type ExternalToolInvocationParameters = {
+    idempotencyKey: string;
+    toolName: string;
+    commandPath: string[];
+    input: TypedSchemaValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type ToolInvocationResult = {
+    result?: TypedSchemaValue;
+  };
+  export type CustomToolError = {
+    name: string;
+    payload: TypedSchemaValue;
+  };
+  export type ToolError =
+  {
+    tag: 'invalid-tool-name'
+    val: string
+  } |
+  {
+    tag: 'invalid-command-path'
+    val: string[]
+  } |
+  {
+    tag: 'invalid-input'
+    val: string
+  } |
+  {
+    tag: 'constraint-violation'
+    val: string
+  } |
+  {
+    tag: 'invalid-result'
+    val: string
+  } |
+  {
+    tag: 'custom-error'
+    val: CustomToolError
+  };
+  export type ToolRpcError =
+  {
+    tag: 'protocol-error'
+    val: string
+  } |
+  {
+    tag: 'denied'
+    val: string
+  } |
+  {
+    tag: 'not-found'
+    val: string
+  } |
+  {
+    tag: 'remote-internal-error'
+    val: string
+  } |
+  {
+    tag: 'remote-tool-error'
+    val: ToolError
+  } |
+  {
+    tag: 'cancelled'
+  } |
+  {
+    tag: 'resource-exhausted'
+    val: string
+  };
+  export type ExternalToolResultParameters = {
+    result: Result<ToolInvocationResult, ToolRpcError>;
+  };
   export type AgentInvocationOutputParameters = {
     output: TypedSchemaValue;
   };
@@ -514,6 +588,10 @@ declare module 'golem:api/oplog@1.5.0' {
     val: AgentMethodInvocationParameters
   } |
   {
+    tag: 'external-tool'
+    val: ExternalToolInvocationParameters
+  } |
+  {
     tag: 'save-snapshot'
   } |
   {
@@ -543,6 +621,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-method'
     val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'external-tool'
+    val: ExternalToolResultParameters
   } |
   {
     tag: 'manual-update'
@@ -688,6 +770,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
