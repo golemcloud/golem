@@ -17,8 +17,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::Principal;
 use golem_common::model::durable_stream::{
-    StreamExportForkV1, StreamForkCutRecordV1, StreamId, StreamItemsPayloadV1, StreamOffsetV1,
-    StreamSessionRecordV1,
+    StreamExportFork, StreamForkCutRecord, StreamId, StreamItemsPayload, StreamOffset,
+    StreamSessionRecord,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogEntry;
@@ -32,12 +32,12 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub(super) struct Candidate {
-    pub export: StreamExportForkV1,
+    pub export: StreamExportFork,
     pub horizon: OplogIndex,
     pub cut: OplogIndex,
     pub selected: StreamId,
-    pub retained_through: Option<StreamOffsetV1>,
-    pub initial: Option<StreamItemsPayloadV1>,
+    pub retained_through: Option<StreamOffset>,
+    pub initial: Option<StreamItemsPayload>,
 }
 
 enum Error {
@@ -415,11 +415,11 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         .map(|bytes| {
             <[u8; 24]>::try_from(bytes)
                 .ok()
-                .and_then(|bytes| StreamOffsetV1::from_bytes(bytes).ok())
+                .and_then(|bytes| StreamOffset::from_bytes(bytes).ok())
                 .ok_or_else(|| reject(Reason::InvalidOffset))
         })
         .transpose()?;
-    let origin = StreamOffsetV1::new(OplogIndex::NONE, 0);
+    let origin = StreamOffset::new(OplogIndex::NONE, 0);
     let anchor = requested_offset.unwrap_or_else(|| {
         snapshot
             .terminal
@@ -427,7 +427,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
                 snapshot
                     .batches
                     .last()
-                    .map(|(index, count)| StreamOffsetV1::new(*index, count - 1))
+                    .map(|(index, count)| StreamOffset::new(*index, count - 1))
             })
             .unwrap_or(origin)
     });
@@ -482,7 +482,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         }
     }
     Ok(Candidate {
-        export: StreamExportForkV1 {
+        export: StreamExportFork {
             source: source.agent_id.clone(),
             source_environment_id: source.environment_id,
             source_fingerprint: fingerprint,
@@ -506,7 +506,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
 }
 
 pub(crate) fn response(
-    export: &StreamExportForkV1,
+    export: &StreamExportFork,
     cut: OplogIndex,
     replayed: bool,
 ) -> ForkStreamSlotSuccess {
@@ -523,7 +523,7 @@ pub(crate) fn response(
 }
 
 pub(super) fn matches_request(
-    export: &StreamExportForkV1,
+    export: &StreamExportFork,
     request: &ForkStreamSlotRequest,
     source: &AgentId,
 ) -> bool {
@@ -549,7 +549,7 @@ pub(super) fn matches_request(
 pub(crate) async fn creation_record(
     service: &dyn OplogService,
     target: &OwnedAgentId,
-) -> Result<Option<StreamForkCutRecordV1>, WorkerExecutorError> {
+) -> Result<Option<StreamForkCutRecord>, WorkerExecutorError> {
     let mode = AgentMode::Durable;
     let horizon = service.get_last_index(target, mode).await;
     if horizon == OplogIndex::NONE {
@@ -579,7 +579,7 @@ pub(crate) async fn creation_record(
                     .download_payload(target, mode, record)
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
-                if let StreamSessionRecordV1::ForkCut(cut) = record
+                if let StreamSessionRecord::ForkCut(cut) = record
                     && cut.target == target.agent_id
                     && cut.target_environment_id == target.environment_id
                     && cut.target_fingerprint.0 == *instance_id
@@ -597,12 +597,12 @@ pub(super) fn initial_payload(
     graph: &SchemaGraph,
     binary: bool,
     body: &[u8],
-) -> Result<Option<StreamItemsPayloadV1>, WorkerExecutorError> {
+) -> Result<Option<StreamItemsPayload>, WorkerExecutorError> {
     if body.is_empty() {
         return Ok(None);
     }
     let payload = if binary {
-        StreamItemsPayloadV1::PackedU8(body.to_vec())
+        StreamItemsPayload::PackedU8(body.to_vec())
     } else {
         let json: serde_json::Value = serde_json::from_slice(body)
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
@@ -623,7 +623,7 @@ pub(super) fn initial_payload(
                 .map_err(WorkerExecutorError::invalid_request)?;
             encoded.push(value.encode_to_vec());
         }
-        StreamItemsPayloadV1::Values(encoded)
+        StreamItemsPayload::Values(encoded)
     };
     crate::durable_host::durable_stream::validate_external_input_payload(&payload)
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;

@@ -15,9 +15,8 @@
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -199,15 +198,6 @@ impl Oplog for RateLimitedOplog {
         result
     }
 
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let result = self.inner.add_durable_stream_batch_iter(make_batch).await;
-        self.apply_rate_limit().await;
-        result
-    }
-
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
@@ -222,7 +212,7 @@ impl Oplog for RateLimitedOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         self.inner
             .raw_durable_stream_session_status(session_key)
@@ -573,17 +563,6 @@ impl OplogService for RateLimitedOplogService {
     ) -> Result<RawOplogPayload, String> {
         self.inner
             .upload_raw_payload(owned_agent_id, agent_mode, data)
-            .await
-    }
-
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.inner
-            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
             .await
     }
 

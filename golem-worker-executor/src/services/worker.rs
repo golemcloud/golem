@@ -15,7 +15,7 @@
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
-use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::OplogService;
@@ -27,7 +27,7 @@ use crate::storage::keyvalue::{
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
-use golem_common::base_model::durable_stream::{StreamId, StreamSessionKeyV1};
+use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
@@ -95,9 +95,9 @@ type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 
 pub struct DurableStreamRecoveryMetadata {
     pub(crate) covered_through: OplogIndex,
-    pub(crate) sessions: Vec<(StreamSessionKeyV1, SessionControlMetadata)>,
+    pub(crate) sessions: Vec<(StreamSessionKey, SessionControlMetadata)>,
     pub(crate) consumer_deleting:
-        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
 }
 
 /// The potentially large parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
@@ -351,7 +351,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
     ) -> Result<SessionControlMetadata, String> {
         Err("durable stream control metadata is unavailable".into())
     }
@@ -368,7 +368,7 @@ pub trait WorkerService: Send + Sync {
     async fn read_durable_stream_consumer_page(
         &self,
         _owned_agent_id: &OwnedAgentId,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
         _stream: StreamId,
         _page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
@@ -379,7 +379,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
         _attempt: golem_common::model::durable_stream::AttemptId,
     ) -> Result<Option<OplogIndex>, String> {
         Err("durable stream resume index is unavailable".into())
@@ -1017,7 +1017,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         attempt: golem_common::model::durable_stream::AttemptId,
     ) -> Result<Option<OplogIndex>, String> {
         self.stream_session_index
@@ -1029,7 +1029,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
     ) -> Result<SessionControlMetadata, String> {
         self.stream_session_index
             .lookup_control_metadata(owned_agent_id, agent_mode, key)
@@ -1039,7 +1039,7 @@ impl WorkerService for DefaultWorkerService {
     async fn read_durable_stream_consumer_page(
         &self,
         owned_agent_id: &OwnedAgentId,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         stream: StreamId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
@@ -1222,7 +1222,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
-            for shard_id in shard_assignment.shard_ids {
+            for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
                 let mut shard_worker = self.enum_workers_at_key(&key).await?;
                 result.append(&mut shard_worker);
@@ -1784,11 +1784,11 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use std::collections::{BTreeMap, HashSet, VecDeque};
+    use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
@@ -2138,7 +2138,12 @@ mod tests {
         let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let number_of_shards = 4;
-        shard_service.register(number_of_shards, &HashSet::new());
+        shard_service.register(
+            number_of_shards,
+            &HashMap::new(),
+            None,
+            ShardLeaseRevision::default(),
+        );
         let service = DefaultWorkerService::new(
             key_value_storage.clone(),
             shard_service,
@@ -2805,16 +2810,16 @@ mod tests {
     #[test]
     fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
         use golem_common::model::durable_stream::{
-            StreamCancelReasonV1, StreamCancelRoleV1, StreamConsumerCancelIntentRecordV1,
-            StreamInvocationIdV1,
+            StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
+            StreamInvocationId,
         };
 
         let mut status = AgentStatusRecord::default();
         status
             .pending_durable_stream_cancellations
-            .insert(StreamConsumerCancelIntentRecordV1 {
+            .insert(StreamConsumerCancelIntentRecord {
                 format_version: 1,
-                session_key: StreamInvocationIdV1 {
+                session_key: StreamInvocationId {
                     callee_environment_id: EnvironmentId::new(),
                     callee: AgentId {
                         component_id: ComponentId::new(),
@@ -2825,8 +2830,8 @@ mod tests {
                 },
                 stream_id: StreamId(uuid::Uuid::new_v4()),
                 epoch: 1,
-                role: StreamCancelRoleV1::OutputConsumer,
-                reason: StreamCancelReasonV1::Cancelled,
+                role: StreamCancelRole::OutputConsumer,
+                reason: StreamCancelReason::Cancelled,
                 details: None,
             });
 

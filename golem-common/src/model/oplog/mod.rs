@@ -139,6 +139,7 @@ impl OplogEntry {
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
             | OplogEntry::PendingAgentInvocation { .. }
@@ -148,6 +149,7 @@ impl OplogEntry {
             | OplogEntry::GrowMemory { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
@@ -274,6 +276,7 @@ impl OplogEntry {
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
@@ -289,6 +292,7 @@ impl OplogEntry {
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
@@ -362,6 +366,7 @@ impl OplogEntry {
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
@@ -376,6 +381,7 @@ impl OplogEntry {
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
@@ -539,6 +545,7 @@ impl OplogScopeProjection {
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
             | OplogEntry::PendingAgentInvocation { .. }
@@ -551,6 +558,7 @@ impl OplogScopeProjection {
                 ..
             }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }

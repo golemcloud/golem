@@ -20,8 +20,8 @@ use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
@@ -236,6 +236,7 @@ oplog_entry! {
         wit_public_type: "error-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
+            kind: OplogErrorKind,
             error: AgentError,
             /// Points to the oplog index where the retry should start from. Normally this can be just the
             /// current oplog index (after the last persisted side-effect). When failing in an atomic region
@@ -250,11 +251,20 @@ oplog_entry! {
             retry_policy_state: Option<RetryPolicyState>,
         }
         public {
+            kind: OplogErrorKind,
             error: String,
             retry_from: OplogIndex,
             inside_atomic_region: bool,
             retry_policy_state: Option<PublicRetryPolicyState>,
         }
+    },
+    /// A previously failed startup or replay completed successfully.
+    RecoverySucceeded {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -452,6 +462,14 @@ oplog_entry! {
     },
     /// Marks the point where the worker was restarted from clean initial state
     Restart {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
+    },
+    /// Marks that an unfinished durable invocation was admitted to resume
+    Resumed {
         hint: true
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
@@ -929,7 +947,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+            record: payload::OplogPayload<StreamRegisteredRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -942,7 +960,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamItemsRecordV1>,
+            record: payload::OplogPayload<StreamItemsRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -955,7 +973,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamEndRecordV1>,
+            record: payload::OplogPayload<StreamEndRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -968,7 +986,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamCancelRecordV1>,
+            record: payload::OplogPayload<StreamCancelRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -982,7 +1000,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamSessionRecordV1>,
+            record: payload::OplogPayload<StreamSessionRecord>,
         }
         public {
             record: TypedSchemaValue,

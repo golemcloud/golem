@@ -22,10 +22,82 @@
 //! still require a cut that preserves their committed/rolled-back outcome.
 
 use golem_common::base_model::OplogIndex;
-use golem_common::model::oplog::{OplogEntry, OplogIndexRange};
+use golem_common::model::oplog::{OplogEntry, OplogIndexRange, UpdateDescription};
 use golem_common::model::regions::DeletedRegions;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevertUpdateBoundaryError {
+    SplitSnapshotUpdate {
+        pending_index: OplogIndex,
+        outcome_index: OplogIndex,
+    },
+}
+
+impl Display for RevertUpdateBoundaryError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index,
+                outcome_index,
+            } => write!(
+                f,
+                "the cut point retains a snapshot-based PendingUpdate at oplog index {pending_index} but removes its outcome at oplog index {outcome_index}"
+            ),
+        }
+    }
+}
+
+/// Validates snapshot-update boundaries. Update outcomes are paired with pending updates in oplog
+/// order, matching the status reducer. A cut may remove an update entirely or retain it entirely,
+/// including a pending update that does not have an outcome yet.
+pub fn validate_snapshot_update_boundaries(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    cut_point: OplogIndex,
+    deleted_regions: &DeletedRegions,
+) -> Result<(), RevertUpdateBoundaryError> {
+    let mut pending_updates = VecDeque::new();
+
+    for (idx, entry) in entries {
+        if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        match entry {
+            OplogEntry::PendingUpdate { description, .. } => pending_updates.push_back((
+                *idx,
+                matches!(description, UpdateDescription::SnapshotBased { .. }),
+            )),
+            OplogEntry::SuccessfulUpdate { .. } => {
+                if let Some((pending_index, true)) = pending_updates.pop_front()
+                    && pending_index <= cut_point
+                    && cut_point < *idx
+                {
+                    return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                        pending_index,
+                        outcome_index: *idx,
+                    });
+                }
+            }
+            OplogEntry::FailedUpdate { .. } => {
+                if let Some((pending_index, true)) = pending_updates.pop_front()
+                    && pending_index <= cut_point
+                    && cut_point < *idx
+                {
+                    return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                        pending_index,
+                        outcome_index: *idx,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
 
 /// A paired durable construct whose two halves lie on opposite sides of a cut point.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +198,7 @@ where
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
@@ -140,6 +213,7 @@ where
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
@@ -191,7 +265,7 @@ pub(crate) async fn streaming_acceptance_spans_cut(
     horizon: OplogIndex,
 ) -> Result<bool, String> {
     use crate::services::oplog::OplogOps;
-    use golem_common::model::durable_stream::StreamSessionRecordV1;
+    use golem_common::model::durable_stream::StreamSessionRecord;
 
     if cut >= horizon {
         return Ok(false);
@@ -206,7 +280,7 @@ pub(crate) async fn streaming_acceptance_spans_cut(
                     OplogEntry::StreamRegistered { .. } => continue,
                     OplogEntry::StreamSession { record, .. } => {
                         return Ok(matches!(oplog.download_payload(record).await?,
-                            StreamSessionRecordV1::Prepared(prepared)
+                            StreamSessionRecord::Prepared(prepared)
                                 if prepared.stream_mappings.iter().any(|mapping| mapping.handle == registration.handle)));
                     }
                     _ => return Ok(false),
@@ -220,27 +294,27 @@ pub(crate) async fn streaming_acceptance_spans_cut(
                 idempotency_key, ..
             },
         ) => Ok(matches!(oplog.download_payload(record).await?,
-                StreamSessionRecordV1::Prepared(prepared) if prepared.attempt.session_key.idempotency_key == idempotency_key)),
+                StreamSessionRecord::Prepared(prepared) if prepared.attempt.session_key.idempotency_key == idempotency_key)),
         (
             OplogEntry::PendingAgentInvocation {
                 idempotency_key, ..
             },
             OplogEntry::StreamSession { record, .. },
         ) => Ok(matches!(oplog.download_payload(record).await?,
-                StreamSessionRecordV1::Attached(attached) if attached.pending_invocation_oplog_index == cut
+                StreamSessionRecord::Attached(attached) if attached.pending_invocation_oplog_index == cut
                     && attached.session_key.idempotency_key == idempotency_key)),
         (
             OplogEntry::StreamSession { record: left, .. },
             OplogEntry::StreamSession { record: right, .. },
         ) => {
-            let StreamSessionRecordV1::TopologyPrepared(right) =
+            let StreamSessionRecord::TopologyPrepared(right) =
                 oplog.download_payload(right).await?
             else {
                 return Ok(false);
             };
             Ok(match oplog.download_payload(left).await? {
-                StreamSessionRecordV1::Attached(left) => left.session_key == right.session_key,
-                StreamSessionRecordV1::TopologyPrepared(left) => {
+                StreamSessionRecord::Attached(left) => left.session_key == right.session_key,
+                StreamSessionRecord::TopologyPrepared(left) => {
                     left.session_key == right.session_key
                 }
                 _ => false,
@@ -281,9 +355,9 @@ mod tests {
     use super::*;
     use golem_common::model::Timestamp;
     use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::{
-        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecordV1, StreamSessionRecordV1,
+        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecord, StreamSessionRecord,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogPayload;
@@ -348,8 +422,8 @@ mod tests {
     fn stream_entry() -> OplogEntry {
         OplogEntry::stream_session(
             None,
-            OplogPayload::Inline(Box::new(StreamSessionRecordV1::ConsumerDeleting(
-                StreamConsumerDeletingRecordV1 {
+            OplogPayload::Inline(Box::new(StreamSessionRecord::ConsumerDeleting(
+                StreamConsumerDeletingRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
                     consumer: AgentId {
@@ -361,6 +435,124 @@ mod tests {
                 },
             ))),
         )
+    }
+
+    fn snapshot_update(revision: u64) -> UpdateDescription {
+        UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(revision).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    #[test]
+    fn successful_snapshot_update_boundary_is_validated() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([
+            (idx(3), OplogEntry::pending_update(update.clone())),
+            (
+                idx(5),
+                OplogEntry::successful_update(
+                    *update.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                ),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(4), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(5), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn failed_snapshot_update_boundary_is_rejected() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([
+            (idx(3), OplogEntry::pending_update(update.clone())),
+            (
+                idx(5),
+                OplogEntry::failed_update(*update.target_revision(), Some("failed".to_string())),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+    }
+
+    #[test]
+    fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update))]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
+        let snapshot = snapshot_update(2);
+        let automatic = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(3).unwrap(),
+        };
+        let entries = BTreeMap::from([
+            (idx(2), OplogEntry::pending_update(snapshot.clone())),
+            (
+                idx(3),
+                OplogEntry::successful_update(
+                    *snapshot.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                ),
+            ),
+            (idx(5), OplogEntry::pending_update(automatic.clone())),
+            (
+                idx(6),
+                OplogEntry::successful_update(
+                    *automatic.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                ),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(1), &deleted(vec![(2, 3)])),
+            Ok(())
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ use test_r::test;
 
 async fn load() -> LoadResult {
     let identity = identity();
-    DurableStreamProducer::load(
+    DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         identity.environment_id,
         identity.agent_id,
@@ -50,16 +50,10 @@ async fn nested_lookup_does_not_wait_for_its_own_activity_to_drain() {
                 )
                 .await
                 .expect("nested lookup waited for its own producer activity");
-                assert!(matches!(
-                    nested,
-                    Err(DurableStreamProducerError::RecoveryRequired)
-                ));
+                assert!(matches!(nested, Err(StreamStoreError::RecoveryRequired)));
             })
             .await;
-        assert!(matches!(
-            result,
-            Err(DurableStreamProducerError::RecoveryRequired)
-        ));
+        assert!(matches!(result, Err(StreamStoreError::RecoveryRequired)));
         if let Some(reload) = reload {
             let replacement = reload.await.unwrap().unwrap();
             assert!(!Arc::ptr_eq(&replacement, &producer));
@@ -113,7 +107,7 @@ async fn failed_or_aborted_ephemeral_archive_rejects_response_admission() {
         let mut response = Box::pin(slot.retain_response_or_wait_for_archive());
         assert!(futures::poll!(response.as_mut()).is_pending());
         if !abort {
-            archival.send_replace(Some(Err(DurableStreamProducerError::Oplog(
+            archival.send_replace(Some(Err(StreamStoreError::Oplog(
                 "archive failed".to_string(),
             ))));
         }
@@ -174,7 +168,7 @@ async fn shutdown_fences_empty_and_idle_slots_without_flushing_buffered_entries(
             let identity = identity();
             let source = oplog.clone();
             slot.get_or_load(unused_commit(), move || async move {
-                DurableStreamProducer::load(
+                DurableStreamStore::load(
                     source,
                     identity.environment_id,
                     identity.agent_id,
@@ -206,19 +200,19 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
     use crate::durable_host::durable_stream::tests::registration;
     use crate::services::oplog::{CommitLevel, Oplog};
     use golem_common::base_model::durable_stream::{
-        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+        StreamRegistrationCoordinate, StreamRootKind, StreamSourceKind,
     };
 
     let slot = Arc::new(DurableStreamProducerSlot::default());
     let identity = identity();
     let request = registration(
         &identity,
-        StreamRegistrationCoordinateV1::Root {
+        StreamRegistrationCoordinate::Root {
             invocation_id: identity.invocation.clone(),
-            root_kind: StreamRootKindV1::MethodResult,
+            root_kind: StreamRootKind::MethodResult,
             recursive_value_path: vec![],
         },
-        StreamSourceKindV1::InvocationOutput,
+        StreamSourceKind::InvocationOutput,
     );
     let oplog = Arc::new(TestOplog::default());
     let reached = Arc::new(tokio::sync::Notify::new());
@@ -241,7 +235,7 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
     };
     let producer = slot
         .get_or_load(unused_commit(), move || async move {
-            DurableStreamProducer::load_with_commit(
+            DurableStreamStore::load_with_commit(
                 oplog,
                 identity.environment_id,
                 identity.agent_id,
@@ -253,14 +247,14 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
         })
         .await
         .unwrap();
-    let mut append = Box::pin(producer.register(request));
+    let mut append = Box::pin(producer.register(None, request));
     assert!(futures::poll!(append.as_mut()).is_pending());
     reached.notified().await;
     drop(append);
     drop(slot.shutdown());
     assert_eq!(
         producer.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
     let mut shutdown = Box::pin(slot.shutdown());
     assert!(futures::poll!(shutdown.as_mut()).is_pending());
@@ -308,7 +302,7 @@ async fn forced_retirement_wins_initial_and_recovery_publication_after_metadata_
         assert!(!slot.try_retire_quiescent());
         assert!(matches!(
             slot.get_or_load(unused_commit(), load).await,
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         ));
         let mut retirement = Box::pin(slot.retire(unused_commit()));
         assert!(futures::poll!(retirement.as_mut()).is_pending());
@@ -316,13 +310,13 @@ async fn forced_retirement_wins_initial_and_recovery_publication_after_metadata_
         release.send(()).unwrap();
         assert!(matches!(
             loading.await,
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         ));
         retirement.await.unwrap();
         assert!(flushed.load(Ordering::Acquire));
         assert_eq!(
             unpublished.ensure_healthy(),
-            Err(DurableStreamProducerError::RecoveryRequired)
+            Err(StreamStoreError::RecoveryRequired)
         );
         assert!(slot.try_retire_quiescent());
     }
@@ -349,7 +343,7 @@ async fn cancelled_retirement_waiter_does_not_cancel_the_final_flush() {
     });
     assert_eq!(
         producer.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
     drop(first);
     started.notified().await;
@@ -377,14 +371,11 @@ async fn quiescent_retirement_fences_both_empty_and_loaded_slots() {
                 panic!("retired slot must not start loading")
             })
             .await;
-        assert!(matches!(
-            result,
-            Err(DurableStreamProducerError::RecoveryRequired)
-        ));
+        assert!(matches!(result, Err(StreamStoreError::RecoveryRequired)));
         if let Some(previous) = previous {
             assert_eq!(
                 previous.ensure_healthy(),
-                Err(DurableStreamProducerError::RecoveryRequired)
+                Err(StreamStoreError::RecoveryRequired)
             );
         }
     }
@@ -395,7 +386,7 @@ async fn failed_initial_load_can_be_retried() {
     let slot = Arc::new(DurableStreamProducerSlot::default());
     let first = slot
         .get_or_load(unused_commit(), || async {
-            Err(DurableStreamProducerError::Oplog(
+            Err(StreamStoreError::Oplog(
                 "transient metadata lookup failure".to_string(),
             ))
         })
@@ -419,7 +410,7 @@ async fn failed_recovery_load_keeps_the_owner_fenced() {
 
     let first = slot
         .get_or_load(Arc::new(|_| Box::pin(async {})), || async {
-            Err(DurableStreamProducerError::Oplog(
+            Err(StreamStoreError::Oplog(
                 "transient metadata lookup failure".to_string(),
             ))
         })
@@ -509,7 +500,7 @@ async fn recovery_is_single_flight_and_waits_for_the_full_flush_after_cancellati
     assert!(futures::poll!(second.as_mut()).is_pending());
     assert_eq!(
         old.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
     release.add_permits(1);
     let replacement = second.await.unwrap();
@@ -517,7 +508,7 @@ async fn recovery_is_single_flight_and_waits_for_the_full_flush_after_cancellati
     assert_eq!(replacement.ensure_healthy(), Ok(()));
     assert_eq!(
         old.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
 }
 
@@ -526,7 +517,7 @@ async fn corrupt_recovery_stays_fenced_without_automatic_retries() {
     let slot = Arc::new(DurableStreamProducerSlot::default());
     let old = slot.get_or_load(unused_commit(), load).await.unwrap();
     old.poison();
-    let expected = DurableStreamProducerError::CorruptHistory("invalid batch".to_string());
+    let expected = StreamStoreError::CorruptHistory("invalid batch".to_string());
     assert!(!slot.try_retire_quiescent());
     let error = expected.clone();
     let result = slot
@@ -544,6 +535,6 @@ async fn corrupt_recovery_stays_fenced_without_automatic_retries() {
     assert!(matches!(result, Err(error) if error == expected));
     assert_eq!(
         old.ensure_healthy(),
-        Err(DurableStreamProducerError::RecoveryRequired)
+        Err(StreamStoreError::RecoveryRequired)
     );
 }

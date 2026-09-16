@@ -4,13 +4,27 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use super::*;
+use super::super::error::RequestHandlerError;
+use super::super::route_resolver::ResolvedRouteEntry;
+use super::super::{RichRequest, RouteExecutionResult};
+use super::encoding::offset_text;
+use super::session::{arguments_come_from_url, content_type_mismatch, declared_slot_content_type};
+use super::{
+    DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
+    route_method,
+};
+use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    AppendToStreamSlotRequest, ExternalStreamProducer, TypedStreamSlotItems,
+    AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotSuccess, TypedStreamSlotItems,
     append_to_stream_slot_request::Payload, append_to_stream_slot_response::Result as Outcome,
 };
-use golem_common::schema::{FieldSource, SchemaGraph};
+use golem_common::model::AgentId;
+use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
 use golem_schema::schema::render::from_untrusted_json_value;
+use golem_service_base::custom_api::CallAgentBehaviour;
+use golem_service_base::model::auth::AuthCtx;
+use http::{HeaderName, StatusCode};
+use prost::Message;
 use tokio::io::AsyncReadExt;
 
 const MAX_PRODUCER_NUMBER: u64 = (1 << 53) - 1;
@@ -21,7 +35,7 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &golem_common::model::AgentId,
+        agent_id: &AgentId,
         session: &str,
         slot: &str,
         allow_create: bool,
@@ -83,13 +97,7 @@ impl DurableStreamsHandler {
                 else {
                     return Ok(response(StatusCode::NOT_FOUND));
                 };
-                if !behaviour.method_parameters.iter().all(|param| {
-                    matches!(
-                        param,
-                        golem_service_base::custom_api::MethodParameter::Path { .. }
-                            | golem_service_base::custom_api::MethodParameter::Query { .. }
-                    )
-                }) {
+                if !arguments_come_from_url(behaviour) {
                     let path = request
                         .underlying
                         .uri()
@@ -390,6 +398,8 @@ fn problem(status: StatusCode, path: &str, detail: &str) -> RouteExecutionResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::schema::SchemaValue;
+    use golem_schema::schema::render::to_json_value;
     use test_r::test;
 
     #[test]
@@ -473,7 +483,7 @@ mod tests {
 
     #[test]
     fn duplicate_reports_original_offset_and_highest_sequence_not_current_tail() {
-        let original = golem_common::model::durable_stream::StreamOffsetV1::new(
+        let original = golem_common::model::durable_stream::StreamOffset::new(
             golem_common::model::OplogIndex::from_u64(31),
             2,
         );

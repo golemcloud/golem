@@ -23,7 +23,7 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
-use crate::durable_host::durable_stream::{DurableStreamProducer, DurableStreamProducerError};
+use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
 use crate::services::events::Events;
@@ -36,8 +36,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
-    HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
+    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
+    HasOplogService, HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
@@ -58,7 +58,7 @@ use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
-use golem_common::model::durable_stream::StreamSessionRecordV1;
+use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogIndexRange};
@@ -133,6 +133,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub http_connection_pool: Option<HttpConnectionPool>,
     pub websocket_connection_pool: WebSocketConnectionPool,
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
+    pub native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     pub extra_deps: Ctx::ExtraDeps,
     pub leak_sentinel: Arc<()>,
 }
@@ -345,6 +346,12 @@ impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DefaultWorkerFork<Ctx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.native_tool_catalog.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -381,6 +388,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -420,6 +428,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -462,6 +471,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             http_connection_pool,
             websocket_connection_pool,
             environment_state_service,
+            native_tool_catalog,
             extra_deps,
             leak_sentinel,
         }
@@ -495,8 +505,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        // We assume the source worker belongs to this executor
-        self.shard_service.check_worker(source_agent_id)?;
+        // ADMISSION: this is the only ownership check on the
+        // fork path and it rejects rather than routing, so a fork started after
+        // the lease lapsed must be refused.
+        self.shard_service.check_admission(source_agent_id)?;
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
@@ -521,7 +533,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         request_hash: [u8; 32],
         selected: Option<(
             golem_common::model::durable_stream::StreamId,
-            Option<golem_common::model::durable_stream::StreamOffsetV1>,
+            Option<golem_common::model::durable_stream::StreamOffset>,
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
@@ -635,7 +647,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )));
         }
 
-        let mut fork_cut = DurableStreamProducer::prepare_fork_cut(
+        let mut fork_cut = DurableStreamStore::prepare_fork_cut(
             source_oplog.as_ref(),
             (&owned_source_agent_id, source_fingerprint),
             (&owned_target_agent_id, AgentFingerprint(instance_id)),
@@ -647,8 +659,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )
         .await
         .map_err(|error| match error {
-            DurableStreamProducerError::InvalidOffset(_)
-            | DurableStreamProducerError::UnknownStream(_) => {
+            StreamStoreError::InvalidOffset(_) | StreamStoreError::UnknownStream(_) => {
                 WorkerExecutorError::invalid_request(error.to_string())
             }
             _ => WorkerExecutorError::runtime(error.to_string()),
@@ -796,7 +807,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // The marker precedes every target-authored cancellation or synthetic result.
         let now = Timestamp::now_utc();
         let record = new_oplog
-            .upload_payload(&StreamSessionRecordV1::ForkCut(fork_cut.clone()))
+            .upload_payload(&StreamSessionRecord::ForkCut(fork_cut.clone()))
             .await
             .map_err(WorkerExecutorError::runtime)?;
         new_oplog
@@ -857,7 +868,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .ok_or_else(|| {
                     WorkerExecutorError::runtime("Fork selected input mapping is missing")
                 })?;
-            let producer = DurableStreamProducer::load(
+            let producer = DurableStreamStore::load(
                 new_oplog.clone(),
                 environment_id,
                 target_agent_id.clone(),
@@ -868,6 +879,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             let result = producer
                 .append_external_input(
+                    None,
                     &mapping.continuation.source_invocation,
                     mapping.continuation.stream_id,
                     candidate.initial.clone(),
@@ -878,7 +890,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             if !matches!(
                 result,
-                crate::durable_host::durable_stream::ExternalAppendOutcomeV1::Accepted(_)
+                crate::durable_host::durable_stream::ExternalAppendOutcome::Accepted(_)
             ) {
                 return Err(WorkerExecutorError::runtime(
                     "Fork initial input was not accepted",

@@ -92,6 +92,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -197,6 +199,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             agent_webhooks_service,
             resource_limits,
             quota_service,
+            self.create_native_tool_catalog()?,
             additional_deps,
             shutdown_token,
             http_connection_pool,
@@ -245,6 +248,7 @@ pub async fn create_debugging_service_services(
     agent_webhooks_service: Arc<AgentWebhooksService>,
     resource_limits: Arc<dyn ResourceLimits>,
     quota_service: Arc<dyn QuotaService>,
+    native_tool_catalog: Arc<golem_worker_executor::native_tool::NativeToolCatalog<DebugContext>>,
     additional_deps: AdditionalDeps,
     shutdown_token: tokio_util::sync::CancellationToken,
     http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
@@ -291,6 +295,7 @@ pub async fn create_debugging_service_services(
         oplog_processor_plugin.clone(),
         resource_limits.clone(),
         environment_state_service.clone(),
+        native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
         shutdown_token.clone(),
@@ -333,6 +338,7 @@ pub async fn create_debugging_service_services(
         resource_limits.clone(),
         shutdown_token.clone(),
         environment_state_service.clone(),
+        native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
         http_connection_pool.clone(),
@@ -375,6 +381,7 @@ pub async fn create_debugging_service_services(
         http_connection_pool,
         websocket_connection_pool,
         environment_state_service,
+        native_tool_catalog,
         additional_deps,
         leak_sentinel,
     ))
@@ -415,7 +422,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;

@@ -1544,13 +1544,11 @@ impl WorkerService {
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
-        let read: golem_common::model::durable_stream::DurableStreamReadRequestV1 =
+        let read: golem_common::model::durable_stream::DurableStreamReadRequest =
             golem_common::serialization::deserialize(&payload)
                 .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
         match read {
-            golem_common::model::durable_stream::DurableStreamReadRequestV1::AttachedConsumer(
-                _,
-            ) => {
+            golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(_) => {
                 let component = self
                     .component_service
                     .get_current_by_id_uncached(producer_agent_id.component_id)
@@ -1563,9 +1561,7 @@ impl WorkerService {
                     AgentResourcePattern::Any,
                 )?;
             }
-            golem_common::model::durable_stream::DurableStreamReadRequestV1::AuthorizedExport(
-                _,
-            ) => {
+            golem_common::model::durable_stream::DurableStreamReadRequest::AuthorizedExport(_) => {
                 auth_ctx
                     .authorize_system_only("read authorized durable stream export")
                     .map_err(AuthServiceError::Unauthorized)?;
@@ -3575,6 +3571,7 @@ mod tests {
                     updates: Vec::new(),
                     created_at: Timestamp::now_utc(),
                     last_error: None,
+                    last_error_kind: None,
                     component_size: 0,
                     total_linear_memory_size: 0,
                     exported_resource_instances: Vec::new(),

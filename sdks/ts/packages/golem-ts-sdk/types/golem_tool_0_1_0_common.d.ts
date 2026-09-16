@@ -422,6 +422,7 @@ declare module 'golem:tool/common@0.1.0' {
   };
   export type ToolMiddleware = {
     name: string;
+    version: string;
     aliases: string[];
     doc: Doc;
     scope: ToolMiddlewareScope;
@@ -429,6 +430,12 @@ declare module 'golem:tool/common@0.1.0' {
   /**
    * Invocation contract — shared between guest and host.
    */
+  export type CustomToolError = {
+    /** The selected declared error-case name, independent of payload shape. */
+    name: string;
+    /** Unit for a payloadless error; otherwise the declared payload type. */
+    payload: TypedSchemaValue;
+  };
   export type ToolError =
   {
     tag: 'invalid-tool-name'
@@ -457,15 +464,12 @@ declare module 'golem:tool/common@0.1.0' {
     val: string
   } |
   /**
-   * Tool-defined failure. Mirrors `golem:agent/common`'s
-   * `agent-error::custom-error`: the payload is a self-contained
-   * `typed-schema-value` carrying the error value. Producers SHOULD
-   * shape it so its root type matches one of the body's declared
-   * `error-case` payload types.
+   * Tool-defined failure identified by its declared case name. Consumers
+   * preserve unfamiliar names and their typed payload when forwarding.
    */
   {
     tag: 'custom-error'
-    val: TypedSchemaValue
+    val: CustomToolError
   };
   export type InvocationResult = {
     result?: TypedSchemaValue;

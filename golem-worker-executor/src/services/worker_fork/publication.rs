@@ -8,7 +8,7 @@
 
 use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::durable_stream::{StreamId, StreamOffsetV1, StreamSessionRecordV1};
+use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
@@ -22,7 +22,7 @@ pub(crate) fn request_hash(
     source: &OwnedAgentId,
     fingerprint: AgentFingerprint,
     cut: OplogIndex,
-    selected: Option<(StreamId, Option<StreamOffsetV1>)>,
+    selected: Option<(StreamId, Option<StreamOffset>)>,
     guest_result: Option<(Option<OplogIndex>, Uuid)>,
 ) -> Result<[u8; 32], String> {
     let bytes = golem_common::serialization::serialize(&(
@@ -84,7 +84,7 @@ pub(crate) async fn existing_fork(
         return Err(conflict());
     }
     match record {
-        StreamSessionRecordV1::ForkCut(record)
+        StreamSessionRecord::ForkCut(record)
             if record.request_hash == hash
                 && record.cut_index == cut
                 && record.target == target.agent_id
@@ -157,7 +157,7 @@ mod tests {
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::component::{ComponentId, ComponentRevision};
-    use golem_common::model::durable_stream::StreamForkCutRecordV1;
+    use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, RetryConfig};
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -216,7 +216,7 @@ mod tests {
                 &source,
                 generation,
                 cut,
-                Some((selected, Some(StreamOffsetV1::new(cut, 0)))),
+                Some((selected, Some(StreamOffset::new(cut, 0)))),
                 None
             )
             .unwrap()
@@ -291,7 +291,7 @@ mod tests {
             ))
             .await;
         stage.add(OplogEntry::suspend()).await;
-        let record = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        let record = StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: hash.to_vec(),
             export: None,

@@ -463,7 +463,7 @@ async fn test_playback_and_fork(
     assert_eq!(playback_result.agent_id, agent_id);
 
     // The copied prefix is followed by lineage metadata and pending-work cleanup.
-    use golem_common::model::durable_stream::StreamSessionRecordV1;
+    use golem_common::model::durable_stream::StreamSessionRecord;
     use golem_common::schema::FromSchema;
     let fork_cuts: Vec<_> = forked_oplogs
         .iter()
@@ -471,8 +471,8 @@ async fn test_playback_and_fork(
             let PublicOplogEntry::StreamSession(record) = &entry.entry else {
                 return None;
             };
-            let StreamSessionRecordV1::ForkCut(cut) =
-                StreamSessionRecordV1::from_value(record.record.value()).ok()?
+            let StreamSessionRecord::ForkCut(cut) =
+                StreamSessionRecord::from_value(record.record.value()).ok()?
             else {
                 return None;
             };

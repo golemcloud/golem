@@ -22,10 +22,9 @@ use crate::services::oplog::reader::{
     OplogReadSource, checked_range_end, exact_from_source, fail_stop,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor,
-    OplogService, OrderedOplogStart, PendingUpload, ReservedPayload, ReservedRawStartBuilder,
-    cursor_value, next_scan_cursor, scan_modes,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, PendingUpload,
+    ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -860,22 +859,6 @@ impl OplogService for PrimaryOplogService {
         .await
     }
 
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        Self::upload_raw_payload(
-            self.blob_storage.clone(),
-            0,
-            owned_agent_id,
-            agent_mode,
-            data,
-        )
-        .await
-    }
-
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1031,10 +1014,6 @@ enum OplogJob {
         make_batch: DurableStreamBatchBuilder,
         done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
     },
-    AddDurableStreamBatchIter {
-        make_batch: DurableStreamBatchIterBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
-    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
@@ -1053,6 +1032,9 @@ enum OplogJob {
         level: CommitLevel,
         done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
     },
+    Flush {
+        done: tokio::sync::oneshot::Sender<()>,
+    },
     DropPrefix {
         last_dropped_id: OplogIndex,
         done: tokio::sync::oneshot::Sender<u64>,
@@ -1061,11 +1043,11 @@ enum OplogJob {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
     RawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         done: tokio::sync::oneshot::Sender<RawSessionLookup>,
     },
     CompleteRawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
         status: Result<Option<DurableStreamSessionStatus>, String>,
@@ -1143,6 +1125,7 @@ impl PrimaryOplog {
             key: key.clone(),
             buffer: VecDeque::new(),
             last_committed_idx: last_oplog_idx,
+            last_reported_commit_idx: last_oplog_idx,
             last_oplog_idx,
             owned_agent_id,
             agent_mode,
@@ -1197,57 +1180,6 @@ impl PrimaryOplog {
                         if result.is_ok() && state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send(result);
-                    }
-                    OplogJob::AddDurableStreamBatchIter { make_batch, done } => {
-                        record_oplog_call("add_durable_stream_batch_iter");
-                        let first_index = state.last_oplog_idx.next();
-                        let mut prepared = Vec::new();
-                        let mut error = None;
-                        for record in make_batch(first_index) {
-                            let bytes = match record.serialize() {
-                                Ok(bytes) => bytes,
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            };
-                            let raw = match PrimaryOplogService::upload_raw_payload(
-                                state.blob_storage.clone(),
-                                0,
-                                &state.owned_agent_id,
-                                state.agent_mode,
-                                bytes,
-                            )
-                            .await
-                            {
-                                Ok(raw) => raw,
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            };
-                            match record.into_external_entry(raw) {
-                                Ok(entry) => prepared.push(entry),
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            }
-                        }
-                        let result = if let Some(error) = error {
-                            Err(error)
-                        } else {
-                            let mut result = Vec::with_capacity(prepared.len());
-                            for entry in prepared {
-                                let index = state.push(entry.clone());
-                                result.push((index, entry));
-                            }
-                            if state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
-                            }
-                            Ok(result)
-                        };
                         let _ = done.send(result);
                     }
                     OplogJob::AddPair {
@@ -1335,8 +1267,16 @@ impl PrimaryOplog {
                         let _ = done.send(result);
                     }
                     OplogJob::Commit { level, done } => {
-                        let result = state.commit(level).await;
+                        let previously_committed_through = state.last_committed_idx;
+                        let committed = state.commit(level).await;
+                        let result = state
+                            .committed_since_last_report(previously_committed_through, committed)
+                            .await;
                         let _ = done.send(result);
+                    }
+                    OplogJob::Flush { done } => {
+                        state.commit(CommitLevel::Always).await;
+                        let _ = done.send(());
                     }
                     OplogJob::DropPrefix {
                         last_dropped_id,
@@ -1596,6 +1536,7 @@ struct PrimaryOplogState {
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
+    last_reported_commit_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
@@ -1799,6 +1740,31 @@ impl PrimaryOplogState {
         self.append(entries).await
     }
 
+    async fn committed_since_last_report(
+        &mut self,
+        previously_committed_through: OplogIndex,
+        mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let committed_through = self.last_committed_idx;
+        let mut entries = if self.last_reported_commit_idx < previously_committed_through {
+            let start = self.last_reported_commit_idx.next();
+            let count =
+                u64::from(previously_committed_through) - u64::from(self.last_reported_commit_idx);
+            let entries = self.reader().read_source(start, count).await;
+            fail_stop(exact_from_source(
+                OplogReadSource::Primary,
+                start,
+                count,
+                entries,
+            ))
+        } else {
+            BTreeMap::new()
+        };
+        entries.append(&mut newly_committed);
+        self.last_reported_commit_idx = committed_through;
+        entries
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
 
@@ -1851,14 +1817,6 @@ impl Oplog for PrimaryOplog {
             .await
     }
 
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        self.run_job(|done| OplogJob::AddDurableStreamBatchIter { make_batch, done })
-            .await
-    }
-
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -1890,7 +1848,7 @@ impl Oplog for PrimaryOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         loop {
             let snapshot = self
@@ -1937,11 +1895,7 @@ impl Oplog for PrimaryOplog {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         record_oplog_call("wait_for_replicas");
 
-        self.run_job(|done| OplogJob::Commit {
-            level: CommitLevel::Always,
-            done,
-        })
-        .await;
+        self.run_job(|done| OplogJob::Flush { done }).await;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
         match reader

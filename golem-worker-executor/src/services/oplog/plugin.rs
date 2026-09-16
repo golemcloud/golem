@@ -17,9 +17,8 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::activity::{ActivityGate, ActivityGuard};
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -201,7 +200,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         let current_assignment = self.shard_service.current_assignment()?;
         let agent_id = Self::generate_local_agent_id(
             plugin_component_id,
-            &current_assignment.shard_ids,
+            &current_assignment.shard_id_set(),
             current_assignment.number_of_shards,
         );
 
@@ -349,6 +348,14 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     updates: Vec::new(),
                     created_at: Some(worker_metadata.created_at.into()),
                     last_error: None,
+                    last_error_kind: latest_status.last_error_kind.map(|kind| match kind {
+                        golem_common::model::oplog::OplogErrorKind::Invocation => {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation as i32
+                        }
+                        golem_common::model::oplog::OplogErrorKind::Recovery => {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                        }
+                    }),
                     component_size: latest_status.component_size,
                     total_linear_memory_size: latest_status.total_linear_memory_size,
                     owned_resources: Vec::new(),
@@ -417,7 +424,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
         let assignment = self.shard_service.current_assignment()?;
         let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
-        Ok(assignment.shard_ids.contains(&shard_id))
+        Ok(assignment.contains(&shard_id))
     }
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -433,7 +440,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         &entry.get().owned_agent_id.agent_id,
                         new_assignment.number_of_shards,
                     );
-                    if new_assignment.shard_ids.contains(&shard_id) {
+                    if new_assignment.contains(&shard_id) {
                         continue;
                     } else {
                         // The worker is removed from the in-memory map, but we leave it running to finish any pending invocations.
@@ -866,17 +873,6 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.inner
-            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
-            .await
-    }
-
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -923,10 +919,6 @@ enum ForwardingJob {
     },
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
-    },
-    AddDurableStreamBatchIter {
-        make_batch: DurableStreamBatchIterBuilder,
         done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
     },
     AddPair {
@@ -1059,18 +1051,6 @@ impl ForwardingOplog {
                     ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
                         let cache_entries = state.cache_is_required();
                         let result = state.inner.add_durable_stream_batch(make_batch).await;
-                        if let Ok(entries) = &result {
-                            if cache_entries {
-                                state.record_cached(entries.iter().cloned());
-                            } else {
-                                state.record_uncached(entries.iter().map(|(idx, _)| *idx));
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddDurableStreamBatchIter { make_batch, done } => {
-                        let cache_entries = state.cache_is_required();
-                        let result = state.inner.add_durable_stream_batch_iter(make_batch).await;
                         if let Ok(entries) = &result {
                             if cache_entries {
                                 state.record_cached(entries.iter().cloned());
@@ -1355,14 +1335,6 @@ impl Oplog for ForwardingOplog {
             .await
     }
 
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        self.run_job(|done| ForwardingJob::AddDurableStreamBatchIter { make_batch, done })
-            .await
-    }
-
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
@@ -1378,7 +1350,7 @@ impl Oplog for ForwardingOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         self.inner
             .raw_durable_stream_session_status(session_key)

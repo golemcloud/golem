@@ -179,10 +179,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
-    let assignment = golem_common::model::ShardAssignment {
-        number_of_shards: 1,
-        shard_ids: HashSet::from([golem_common::model::ShardId::new(0)]),
-    };
+    let assignment =
+        golem_common::model::ShardAssignment::unexpiring(1, [golem_common::model::ShardId::new(0)]);
     assert_eq!(
         scheduler
             .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)
@@ -881,7 +879,7 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::durable_stream::StreamSessionRecordV1;
+    use golem_common::model::durable_stream::StreamSessionRecord;
     use golem_common::schema::FromSchema;
 
     let context = TestContext::new(last_unique_id);
@@ -948,8 +946,8 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
             let PublicOplogEntry::StreamSession(record) = &entry.entry else {
                 return None;
             };
-            let StreamSessionRecordV1::ForkCut(cut) =
-                StreamSessionRecordV1::from_value(record.record.value()).ok()?
+            let StreamSessionRecord::ForkCut(cut) =
+                StreamSessionRecord::from_value(record.record.value()).ok()?
             else {
                 return None;
             };

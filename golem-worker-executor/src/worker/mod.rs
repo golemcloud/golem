@@ -15,8 +15,14 @@
 pub mod agent_config;
 pub mod cut_point;
 mod durable_stream_producer;
-pub(crate) use durable_stream_producer::EphemeralResponseLease;
-mod durable_stream_slots;
+pub use durable_stream_producer::EphemeralResponseLease;
+pub mod durable_stream_slots;
+pub use durable_stream_slots::{
+    AppendStreamSlotPayload, AppendToStreamSlotRequest, AppendToStreamSlotResult,
+    CreateStreamSessionResult, ExportStreamControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotResult, StreamSlotItem, StreamSlotItemContent,
+    StreamSlotProducer,
+};
 pub mod entity_invocation;
 pub mod entity_slot;
 pub mod instance;
@@ -36,14 +42,12 @@ use self::agent_config::{
     effective_agent_config, ensure_required_agent_secrets_are_configured,
     parse_worker_creation_agent_config,
 };
-use crate::durable_host::durable_session::{
-    DurableSessionStreams, DurableStreamConsumerJournal, SessionControlMetadata,
-};
+use crate::durable_host::durable_session::{DurableStreamConsumerJournal, StreamSession};
 use crate::durable_host::durable_stream::{
-    AttachedStreamSegmentSource, CommittedProducerStreamEventV1, ConsumerAttachmentStatus,
-    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamProducer,
-    ProducerRegistrationRequestV1, RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe,
-    StreamAttachmentControl,
+    AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
+    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamStore,
+    ProducerRegistrationRequest, RoutedStreamAttachmentControl, SessionControlMetadata,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -85,9 +89,9 @@ use crate::services::{
     All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
-    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
+    HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
@@ -95,19 +99,20 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, run_invocation_loop_task,
 };
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
+    calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
+    fold_invocation_result_entries, update_status_with_new_entries,
 };
-use crate::workerctx::{WorkerCtx, WorkerFilesystemContext};
+use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::durable_stream::{
-    AttachedStreamSegmentRequestV1, AttemptId, DURABLE_STREAM_FORMAT_VERSION,
-    PersistedStreamInvocationDescriptorV1, ResumeAttemptDescriptorV1, SessionStreamRoleV1,
-    StartAttemptDescriptorV1, StreamAttachmentControlOperationV1, StreamAttachmentControlRequestV1,
-    StreamAttachmentFinalizationReasonV1, StreamAttachmentKeyV1, StreamConsumerDeletingRecordV1,
-    StreamSessionAttachedRecordV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
-    StreamSessionPreparedRecordV1, StreamSessionRecordV1, StreamSessionResumeAttemptRecordV1,
+    AttachedStreamSegmentRequest, AttemptId, DURABLE_STREAM_FORMAT_VERSION,
+    PersistedStreamInvocationDescriptor, ResumeAttemptDescriptor, SessionStreamRole,
+    StartAttemptDescriptor, StreamAttachmentControlOperation, StreamAttachmentControlRequest,
+    StreamAttachmentFinalizationReason, StreamAttachmentKey, StreamConsumerDeletingRecord,
+    StreamSessionAttachedRecord, StreamSessionKey, StreamSessionMappingRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::QueuedCardEvent;
@@ -127,8 +132,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
+    TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{
@@ -137,7 +142,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -179,28 +184,31 @@ struct ReadOnlyContext {
     cacheable: bool,
 }
 
-pub(crate) struct DurableStreamingInvocationRequest {
-    pub(crate) attempt: StartAttemptDescriptorV1,
-    pub(crate) registrations: Vec<(u64, ProducerRegistrationRequestV1)>,
-    pub(crate) foreign_mappings: Vec<StreamSessionMappingRecordV1>,
-    pub(crate) input_schema: Arc<golem_schema::schema::SchemaGraph>,
-    pub(crate) input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
-    pub(crate) invocation: AgentInvocation,
-    pub(crate) acceptance_committed: tokio::sync::oneshot::Sender<()>,
+/// Fully resolved durable streaming invocation admitted by the executor service.
+pub struct DurableStreamingInvocationRequest {
+    pub attempt: StartAttemptDescriptor,
+    pub registrations: Vec<(u64, ProducerRegistrationRequest)>,
+    pub foreign_mappings: Vec<StreamSessionMappingRecord>,
+    pub input_schema: Arc<golem_schema::schema::SchemaGraph>,
+    pub input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
+    pub invocation: AgentInvocation,
+    pub acceptance_committed: tokio::sync::oneshot::Sender<()>,
 }
 
-pub(crate) struct DurableStreamingInvocationAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecordV1,
-    pub(crate) streams: DurableSessionStreams,
-    pub(crate) replayed: bool,
+/// Durable state returned after accepting a streaming invocation.
+pub struct DurableStreamingInvocationAcceptance {
+    pub prepared: StreamSessionPreparedRecord,
+    pub streams: StreamSession,
+    pub replayed: bool,
 }
 
-pub(crate) struct DurableStreamingResumeAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecordV1,
-    pub(crate) mappings: Vec<StreamSessionMappingRecordV1>,
-    pub(crate) streams: DurableSessionStreams,
-    pub(crate) epoch: u64,
-    pub(crate) replayed: bool,
+/// Durable state returned after resuming or taking over a streaming invocation.
+pub struct DurableStreamingResumeAcceptance {
+    pub prepared: StreamSessionPreparedRecord,
+    pub mappings: Vec<StreamSessionMappingRecord>,
+    pub streams: StreamSession,
+    pub epoch: u64,
+    pub replayed: bool,
 }
 
 /// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
@@ -552,16 +560,16 @@ pub(crate) struct DurableTopologyRecoveryCache {
     initialized: bool,
     covered_through: OplogIndex,
     consumer_deleting: bool,
-    pub(crate) sessions: HashMap<StreamSessionKeyV1, SessionControlMetadata>,
-    pub(crate) dirty: HashSet<StreamSessionKeyV1>,
+    pub(crate) sessions: HashMap<StreamSessionKey, SessionControlMetadata>,
+    pub(crate) dirty: HashSet<StreamSessionKey>,
 }
 
 impl DurableTopologyRecoveryCache {
-    fn acknowledge_recovery(&mut self, key: &StreamSessionKeyV1, covered_through: OplogIndex) {
+    fn acknowledge_recovery(&mut self, key: &StreamSessionKey, covered_through: OplogIndex) {
         if self
             .sessions
             .get(key)
-            .is_some_and(|control| control.covered_through == covered_through)
+            .is_some_and(|control| control.covered_through() == covered_through)
         {
             self.dirty.remove(key);
         }
@@ -607,10 +615,10 @@ impl DurableTopologyRecoveryCache {
                         "unsupported or malformed durable Stream Session record version".into(),
                     );
                 }
-                if matches!(record, StreamSessionRecordV1::ForkCut(_)) {
+                if matches!(record, StreamSessionRecord::ForkCut(_)) {
                     return Err("fork marker requires worker reconstruction".into());
                 }
-                if let StreamSessionRecordV1::ConsumerDeleting(record) = &record
+                if let StreamSessionRecord::ConsumerDeleting(record) = &record
                     && record.consumer_environment_id == owner.environment_id
                     && record.consumer == owner.agent_id
                     && record.consumer_fingerprint == fingerprint
@@ -619,23 +627,23 @@ impl DurableTopologyRecoveryCache {
                 }
                 if !matches!(
                     record,
-                    StreamSessionRecordV1::Prepared(_)
-                        | StreamSessionRecordV1::Attached(_)
-                        | StreamSessionRecordV1::ResumeAttempt(_)
-                        | StreamSessionRecordV1::Detached(_)
-                        | StreamSessionRecordV1::TopologyPrepared(_)
-                        | StreamSessionRecordV1::TopologyActivated(_)
-                        | StreamSessionRecordV1::AttachmentFinalized(_)
-                        | StreamSessionRecordV1::ConsumerTerminal(_)
-                        | StreamSessionRecordV1::SourceUnavailable(_)
-                        | StreamSessionRecordV1::Finished(_)
-                        | StreamSessionRecordV1::ConsumerCancelIntent(_)
-                        | StreamSessionRecordV1::ConsumerCancelApplied(_)
-                        | StreamSessionRecordV1::CancelRequested(_)
-                        | StreamSessionRecordV1::Tombstoned(_)
-                        | StreamSessionRecordV1::Mapping(_)
-                        | StreamSessionRecordV1::InvocationResult(_)
-                        | StreamSessionRecordV1::ConsumerItemValue(_)
+                    StreamSessionRecord::Prepared(_)
+                        | StreamSessionRecord::Attached(_)
+                        | StreamSessionRecord::ResumeAttempt(_)
+                        | StreamSessionRecord::Detached(_)
+                        | StreamSessionRecord::TopologyPrepared(_)
+                        | StreamSessionRecord::TopologyActivated(_)
+                        | StreamSessionRecord::AttachmentFinalized(_)
+                        | StreamSessionRecord::ConsumerTerminal(_)
+                        | StreamSessionRecord::SourceUnavailable(_)
+                        | StreamSessionRecord::Finished(_)
+                        | StreamSessionRecord::ConsumerCancelIntent(_)
+                        | StreamSessionRecord::ConsumerCancelApplied(_)
+                        | StreamSessionRecord::CancelRequested(_)
+                        | StreamSessionRecord::Tombstoned(_)
+                        | StreamSessionRecord::Mapping(_)
+                        | StreamSessionRecord::InvocationResult(_)
+                        | StreamSessionRecord::ConsumerItemValue(_)
                 ) {
                     continue;
                 }
@@ -649,7 +657,7 @@ impl DurableTopologyRecoveryCache {
                     self.sessions.insert(key.clone(), control);
                 }
                 let control = self.sessions.get_mut(key).unwrap();
-                if *index > control.covered_through {
+                if *index > control.covered_through() {
                     control.apply(*index, key, &record);
                 }
                 self.dirty.insert(key.clone());
@@ -727,7 +735,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
 
     async fn committed_finished_index(
         &self,
-        session: &StreamSessionKeyV1,
+        session: &StreamSessionKey,
     ) -> Result<Option<OplogIndex>, String> {
         let status = self.status.load_full();
         self.worker_service
@@ -774,8 +782,123 @@ fn into_pending_invocation_parts(
     )
 }
 
+fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_agent_error(reason),
+        WorkerExecutorError::InvalidRequest { details }
+        | WorkerExecutorError::ParamTypeMismatch { details }
+        | WorkerExecutorError::ValueMismatch { details } => {
+            AgentError::InvalidRequest(details.clone())
+        }
+        WorkerExecutorError::PermissionDenied { details } => {
+            AgentError::PermissionDenied(details.clone())
+        }
+        WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        } => AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+            method: method.clone(),
+            host_function: host_function.clone(),
+        }),
+        WorkerExecutorError::InvocationFailed { error, .. }
+        | WorkerExecutorError::PreviousInvocationFailed { error, .. } => error.clone(),
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => AgentError::InternalError(
+            format!("Unexpected oplog entry during replay: expected {expected}, got {got}"),
+        ),
+        WorkerExecutorError::ComponentParseFailed { .. } => {
+            AgentError::InternalError(error.to_string())
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => AgentError::Unknown(error.to_string()),
+        _ => AgentError::InternalError(error.to_string()),
+    }
+}
+
+fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_infrastructure_recovery_error(reason)
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => true,
+        _ => false,
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
+    pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+    ) -> Result<(), WorkerExecutorError> {
+        match &status.status {
+            AgentStatus::Failed => {
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(deps, owned_agent_id, agent_mode, status)
+                        .await;
+                if let Some(last_error) = error_and_retry_count {
+                    if status.last_error_kind == Some(OplogErrorKind::Recovery) {
+                        Err(WorkerExecutorError::failed_to_resume_worker(
+                            owned_agent_id.agent_id.clone(),
+                            WorkerExecutorError::runtime(
+                                last_error.error.to_string(&last_error.stderr),
+                            ),
+                        ))
+                    } else {
+                        Err(WorkerExecutorError::PreviousInvocationFailed {
+                            error: last_error.error,
+                            stderr: last_error.stderr,
+                        })
+                    }
+                } else {
+                    Err(WorkerExecutorError::runtime(
+                        "Previous invocation failed, but failed to get error details",
+                    ))
+                }
+            }
+            AgentStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
+            _ => Ok(()),
+        }
+    }
+
+    /// Resolves the resident or suspended worker that owns durable stream state.
+    pub async fn find_durable_stream_worker<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<Arc<Self>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        if Self::get_latest_metadata(deps, owned_agent_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        Self::get_existing_suspended(deps, owned_agent_id, None, Principal::anonymous())
+            .await
+            .map(Some)
+    }
+
+    /// Returns the consumer journal adapter backed by this worker's durable state.
+    pub fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),
             status: self.last_known_status.clone(),
@@ -846,67 +969,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if !worker.is_current_cached_owner().await {
                             return Ok(());
                         }
-                        let retirement = worker.retire_durable_stream_producer();
-                        worker.set_interrupting(interrupt).await;
                         worker
-                            .stop_internal(
-                                false,
-                                None,
-                                UnloadRequest::ordinary(UnloadReason::from_interrupt(interrupt)),
-                                FinalWorkerState::Unloaded {
-                                    startup_failure: None,
-                                },
-                                PendingLiveInvocationDisposition::Fail,
-                            )
-                            .await;
-                        if let WorkerInstance::CleanupFailed(error) = &*worker.instance.lock().await
-                        {
-                            return Err(error.clone());
-                        }
-                        // An unloaded worker has no Store left to record a queued interrupt,
-                        // and retirement prevents a replacement generation from doing so.
-                        let pending = worker
-                            .interrupt_signal
-                            .lock()
-                            .await
-                            .claim_pending_terminal();
-                        if let Some(pending) = pending {
-                            let status = worker.get_attached_last_known_status().await;
-                            if matches!(
-                                status.status,
-                                AgentStatus::Running
-                                    | AgentStatus::Retrying
-                                    | AgentStatus::Suspended
-                            ) {
-                                let entry = match pending.kind {
-                                    InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
-                                    InterruptKind::Suspend(_) => OplogEntry::suspend(),
-                                    InterruptKind::Restart | InterruptKind::Jump => {
-                                        unreachable!("only terminal interrupts can be claimed")
-                                    }
-                                };
-                                worker.add_and_commit_oplog(entry).await;
-                                if matches!(pending.kind, InterruptKind::Interrupt(_))
-                                    && let Some(key) = &status.current_idempotency_key
-                                {
-                                    worker
-                                        .store_invocation_failure(
-                                            key,
-                                            &TrapType::Interrupt(pending.kind),
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
-                        worker.durable_stream_attachment_reconciler.stop().await;
-                        retirement.await?;
-                        worker.state_actor.drain_lifecycle().await?;
-                        if let Some(forwarding) = &forwarding {
-                            forwarding.drain_forwarding().await;
-                        }
-                        worker.durable_stream_commit()(None).await;
-                        worker.status_flusher.begin_delete().await;
-                        worker.status_checkpointer.begin_delete().await;
+                            .quiesce_for_owner_retirement(Some(interrupt), forwarding.as_deref())
+                            .await?;
                         if let Some(forwarding) = &forwarding {
                             forwarding.forget_retired_wrapper();
                         }
@@ -928,6 +993,71 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .clone()
             .await
+    }
+
+    /// Stops and drains a fenced owner before archival or cache removal. The caller
+    /// holds owner_cleanup and has fenced both stream admission and oplog forwarding.
+    async fn quiesce_for_owner_retirement(
+        &self,
+        interrupt: Option<InterruptKind>,
+        forwarding: Option<&ForwardingOplog>,
+    ) -> Result<(), WorkerExecutorError> {
+        let retirement = self.retire_durable_stream_producer();
+        if let Some(interrupt) = interrupt {
+            self.set_interrupting(interrupt).await;
+        }
+        self.stop_internal(
+            false,
+            None,
+            UnloadRequest::ordinary(
+                interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt),
+            ),
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            PendingLiveInvocationDisposition::Fail,
+        )
+        .await;
+        if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
+            return Err(error.clone());
+        }
+        if interrupt.is_some() {
+            // An unloaded worker has no Store left to record a queued interrupt,
+            // and retirement prevents a replacement generation from doing so.
+            let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
+            if let Some(pending) = pending {
+                let status = self.get_attached_last_known_status().await;
+                if matches!(
+                    status.status,
+                    AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
+                ) {
+                    let entry = match pending.kind {
+                        InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
+                        InterruptKind::Suspend(_) => OplogEntry::suspend(),
+                        InterruptKind::Restart | InterruptKind::Jump => {
+                            unreachable!("only terminal interrupts can be claimed")
+                        }
+                    };
+                    self.add_and_commit_oplog(entry).await;
+                    if matches!(pending.kind, InterruptKind::Interrupt(_))
+                        && let Some(key) = &status.current_idempotency_key
+                    {
+                        self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
+                            .await;
+                    }
+                }
+            }
+        }
+        self.durable_stream_attachment_reconciler.stop().await;
+        retirement.await?;
+        self.state_actor.drain_lifecycle().await?;
+        if let Some(forwarding) = forwarding {
+            forwarding.drain_forwarding().await;
+        }
+        self.durable_stream_commit()(None).await;
+        self.status_flusher.begin_delete().await;
+        self.status_checkpointer.begin_delete().await;
+        Ok(())
     }
 
     /// Gets or creates a worker, but does not start it
@@ -1447,8 +1577,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         runtime: OwnerRuntime,
         execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
-        executable_component: golem_service_base::model::component::Component,
-        activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
+        executable: WorkerCtxExecutable,
+        activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
@@ -1465,7 +1595,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )?,
             None => golem_common::model::card::EffectiveSurface::default(),
         };
-        let executable_revision = executable_component.revision;
+        use golem_common::model::entity::EntityActivationSource;
+        let executable_revision = match (&executable, activation.source()) {
+            (
+                WorkerCtxExecutable::Component(component),
+                EntityActivationSource::Component { executable },
+            ) if component.id == executable.component_id
+                && component.revision == executable.component_revision =>
+            {
+                component.revision
+            }
+            (
+                WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                },
+            ) if host_tool_id == expected_id && implementation_version == expected_version => {
+                owner_component_metadata.revision
+            }
+            (WorkerCtxExecutable::Component(_), _) | (WorkerCtxExecutable::Native { .. }, _) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Entity context executable does not match its validated activation source",
+                ));
+            }
+        };
         let initial_agent_config = match &self.parsed_agent_id {
             Some(agent_id) => {
                 let component_config = owner_component_metadata
@@ -1483,10 +1640,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let filesystem_generation = self
             .owner_runtime_resources
             .filesystem_generation_handle()?;
-        if let Some(files) = activation
-            .as_ref()
-            .map(|activation| &activation.policy().provision().files)
-            .filter(|files| !files.is_empty())
+        if let Some(files) =
+            Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {
             provision_initial_files(
                 &filesystem_generation,
@@ -1499,7 +1654,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         }
         let filesystem_context = create_filesystem_context(filesystem_generation).await?;
-        let initial_linear_memory = executable_component.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = match &executable {
+            WorkerCtxExecutable::Component(component) => {
+                component.metadata.initial_linear_memory_bytes()
+            }
+            WorkerCtxExecutable::Native { .. } => 0,
+        };
         if initial_linear_memory > self.resource_entry.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 self.agent_id(),
@@ -1561,6 +1721,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.card_service(),
             self.card_interest_index.clone(),
             self.component_service(),
+            self.native_tool_catalog(),
             self.extra_deps(),
             self.config(),
             filesystem_context,
@@ -1594,8 +1755,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
-            executable_component,
-            activation,
+            executable,
+            Some(activation),
         )
         .await
     }
@@ -1655,6 +1816,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(error);
                     }
                 };
+                let status = this.state_actor.attached_status().await;
+                if this.agent_mode() == AgentMode::Durable
+                    && status.status == AgentStatus::Interrupted
+                    && status.current_idempotency_key.is_some()
+                {
+                    this.add_and_commit_oplog_internal(
+                        &instance_guard,
+                        OplogEntry::resumed(),
+                        None,
+                    )
+                    .await;
+                }
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();
@@ -1825,7 +1998,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Err(WorkerExecutorError::runtime("Worker deletion interrupted by owner retirement"))
                     }
                     result = async {
-                        let producer = DurableStreamProducer::load_indexed_with_commit(
+                        let producer = DurableStreamStore::load_indexed_with_commit(
                             self.oplog.clone(),
                             self.owned_agent_id.clone(),
                             self.initial_worker_metadata.fingerprint,
@@ -1904,7 +2077,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn finish_deleting_streams(
         &self,
-        producer: &Arc<DurableStreamProducer>,
+        producer: &Arc<DurableStreamStore>,
     ) -> Result<(), WorkerExecutorError> {
         self.finalize_durable_stream_consumer_dependencies(producer)
             .await?;
@@ -1954,7 +2127,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn finalize_durable_stream_consumer_dependencies(
         &self,
-        producer: &DurableStreamProducer,
+        producer: &DurableStreamStore,
     ) -> Result<(), WorkerExecutorError> {
         let current = self.oplog.current_oplog_index().await;
         let mut deleting_recorded = false;
@@ -1975,7 +2148,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map_err(WorkerExecutorError::runtime)?;
                 validate_stream_session_record(&record)?;
                 match record {
-                    StreamSessionRecordV1::ConsumerDeleting(record)
+                    StreamSessionRecord::ConsumerDeleting(record)
                         if record.consumer_environment_id == self.owned_agent_id.environment_id
                             && record.consumer == self.owned_agent_id.agent_id
                             && record.consumer_fingerprint
@@ -1983,7 +2156,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         deleting_recorded = true;
                     }
-                    StreamSessionRecordV1::TopologyPrepared(record)
+                    StreamSessionRecord::TopologyPrepared(record)
                         if record.attachment.consumer_environment_id
                             == self.owned_agent_id.environment_id
                             && record.attachment.consumer == self.owned_agent_id.agent_id
@@ -1997,14 +2170,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             record.attachment.stream_id,
                         );
                         if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)| {
+                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
                                 key.epoch <= record.attachment.epoch
                             },
                         ) {
                             dependencies.insert(slot, (record.attachment, record.mapping));
                         }
                     }
-                    StreamSessionRecordV1::TopologyActivated(record)
+                    StreamSessionRecord::TopologyActivated(record)
                         if record.attachment.consumer_environment_id
                             == self.owned_agent_id.environment_id
                             && record.attachment.consumer == self.owned_agent_id.agent_id
@@ -2018,7 +2191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             record.attachment.stream_id,
                         );
                         if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)| {
+                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
                                 key.epoch <= record.attachment.epoch
                             },
                         ) {
@@ -2031,15 +2204,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if !deleting_recorded {
             producer
-                .append_session_record(StreamSessionRecordV1::ConsumerDeleting(
-                    StreamConsumerDeletingRecordV1 {
+                .append_session_record(
+                    None,
+                    StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         consumer_environment_id: self.owned_agent_id.environment_id,
                         consumer: self.owned_agent_id.agent_id.clone(),
                         consumer_fingerprint: self.initial_worker_metadata.fingerprint,
                         deleting_at_millis: Timestamp::now_utc().to_millis(),
-                    },
-                ))
+                    }),
+                )
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         }
@@ -2051,7 +2225,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone())
                 .finalize_attachment(
                     key,
-                    StreamAttachmentFinalizationReasonV1::ConsumerDeleted,
+                    StreamAttachmentFinalizationReason::ConsumerDeleted,
                     Timestamp::now_utc().to_millis(),
                 )
                 .await
@@ -2133,18 +2307,65 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
+        if is_active
+            && self
+                .get_non_detached_last_known_status()
+                .await
+                .last_error_kind
+                == Some(OplogErrorKind::Recovery)
+        {
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::recovery_succeeded(),
+                None,
+            )
+            .await;
+        }
+
         let completed = match &result {
             Ok(()) => self
                 .startup_attempt
                 .complete_success_if_active(start_attempt, active_attempt),
             Err(_) => self.startup_attempt.complete(start_attempt, &result),
         };
-        drop(instance_guard);
 
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
+        drop(instance_guard);
         is_active
+    }
+
+    pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
+        let latest_status = self.get_non_detached_last_known_status().await;
+        let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
+            Ctx::get_last_error_and_retry_count(
+                self.all(),
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &latest_status,
+            )
+            .await
+        } else {
+            None
+        };
+        let retry_from = previous_error
+            .as_ref()
+            .map(|error| error.retry_from)
+            .unwrap_or(self.oplog.current_oplog_index().await);
+        let infrastructure_failure = is_infrastructure_recovery_error(error);
+        let error = recovery_agent_error(error);
+        let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
+            .then_some(RetryPolicyState::Terminal);
+        self.add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Recovery,
+            error,
+            retry_from,
+            false,
+            retry_policy_state,
+        ))
+        .await;
     }
 
     pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
@@ -4036,7 +4257,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ))
     }
 
-    pub(crate) async fn accept_durable_streaming_invocation(
+    /// Accepts a durable streaming invocation with metering and attempt reporting.
+    pub async fn accept_durable_streaming_invocation(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
@@ -4065,7 +4287,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
-    pub(crate) async fn accept_durable_stream_slot_invocation(
+    /// Accepts a stream-slot invocation that has already been metered by its transport.
+    pub async fn accept_durable_stream_slot_invocation(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
@@ -4110,7 +4333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
         acceptance_match: DurableStreamingAcceptanceMatch,
-        producer: Arc<DurableStreamProducer>,
+        producer: Arc<DurableStreamStore>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
@@ -4128,7 +4351,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let session_key = request.attempt.session_key.clone();
         let records = self.stream_session_records(&session_key, None).await?;
         let initial_epoch = match records.iter().find_map(|record| match record {
-            StreamSessionRecordV1::Attached(attached) => Some(attached.epoch),
+            StreamSessionRecord::Attached(attached) => Some(attached.epoch),
             _ => None,
         }) {
             Some(epoch) => epoch,
@@ -4138,7 +4361,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
         };
         let mut prepared_records = records.iter().filter_map(|record| match record {
-            StreamSessionRecordV1::Prepared(prepared) => Some(prepared.clone()),
+            StreamSessionRecord::Prepared(prepared) => Some(prepared.clone()),
             _ => None,
         });
         let existing_prepared = prepared_records.next();
@@ -4248,13 +4471,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .iter()
                     .map(|(transport_stream_id, _)| *transport_stream_id)
                     .zip(requested_handles)
-                    .map(
-                        |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                            transport_stream_id,
-                            handle,
-                            role: SessionStreamRoleV1::Input,
-                        },
-                    )
+                    .map(|(transport_stream_id, handle)| StreamSessionMappingRecord {
+                        transport_stream_id,
+                        handle,
+                        role: SessionStreamRole::Input,
+                    })
                     .collect()
             } else {
                 foreign_mappings.clone()
@@ -4279,12 +4500,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .iter()
                 .map(|mapping| mapping.handle.clone())
                 .collect();
-            let prepared = StreamSessionPreparedRecordV1 {
+            let prepared = StreamSessionPreparedRecord {
                 format_version: 1,
                 attempt,
                 stream_mappings: foreign_mappings.clone(),
             };
-            let streams = DurableSessionStreams::new(
+            let streams = StreamSession::new(
                 producer.clone(),
                 self.oplog.clone(),
                 session_key.clone(),
@@ -4295,7 +4516,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
                 .map(|mapping| {
                     Ok(
-                        golem_common::model::durable_stream::StreamTopologyPreparedRecordV1 {
+                        golem_common::model::durable_stream::StreamTopologyPreparedRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: session_key.clone(),
                             attachment: streams
@@ -4315,6 +4536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             let prepared = producer
                 .prepare_session(
+                    None,
                     Vec::new(),
                     topologies,
                     pending,
@@ -4338,6 +4560,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let attempt = request.attempt.clone();
             let prepared = producer
                 .prepare_session(
+                    None,
                     request.registrations.clone(),
                     Vec::new(),
                     pending,
@@ -4348,17 +4571,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let mut attempt = attempt;
                         attempt.invocation.stream_handles =
                             bindings.iter().map(|(_, handle)| handle.clone()).collect();
-                        StreamSessionPreparedRecordV1 {
+                        StreamSessionPreparedRecord {
                             format_version: 1,
                             stream_mappings: bindings
                                 .into_iter()
-                                .map(
-                                    |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                                        transport_stream_id,
-                                        handle,
-                                        role: SessionStreamRoleV1::Input,
-                                    },
-                                )
+                                .map(|(transport_stream_id, handle)| StreamSessionMappingRecord {
+                                    transport_stream_id,
+                                    handle,
+                                    role: SessionStreamRole::Input,
+                                })
                                 .collect(),
                             attempt,
                         }
@@ -4371,7 +4592,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let mut attached_records = records.iter().filter_map(|record| match record {
-            StreamSessionRecordV1::Attached(attached) => Some(attached),
+            StreamSessionRecord::Attached(attached) => Some(attached),
             _ => None,
         });
         let attached = attached_records.next();
@@ -4406,23 +4627,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             || foreign_mappings.is_empty()
             || records
                 .iter()
-                .any(|record| matches!(record, StreamSessionRecordV1::Finished(_)))
+                .any(|record| matches!(record, StreamSessionRecord::Finished(_)))
         {
             &[][..]
         } else {
             prepared.stream_mappings.as_slice()
         };
-        let streams = DurableSessionStreams::new(
+        let streams = StreamSession::new(
             producer.clone(),
             self.oplog.clone(),
             session_key,
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_attachment(initial_epoch, prepared.attempt.attempt_id)
         .with_rpc(self.rpc())
@@ -4463,8 +4678,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Box::new(move |pending_invocation_oplog_index| {
                         OplogEntry::stream_session(
                             None,
-                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
-                                StreamSessionAttachedRecordV1 {
+                            OplogPayload::Inline(Box::new(StreamSessionRecord::Attached(
+                                StreamSessionAttachedRecord {
                                     format_version: 1,
                                     session_key: attached_attempt.session_key,
                                     attachment_id: attached_attempt.attachment_id,
@@ -4539,7 +4754,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         if !records
             .iter()
-            .any(|record| matches!(record, StreamSessionRecordV1::Finished(_)))
+            .any(|record| matches!(record, StreamSessionRecord::Finished(_)))
         {
             Worker::start_if_needed(self.clone()).await?;
         }
@@ -4550,13 +4765,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
-    pub(crate) async fn resume_durable_streaming_invocation(
+    /// Resumes or takes over an existing durable streaming invocation.
+    pub async fn resume_durable_streaming_invocation(
         self: &Arc<Self>,
-        attempt: ResumeAttemptDescriptorV1,
+        attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         let operation = match attempt.operation {
-            golem_common::model::durable_stream::StreamResumeOperationV1::Resume => "resume",
-            golem_common::model::durable_stream::StreamResumeOperationV1::Takeover => "takeover",
+            golem_common::model::durable_stream::StreamResumeOperation::Resume => "resume",
+            golem_common::model::durable_stream::StreamResumeOperation::Takeover => "takeover",
         };
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
             Some(
@@ -4595,7 +4811,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resume_durable_streaming_invocation_unmetered(
         self: &Arc<Self>,
-        attempt: ResumeAttemptDescriptorV1,
+        attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         {
             let instance = self.lock_non_stopping_worker().await;
@@ -4625,7 +4841,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let prepared = records
             .iter()
             .find_map(|record| match record {
-                StreamSessionRecordV1::Prepared(record) => Some(record.clone()),
+                StreamSessionRecord::Prepared(record) => Some(record.clone()),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -4642,29 +4858,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut mappings = prepared.stream_mappings.clone();
         for record in &records {
             match record {
-                StreamSessionRecordV1::Mapping(record) => {
+                StreamSessionRecord::Mapping(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::InvocationResult(record) => {
+                StreamSessionRecord::InvocationResult(record) => {
                     for mapping in &record.stream_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
                         }
                     }
                 }
-                StreamSessionRecordV1::TopologyPrepared(record) => {
+                StreamSessionRecord::TopologyPrepared(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::TopologyActivated(record) => {
+                StreamSessionRecord::TopologyActivated(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::ConsumerItemValue(record) => {
+                StreamSessionRecord::ConsumerItemValue(record) => {
                     for mapping in &record.recursive_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
@@ -4675,28 +4891,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let make_streams =
-            |epoch, attempt_id| -> Result<DurableSessionStreams, WorkerExecutorError> {
-                Ok(DurableSessionStreams::new(
-                    producer.clone(),
-                    self.oplog.clone(),
-                    attempt.session_key.clone(),
-                    mappings.iter().map(|mapping| {
-                        (
-                            mapping.transport_stream_id,
-                            mapping.handle.clone(),
-                            mapping.role,
-                        )
-                    }),
-                )
-                .with_attachment(epoch, attempt_id)
-                .with_rpc(self.rpc())
-                .with_consumer_journal(self.durable_stream_consumer_journal())
-                .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?))
-            };
+        let make_streams = |epoch, attempt_id| -> Result<StreamSession, WorkerExecutorError> {
+            Ok(StreamSession::new(
+                producer.clone(),
+                self.oplog.clone(),
+                attempt.session_key.clone(),
+                mappings.iter().cloned(),
+            )
+            .with_attachment(epoch, attempt_id)
+            .with_rpc(self.rpc())
+            .with_consumer_journal(self.durable_stream_consumer_journal())
+            .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?))
+        };
 
         for record in &records {
-            if let StreamSessionRecordV1::ResumeAttempt(existing) = record
+            if let StreamSessionRecord::ResumeAttempt(existing) = record
                 && existing.attempt.attempt_id == attempt.attempt_id
             {
                 if existing.attempt != attempt {
@@ -4708,7 +4917,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if streams.ensure_current_attachment().await.is_ok() {
                     for mapping in &mappings {
                         if !producer.owns_handle_identity(&mapping.handle) {
-                            if mapping.role == SessionStreamRoleV1::Input
+                            if mapping.role == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
@@ -4752,11 +4961,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let (current_epoch, current_attempt_id, attached) =
-            make_streams(attempt.expected_epoch, attempt.attempt_id)?
-                .authoritative_attachment_state()
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+        let crate::durable_host::durable_session::AuthoritativeAttachmentState {
+            epoch: current_epoch,
+            attempt_id: current_attempt_id,
+            attached,
+        } = make_streams(attempt.expected_epoch, attempt.attempt_id)?
+            .authoritative_attachment_state()
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
         if attempt.expected_epoch < current_epoch {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "StaleEpoch: current attachment epoch is {current_epoch}"
@@ -4768,8 +4980,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )));
         }
         match (attempt.operation, attached) {
-            (golem_common::model::durable_stream::StreamResumeOperationV1::Resume, false)
-            | (golem_common::model::durable_stream::StreamResumeOperationV1::Takeover, true) => {}
+            (golem_common::model::durable_stream::StreamResumeOperation::Resume, false)
+            | (golem_common::model::durable_stream::StreamResumeOperation::Takeover, true) => {}
             _ => {
                 return Err(WorkerExecutorError::invalid_request(
                     "InvalidAttachmentState: resume requires Detached and takeover requires Attached",
@@ -4788,7 +5000,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
         })?;
         current_streams
-            .commit_resume_attempt(StreamSessionResumeAttemptRecordV1 {
+            .commit_resume_attempt(StreamSessionResumeAttemptRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 attempt: attempt.clone(),
                 accepted_epoch,
@@ -4799,7 +5011,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         for mapping in &mappings {
             if !producer.owns_handle_identity(&mapping.handle) {
-                if mapping.role == SessionStreamRoleV1::Input
+                if mapping.role == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
@@ -4829,9 +5041,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn stream_session_records(
         &self,
-        session_key: &golem_common::base_model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::base_model::durable_stream::StreamSessionKey,
         attempt: Option<AttemptId>,
-    ) -> Result<Vec<StreamSessionRecordV1>, WorkerExecutorError> {
+    ) -> Result<Vec<StreamSessionRecord>, WorkerExecutorError> {
         let service = self.worker_service();
         let mut metadata = service
             .lookup_durable_stream_control_metadata(
@@ -4854,12 +5066,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
-        while metadata.covered_through < current {
+        while metadata.covered_through() < current {
             let entries = self
                 .oplog
                 .read_exact(
-                    metadata.covered_through.next(),
-                    (current.as_u64() - metadata.covered_through.as_u64()).min(1024),
+                    metadata.covered_through().next(),
+                    (current.as_u64() - metadata.covered_through().as_u64()).min(1024),
                 )
                 .await;
             for (index, entry) in entries {
@@ -4869,12 +5081,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .download_payload(record)
                         .await
                         .map_err(WorkerExecutorError::runtime)?;
-                    if matches!(record, StreamSessionRecordV1::ForkCut(_)) {
+                    if matches!(record, StreamSessionRecord::ForkCut(_)) {
                         return Err(WorkerExecutorError::runtime(
                             "fork marker requires worker reconstruction",
                         ));
                     }
-                    if let StreamSessionRecordV1::ResumeAttempt(record) = &record
+                    if let StreamSessionRecord::ResumeAttempt(record) = &record
                         && &record.attempt.session_key == session_key
                         && Some(record.attempt.attempt_id) == attempt
                     {
@@ -4882,16 +5094,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     metadata.apply(index, session_key, &record);
                 } else {
-                    metadata.covered_through = index;
+                    metadata.advance_coverage(index);
                 }
             }
         }
         let mut records = Vec::new();
         for offset in [
-            metadata.prepared,
-            metadata.initial_attached,
+            metadata.prepared_position(),
+            metadata.attached_position(),
             resume_offset,
-            metadata.finished,
+            metadata.finished_position(),
         ]
         .into_iter()
         .flatten()
@@ -4908,8 +5120,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .acceptance_mappings()
             .map_err(WorkerExecutorError::runtime)?
         {
-            records.push(StreamSessionRecordV1::Mapping(
-                golem_common::base_model::durable_stream::StreamSessionMappingUpdateRecordV1 {
+            records.push(StreamSessionRecord::Mapping(
+                golem_common::base_model::durable_stream::StreamSessionMappingUpdateRecord {
                     format_version: 1,
                     session_key: session_key.clone(),
                     mapping,
@@ -4938,7 +5150,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn read_stream_session_record(
         &self,
         index: OplogIndex,
-    ) -> Result<StreamSessionRecordV1, WorkerExecutorError> {
+    ) -> Result<StreamSessionRecord, WorkerExecutorError> {
         self.durable_stream_producer()
             .await?
             .read_session_record(index)
@@ -4949,7 +5161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn prepared_stream_session(
         &self,
         idempotency_key: &IdempotencyKey,
-    ) -> Result<Option<StreamSessionPreparedRecordV1>, WorkerExecutorError> {
+    ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
             .await?
@@ -4958,14 +5170,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(None);
         };
         match self.read_stream_session_record(index).await? {
-            StreamSessionRecordV1::Prepared(record) => Ok(Some(record)),
+            StreamSessionRecord::Prepared(record) => Ok(Some(record)),
             _ => Err(WorkerExecutorError::runtime(
                 "stream session index does not refer to Prepared",
             )),
         }
     }
 
-    pub(crate) async fn rehydrate_durable_streaming_invocation(
+    /// Reconstructs stream-bearing invocation input from committed session mappings.
+    pub async fn rehydrate_durable_streaming_invocation(
         &self,
         invocation: AgentInvocation,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
@@ -4983,17 +5196,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
         }
         let producer = self.durable_stream_producer().await?;
-        let streams = DurableSessionStreams::new(
+        let streams = StreamSession::new(
             producer,
             self.oplog.clone(),
             prepared.attempt.session_key.clone(),
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
@@ -5018,14 +5225,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .decode_initial(
                 value,
                 &prepared.attempt.invocation.stream_handles,
-                SessionStreamRoleV1::Input,
+                SessionStreamRole::Input,
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
         Ok(replace_agent_method_input(invocation, input))
     }
 
-    pub(crate) async fn materialize_durable_streaming_result(
+    /// Persists stream-bearing result mappings and returns the transport value.
+    pub async fn materialize_durable_streaming_result(
         &self,
         idempotency_key: &IdempotencyKey,
         value: golem_common::schema::SchemaValue,
@@ -5043,17 +5251,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let requires_attachment =
             stream_effective_identity_is_agent(&prepared.attempt.effective_identity);
-        let mut streams = DurableSessionStreams::new(
+        let mut streams = StreamSession::new(
             self.durable_stream_producer().await?,
             self.oplog.clone(),
             prepared.attempt.session_key,
-            prepared.stream_mappings.iter().map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            }),
+            prepared.stream_mappings.iter().cloned(),
         )
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
@@ -5067,7 +5269,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(WorkerExecutorError::runtime)
     }
 
-    pub(crate) async fn fail_durable_streaming_session(
+    /// Records a failed terminal for the invocation's durable stream session.
+    pub async fn fail_durable_streaming_session(
         &self,
         idempotency_key: &IdempotencyKey,
         details: String,
@@ -5076,7 +5279,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    pub(crate) async fn complete_durable_streaming_session(
+    /// Records a successful terminal for the invocation's durable stream session.
+    pub async fn complete_durable_streaming_session(
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
@@ -5098,7 +5302,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(index) = status.prepared else {
             return Ok(());
         };
-        let StreamSessionRecordV1::Prepared(prepared) =
+        let StreamSessionRecord::Prepared(prepared) =
             self.read_stream_session_record(index).await?
         else {
             return Err(WorkerExecutorError::runtime(
@@ -5107,7 +5311,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let result_mappings = match status.invocation_result {
             Some(index) => match self.read_stream_session_record(index).await? {
-                StreamSessionRecordV1::InvocationResult(record) => record.stream_mappings,
+                StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
                 _ => {
                     return Err(WorkerExecutorError::runtime(
                         "stream session index does not refer to InvocationResult",
@@ -5120,14 +5324,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .stream_mappings
             .iter()
             .chain(&result_mappings)
-            .map(|mapping| {
-                (
-                    mapping.transport_stream_id,
-                    mapping.handle.clone(),
-                    mapping.role,
-                )
-            });
-        let streams = DurableSessionStreams::new(
+            .cloned();
+        let streams = StreamSession::new(
             self.durable_stream_producer().await?,
             self.oplog.clone(),
             prepared.attempt.session_key,
@@ -5167,7 +5365,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn durable_stream_producer(
         &self,
-    ) -> Result<Arc<DurableStreamProducer>, WorkerExecutorError> {
+    ) -> Result<Arc<DurableStreamStore>, WorkerExecutorError> {
         self.load_durable_stream_producer()
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
@@ -5217,10 +5415,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn load_durable_stream_producer(
         &self,
-    ) -> Result<
-        Arc<DurableStreamProducer>,
-        crate::durable_host::durable_stream::DurableStreamProducerError,
-    > {
+    ) -> Result<Arc<DurableStreamStore>, crate::durable_host::durable_stream::StreamStoreError>
+    {
         let commit = self.durable_stream_commit();
         let oplog = self.oplog.clone();
         let owner = self.owned_agent_id.clone();
@@ -5235,7 +5431,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mode = self.agent_mode();
         self.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
-                DurableStreamProducer::load_indexed_with_commit(
+                DurableStreamStore::load_indexed_with_commit(
                     oplog,
                     owner,
                     fingerprint,
@@ -5295,7 +5491,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn recover_durable_stream_topologies(
         &self,
         retry_remote_cancellations: bool,
-        session: Option<&StreamSessionKeyV1>,
+        session: Option<&StreamSessionKey>,
     ) -> Result<(), WorkerExecutorError> {
         if !self.has_durable_stream_history() {
             return Ok(());
@@ -5333,14 +5529,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut recoverable = Vec::new();
         let mut first_error = None;
         for (key, metadata) in sessions {
-            let streams = DurableSessionStreams::new(
+            let streams = StreamSession::new(
                 self.durable_stream_producer().await?,
                 self.oplog.clone(),
                 key.clone(),
                 std::iter::empty(),
             );
             streams
-                .reconcile_local_cancellation_intents()
+                .reconcile_local_cancellation_intents(None)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let mut cancellations_done = !streams
@@ -5371,7 +5567,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.durable_topology_recovery
                         .lock()
                         .await
-                        .acknowledge_recovery(&key, metadata.covered_through);
+                        .acknowledge_recovery(&key, metadata.covered_through());
                 }
                 continue;
             }
@@ -5390,22 +5586,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return Err(WorkerExecutorError::runtime(error));
                 }
                 let prepared = self
-                    .read_stream_session_record(metadata.prepared.ok_or_else(|| {
+                    .read_stream_session_record(metadata.prepared_position().ok_or_else(|| {
                         WorkerExecutorError::runtime(
                             "local durable topology has no Prepared session authority",
                         )
                     })?)
                     .await?;
                 let attached = self
-                    .read_stream_session_record(metadata.initial_attached.ok_or_else(|| {
+                    .read_stream_session_record(metadata.attached_position().ok_or_else(|| {
                         WorkerExecutorError::runtime(
                             "local durable topology has no attachment authority",
                         )
                     })?)
                     .await?;
                 let (
-                    StreamSessionRecordV1::Prepared(prepared),
-                    StreamSessionRecordV1::Attached(attached),
+                    StreamSessionRecord::Prepared(prepared),
+                    StreamSessionRecord::Attached(attached),
                 ) = (prepared, attached)
                 else {
                     return Err(WorkerExecutorError::runtime(
@@ -5427,7 +5623,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             recoverable.push((
                 key,
-                metadata.covered_through,
+                metadata.covered_through(),
                 topologies,
                 cancellations_done,
             ));
@@ -5439,13 +5635,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
         for (session_key, covered_through, topologies, cancellations_done) in recoverable {
             let mut succeeded = cancellations_done;
-            for (attachment, mapping) in topologies {
+            for topology in topologies {
+                let attachment = topology.attachment_key;
+                let mapping = topology.mapping;
                 let control = RoutedStreamAttachmentControl::new(
                     self.rpc(),
                     mapping.clone(),
                     auth_ctx.clone(),
                 );
-                let streams = DurableSessionStreams::new(
+                let streams = StreamSession::new(
                     producer.clone(),
                     self.oplog.clone(),
                     session_key.clone(),
@@ -5488,7 +5686,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
     ) -> Result<bool, WorkerExecutorError> {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -5496,7 +5694,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let key = request.operation.key();
-        if let StreamAttachmentControlOperationV1::SourceUnavailable {
+        if let StreamAttachmentControlOperation::SourceUnavailable {
             key,
             source_offset,
             consumer_read_ordinal,
@@ -5515,6 +5713,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .durable_stream_producer()
                 .await?
                 .commit_source_unavailable_overlay(
+                    None,
                     key.clone(),
                     *source_offset,
                     *consumer_read_ordinal,
@@ -5551,14 +5750,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
-        let consumer_status = if let StreamAttachmentControlOperationV1::Cancel {
+        let consumer_status = if let StreamAttachmentControlOperation::Cancel {
             role,
             reason,
             details,
             ..
         } = &request.operation
         {
-            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: key.session_key.clone(),
                 stream_id: key.stream_id,
@@ -5575,21 +5774,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let authorized = match &request.operation {
-            StreamAttachmentControlOperationV1::Prepare { .. } => matches!(
+            StreamAttachmentControlOperation::Prepare { .. } => matches!(
                 consumer_status,
                 ConsumerAttachmentStatus::Prepared | ConsumerAttachmentStatus::Active
             ),
-            StreamAttachmentControlOperationV1::Activate { .. }
-            | StreamAttachmentControlOperationV1::Detach { .. }
-            | StreamAttachmentControlOperationV1::Renew { .. }
-            | StreamAttachmentControlOperationV1::Cancel { .. } => {
+            StreamAttachmentControlOperation::Activate { .. }
+            | StreamAttachmentControlOperation::Detach { .. }
+            | StreamAttachmentControlOperation::Renew { .. }
+            | StreamAttachmentControlOperation::Cancel { .. } => {
                 consumer_status == ConsumerAttachmentStatus::Active
             }
-            StreamAttachmentControlOperationV1::Finalize { reason, .. } => {
-                *reason == StreamAttachmentFinalizationReasonV1::ConsumerDeleted
+            StreamAttachmentControlOperation::Finalize { reason, .. } => {
+                *reason == StreamAttachmentFinalizationReason::ConsumerDeleted
                     && consumer_status == ConsumerAttachmentStatus::Deleting
             }
-            StreamAttachmentControlOperationV1::SourceUnavailable { .. } => {
+            StreamAttachmentControlOperation::SourceUnavailable { .. } => {
                 unreachable!("source-unavailable controls return before producer authorization")
             }
         };
@@ -5600,37 +5799,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let producer_now_millis = Timestamp::now_utc().to_millis();
         let replayed = match request.operation {
-            StreamAttachmentControlOperationV1::Prepare { key, .. } => producer
+            StreamAttachmentControlOperation::Prepare { key, .. } => producer
                 .prepare_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Activate { key, .. } => producer
+            StreamAttachmentControlOperation::Activate { key, .. } => producer
                 .activate_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Detach { key } => {
+            StreamAttachmentControlOperation::Detach { key } => {
                 producer.detach_attachment(&key).await.map(|_| false)
             }
-            StreamAttachmentControlOperationV1::Renew { key, .. } => producer
+            StreamAttachmentControlOperation::Renew { key, .. } => producer
                 .renew_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Cancel {
+            StreamAttachmentControlOperation::Cancel {
                 key,
                 role,
                 reason,
                 details,
             } => {
                 let role_matches = match mapping.role {
-                    SessionStreamRoleV1::Input => matches!(
+                    SessionStreamRole::Input => matches!(
                         role,
-                        golem_common::model::durable_stream::StreamCancelRoleV1::InputProducer
-                            | golem_common::model::durable_stream::StreamCancelRoleV1::InputConsumer
+                        golem_common::model::durable_stream::StreamCancelRole::InputProducer
+                            | golem_common::model::durable_stream::StreamCancelRole::InputConsumer
                     ),
-                    SessionStreamRoleV1::Output => matches!(
+                    SessionStreamRole::Output => matches!(
                         role,
-                        golem_common::model::durable_stream::StreamCancelRoleV1::OutputProducer
-                            | golem_common::model::durable_stream::StreamCancelRoleV1::OutputConsumer
+                        golem_common::model::durable_stream::StreamCancelRole::OutputProducer
+                            | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
                     ),
                 };
                 if !role_matches {
@@ -5639,17 +5838,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
                 producer
-                    .cancel_open(key.stream_id, role, reason, details)
+                    .cancel_open(None, key.stream_id, role, reason, details)
                     .await
                     .map(|_| false)
             }
-            StreamAttachmentControlOperationV1::Finalize { key, reason, .. } => producer
+            StreamAttachmentControlOperation::Finalize { key, reason, .. } => producer
                 .finalize_attachment(key, reason, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::SourceUnavailable { .. } => unreachable!(
-                "source-unavailable controls return before producer execution"
-            ),
+            StreamAttachmentControlOperation::SourceUnavailable { .. } => {
+                unreachable!("source-unavailable controls return before producer execution")
+            }
         }
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         Ok(replayed)
@@ -5657,7 +5856,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn read_durable_stream_by_handle(
         &self,
-        request: golem_common::model::durable_stream::StreamHandleReadRequestV1,
+        request: golem_common::model::durable_stream::StreamHandleReadRequest,
     ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
         let handle = &request.handle;
         if handle.producer_environment_id != self.owned_agent_id.environment_id
@@ -5688,8 +5887,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[tracing::instrument(name = "durable_stream.read_request", level = "debug", skip_all)]
     pub(crate) async fn read_durable_stream_segment(
         &self,
-        request: AttachedStreamSegmentRequestV1,
-    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamReadError<WorkerExecutorError>>
+        request: AttachedStreamSegmentRequest,
+    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamReadError<WorkerExecutorError>>
     {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -6189,7 +6388,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         last_oplog_index: OplogIndex,
         expected_oplog_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        use crate::durable_host::durable_stream::DurableStreamProducerError;
+        use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
         let region_end = self.oplog.current_oplog_index().await;
@@ -6207,30 +6406,85 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let region_start = last_oplog_index.next();
         let last_known_status = self.get_attached_last_known_status().await;
+        let dropped_region = OplogRegion {
+            start: region_start,
+            end: region_end,
+        };
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await;
 
-        if last_known_status
-            .skipped_regions
-            .is_in_deleted_region(last_oplog_index)
         {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
-            )))
-        } else if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
-            |idx| self.oplog.read(idx),
-            last_oplog_index,
-            region_end,
-            &last_known_status.skipped_regions,
-        )
-        .await
-        {
-            Err(WorkerExecutorError::invalid_request(format!(
-                "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
-            )))
-        } else {
-            let region = OplogRegion {
-                start: region_start,
-                end: region_end,
+            cut_point::validate_snapshot_update_boundaries(
+                &entries,
+                last_oplog_index,
+                &last_known_status.deleted_regions,
+            )
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: {error}"
+                ))
+            })?;
+
+            let validation_regions = calculate_revert_validation_regions(&entries, &dropped_region);
+
+            if validation_regions.is_in_deleted_region(last_oplog_index) {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+                )));
+            }
+
+            if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
+                |idx| {
+                    std::future::ready(
+                        entries
+                            .get(&idx)
+                            .expect("read_exact must return every requested oplog entry")
+                            .clone(),
+                    )
+                },
+                last_oplog_index,
+                region_end,
+                &validation_regions,
+            )
+            .await
+            {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
+                )));
+            }
+
+            let mut prospective_entries = entries;
+            prospective_entries.insert(
+                region_end.next(),
+                OplogEntry::revert(dropped_region.clone()),
+            );
+            let retained_status = AgentStatusRecord {
+                invocation_results: self.config().invocation_results.membership(),
+                ..Default::default()
             };
+            let retained_status = update_status_with_new_entries(
+                self.agent_mode(),
+                retained_status,
+                prospective_entries,
+                &self.config().retry,
+            )
+            .map_err(WorkerExecutorError::runtime)?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to reconstruct worker status at oplog index {last_oplog_index}"
+                ))
+            })?;
+
+            let restored_component = self.preflight_revert_restoration(&retained_status).await?;
+
+            let validated_oplog_index = self.oplog.current_oplog_index().await;
+            if validated_oplog_index != region_end {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Oplog changed while validating revert: expected oplog index {region_end}, found {validated_oplog_index}"
+                )));
+            }
 
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
@@ -6240,7 +6494,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &self.owned_agent_id,
                     self.initial_worker_metadata.fingerprint,
                 );
-                let cut = DurableStreamProducer::prepare_fork_cut(
+                let cut = DurableStreamStore::prepare_fork_cut(
                     self.oplog.as_ref(),
                     identity,
                     identity,
@@ -6252,16 +6506,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await
                 .map_err(|error| match error {
-                    DurableStreamProducerError::InvalidOffset(_) => {
+                    StreamStoreError::InvalidOffset(_) => {
                         WorkerExecutorError::invalid_request(error.to_string())
                     }
                     _ => WorkerExecutorError::runtime(error.to_string()),
                 })?;
                 let mut entries = vec![
-                    DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(region)),
+                    DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(
+                        dropped_region.clone(),
+                    )),
                     DurableStreamOplogRecord::Session(
                         None,
-                        Box::new(StreamSessionRecordV1::ForkCut(cut)),
+                        Box::new(StreamSessionRecord::ForkCut(cut)),
                     ),
                 ];
                 for pending in &last_known_status.pending_invocations {
@@ -6289,12 +6545,115 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
             } else {
-                self.oplog.add(OplogEntry::revert(region)).await;
+                self.oplog
+                    .add(OplogEntry::revert(dropped_region.clone()))
+                    .await;
             }
             self.durable_stream_commit()(None).await;
             self.reattach_worker_status().await;
+            self.current_component.store(Arc::new(restored_component));
             Ok(())
         }
+    }
+
+    async fn preflight_revert_restoration(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        let pending_update = status.pending_updates.front();
+        let active_revision = pending_update
+            .map(|update| update.target_revision)
+            .unwrap_or(status.component_revision);
+        let (_, active_component) = self
+            .component_service()
+            .get(
+                &self.engine(),
+                self.owned_agent_id.component_id(),
+                active_revision,
+            )
+            .await?;
+
+        if let Some(rejected) = self
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            self.rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
+        let replay_revision = component_revision_for_replay(
+            status,
+            pending_update.is_some(),
+            self.rejected_periodic_snapshot_through
+                .load(Ordering::Acquire),
+        );
+        let replay_component = if active_component.revision == replay_revision {
+            active_component.clone()
+        } else {
+            self.component_service()
+                .get_metadata(self.owned_agent_id.component_id(), Some(replay_revision))
+                .await?
+        };
+
+        if let Some(snapshot_index) = status.last_manual_update_snapshot_index {
+            self.preflight_snapshot_update_payload(snapshot_index)
+                .await?;
+        }
+        if let Some(pending_update) = pending_update
+            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
+        {
+            self.preflight_snapshot_update_payload(pending_update.oplog_index)
+                .await?;
+        }
+
+        let initial_files = self
+            .parsed_agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                replay_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+            })
+            .map(|config| config.files.clone())
+            .unwrap_or_default();
+        prepare_initial_files(
+            &self.file_loader(),
+            self.owned_agent_id.environment_id,
+            &initial_files,
+        )
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+
+        Ok(active_component)
+    }
+
+    async fn preflight_snapshot_update_payload(
+        &self,
+        snapshot_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self.oplog.read(snapshot_index).await {
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { payload, .. },
+                ..
+            } => {
+                self.oplog
+                    .download_payload(payload)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
+            _ => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn wait_for_invocation_result(
@@ -8063,47 +8422,23 @@ impl RunningWorker {
                 .fetch_max(rejected.into(), Ordering::AcqRel);
         }
 
-        let automatic_snapshot = worker_metadata
-            .last_known_status
-            .last_automatic_snapshot_index
-            .zip(
-                worker_metadata
-                    .last_known_status
-                    .last_automatic_snapshot_component_revision,
-            )
-            .filter(|(_, snapshot_revision)| {
-                *snapshot_revision == worker_metadata.last_known_status.component_revision
-            })
-            .filter(|(index, _)| {
-                pending_update.is_none()
-                    && u64::from(*index)
-                        > parent
-                            .rejected_periodic_snapshot_through
-                            .load(Ordering::Acquire)
-                            .max(
-                                parent
-                                    .unavailable_periodic_snapshot_through
-                                    .load(Ordering::Acquire),
-                            )
-            });
-
-        let component_version_for_replay = automatic_snapshot.map_or_else(
-            || {
-                worker_metadata
-                    .last_known_status
-                    .pending_updates
-                    .front()
-                    .and_then(|update| match update.kind {
-                        PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                        PendingUpdateKind::Automatic => None,
-                    })
-                    .unwrap_or(
-                        worker_metadata
-                            .last_known_status
-                            .component_revision_for_replay,
-                    )
-            },
-            |(_, snapshot_revision)| snapshot_revision,
+        let rejected_or_unavailable_snapshot_through = parent
+            .rejected_periodic_snapshot_through
+            .load(Ordering::Acquire)
+            .max(
+                parent
+                    .unavailable_periodic_snapshot_through
+                    .load(Ordering::Acquire),
+            );
+        let automatic_snapshot = automatic_snapshot_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
+        );
+        let component_version_for_replay = component_revision_for_replay(
+            &worker_metadata.last_known_status,
+            pending_update.is_some(),
+            rejected_or_unavailable_snapshot_through,
         );
 
         let component_metadata_for_replay =
@@ -8311,6 +8646,7 @@ impl RunningWorker {
             parent.card_service(),
             parent.card_interest_index.clone(),
             parent.component_service(),
+            parent.native_tool_catalog(),
             parent.extra_deps(),
             parent.config(),
             filesystem_context,
@@ -8344,7 +8680,7 @@ impl RunningWorker {
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
-            component_metadata_for_replay,
+            WorkerCtxExecutable::Component(Box::new(component_metadata_for_replay)),
             None,
         )
         .await
@@ -8964,13 +9300,16 @@ fn lookup_result_from_cached_result(
                 Err(FailedInvocationResult {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
-                    // and the worker has not entered a terminal state, report it as
-                    // pending so lookup callers can observe the eventual terminal result.
+                    // and there is no terminal invocation outcome, report it as pending
+                    // so lookup callers can observe the eventual result. A recovery
+                    // failure makes the agent unavailable but does not finish this invocation.
                     trap_type: TrapType::Error { .. },
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && (status.status != AgentStatus::Failed
+                || status.last_error_kind == Some(OplogErrorKind::Recovery))
+            && status.status != AgentStatus::Exited =>
         {
             LookupResult::Pending
         }
@@ -9024,6 +9363,45 @@ fn lookup_result_from_cached_result(
     }
 }
 
+fn automatic_snapshot_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_through: u64,
+) -> Option<(OplogIndex, ComponentRevision)> {
+    status
+        .last_automatic_snapshot_index
+        .zip(status.last_automatic_snapshot_component_revision)
+        .filter(|(_, snapshot_revision)| *snapshot_revision == status.component_revision)
+        .filter(|(index, _)| {
+            !has_pending_update && u64::from(*index) > rejected_or_unavailable_through
+        })
+}
+
+fn component_revision_for_replay(
+    status: &AgentStatusRecord,
+    has_pending_update: bool,
+    rejected_or_unavailable_snapshot_through: u64,
+) -> ComponentRevision {
+    automatic_snapshot_for_replay(
+        status,
+        has_pending_update,
+        rejected_or_unavailable_snapshot_through,
+    )
+    .map_or_else(
+        || {
+            status
+                .pending_updates
+                .front()
+                .and_then(|update| match update.kind {
+                    PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                    PendingUpdateKind::Automatic => None,
+                })
+                .unwrap_or(status.component_revision_for_replay)
+        },
+        |(_, snapshot_revision)| snapshot_revision,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9036,13 +9414,74 @@ mod tests {
         let key = crate::durable_host::durable_stream::tests::identity().invocation;
         let mut cache = DurableTopologyRecoveryCache::default();
         let mut control = SessionControlMetadata::default();
-        control.covered_through = OplogIndex::from_u64(12);
+        control.advance_coverage(OplogIndex::from_u64(12));
         cache.sessions.insert(key.clone(), control);
         cache.dirty.insert(key.clone());
         cache.acknowledge_recovery(&key, OplogIndex::from_u64(11));
         assert!(cache.dirty.contains(&key));
         cache.acknowledge_recovery(&key, OplogIndex::from_u64(12));
         assert!(!cache.dirty.contains(&key));
+    }
+
+    #[test]
+    fn recovery_error_classification_keeps_only_transient_failures_retryable() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::runtime("temporary outage")),
+            AgentError::Unknown(message) if message.contains("temporary outage")
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::invalid_request("invalid export")),
+            AgentError::InvalidRequest(message) if message == "invalid export"
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ComponentParseFailed {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }),
+            AgentError::InternalError(message) if message.contains("invalid wasm")
+        ));
+        let component_id = ComponentId::new();
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(!is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentParseFailed {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }
+        ));
+    }
+
+    #[test]
+    fn recovery_error_classification_unwraps_failed_resume() {
+        let error = WorkerExecutorError::failed_to_resume_worker(
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "agent".to_string(),
+            },
+            WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError("retry me".to_string()),
+                stderr: String::new(),
+            },
+        );
+
+        assert_eq!(
+            recovery_agent_error(&error),
+            AgentError::TransientError("retry me".to_string())
+        );
+    }
+
+    #[test]
+    fn recovery_error_classification_preserves_read_only_violation() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ReadOnlyViolation {
+                method: "get-state".to_string(),
+                host_function: "filesystem.write".to_string(),
+            }),
+            AgentError::ReadOnlyViolation(_)
+        ));
     }
 
     #[test]
@@ -9059,6 +9498,29 @@ mod tests {
                 target_revision: actual
             } if actual == target_revision
         ));
+    }
+
+    #[test]
+    fn rejected_automatic_snapshot_uses_manual_replay_revision() {
+        let active_revision = ComponentRevision::new(3).unwrap();
+        let replay_revision = ComponentRevision::new(2).unwrap();
+        let snapshot_index = OplogIndex::from_u64(10);
+        let status = AgentStatusRecord {
+            component_revision: active_revision,
+            component_revision_for_replay: replay_revision,
+            last_automatic_snapshot_index: Some(snapshot_index),
+            last_automatic_snapshot_component_revision: Some(active_revision),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index)),
+            replay_revision
+        );
+        assert_eq!(
+            component_revision_for_replay(&status, false, u64::from(snapshot_index) - 1),
+            active_revision
+        );
     }
 
     #[test]
@@ -9506,13 +9968,13 @@ mod tests {
             agent_id: "callee".to_string(),
         };
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
-        let session_key = golem_common::base_model::durable_stream::StreamInvocationIdV1 {
+        let session_key = golem_common::base_model::durable_stream::StreamInvocationId {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
             callee_fingerprint: fingerprint,
             idempotency_key: IdempotencyKey::new("invocation".to_string()),
         };
-        let attempt = StartAttemptDescriptorV1 {
+        let attempt = StartAttemptDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: session_key.clone(),
             attachment_id: golem_common::base_model::durable_stream::AttachmentId::primary(
@@ -9523,7 +9985,7 @@ mod tests {
             .unwrap(),
             expected_callee_fingerprint: fingerprint,
             attempt_id: golem_common::base_model::durable_stream::AttemptId::fresh(),
-            invocation: PersistedStreamInvocationDescriptorV1 {
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
@@ -9628,6 +10090,31 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
+        let key = IdempotencyKey::fresh();
+        let mut status = status_with_current_key(AgentStatus::Failed, &key);
+        status.last_error_kind = Some(OplogErrorKind::Recovery);
+        let lookup = lookup_result_from_cached_result(
+            &status,
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("prior retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
     }
 
     #[test]
@@ -10038,8 +10525,8 @@ enum DurableStreamingAcceptanceMatch {
 }
 
 fn stream_slot_session_matches(
-    persisted: &StartAttemptDescriptorV1,
-    requested: &StartAttemptDescriptorV1,
+    persisted: &StartAttemptDescriptor,
+    requested: &StartAttemptDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -10056,8 +10543,8 @@ fn stream_slot_session_matches(
 }
 
 fn stream_slot_mappings_match(
-    persisted: &[StreamSessionMappingRecordV1],
-    requested: &[StreamSessionMappingRecordV1],
+    persisted: &[StreamSessionMappingRecord],
+    requested: &[StreamSessionMappingRecord],
 ) -> bool {
     persisted.len() == requested.len()
         && persisted
@@ -10069,8 +10556,8 @@ fn stream_slot_mappings_match(
 }
 
 fn stream_attempt_matches(
-    persisted: &StartAttemptDescriptorV1,
-    requested: &StartAttemptDescriptorV1,
+    persisted: &StartAttemptDescriptor,
+    requested: &StartAttemptDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -10083,8 +10570,8 @@ fn stream_attempt_matches(
 }
 
 fn persisted_stream_descriptor_matches(
-    persisted: &PersistedStreamInvocationDescriptorV1,
-    requested: &PersistedStreamInvocationDescriptorV1,
+    persisted: &PersistedStreamInvocationDescriptor,
+    requested: &PersistedStreamInvocationDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -10135,8 +10622,8 @@ fn stream_agent_authority(effective_identity: &[u8]) -> Option<&[u8]> {
 }
 
 pub(crate) fn same_origin_stream_invocation(
-    persisted: &StartAttemptDescriptorV1,
-    requested: &StartAttemptDescriptorV1,
+    persisted: &StartAttemptDescriptor,
+    requested: &StartAttemptDescriptor,
 ) -> bool {
     use golem_api_grpc::proto::golem::worker::InvocationStart;
 
@@ -10311,42 +10798,40 @@ fn normalize_stream_join_authority(
 }
 
 pub(crate) fn stream_session_record_key(
-    record: &StreamSessionRecordV1,
-) -> Option<&golem_common::base_model::durable_stream::StreamSessionKeyV1> {
+    record: &StreamSessionRecord,
+) -> Option<&golem_common::base_model::durable_stream::StreamSessionKey> {
     match record {
-        StreamSessionRecordV1::CallerAttempt(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Prepared(record) => Some(&record.attempt.session_key),
-        StreamSessionRecordV1::Attached(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ResumeAttempt(record) => Some(&record.attempt.session_key),
-        StreamSessionRecordV1::Detached(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Mapping(record) => Some(&record.session_key),
-        StreamSessionRecordV1::AttachmentPrepared(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentActivated(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentRenewed(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentFinalized(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::CascadeOutbox(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::SourceUnavailable(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::TopologyPrepared(record) => Some(&record.session_key),
-        StreamSessionRecordV1::TopologyActivated(record) => Some(&record.session_key),
-        StreamSessionRecordV1::InputHighWater(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ExternalProducerState(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerItemValue(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerCancelIntent(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerCancelApplied(record) => Some(&record.intent.session_key),
-        StreamSessionRecordV1::ConsumerTerminal(record) => Some(&record.session_key),
-        StreamSessionRecordV1::InvocationResult(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Finished(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Tombstoned(record) => Some(&record.session_key),
-        StreamSessionRecordV1::CancelRequested(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ProducerDeleting(_)
-        | StreamSessionRecordV1::ConsumerDeleting(_)
-        | StreamSessionRecordV1::ForkCut(_) => None,
+        StreamSessionRecord::CallerAttempt(record) => Some(&record.session_key),
+        StreamSessionRecord::Prepared(record) => Some(&record.attempt.session_key),
+        StreamSessionRecord::Attached(record) => Some(&record.session_key),
+        StreamSessionRecord::ResumeAttempt(record) => Some(&record.attempt.session_key),
+        StreamSessionRecord::Detached(record) => Some(&record.session_key),
+        StreamSessionRecord::Mapping(record) => Some(&record.session_key),
+        StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentActivated(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentRenewed(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentFinalized(record) => Some(&record.key.session_key),
+        StreamSessionRecord::CascadeOutbox(record) => Some(&record.key.session_key),
+        StreamSessionRecord::SourceUnavailable(record) => Some(&record.key.session_key),
+        StreamSessionRecord::TopologyPrepared(record) => Some(&record.session_key),
+        StreamSessionRecord::TopologyActivated(record) => Some(&record.session_key),
+        StreamSessionRecord::InputHighWater(record) => Some(&record.session_key),
+        StreamSessionRecord::ExternalProducerState(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerItemValue(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerCancelIntent(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerCancelApplied(record) => Some(&record.intent.session_key),
+        StreamSessionRecord::ConsumerTerminal(record) => Some(&record.session_key),
+        StreamSessionRecord::InvocationResult(record) => Some(&record.session_key),
+        StreamSessionRecord::Finished(record) => Some(&record.session_key),
+        StreamSessionRecord::Tombstoned(record) => Some(&record.session_key),
+        StreamSessionRecord::CancelRequested(record) => Some(&record.session_key),
+        StreamSessionRecord::ProducerDeleting(_)
+        | StreamSessionRecord::ConsumerDeleting(_)
+        | StreamSessionRecord::ForkCut(_) => None,
     }
 }
 
-fn validate_stream_session_record(
-    record: &StreamSessionRecordV1,
-) -> Result<(), WorkerExecutorError> {
+fn validate_stream_session_record(record: &StreamSessionRecord) -> Result<(), WorkerExecutorError> {
     if record.has_supported_format() {
         Ok(())
     } else {

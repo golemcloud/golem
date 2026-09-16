@@ -83,6 +83,12 @@ async fn revert_successful_invocations(
     executor
         .invoke_and_await_agent(&component, &agent_id2, "inc_by", data_value!(1u64))
         .await?;
+    let retained_index = executor
+        .get_oplog(&worker_id2, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
 
     // counter2.inc_by(2)
     executor
@@ -103,6 +109,30 @@ async fn revert_successful_invocations(
             }),
         )
         .await?;
+
+    // Reverting twice to the same live tail is valid even though its successor is deleted.
+    for _ in 0..2 {
+        executor
+            .revert(
+                &worker_id2,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: retained_index,
+                }),
+            )
+            .await?;
+    }
+    assert!(
+        executor
+            .revert(
+                &worker_id2,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: retained_index.next(),
+                }),
+            )
+            .await
+            .is_err(),
+        "a deleted entry cannot be the retained tail"
+    );
 
     // counter1.get_value() -> 5 (unchanged)
     let result1 = executor
@@ -427,6 +457,227 @@ async fn revert_auto_update(
     assert_ne!(result2.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn revert_across_two_successful_manual_updates(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let initial = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let revert_target = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
+
+    let revision_two = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, revision_two.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            revision_two.revision,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    let revision_two_target = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
+
+    let revision_three = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, revision_three.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            revision_three.revision,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+
+    let before_revert = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let first_pending_update = before_revert
+        .iter()
+        .find_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::PendingUpdate { .. })
+                .then_some(entry.oplog_index)
+        })
+        .expect("manual update should write PendingUpdate");
+    let before_failed_cut = before_revert.last().unwrap().oplog_index;
+    let split_result = executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_pending_update,
+            }),
+        )
+        .await;
+    assert!(
+        split_result
+            .expect_err("cut between PendingUpdate and SuccessfulUpdate must fail")
+            .to_string()
+            .contains("retains a snapshot-based PendingUpdate")
+    );
+    assert_eq!(
+        executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .last()
+            .unwrap()
+            .oplog_index,
+        before_failed_cut,
+        "an invalid update-boundary cut must not append Revert"
+    );
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: revision_two_target,
+            }),
+        )
+        .await?;
+
+    let after_middle_revert = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(after_middle_revert.into_typed::<u32>()?, 1);
+    assert_eq!(metadata.component_revision, revision_two.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    executor.simulated_crash(&worker_id).await?;
+    let middle_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(middle_after_restart.into_typed::<u32>()?, 1);
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: revert_target,
+            }),
+        )
+        .await?;
+
+    let after_revert = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(initial.into_typed::<u32>()?, 0);
+    assert_eq!(after_revert.into_typed::<u32>()?, 0);
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 0));
+
+    executor.simulated_crash(&worker_id).await?;
+    let after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(after_restart.into_typed::<u32>()?, 0);
+
+    let later_revision = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, later_revision.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            later_revision.revision,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    let after_later_update = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(after_later_update.into_typed::<u32>()?, 1);
+
+    // The last two method invocations straddle the later manual update, so resolving this count
+    // produces a cut in the surviving v1 history and crosses the update.
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 2,
+            }),
+        )
+        .await?;
+    let after_count_revert = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(after_count_revert.into_typed::<u32>()?, 0);
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 0));
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }

@@ -31,11 +31,10 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    AttachmentId, AttemptId, PersistedStreamInvocationDescriptorV1, ResumeAttemptDescriptorV1,
-    StartAttemptDescriptorV1, StreamInvocationIdV1, StreamResumeOperationV1,
-    StreamSessionAttachedRecordV1, StreamSessionDetachedRecordV1, StreamSessionFinishedRecordV1,
-    StreamSessionInvocationResultRecordV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
-    StreamSessionResumeAttemptRecordV1,
+    AttachmentId, AttemptId, PersistedStreamInvocationDescriptor, ResumeAttemptDescriptor,
+    StartAttemptDescriptor, StreamInvocationId, StreamResumeOperation, StreamSessionAttachedRecord,
+    StreamSessionDetachedRecord, StreamSessionFinishedRecord, StreamSessionInvocationResultRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
@@ -107,18 +106,18 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     let remote = owned_agent("cancellation-producer", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     let key = session_key(&remote, &IdempotencyKey::new("cancel-session".into()));
-    let intent = StreamConsumerCancelIntentRecordV1 {
+    let intent = StreamConsumerCancelIntentRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: key.clone(),
         stream_id: StreamId(uuid::Uuid::new_v4()),
         epoch: 3,
-        role: StreamCancelRoleV1::OutputConsumer,
-        reason: StreamCancelReasonV1::Cancelled,
+        role: StreamCancelRole::OutputConsumer,
+        reason: StreamCancelReason::Cancelled,
         details: Some("external cancellation".into()),
     };
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
     )
     .await;
     oplog.commit(CommitLevel::Always).await;
@@ -137,7 +136,7 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     wrong_intent.epoch = 4;
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             intent: wrong_intent,
         }),
@@ -157,7 +156,7 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
 
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             intent: intent.clone(),
         }),
@@ -236,10 +235,10 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
         )
         .await;
-    let mapping = StreamSessionMappingRecordV1 {
+    let mapping = StreamSessionMappingRecord {
         transport_stream_id: 7,
-        role: SessionStreamRoleV1::Output,
-        handle: DurableStreamHandleV1 {
+        role: SessionStreamRole::Output,
+        handle: DurableStreamHandle {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: remote.environment_id,
@@ -250,17 +249,17 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         },
     };
-    let StreamSessionRecordV1::Prepared(prepared) = prepared_record(&owner, &key.idempotency_key)
+    let StreamSessionRecord::Prepared(prepared) = prepared_record(&owner, &key.idempotency_key)
     else {
         unreachable!()
     };
     let attachment_id = prepared.attempt.attachment_id;
     let attempt_id = prepared.attempt.attempt_id;
-    append_session(oplog.as_ref(), StreamSessionRecordV1::Prepared(prepared)).await;
+    append_session(oplog.as_ref(), StreamSessionRecord::Prepared(prepared)).await;
     let pending = append_pending_invocation(oplog.as_ref(), &key.idempotency_key).await;
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: key.clone(),
             attachment_id,
@@ -272,14 +271,14 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     .await;
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Mapping(StreamSessionMappingUpdateRecordV1 {
+        StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
             format_version: 1,
             session_key: key.clone(),
             mapping: mapping.clone(),
         }),
     )
     .await;
-    let attachment = StreamAttachmentKeyV1 {
+    let attachment = StreamAttachmentKey {
         attachment_id,
         stream_id: mapping.handle.stream_id,
         epoch: 1,
@@ -292,13 +291,13 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
         expected_consumer_fingerprint: key.callee_fingerprint,
         consumer_invocation: key.clone(),
     };
-    let intent = StreamConsumerCancelIntentRecordV1 {
+    let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
         session_key: key.clone(),
         stream_id: mapping.handle.stream_id,
         epoch: 1,
-        role: StreamCancelRoleV1::OutputConsumer,
-        reason: StreamCancelReasonV1::Cancelled,
+        role: StreamCancelRole::OutputConsumer,
+        reason: StreamCancelReason::Cancelled,
         details: Some("committed external cancellation".into()),
     };
     oplog.commit(CommitLevel::Always).await;
@@ -313,16 +312,16 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     );
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
     )
     .await;
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ResumeAttempt(StreamSessionResumeAttemptRecordV1 {
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            attempt: ResumeAttemptDescriptorV1 {
+            attempt: ResumeAttemptDescriptor {
                 format_version: 1,
-                operation: StreamResumeOperationV1::Takeover,
+                operation: StreamResumeOperation::Takeover,
                 session_key: key.clone(),
                 attachment_id,
                 expected_callee_fingerprint: key.callee_fingerprint,
@@ -372,7 +371,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
         )
         .await;
-    let foreign_attachment = StreamAttachmentKeyV1 {
+    let foreign_attachment = StreamAttachmentKey {
         consumer_environment_id: foreign.environment_id,
         consumer: foreign.agent_id.clone(),
         expected_consumer_fingerprint: consumer_invocation.callee_fingerprint,
@@ -380,13 +379,13 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
         ..attachment.clone()
     };
     for record in [
-        StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
             format_version: 1,
             session_key: key.clone(),
             attachment: foreign_attachment.clone(),
             mapping: mapping.clone(),
         }),
-        StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
             format_version: 1,
             session_key: key.clone(),
             attachment: foreign_attachment.clone(),
@@ -502,8 +501,8 @@ async fn service_with_oplog() -> (
     (service, kv, oplog)
 }
 
-fn session_key(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamInvocationIdV1 {
-    StreamInvocationIdV1 {
+fn session_key(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamInvocationId {
+    StreamInvocationId {
         callee_environment_id: id.environment_id,
         callee: id.agent_id.clone(),
         callee_fingerprint: AgentFingerprint(id.agent_id.component_id.0),
@@ -511,17 +510,17 @@ fn session_key(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamInvocationIdV1 
     }
 }
 
-fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionRecordV1 {
+fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionRecord {
     let session_key = session_key(id, key);
-    StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+    StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
-        attempt: StartAttemptDescriptorV1 {
+        attempt: StartAttemptDescriptor {
             format_version: 1,
             session_key: session_key.clone(),
             attachment_id: AttachmentId::primary(id.environment_id, &id.agent_id, key).unwrap(),
             expected_callee_fingerprint: session_key.callee_fingerprint,
             attempt_id: AttemptId(uuid::Uuid::new_v4()),
-            invocation: PersistedStreamInvocationDescriptorV1 {
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: 1,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
@@ -584,7 +583,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
         .await
 }
 
-async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecordV1) -> OplogIndex {
+async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> OplogIndex {
     oplog
         .add(DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry())
         .await
@@ -602,7 +601,7 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
 #[test]
 #[test_r::timeout("30s")]
 async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chunks() {
-    use golem_common::model::durable_stream::StreamForkCutRecordV1;
+    use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::regions::OplogRegion;
 
     for warm in [false, true] {
@@ -656,7 +655,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
             start: OplogIndex::INITIAL.next(),
             end,
         };
-        let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: vec![0; 32],
             export: None,
@@ -725,8 +724,8 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
 #[test_r::timeout("30s")]
 async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_replaces_tail() {
     use golem_common::model::durable_stream::{
-        StreamConsumerItemValueRecordV1, StreamForkCutRecordV1, StreamForkSessionMappingV1,
-        StreamId, StreamOffsetV1,
+        StreamConsumerItemValueRecord, StreamForkCutRecord, StreamForkSessionMapping, StreamId,
+        StreamOffset,
     };
     use golem_common::model::regions::OplogRegion;
 
@@ -775,11 +774,11 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         retained.push(
             append_session(
                 oplog.as_ref(),
-                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                     format_version: 1,
                     session_key: foreign_session.clone(),
                     stream_id: stream,
-                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
                     consumer_read_ordinal: ordinal,
                     value: vec![ordinal as u8],
                     packed_u8: true,
@@ -792,7 +791,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     }
     let fork = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: vec![0; 32],
             export: None,
@@ -808,7 +807,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             selected_stream_id: None,
             retained_through: None,
             streams: vec![],
-            sessions: vec![StreamForkSessionMappingV1 {
+            sessions: vec![StreamForkSessionMapping {
                 source: foreign_session.clone(),
                 continuation: local_session.clone(),
                 continuation_attempt_id: AttemptId::fresh(),
@@ -821,11 +820,11 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         removed.push(
             append_session(
                 oplog.as_ref(),
-                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                     format_version: 1,
                     session_key: local_session.clone(),
                     stream_id: stream,
-                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
                     consumer_read_ordinal: ordinal,
                     value: vec![ordinal as u8],
                     packed_u8: true,
@@ -858,7 +857,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             .copied()
             .collect::<Vec<_>>()
     );
-    let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+    let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
         export: None,
@@ -874,7 +873,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         selected_stream_id: None,
         retained_through: None,
         streams: vec![],
-        sessions: vec![StreamForkSessionMappingV1 {
+        sessions: vec![StreamForkSessionMapping {
             source: local_session.clone(),
             continuation: local_session.clone(),
             continuation_attempt_id: AttemptId::fresh(),
@@ -918,11 +917,11 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     );
     let replacement = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+        StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
             format_version: 1,
             session_key: local_session.clone(),
             stream_id: stream,
-            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(260), 0),
+            source_offset: StreamOffset::new(OplogIndex::from_u64(260), 0),
             consumer_read_ordinal: 259,
             value: vec![99],
             packed_u8: true,
@@ -956,8 +955,8 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
 #[test_r::timeout("30s")]
 async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows() {
     use golem_common::model::durable_stream::{
-        StreamConsumerItemValueRecordV1, StreamForkCutRecordV1, StreamForkSessionMappingV1,
-        StreamId, StreamOffsetV1,
+        StreamConsumerItemValueRecord, StreamForkCutRecord, StreamForkSessionMapping, StreamId,
+        StreamOffset,
     };
     use golem_common::model::regions::OplogRegion;
 
@@ -1006,11 +1005,11 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         retained.push(
             append_session(
                 oplog.as_ref(),
-                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                     format_version: 1,
                     session_key: session.clone(),
                     stream_id: stream,
-                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
                     consumer_read_ordinal: ordinal,
                     value: vec![ordinal as u8],
                     packed_u8: true,
@@ -1038,11 +1037,11 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         removed.push(
             append_session(
                 oplog.as_ref(),
-                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                     format_version: 1,
                     session_key: session.clone(),
                     stream_id: stream,
-                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
                     consumer_read_ordinal: ordinal,
                     value: vec![ordinal as u8],
                     packed_u8: true,
@@ -1074,7 +1073,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             .copied()
             .collect::<Vec<_>>()
     );
-    let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+    let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![2; 32],
         export: None,
@@ -1090,7 +1089,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         selected_stream_id: None,
         retained_through: None,
         streams: vec![],
-        sessions: vec![StreamForkSessionMappingV1 {
+        sessions: vec![StreamForkSessionMapping {
             source: session.clone(),
             continuation: session.clone(),
             continuation_attempt_id: AttemptId::fresh(),
@@ -1107,11 +1106,11 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         second.lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session),
     );
     assert_eq!(
-        left_control.unwrap().consumer_record_counts.get(&stream),
+        left_control.unwrap().consumer_record_counts().get(&stream),
         Some(&259)
     );
     assert_eq!(
-        right_control.unwrap().consumer_record_counts.get(&stream),
+        right_control.unwrap().consumer_record_counts().get(&stream),
         Some(&259)
     );
     let (left, right) = tokio::join!(
@@ -1148,13 +1147,13 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> O
 }
 
 fn attached_record(
-    session_key: StreamInvocationIdV1,
+    session_key: StreamInvocationId,
     attachment_id: AttachmentId,
     attempt_id: AttemptId,
     epoch: u64,
     pending_invocation_oplog_index: OplogIndex,
-) -> StreamSessionRecordV1 {
-    StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+) -> StreamSessionRecord {
+    StreamSessionRecord::Attached(StreamSessionAttachedRecord {
         format_version: 1,
         session_key,
         attachment_id,
@@ -1165,12 +1164,12 @@ fn attached_record(
 }
 
 fn detached_record(
-    session_key: StreamInvocationIdV1,
+    session_key: StreamInvocationId,
     attachment_id: AttachmentId,
     attempt_id: AttemptId,
     epoch: u64,
-) -> StreamSessionRecordV1 {
-    StreamSessionRecordV1::Detached(StreamSessionDetachedRecordV1 {
+) -> StreamSessionRecord {
+    StreamSessionRecord::Detached(StreamSessionDetachedRecord {
         format_version: 1,
         session_key,
         attachment_id,
@@ -1223,7 +1222,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     }
     let result = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
             session_key: key.clone(),
             result: vec![42; 8192],
@@ -1238,7 +1237,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.invocation_result, Some(result));
+    assert_eq!(metadata.result_position(), Some(result));
     assert!(
         storage.reads() >= 4,
         "initial catchup must read multiple chunks"
@@ -1254,7 +1253,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.invocation_result, Some(result));
+    assert_eq!(metadata.result_position(), Some(result));
     assert_eq!(
         storage.reads(),
         1,
@@ -1267,13 +1266,13 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &other_key)
             .await
             .unwrap()
-            .invocation_result
+            .result_position()
             .is_none()
     );
 
     let finished = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: key.clone(),
             result: Ok(()),
@@ -1286,7 +1285,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
             .await
             .unwrap()
-            .finished
+            .finished_position()
             .is_none()
     );
     oplog.commit(CommitLevel::Always).await;
@@ -1295,8 +1294,8 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.finished, Some(finished));
-    assert_eq!(metadata.covered_through, finished);
+    assert_eq!(metadata.finished_position(), Some(finished));
+    assert_eq!(metadata.covered_through(), finished);
     assert_eq!(
         storage.reads(),
         2,
@@ -1311,12 +1310,12 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         for target in [stream, other_stream] {
             let index = append_session(
                 oplog.as_ref(),
-                StreamSessionRecordV1::ConsumerItemValue(
-                    golem_common::model::durable_stream::StreamConsumerItemValueRecordV1 {
+                StreamSessionRecord::ConsumerItemValue(
+                    golem_common::model::durable_stream::StreamConsumerItemValueRecord {
                         format_version: 1,
                         session_key: consumer_key.clone(),
                         stream_id: target,
-                        source_offset: golem_common::model::durable_stream::StreamOffsetV1::new(
+                        source_offset: golem_common::model::durable_stream::StreamOffset::new(
                             OplogIndex::from_u64(ordinal + 1),
                             0,
                         ),
@@ -1350,7 +1349,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &consumer_key)
         .await
         .unwrap();
-    assert_eq!(metadata.consumer_record_counts.get(&stream), Some(&600));
+    assert_eq!(metadata.consumer_record_count(stream), 600);
     assert_eq!(
         storage.reads(),
         1,
@@ -1380,7 +1379,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     let mut active = Vec::new();
     for number in 0..320 {
         let record = prepared_record(&id, &IdempotencyKey::new(format!("recover-{number}")));
-        let StreamSessionRecordV1::Prepared(prepared) = &record else {
+        let StreamSessionRecord::Prepared(prepared) = &record else {
             unreachable!();
         };
         active.push(prepared.attempt.session_key.clone());
@@ -1430,7 +1429,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     );
 
     let record = prepared_record(&id, &IdempotencyKey::new("raw-recovery".into()));
-    let StreamSessionRecordV1::Prepared(prepared) = &record else {
+    let StreamSessionRecord::Prepared(prepared) = &record else {
         unreachable!();
     };
     let raw_key = prepared.attempt.session_key.clone();
@@ -1473,7 +1472,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     for key in active.iter().take(260) {
         append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
                 session_key: key.clone(),
                 result: Ok(()),
@@ -1520,7 +1519,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     for key in active.iter().skip(260) {
         append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
                 session_key: key.clone(),
                 result: Ok(()),
@@ -1543,13 +1542,13 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         let attempt = AttemptId(uuid::Uuid::new_v4());
         let offset = append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::ResumeAttempt(
-                golem_common::model::durable_stream::StreamSessionResumeAttemptRecordV1 {
+            StreamSessionRecord::ResumeAttempt(
+                golem_common::model::durable_stream::StreamSessionResumeAttemptRecord {
                     format_version: 1,
-                    attempt: golem_common::model::durable_stream::ResumeAttemptDescriptorV1 {
+                    attempt: golem_common::model::durable_stream::ResumeAttemptDescriptor {
                         format_version: 1,
                         operation:
-                            golem_common::model::durable_stream::StreamResumeOperationV1::Takeover,
+                            golem_common::model::durable_stream::StreamResumeOperation::Takeover,
                         session_key: key.clone(),
                         attachment_id: AttachmentId::primary(
                             id.environment_id,
@@ -1628,7 +1627,7 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
     let mut mappings = Vec::new();
     let mut attachments = Vec::new();
     for transport_stream_id in 0..2 {
-        let handle = DurableStreamHandleV1 {
+        let handle = DurableStreamHandle {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: remote.environment_id,
@@ -1638,12 +1637,12 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         };
-        let mapping = StreamSessionMappingRecordV1 {
+        let mapping = StreamSessionMappingRecord {
             transport_stream_id,
             handle: handle.clone(),
-            role: SessionStreamRoleV1::Output,
+            role: SessionStreamRole::Output,
         };
-        let attachment = StreamAttachmentKeyV1 {
+        let attachment = StreamAttachmentKey {
             attachment_id: AttachmentId::primary(
                 remote.environment_id,
                 &remote.agent_id,
@@ -1662,13 +1661,13 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             consumer_invocation: consumer.clone(),
         };
         for record in [
-            StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+            StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                 format_version: 1,
                 session_key: key.clone(),
                 attachment: attachment.clone(),
                 mapping: mapping.clone(),
             }),
-            StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+            StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
                 format_version: 1,
                 session_key: key.clone(),
                 attachment: attachment.clone(),
@@ -1696,13 +1695,13 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
     assert_eq!(cache.sessions.len(), 1);
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ConsumerTerminal(StreamConsumerTerminalRecordV1 {
+        StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
             format_version: 1,
             session_key: key.clone(),
             stream_id: attachments[0].stream_id,
-            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(100), 0),
+            source_offset: StreamOffset::new(OplogIndex::from_u64(100), 0),
             consumer_read_ordinal: 0,
-            terminal: StreamConsumerTerminalV1::End(StreamEndResultV1::Ok),
+            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
         }),
     )
     .await;
@@ -1724,13 +1723,16 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         1,
         "closing one stream must retain the other stream"
     );
-    assert_eq!(pending[0].0.stream_id, attachments[1].stream_id);
+    assert_eq!(
+        pending[0].attachment_key.stream_id,
+        attachments[1].stream_id
+    );
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::SourceUnavailable(StreamSourceUnavailableRecordV1 {
+        StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
             format_version: 1,
             key: attachments[1].clone(),
-            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(101), 0),
+            source_offset: StreamOffset::new(OplogIndex::from_u64(101), 0),
             consumer_read_ordinal: 0,
         }),
     )
@@ -1773,7 +1775,7 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         attachment.epoch = 2;
         append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+            StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
                 format_version: 1,
                 session_key: key.clone(),
                 attachment,
@@ -1965,7 +1967,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     let old_first = append_session(oplog.as_ref(), prepared_record(&id, &old)).await;
     let old_result = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
             session_key: session_key(&id, &old),
             result: vec![1],
@@ -1976,7 +1978,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     .await;
     let old_finished = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: session_key(&id, &old),
             result: Ok(()),
@@ -1992,7 +1994,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
         let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         let finished = append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
                 session_key: session_key(&id, &key),
                 result: Ok(()),
@@ -2035,7 +2037,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         append_session(oplog.as_ref(), prepared_record(&id, &other)).await;
         append_session(
             oplog.as_ref(),
-            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
                 session_key: session_key(&id, &other),
                 result: Ok(()),
@@ -2069,7 +2071,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
 
     let result = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
             session_key: session_key(&id, &key),
             result: vec![2],
@@ -2080,7 +2082,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
     .await;
     let finished = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: session_key(&id, &key),
             result: Ok(()),
@@ -2133,7 +2135,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     assert!(!status.has_durable_stream_history);
     status = AgentStatusRecord::default();
     let records = [
-        StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
             session_key: outgoing_session,
             result: vec![],
@@ -2141,14 +2143,14 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
             stream_mappings: vec![],
         }),
         prepared_record(&id, &key),
-        StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
             session_key: session_key(&id, &key),
             result: vec![],
             output_streams: vec![],
             stream_mappings: vec![],
         }),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: session_key(&id, &key),
             result: Ok(()),
@@ -2189,11 +2191,11 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
 
 #[test]
 async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain() {
-    use crate::durable_host::durable_session::DurableSessionStreams;
-    use crate::durable_host::durable_stream::DurableStreamProducer;
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::durable_stream::DurableStreamStore;
     use golem_common::model::durable_stream::{
-        ResumeAttemptDescriptorV1, StreamResumeOperationV1, StreamSessionAttachedRecordV1,
-        StreamSessionDetachedRecordV1, StreamSessionResumeAttemptRecordV1,
+        ResumeAttemptDescriptor, StreamResumeOperation, StreamSessionAttachedRecord,
+        StreamSessionDetachedRecord, StreamSessionResumeAttemptRecord,
     };
 
     let (_, _, oplog_service) = service_with_oplog().await;
@@ -2202,7 +2204,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let key = IdempotencyKey::new("stream".into());
     let prepared = prepared_record(&id, &key);
     assert!(prepared.has_supported_format());
-    let StreamSessionRecordV1::Prepared(prepared_record) = &prepared else {
+    let StreamSessionRecord::Prepared(prepared_record) = &prepared else {
         unreachable!()
     };
     let first_attempt = prepared_record.attempt.attempt_id;
@@ -2212,7 +2214,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let pending_invocation_oplog_index = append_pending_invocation(oplog.as_ref(), &key).await;
     let attached = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session.clone(),
             attachment_id,
@@ -2224,7 +2226,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     .await;
     oplog.commit(CommitLevel::Always).await;
 
-    let producer = DurableStreamProducer::load(
+    let producer = DurableStreamStore::load(
         oplog.clone(),
         id.environment_id,
         id.agent_id.clone(),
@@ -2233,16 +2235,16 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     )
     .await
     .unwrap();
-    let old = DurableSessionStreams::new(producer.clone(), oplog.clone(), session.clone(), [])
+    let old = StreamSession::new(producer.clone(), oplog.clone(), session.clone(), [])
         .with_attachment(1, first_attempt);
     old.ensure_current_attachment().await.unwrap();
 
     let takeover_attempt = AttemptId::fresh();
-    let resume = StreamSessionRecordV1::ResumeAttempt(StreamSessionResumeAttemptRecordV1 {
+    let resume = StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
         format_version: 1,
-        attempt: ResumeAttemptDescriptorV1 {
+        attempt: ResumeAttemptDescriptor {
             format_version: 1,
-            operation: StreamResumeOperationV1::Takeover,
+            operation: StreamResumeOperation::Takeover,
             session_key: session.clone(),
             attachment_id,
             expected_callee_fingerprint: session.callee_fingerprint,
@@ -2260,7 +2262,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog_service.get_last_index(&id, AgentMode::Durable).await,
         attached
     );
-    let new = DurableSessionStreams::new(producer, oplog.clone(), session.clone(), [])
+    let new = StreamSession::new(producer, oplog.clone(), session.clone(), [])
         .with_attachment(2, takeover_attempt);
     assert!(old.ensure_current_attachment().await.is_err());
     new.ensure_current_attachment().await.unwrap();
@@ -2280,7 +2282,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
 
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Detached(StreamSessionDetachedRecordV1 {
+        StreamSessionRecord::Detached(StreamSessionDetachedRecord {
             format_version: 1,
             session_key: session.clone(),
             attachment_id,
@@ -2304,7 +2306,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = IdempotencyKey::new("stream".into());
     let prepared = prepared_record(&id, &key);
-    let StreamSessionRecordV1::Prepared(value) = &prepared else {
+    let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
     };
     let session_key = value.attempt.session_key.clone();
@@ -2328,11 +2330,11 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
     let resumed_attempt = AttemptId::fresh();
     let resumed = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::ResumeAttempt(StreamSessionResumeAttemptRecordV1 {
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            attempt: ResumeAttemptDescriptorV1 {
+            attempt: ResumeAttemptDescriptor {
                 format_version: 1,
-                operation: StreamResumeOperationV1::Takeover,
+                operation: StreamResumeOperation::Takeover,
                 session_key: session_key.clone(),
                 attachment_id,
                 expected_callee_fingerprint: session_key.callee_fingerprint,
@@ -2376,7 +2378,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
     let first = create_oplog(oplog_service.as_ref(), &id).await;
     let key = IdempotencyKey::new("stream".into());
     let prepared = prepared_record(&id, &key);
-    let StreamSessionRecordV1::Prepared(value) = &prepared else {
+    let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
     };
     let session_key = value.attempt.session_key.clone();
@@ -2420,11 +2422,11 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
     let takeover_attempt = AttemptId::fresh();
     append_session(
         second.as_ref(),
-        StreamSessionRecordV1::ResumeAttempt(StreamSessionResumeAttemptRecordV1 {
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            attempt: ResumeAttemptDescriptorV1 {
+            attempt: ResumeAttemptDescriptor {
                 format_version: 1,
-                operation: StreamResumeOperationV1::Takeover,
+                operation: StreamResumeOperation::Takeover,
                 session_key: session_key.clone(),
                 attachment_id,
                 expected_callee_fingerprint: session_key.callee_fingerprint,
@@ -2457,7 +2459,7 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let old_key = IdempotencyKey::new("old".into());
     let prepared = prepared_record(&id, &old_key);
-    let StreamSessionRecordV1::Prepared(value) = &prepared else {
+    let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
     };
     let session_key = value.attempt.session_key.clone();
@@ -2472,7 +2474,7 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     .await;
     append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: session_key.clone(),
             result: Ok(()),
@@ -2533,7 +2535,7 @@ async fn persisted_exact_horizon_rejects_newer_index_and_offsets_hide_newer_atta
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = IdempotencyKey::new("stream".into());
     let prepared = prepared_record(&id, &key);
-    let StreamSessionRecordV1::Prepared(value) = &prepared else {
+    let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
     };
     let session_key = value.attempt.session_key.clone();
@@ -2630,7 +2632,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     let prepared_idx = append_session(oplog.as_ref(), prepared).await;
     let finished_idx = append_session(
         oplog.as_ref(),
-        StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
             session_key: session_key.clone(),
             result: Ok(()),
@@ -2723,7 +2725,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = IdempotencyKey::new("session".into());
     let prepared = prepared_record(&id, &key);
-    let StreamSessionRecordV1::Prepared(value) = &prepared else {
+    let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
     };
     let session = value.attempt.session_key.clone();
@@ -2804,13 +2806,13 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let idempotency_key = IdempotencyKey::new("shared".into());
     let first = prepared_record(&id, &idempotency_key);
-    let StreamSessionRecordV1::Prepared(first_value) = &first else {
+    let StreamSessionRecord::Prepared(first_value) = &first else {
         unreachable!()
     };
     let first_key = first_value.attempt.session_key.clone();
     let remote = owned_agent("remote-callee", ComponentId::new());
     let second_key = session_key(&remote, &idempotency_key);
-    let second = StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
+    let second = StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
         format_version: 1,
         session_key: second_key.clone(),
         result: vec![],

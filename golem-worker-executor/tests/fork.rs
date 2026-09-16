@@ -206,7 +206,7 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn control_durable_stream_attachment(
         &self,
-        request: golem_common::model::durable_stream::StreamAttachmentControlRequestV1,
+        request: golem_common::model::durable_stream::StreamAttachmentControlRequest,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -216,7 +216,7 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn read_durable_stream_segment(
         &self,
-        request: golem_common::model::durable_stream::DurableStreamReadRequestV1,
+        request: golem_common::model::durable_stream::DurableStreamReadRequest,
         auth: &AuthCtx,
     ) -> Result<
         Vec<u8>,

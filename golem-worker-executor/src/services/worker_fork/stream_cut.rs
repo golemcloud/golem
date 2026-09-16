@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::OplogIndex;
-use golem_common::model::durable_stream::StreamOffsetV1;
+use golem_common::model::durable_stream::StreamOffset;
 
 /// An exact stream prefix. Complete earlier records keep their original positions; only the
 /// boundary batch may be shortened. Empty prefixes retain the stream's registration.
@@ -24,7 +24,7 @@ pub struct StreamForkCut {
     /// Retained items in the batch identified by `last_item_offset`, not by `oplog_index`.
     pub retained_boundary_items: u32,
     pub retained_items: u64,
-    pub last_item_offset: Option<StreamOffsetV1>,
+    pub last_item_offset: Option<StreamOffset>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,12 +51,12 @@ pub enum StreamForkCutError {
 pub fn resolve_stream_fork_cut(
     registration_index: OplogIndex,
     batches: &[(OplogIndex, u32)],
-    terminal: Option<StreamOffsetV1>,
-    anchor: Option<StreamOffsetV1>,
+    terminal: Option<StreamOffset>,
+    anchor: Option<StreamOffset>,
     sub_offset: u64,
     max_sub_offset: u64,
 ) -> Result<StreamForkCut, StreamForkCutError> {
-    let origin = StreamOffsetV1::new(OplogIndex::NONE, 0);
+    let origin = StreamOffset::new(OplogIndex::NONE, 0);
     let mut total = 0u64;
     let mut previous = registration_index;
     let mut anchor_items = (anchor == Some(origin)).then_some(0);
@@ -100,16 +100,16 @@ pub fn resolve_stream_fork_cut(
         if remaining <= u64::from(length) {
             let retained_boundary_items = remaining as u32;
             return Ok(StreamForkCut {
-                oplog_index: terminal_cut.map_or(index, StreamOffsetV1::producer_oplog_index),
+                oplog_index: terminal_cut.map_or(index, StreamOffset::producer_oplog_index),
                 retained_boundary_items,
                 retained_items,
-                last_item_offset: Some(StreamOffsetV1::new(index, retained_boundary_items - 1)),
+                last_item_offset: Some(StreamOffset::new(index, retained_boundary_items - 1)),
             });
         }
         remaining -= u64::from(length);
     }
     Ok(StreamForkCut {
-        oplog_index: terminal_cut.map_or(registration_index, StreamOffsetV1::producer_oplog_index),
+        oplog_index: terminal_cut.map_or(registration_index, StreamOffset::producer_oplog_index),
         retained_boundary_items: 0,
         retained_items: 0,
         last_item_offset: None,
@@ -125,15 +125,15 @@ mod tests {
         OplogIndex::from_u64(value)
     }
 
-    fn offset(index: u64, sub_index: u32) -> StreamOffsetV1 {
-        StreamOffsetV1::new(idx(index), sub_index)
+    fn offset(index: u64, sub_index: u32) -> StreamOffset {
+        StreamOffset::new(idx(index), sub_index)
     }
 
     fn resolve(
         registration_index: OplogIndex,
         batches: &[(OplogIndex, u32)],
-        terminal: Option<StreamOffsetV1>,
-        anchor: Option<StreamOffsetV1>,
+        terminal: Option<StreamOffset>,
+        anchor: Option<StreamOffset>,
         sub_offset: u64,
     ) -> Result<StreamForkCut, StreamForkCutError> {
         resolve_stream_fork_cut(

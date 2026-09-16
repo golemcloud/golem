@@ -23,9 +23,9 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 };
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog, scan_modes,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -837,17 +837,6 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.primary
-            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
-            .await
-    }
-
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -870,7 +859,7 @@ pub struct MultiLayerOplog {
     multi_layer_oplog_service: MultiLayerOplogService,
     transfer_fiber: TransferFiber,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    last_oplog_index: AtomicOplogIndex,
+    last_reported_commit_index: AtomicOplogIndex,
     last_transfer_point: AtomicOplogIndex,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
@@ -917,10 +906,12 @@ impl MultiLayerOplog {
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");
 
         let initial_primary_length = primary.length().await;
-        let last_oplog_index =
+        let last_reported_commit_index =
             AtomicOplogIndex::from_oplog_index(primary.current_oplog_index().await);
         let last_transfer_point = AtomicOplogIndex::from_oplog_index(
-            last_oplog_index.get().subtract(initial_primary_length),
+            last_reported_commit_index
+                .get()
+                .subtract(initial_primary_length),
         );
         let result = Arc::new(Self {
             owned_agent_id: owned_agent_id.clone(),
@@ -930,7 +921,7 @@ impl MultiLayerOplog {
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
             transfer_fiber: new_transfer_fiber(),
             transfer: tx,
-            last_oplog_index,
+            last_reported_commit_index,
             last_transfer_point,
             close_fn: Some(close),
         });
@@ -1075,18 +1066,24 @@ impl MultiLayerOplog {
             (None, None)
         };
         let result = if this.primary.length().await > 0 {
-            // transferring the whole primary oplog to the next layer
+            // Unreported automatic commits must remain in primary storage until the next
+            // explicit commit returns them to the status reducer.
+            let last_transferred_idx = this.last_reported_commit_index.get();
+            if last_transferred_idx == OplogIndex::NONE {
+                return true;
+            }
             this.transfer
                 .send(TransferFromPrimary {
-                    last_transferred_idx: this.primary.current_oplog_index().await,
+                    last_transferred_idx,
                     keep_alive: Some(this.clone()),
                     done: done_tx,
                     transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of primary oplog entries");
 
-            // If there are more layers to transfer from, return true
+            // Retry if additions beyond the reported prefix still need archiving.
             this.lower.len().get() > 1
+                || this.primary.current_oplog_index().await > last_transferred_idx
         } else {
             let mut n = 0;
             let first_non_empty = loop {
@@ -1157,38 +1154,14 @@ impl Debug for MultiLayerOplog {
 #[async_trait]
 impl Oplog for MultiLayerOplog {
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
-        let pending = self.primary.enqueue_add(entry);
-        let last_oplog_index = self.last_oplog_index.clone();
-        Box::pin(async move {
-            let result = pending.await;
-            last_oplog_index.set(result);
-            result
-        })
+        self.primary.enqueue_add(entry)
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let result = self.primary.add_durable_stream_batch(make_batch).await?;
-        if let Some((last_index, _)) = result.last() {
-            self.last_oplog_index.set(*last_index);
-        }
-        Ok(result)
-    }
-
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let result = self
-            .primary
-            .add_durable_stream_batch_iter(make_batch)
-            .await?;
-        if let Some((last_index, _)) = result.last() {
-            self.last_oplog_index.set(*last_index);
-        }
-        Ok(result)
+        self.primary.add_durable_stream_batch(make_batch).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -1200,9 +1173,12 @@ impl Oplog for MultiLayerOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let result = self.primary.commit(level).await;
 
-        let last_committed_idx = self.last_oplog_index.get();
+        if let Some(index) = result.keys().next_back() {
+            self.last_reported_commit_index.max(*index);
+        }
+        let last_committed_idx = self.last_reported_commit_index.get();
         let last_transferred_idx = self.last_transfer_point.get();
-        let count: u64 = u64::from(last_committed_idx) - u64::from(last_transferred_idx);
+        let count = u64::from(last_committed_idx).saturating_sub(u64::from(last_transferred_idx));
         if count >= self.multi_layer_oplog_service.entry_count_limit {
             debug!(
                 "Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {last_committed_idx}"
@@ -1213,7 +1189,7 @@ impl Oplog for MultiLayerOplog {
                 done: None,
                 transfer_origin: TraceOrigin::capture_current(),
             });
-            self.last_transfer_point.set(last_committed_idx);
+            self.last_transfer_point.max(last_committed_idx);
         }
         result
     }
@@ -1224,7 +1200,7 @@ impl Oplog for MultiLayerOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         self.primary
             .raw_durable_stream_session_status(session_key)
@@ -1286,9 +1262,7 @@ impl Oplog for MultiLayerOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        let (first_idx, second_idx) = self.primary.add_pair(start, make_second).await;
-        self.last_oplog_index.set(second_idx);
-        (first_idx, second_idx)
+        self.primary.add_pair(start, make_second).await
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -1296,26 +1270,18 @@ impl Oplog for MultiLayerOplog {
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
-        // Delegate to the primary (which owns the Start-ordering critical section) and mirror the
-        // assigned index into `last_oplog_index`, like `add`/`add_pair` do.
-        let ordered = self
-            .primary
+        self.primary
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
-            .await?;
-        self.last_oplog_index.set(ordered.index);
-        Ok(ordered)
+            .await
     }
 
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
-        let ordered = self
-            .primary
+        self.primary
             .add_start_with_indexed_reserved_raw_payload(build_request)
-            .await?;
-        self.last_oplog_index.set(ordered.index);
-        Ok(ordered)
+            .await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

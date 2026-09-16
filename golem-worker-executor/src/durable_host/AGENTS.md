@@ -73,7 +73,7 @@ work. Ephemeral targets are fail-stop; do not build resumption for them.
   consumer's `StreamSession` journal are the only authoritative stream state. Commit before
   `DurableLiveStreamBus::publish_committed`; the bus, readers, sockets and transports are
   resumable optimizations and must never be the only holder of an item or terminal.
-- Consumers resume by `StreamOffsetV1` / `consumer_read_ordinal`, never by connection state.
+- Consumers resume by `StreamOffset` / `consumer_read_ordinal`, never by connection state.
 - Stream liveness is bound to the durable `AgentFingerprint` of the producer; every place a stream
   identity crosses a boundary checks it (`validate_forwarded_mapping`, producer-side
   `CorruptHistory` checks). Reject mismatches rather than reattaching to a recreated agent.

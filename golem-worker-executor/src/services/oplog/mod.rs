@@ -24,8 +24,8 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -234,17 +234,6 @@ pub trait OplogService: Debug + Send + Sync {
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String>;
 
-    /// Uploads an oplog payload regardless of the configured inline threshold.
-    async fn upload_raw_payload_external(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        data: Vec<u8>,
-    ) -> Result<RawOplogPayload, String> {
-        self.upload_raw_payload(owned_agent_id, agent_mode, data)
-            .await
-    }
-
     /// Downloads a big oplog payload by its reference
     async fn download_raw_payload(
         &self,
@@ -450,11 +439,11 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
-    Items(Option<OplogIndex>, StreamItemsRecordV1),
-    End(Option<OplogIndex>, StreamEndRecordV1),
-    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
-    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
+    Registered(Option<OplogIndex>, StreamRegisteredRecord),
+    Items(Option<OplogIndex>, StreamItemsRecord),
+    End(Option<OplogIndex>, StreamEndRecord),
+    Cancel(Option<OplogIndex>, StreamCancelRecord),
+    Session(Option<OplogIndex>, Box<StreamSessionRecord>),
     InlineEntry(OplogEntry),
 }
 
@@ -498,29 +487,6 @@ impl DurableStreamOplogRecord {
         }
     }
 
-    fn into_external_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
-        match self {
-            Self::Registered(attribution, _) => Ok(OplogEntry::stream_registered(
-                attribution,
-                raw.into_payload()?,
-            )),
-            Self::Items(attribution, _) => {
-                Ok(OplogEntry::stream_items(attribution, raw.into_payload()?))
-            }
-            Self::End(attribution, _) => {
-                Ok(OplogEntry::stream_end(attribution, raw.into_payload()?))
-            }
-            Self::Cancel(attribution, _) => {
-                Ok(OplogEntry::stream_cancel(attribution, raw.into_payload()?))
-            }
-            Self::Session(attribution, record) => Ok(OplogEntry::stream_session(
-                attribution,
-                raw.into_payload_with_cache(Arc::from(record))?,
-            )),
-            Self::InlineEntry(entry) => Ok(entry),
-        }
-    }
-
     pub fn into_inline_entry(self) -> OplogEntry {
         match self {
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
@@ -549,8 +515,6 @@ impl DurableStreamOplogRecord {
 
 pub type DurableStreamBatchBuilder =
     Box<dyn FnOnce(OplogIndex) -> Vec<DurableStreamOplogRecord> + Send>;
-pub type DurableStreamBatchIterBuilder =
-    Box<dyn FnOnce(OplogIndex) -> Box<dyn Iterator<Item = DurableStreamOplogRecord> + Send> + Send>;
 
 pub type ReservedRawStartBuilder =
     Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>;
@@ -614,27 +578,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
         Ok(result)
     }
 
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let first_index = self.current_oplog_index().await.next();
-        let records = make_batch(first_index);
-        let mut result = Vec::new();
-        for record in records {
-            let expected_index = result
-                .last()
-                .map_or(first_index, |(index, _): &(OplogIndex, OplogEntry)| {
-                    index.next()
-                });
-            let entry = record.into_inline_entry();
-            let index = self.add(entry.clone()).await;
-            assert_eq!(index, expected_index);
-            result.push((index, entry));
-        }
-        Ok(result)
-    }
-
     /// A variant of add that can inject failures in tests. TO BE REMOVED
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.add(entry).await;
@@ -658,7 +601,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// through the returned watermark; storage failures must not be reported as absence.
     async fn raw_durable_stream_session_status(
         &self,
-        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> RawDurableStreamSessionStatus {
         RawDurableStreamSessionStatus {
             watermark: self.current_oplog_index().await,

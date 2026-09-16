@@ -370,15 +370,19 @@ impl IndexedStorage for SqliteIndexedStorage {
         let result = self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    let target_exists: (bool,) = tx
-                        .fetch_one_as(
-                            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);")
+                    // Acquire the write lock before reading the stage. A read-first
+                    // transaction cannot upgrade its snapshot after a concurrent write.
+                    let claimed = tx
+                        .execute(
+                            sqlx::query("INSERT INTO index_storage (namespace, key, id, value) SELECT ?, ?, 0, x'' WHERE NOT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);")
+                                .bind(format!("{target_namespace}-present"))
+                                .bind(&target_key)
                                 .bind(&target_namespace)
                                 .bind(format!("{target_namespace}-present"))
                                 .bind(&target_key),
                         )
                         .await?;
-                    if target_exists.0 {
+                    if claimed.rows_affected() == 0 {
                         return Ok(false);
                     }
                     let stage: (i64, Option<i64>, Option<i64>) = tx
@@ -391,9 +395,6 @@ impl IndexedStorage for SqliteIndexedStorage {
                     if stage != (expected, Some(1), Some(expected)) {
                         return Err(RepoError::InternalError(anyhow::anyhow!("staged oplog is missing, empty, gapped, or has an unexpected tip")));
                     }
-                    tx.execute(sqlx::query(
-                        "INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'');")
-                        .bind(format!("{target_namespace}-present")).bind(&target_key)).await?;
                     tx.execute(
                         sqlx::query("UPDATE index_storage SET namespace = ?, key = ? WHERE namespace = ? AND key = ?;")
                             .bind(&target_namespace)
@@ -611,6 +612,85 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    #[test]
+    async fn staged_publication_serializes_independent_sqlite_connections() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let database = tempdir
+            .path()
+            .join("indexed.db")
+            .to_string_lossy()
+            .into_owned();
+        let mut stores = Vec::new();
+        for _ in 0..8 {
+            stores.push(sqlite_storage(database.clone()).await);
+        }
+        let agent = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "publication-contention".into(),
+        };
+        let mode = AgentMode::Durable;
+        let staged = IndexedStorageNamespace::StagedOpLog {
+            agent_id: agent.clone(),
+            agent_mode: mode,
+        };
+        let visible = IndexedStorageNamespace::OpLog {
+            agent_id: agent.clone(),
+            agent_mode: mode,
+        };
+        for same_target in [true, false] {
+            let mut requests = Vec::new();
+            for (index, store) in stores.iter().enumerate() {
+                let stage = format!("stage-{same_target}-{index}");
+                let target = format!(
+                    "target-{same_target}-{}",
+                    if same_target { 0 } else { index }
+                );
+                store
+                    .append(
+                        "test",
+                        "stage",
+                        "entry",
+                        staged.clone(),
+                        &stage,
+                        1,
+                        vec![index as u8],
+                    )
+                    .await
+                    .unwrap();
+                requests.push((store, stage, target));
+            }
+            let results =
+                futures::future::join_all(requests.iter().map(|(store, stage, target)| {
+                    store.publish_staged("test", "publish", &agent, mode, stage, target, 1)
+                }))
+                .await;
+            let mut winners = 0;
+            for (index, (result, (store, stage, target))) in
+                results.into_iter().zip(&requests).enumerate()
+            {
+                if result.unwrap() {
+                    winners += 1;
+                    assert_eq!(
+                        store
+                            .read("test", "read", "entry", visible.clone(), target, 1, 1)
+                            .await
+                            .unwrap(),
+                        vec![(1, vec![index as u8])]
+                    );
+                } else {
+                    assert_eq!(
+                        store
+                            .read("test", "read", "entry", staged.clone(), stage, 1, 1)
+                            .await
+                            .unwrap(),
+                        vec![(1, vec![index as u8])]
+                    );
+                }
+            }
+            assert_eq!(winners, if same_target { 1 } else { stores.len() });
+        }
     }
 
     #[test]

@@ -14,11 +14,12 @@
 
 mod invocation;
 mod invocation_session;
+mod stream_slots;
 
+pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
 
 use crate::durable_host::agent_monomorphization_context;
-use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
@@ -26,19 +27,20 @@ use crate::model::public_oplog::{
 use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
 use crate::services::rpc::DurableStreamReadError;
+use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::{ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode};
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
-use crate::worker::{Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
@@ -65,7 +67,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     resolve_revert_last_invocations_response,
 };
 use golem_common::base_model::durable_stream::{
-    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -76,15 +78,17 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
+    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome,
+    ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -93,6 +97,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
+use prost::Message;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -116,6 +121,9 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    /// Same arrangement for the assignment-changed hook: the shard manager service holds a Weak
+    /// to it (see `GrpcShardManagerService::assignment_changed_hook`); this is the strong one.
+    _assignment_changed_hook: ShardAssignmentChangedHook,
     ctx: PhantomData<Ctx>,
 }
 
@@ -126,6 +134,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self {
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
+            _assignment_changed_hook: self._assignment_changed_hook.clone(),
             ctx: PhantomData,
         }
     }
@@ -159,13 +168,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         lazy_worker_activator.set(worker_activator.clone());
 
+        // A re-registration after `LeaseNotFound`, and a renewal that corrected the set, must
+        // announce the new assignment exactly as this function and `assign_shards_internal` do.
+        // The renewal loop cannot name `Ctx`, so it is handed this hook — installed before
+        // `register`, which is what starts that loop.
+        let hook_services = services.clone();
+        let assignment_changed_hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let services = hook_services.clone();
+            Box::pin(async move { Self::apply_shard_assignment_effects(&services).await })
+        });
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
             _worker_activator: worker_activator,
+            _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,
         };
 
         info!(port, "Registering worker executor");
+
+        worker_executor
+            .shard_manager_service()
+            .set_assignment_changed_hook(&assignment_changed_hook);
 
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
@@ -173,14 +197,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .register(port, pod_name)
             .await?;
 
-        info!(
-            "Received initial shard assignment (n_shards={}, assigned_shards={:?})",
-            shard_assignment.number_of_shards, shard_assignment.shard_ids
-        );
+        info!(assignment = %shard_assignment, "Received initial shard assignment");
 
         worker_executor.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
+            shard_assignment.revision,
         );
 
         // Deliberately fatal to startup, unlike the same failure on a running executor.
@@ -193,7 +216,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // That is the whole reason the same storage failure is *not* fatal once agents are running:
         // there, aborting would force every one of them to replay from oplog or snapshot, which is
         // far more expensive than stalling through a failover that resolves in tens of seconds.
-        Ctx::on_shard_assignment_changed(&worker_executor)
+        Self::apply_shard_assignment_effects(&worker_executor)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
 
@@ -209,33 +232,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         agent_mode: AgentMode,
         status: &AgentStatusRecord,
     ) -> Result<(), WorkerExecutorError> {
-        match &status.status {
-            AgentStatus::Failed => {
-                let error_and_retry_count =
-                    Ctx::get_last_error_and_retry_count(self, owned_agent_id, agent_mode, status)
-                        .await;
-                if let Some(last_error) = error_and_retry_count {
-                    Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    })
-                } else {
-                    // TODO: In what cases can we reach here?
-                    Err(WorkerExecutorError::runtime(
-                        "Previous invocation failed, but failed to get error details",
-                    ))
-                }
-            }
-            AgentStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
-            _ => Ok(()),
-        }
+        Worker::<Ctx>::ensure_not_failed(self, owned_agent_id, agent_mode, status).await
     }
 
+    /// The single ownership check behind every inbound `WorkerExecutor` RPC
+    /// that names an agent. Every one of those is an ADMISSION decision — there
+    /// is no remote fallback, rejecting is the only outcome — so this is where
+    /// the self-fence goes.
     fn ensure_worker_belongs_to_this_executor(
         &self,
         agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
-        self.shard_service().check_worker(agent_id.as_ref())
+        self.shard_service().check_admission(agent_id.as_ref())
     }
 
     /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
@@ -510,31 +518,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "export stream control requires a system caller and no attachment fields",
                 ));
             }
-            let result = if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-                .await?
-                .is_none()
-            {
-                golem_api_grpc::proto::golem::workerexecutor::v1::ExportStreamControlResult::NotFound
-            } else {
-                Worker::get_or_create_suspended(
-                    self,
-                    &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
-                )
-                .await?
-                .control_export_stream(control)
-                .await?
-            };
+            let result =
+                match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
+                    Some(worker) => worker.control_export_stream(control.into()).await?,
+                    None => DomainExportResult::NotFound,
+                };
+            let result = golem::workerexecutor::v1::ExportStreamControlResult::from(result);
             return Ok(
                 durable_stream_attachment_control_response::Result::ExportResult(result.into()),
             );
         }
-        let control: StreamAttachmentControlRequestV1 =
+        let control: StreamAttachmentControlRequest =
             golem_common::serialization::deserialize(&request.payload)
                 .map_err(WorkerExecutorError::invalid_request)?;
         let consumer_agent_id: AgentId = request
@@ -574,20 +568,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "durable stream attachment target does not match the routed worker",
             ));
         }
-        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &owned_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await?;
         worker
             .control_durable_stream_attachment(control)
             .await
@@ -615,11 +598,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .into());
         }
-        let read: DurableStreamReadRequestV1 =
+        let read: DurableStreamReadRequest =
             golem_common::serialization::deserialize(&request.payload)
                 .map_err(WorkerExecutorError::invalid_request)?;
         match &read {
-            DurableStreamReadRequestV1::AttachedConsumer(read) => {
+            DurableStreamReadRequest::AttachedConsumer(read) => {
                 let consumer_agent_id: AgentId = request
                     .consumer_agent_id
                     .ok_or_else(|| {
@@ -657,7 +640,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .into());
                 }
             }
-            DurableStreamReadRequestV1::AuthorizedExport(read) => {
+            DurableStreamReadRequest::AuthorizedExport(read) => {
                 auth_ctx
                     .authorize_system_only("read authorized durable stream export")
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
@@ -679,28 +662,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
         }
-        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &owned_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await?;
         match read {
-            DurableStreamReadRequestV1::AttachedConsumer(read) => {
+            DurableStreamReadRequest::AttachedConsumer(read) => {
                 let events = worker.read_durable_stream_segment(*read).await?;
                 golem_common::serialization::serialize(&events)
                     .map_err(WorkerExecutorError::runtime)
                     .map_err(Into::into)
             }
-            DurableStreamReadRequestV1::AuthorizedExport(read) => {
+            DurableStreamReadRequest::AuthorizedExport(read) => {
                 worker.read_durable_stream_by_handle(*read).await
             }
         }
@@ -719,27 +691,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         auth_ctx
             .authorize_system_only("access authorized Durable Streams slot")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        Worker::<Ctx>::get_latest_metadata(&self.services, owned_agent_id)
+        Worker::<Ctx>::find_durable_stream_worker(self, owned_agent_id)
             .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        Worker::get_or_create_suspended(
-            self,
-            owned_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
     }
 
     async fn create_stream_session_internal(
         &self,
-        mut request: golem::worker::InvocationStart,
+        request: golem::worker::InvocationStart,
     ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
-        use prost::Message;
         let auth: AuthCtx = request
             .auth_ctx
             .clone()
@@ -770,25 +730,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
-        let producer = worker.durable_stream_producer().await?;
-        let pinned = producer
-            .with_metadata_activity(worker.prepared_stream_session(&key))
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-        if pinned.is_none() {
-            let status = worker.get_last_known_status().await;
-            if worker.agent_mode() != AgentMode::Ephemeral {
-                self.ensure_not_failed(&id, worker.agent_mode(), &status)
-                    .await?;
-            }
-        }
-        let revision = match &pinned {
-            Some(prepared) => prepared.attempt.invocation.target_component_revision,
-            None => worker.get_last_known_status().await.component_revision,
-        };
-        let component = self
+        let revision = worker.stream_session_revision(&key).await?;
+        let component = worker
             .component_service()
-            .get_metadata(id.component_id(), Some(revision))
+            .get_metadata(worker.component_id(), Some(revision))
             .await?;
         let method_name = request
             .method_name
@@ -801,7 +746,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let input_len = proto_input.encoded_len();
         let input =
             decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
-        let parsed = ParsedAgentId::parse(&id.agent_id.agent_id, &component.metadata)
+        let parsed = ParsedAgentId::parse(&worker.agent_id().agent_id, &component.metadata)
             .map_err(WorkerExecutorError::invalid_request)?;
         if !crate::worker::invocation::validate_agent_method_invocation(
             &component.metadata,
@@ -813,6 +758,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "Durable Streams requires a streaming method",
             ));
         }
+        let mut request = request;
         request.attempt_id = Some(uuid::Uuid::new_v4().into());
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
@@ -820,10 +766,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             idempotency_key: key.clone(),
             method_name,
             input,
-            invocation_context: self.limit_invocation_context_stack_depth(
-                from_proto_invocation_context(&request.context),
-            ),
-            principal: extract_principal(&request.principal),
+            invocation_context: from_proto_invocation_context(&request.context)
+                .limit_depth(worker.config().limits.max_invocation_context_stack_depth),
+            principal: request.principal(),
             scope_card: request
                 .scope_card
                 .clone()
@@ -832,7 +777,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .map_err(WorkerExecutorError::permission_denied)?,
         };
         let (committed, _receipt) = tokio::sync::oneshot::channel();
-        let invocation = build_durable_streaming_request(
+        let domain_request = build_durable_streaming_request(
             &request,
             &component.metadata,
             revision,
@@ -840,20 +785,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             invocation,
             input_len,
             committed,
-            self.services
+            worker
                 .config()
                 .limits
                 .live_stream_event_broadcast_capacity
                 .get(),
         )?;
-        let acceptance = worker
-            .accept_durable_stream_slot_invocation(invocation)
-            .await?;
-        Ok(golem::workerexecutor::v1::CreateStreamSessionSuccess {
-            session: key.value,
-            replayed: acceptance.replayed,
-            component_revision: revision.into(),
-        })
+        let result = worker.create_stream_session(domain_request).await?;
+        Ok(result.into())
     }
 
     async fn fork_worker_internal(
@@ -1202,7 +1141,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
-            Some((worker.agent_mode(), worker.get_last_known_status().await))
+            if worker.pending_startup_attempt().is_some() {
+                None
+            } else {
+                Some((worker.agent_mode(), worker.get_last_known_status().await))
+            }
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
                 .await?
@@ -1242,8 +1185,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
+        let revision = ShardLeaseRevision(request.revision);
 
-        self.shard_service().revoke_shards(&shard_ids)?;
+        if let ShardDeliveryOutcome::Stale { delivered, applied } =
+            self.shard_service().revoke_shards(&shard_ids, revision)?
+        {
+            // A newer delivery has already been applied and its set is the
+            // authority; taking shards out of it would be acting on stale news.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring a RevokeShards older than the last delivery applied"
+            );
+            return Ok(());
+        }
 
         for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err() {
@@ -1256,44 +1211,92 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    /// Full replace: the request carries this executor's complete shard set
+    /// with epochs and the cluster's shard count. Anything absent from the
+    /// set is dropped, and any agent whose shard went away is restarted.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let proto_shard_ids = request.shard_ids;
+        let shard_epochs: HashMap<ShardId, ShardEpoch> =
+            shard_epochs_from_proto(request.shard_epochs)
+                .map_err(WorkerExecutorError::invalid_request)?;
 
-        let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
+        let number_of_shards: usize = request
+            .number_of_shards
+            .try_into()
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
 
-        self.shard_service().assign_shards(&shard_ids)?;
-        Ctx::on_shard_assignment_changed(self).await?;
+        // `ShardId::from_agent_id` divides by it.
+        if number_of_shards == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "AssignShardsRequest.number_of_shards must not be 0",
+            ));
+        }
 
+        let revision = ShardLeaseRevision(request.revision);
+        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+            .shard_service()
+            .assign_shards(number_of_shards, &shard_epochs, revision)?
+        {
+            // Crossed on the network with a newer delivery, which has already
+            // been applied; applying this one would put the older set back.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring an AssignShards push older than the last delivery applied"
+            );
+            return Ok(());
+        }
+
+        Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
-    async fn set_shard_assignment_internal(
-        &self,
-        request: golem::workerexecutor::v1::SetShardAssignmentRequest,
-    ) -> Result<(), WorkerExecutorError> {
-        let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
-        let number_of_shards = request
-            .number_of_shards
-            .try_into()
-            .map_err(|_| WorkerExecutorError::runtime("Invalid number of shards"))?;
+    /// The one receipt path for a delivered shard set, whichever way it came:
+    /// a registration, an `AssignShards` push, or a renewal reply that
+    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// the executor the new set to recover agents for. The sweep runs for
+    /// every path, because a renewal can narrow the set as well as widen it:
+    /// a path without it would leave agents running on shards this executor
+    /// no longer owns. The recovery runs only under a live lease: a fenced
+    /// executor starts nothing, so a push that lands after the local lease
+    /// lapsed - the first one after a manager outage does - reports the
+    /// recovery deferred, and the grant that revives the lease runs it.
+    ///
+    /// The owed-recovery ticket is taken here, before anything runs, and handed
+    /// back only after a recovery ran, so the startup registration and the push
+    /// cannot disagree about it and a grant that revives the lease meanwhile
+    /// cannot find nothing owed. An error keeps it owed, which is what a retry
+    /// needs, and an attempt that completes after a newer delivery deferred its
+    /// own does not retire that one. One run more than needed is idempotent.
+    pub(crate) async fn apply_shard_assignment_effects<T>(
+        this: &T,
+    ) -> Result<RecoveryOutcome, anyhow::Error>
+    where
+        T: HasAll<Ctx> + Send + Sync + 'static,
+    {
+        let ticket = this.shard_manager_service().recovery_deferred();
 
-        self.shard_service()
-            .set_shard_assignment(number_of_shards, &shard_ids)?;
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err() {
+        // Pure set membership on purpose: a lapsed lease must not restart every
+        // running agent: a lapsed lease refuses new work and leaves running work alone.
+        for (agent_id, worker_details) in this.active_agents().snapshot().await {
+            if this.shard_service().check_worker(&agent_id).is_err() {
                 worker_details
                     .interrupt_and_retire(InterruptKind::Restart)
                     .await?;
             }
         }
 
-        Ctx::on_shard_assignment_changed(self).await?;
-
-        Ok(())
+        if !this.shard_service().is_ready() {
+            tracing::info!(
+                "Shard lease has lapsed; agents for the delivered set are recovered once it is renewed"
+            );
+            return Ok(RecoveryOutcome::DeferredUntilLeaseIsLive);
+        }
+        Ctx::on_shard_assignment_changed(this).await?;
+        this.shard_manager_service().recovery_succeeded(ticket);
+        Ok(RecoveryOutcome::Recovered)
     }
 
     async fn get_agent_metadata_internal(
@@ -2150,6 +2153,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             created_at: Some(metadata.created_at.into()),
             last_error: last_error_and_retry_count
                 .map(|last_error| last_error.error.to_string(&last_error.stderr)),
+            last_error_kind: latest_status.last_error_kind.map(|kind| match kind {
+                OplogErrorKind::Invocation => golem::worker::OplogErrorKind::Invocation as i32,
+                OplogErrorKind::Recovery => golem::worker::OplogErrorKind::Recovery as i32,
+            }),
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
@@ -2421,42 +2428,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
                             golem::workerexecutor::v1::assign_shards_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn set_shard_assignment(
-        &self,
-        request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!("set_shard_assignment",);
-
-        match self
-            .set_shard_assignment_internal(request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::SetShardAssignmentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::SetShardAssignmentResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),
@@ -3162,11 +3133,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Err(error) => Err(error),
         };
         let result = match worker {
-            Ok(worker) => worker.read_stream_slot(request).await,
+            Ok(worker) => match request.try_into() {
+                Ok(request) => worker.read_stream_slot(request).await,
+                Err(error) => Err(DurableStreamReadError::Other(error)),
+            },
             Err(error) => Err(error.into()),
         };
         let result = match result {
-            Ok(Some(value)) => Outcome::Success(value),
+            Ok(Some(value)) => Outcome::Success(value.into()),
             Ok(None) => Outcome::NotFound(golem::common::Empty {}),
             Err(DurableStreamReadError::Other(error)) => Outcome::Failure(error.into()),
             Err(DurableStreamReadError::Unavailable) => {
@@ -3189,10 +3163,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let result = async {
             let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-            self.stream_slot_worker(&id, request.auth_ctx.clone())
+            let auth_ctx = request.auth_ctx.clone();
+            let outcome = self
+                .stream_slot_worker(&id, auth_ctx)
                 .await?
-                .append_to_stream_slot(request)
-                .await
+                .append_to_stream_slot(request.into())
+                .await?;
+            Ok::<_, WorkerExecutorError>(AppendToStreamSlotResponse::from(outcome))
         }
         .await;
         Ok(Response::new(result.unwrap_or_else(|error| {

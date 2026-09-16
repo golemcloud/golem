@@ -322,6 +322,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
+      - uses: actions/setup-node@v5
+        if: ${{ matrix.group.name == 'integration-tests-group10' || matrix.group.name == 'integration-tests-group11' }}
+        with:
+          node-version: 'lts/*'
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -360,6 +364,7 @@ jobs:
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
       - build-and-store
+      - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
@@ -461,6 +466,20 @@ jobs:
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
+      - name: Restore built Effect SDK
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install Effect SDK dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
@@ -498,70 +517,6 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  it-cli-prebuilt-components:
-    env:
-      CARGO_BUILD_JOBS: 10
-      GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
-    runs-on: blacksmith-32vcpu-ubuntu-2204
-    needs:
-      - build-and-store
-      - build-cli-test-bins
-      - merge-test-components
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - uses: ./.github/actions/setup-rust
-        with:
-          use-cache: 'false'
-          install-cargo-binstall: 'true'
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.49.0
-        with:
-          redis-version: latest
-          auto-start: false
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 'lts/*'
-      - uses: ./.github/actions/restore-binaries
-        with:
-          run-id: ${{ github.run_id }}
-          copy-to-target: 'true'
-      - name: Restore CLI test binaries
-        uses: actions/cache/restore@v5
-        with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
-      - name: Install CLI test binaries
-        run: |
-          mkdir -pv target/dev-release-ci
-          cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
-          chmod +x target/dev-release-ci/*
-      - uses: ./.github/actions/restore-test-components
-        with:
-          run-id: ${{ github.run_id }}
-      - name: Run CLI tests with prebuilt components
-        env:
-          QUIET: true
-          GOLEM_CLI_TEST_SERVER_LOG_DIR: ${{ github.workspace }}/tmp/golem-cli-test-server-logs
-        run: cargo make --profile ci cli-integration-tests-prebuilt-components
-        timeout-minutes: 30
-      - name: Upload golem server logs
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: 'cli-integration-tests-prebuilt-components-server-logs-attempt${{ github.run_attempt }}'
-          path: tmp/golem-cli-test-server-logs
-          if-no-files-found: ignore
-          retention-days: 7
-      - uses: ./.github/actions/publish-test-report
-        if: always()
-        with:
-          artifact-name: 'cli-integration-tests-prebuilt-components-report'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
   consolidate-test-reports:
     name: consolidate-test-reports
     if: ${{ always() }}
@@ -571,7 +526,6 @@ jobs:
       - worker-tests
       - it
       - it-cli
-      - it-cli-prebuilt-components
     steps:
       - name: Download test reports for this attempt
         uses: actions/download-artifact@v8
@@ -959,6 +913,100 @@ jobs:
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
 
+  build-golem-effect:
+    runs-on: blacksmith
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
+      - name: Check code quality
+        working-directory: sdks/effect
+        run: npm run lint
+
+      - name: Check code formatting
+        working-directory: sdks/effect
+        run: npm run format:check
+
+      - name: Typecheck
+        working-directory: sdks/effect
+        run: npm run typecheck
+
+      - name: Build the package and agent template
+        working-directory: sdks/effect
+        run: |
+          npm test
+          npm run build
+          npm run build-agent-template
+          npm run check:dts
+          npm run check:contracts
+          npm run check:artifacts
+          npm run check:package
+
+      - name: Save built Effect SDK for CLI integration tests
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+
+      - name: Upload Effect SDK for Windows package checks
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          if-no-files-found: error
+
+  check-golem-effect-package-windows:
+    runs-on: windows-latest
+    needs: build-golem-effect
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdks/effect/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+      - name: Download built Effect SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: sdks/effect
+      - name: Build package declarations
+        working-directory: sdks/effect
+        run: npm run build
+      - name: Smoke-test cross-platform package tooling
+        working-directory: sdks/effect
+        run: npm run check:package
+
   list-test-component-groups:
     runs-on: blacksmith
     outputs:
@@ -1316,7 +1364,6 @@ jobs:
       - managed-xfs-tests
       - it
       - it-cli
-      - it-cli-prebuilt-components
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20

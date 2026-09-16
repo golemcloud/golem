@@ -210,43 +210,49 @@ pub fn add_agent_method_http_routes(
                 errors
             );
 
+            let behaviour = CallAgentBehaviour {
+                route_mode,
+                base_path_variables: path_segments
+                    .iter()
+                    .filter(|segment| {
+                        matches!(
+                            segment,
+                            PathSegment::Variable { .. } | PathSegment::CatchAll { .. }
+                        )
+                    })
+                    .count() as u32,
+                component_id: implementer.component_id,
+                component_revision: implementer.component_revision,
+                agent_type: agent.type_name.clone(),
+                agent_mode: agent.mode,
+                method_name: agent_method.name.clone(),
+                phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
+                constructor_input: constructor_input.clone(),
+                constructor_parameters: constructor_parameters.clone(),
+                method_input: compiled_input(agent, &agent_method.input_schema),
+                method_parameters,
+                expected_agent_response: compiled_output(agent, &agent_method.output_schema),
+                method_description: Some(agent_method.description.clone()),
+                read_only: agent_method.read_only.clone(),
+            };
             let compiled = UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
                 method: http_endpoint.http_method.clone(),
-                path: path_segments.clone(),
+                path: path_segments,
                 body,
-                behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
-                    route_mode,
-                    base_path_variables: path_segments
-                        .iter()
-                        .filter(|segment| {
-                            matches!(
-                                segment,
-                                PathSegment::Variable { .. } | PathSegment::CatchAll { .. }
-                            )
-                        })
-                        .count() as u32,
-                    component_id: implementer.component_id,
-                    component_revision: implementer.component_revision,
-                    agent_type: agent.type_name.clone(),
-                    agent_mode: agent.mode,
-                    method_name: agent_method.name.clone(),
-                    phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
-                    constructor_input: constructor_input.clone(),
-                    constructor_parameters: constructor_parameters.clone(),
-                    method_input: compiled_input(agent, &agent_method.input_schema),
-                    method_parameters,
-                    expected_agent_response: compiled_output(agent, &agent_method.output_schema),
-                    method_description: Some(agent_method.description.clone()),
-                    read_only: agent_method.read_only.clone(),
-                }),
+                behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
                 security,
                 cors,
             };
 
             if route_mode == AgentRouteMode::DurableStreams {
-                add_durable_stream_route_family(compiled, current_route_id, compiled_routes);
+                add_durable_stream_route_family(
+                    compiled,
+                    behaviour,
+                    current_route_id,
+                    compiled_routes,
+                );
             } else {
                 compiled_routes.push(compiled);
             }
@@ -256,38 +262,37 @@ pub fn add_agent_method_http_routes(
 
 fn add_durable_stream_route_family(
     mut base: UnboundCompiledRoute,
+    behaviour: CallAgentBehaviour,
     current_route_id: &mut i32,
     routes: &mut Vec<UnboundCompiledRoute>,
 ) {
     base.method = HttpMethod::Put(Empty {});
-    let RouteBehaviour::CallAgent(behaviour) = &base.behaviour else {
-        unreachable!("DS routes invoke agents");
-    };
-    let mut path = base.path.clone();
-    path.push(PathSegment::Literal {
+    let mut session_path = base.path.clone();
+    session_path.push(PathSegment::Literal {
         value: "invocations".into(),
     });
-    path.push(PathSegment::Variable {
+    session_path.push(PathSegment::Variable {
         display_name: "session".into(),
     });
-    for stream in [false, true] {
-        if stream {
-            path.push(PathSegment::Literal {
-                value: "streams".into(),
-            });
-            path.push(PathSegment::Variable {
-                display_name: "slot".into(),
-            });
-        }
-        let mut methods = vec![
-            HttpMethod::Put(Empty {}),
-            HttpMethod::Head(Empty {}),
-            HttpMethod::Get(Empty {}),
-            HttpMethod::Delete(Empty {}),
-        ];
-        if stream {
-            methods.push(HttpMethod::Post(Empty {}));
-        }
+    let mut stream_path = session_path.clone();
+    stream_path.push(PathSegment::Literal {
+        value: "streams".into(),
+    });
+    stream_path.push(PathSegment::Variable {
+        display_name: "slot".into(),
+    });
+    let session_methods = vec![
+        HttpMethod::Put(Empty {}),
+        HttpMethod::Head(Empty {}),
+        HttpMethod::Get(Empty {}),
+        HttpMethod::Delete(Empty {}),
+    ];
+    let mut stream_methods = session_methods.clone();
+    stream_methods.push(HttpMethod::Post(Empty {}));
+    for (path, methods) in [
+        (session_path, session_methods),
+        (stream_path, stream_methods),
+    ] {
         for method in methods {
             let route_id = *current_route_id;
             *current_route_id = current_route_id.checked_add(1).unwrap();
@@ -962,6 +967,7 @@ mod tests {
             name: EnvironmentName::try_from("prod").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId(Uuid::new_v4()),

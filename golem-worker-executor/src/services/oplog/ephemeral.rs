@@ -21,9 +21,8 @@ use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
-    IndexedReservedStartBuilder, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
-    PendingUpload, ReservedRawStartBuilder, downcast_oplog,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
@@ -74,10 +73,6 @@ enum EphemeralJob {
         make_batch: DurableStreamBatchBuilder,
         done: tokio::sync::oneshot::Sender<Vec<(OplogIndex, OplogEntry)>>,
     },
-    AddDurableStreamBatchIter {
-        make_batch: DurableStreamBatchIterBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
-    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
@@ -94,11 +89,11 @@ enum EphemeralJob {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
     RawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         done: tokio::sync::oneshot::Sender<RawSessionLookup>,
     },
     CompleteRawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
         status: Result<Option<DurableStreamSessionStatus>, String>,
@@ -230,53 +225,6 @@ impl EphemeralOplog {
                             })
                             .collect();
                         state.maybe_commit().await;
-                        let _ = done.send(result);
-                    }
-                    EphemeralJob::AddDurableStreamBatchIter { make_batch, done } => {
-                        let first_index = state.last_oplog_idx.next();
-                        let mut prepared = Vec::new();
-                        let mut error = None;
-                        for record in make_batch(first_index) {
-                            let bytes = match record.serialize() {
-                                Ok(bytes) => bytes,
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            };
-                            let raw = match actor_primary_service
-                                .upload_raw_payload_external(
-                                    &actor_owned_agent_id,
-                                    agent_mode,
-                                    bytes,
-                                )
-                                .await
-                            {
-                                Ok(raw) => raw,
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            };
-                            match record.into_external_entry(raw) {
-                                Ok(entry) => prepared.push(entry),
-                                Err(err) => {
-                                    error = Some(err);
-                                    break;
-                                }
-                            }
-                        }
-                        let result = if let Some(error) = error {
-                            Err(error)
-                        } else {
-                            let mut result = Vec::with_capacity(prepared.len());
-                            for entry in prepared {
-                                let index = state.push(entry.clone());
-                                result.push((index, entry));
-                            }
-                            state.maybe_commit().await;
-                            Ok(result)
-                        };
                         let _ = done.send(result);
                     }
                     EphemeralJob::AddPair {
@@ -698,15 +646,6 @@ impl Oplog for EphemeralOplog {
             .await)
     }
 
-    async fn add_durable_stream_batch_iter(
-        &self,
-        make_batch: DurableStreamBatchIterBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        record_oplog_call("add_durable_stream_batch_iter");
-        self.run_job(|done| EphemeralJob::AddDurableStreamBatchIter { make_batch, done })
-            .await
-    }
-
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -783,7 +722,7 @@ impl Oplog for EphemeralOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         loop {
             let snapshot = self

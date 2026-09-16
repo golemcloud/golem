@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep, timeout};
 use uuid::Uuid;
 
+#[path = "durable_streams_client.rs"]
+mod reference_client;
+
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(
     #[tagged_as("postgres")]

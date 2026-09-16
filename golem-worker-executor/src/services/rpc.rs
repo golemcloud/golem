@@ -28,9 +28,9 @@ use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, Worke
 use crate::services::{
     HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
-    HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
+    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
+    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
@@ -51,7 +51,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
-    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -161,7 +161,7 @@ pub trait Rpc: Send + Sync {
 
     async fn control_durable_stream_attachment(
         &self,
-        _request: StreamAttachmentControlRequestV1,
+        _request: StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         Err(RpcError::ProtocolError {
@@ -173,7 +173,7 @@ pub trait Rpc: Send + Sync {
 
     async fn read_durable_stream_segment(
         &self,
-        _request: DurableStreamReadRequestV1,
+        _request: DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         Err(RpcError::ProtocolError {
@@ -226,11 +226,11 @@ impl<E> DurableStreamReadError<E> {
     }
 
     pub(crate) fn from_producer(
-        error: crate::durable_host::durable_stream::DurableStreamProducerError,
+        error: crate::durable_host::durable_stream::StreamStoreError,
         map: impl FnOnce(String) -> E,
     ) -> Self {
         match error {
-            crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired => {
+            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired => {
                 Self::Unavailable
             }
             error => Self::Other(map(error.to_string())),
@@ -722,7 +722,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.worker_proxy
@@ -733,7 +733,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn read_durable_stream_segment(
         &self,
-        request: DurableStreamReadRequestV1,
+        request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         self.worker_proxy
@@ -893,6 +893,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     http_connection_pool: Option<HttpConnectionPool>,
@@ -933,6 +934,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
@@ -1151,6 +1153,12 @@ impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DirectWorkerInvocationRpc<Ctx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.native_tool_catalog.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -1186,6 +1194,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         http_connection_pool: Option<HttpConnectionPool>,
@@ -1223,6 +1232,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             resource_limits,
             shutdown_token,
             environment_state_service,
+            native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,
             http_connection_pool,
@@ -1652,7 +1662,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let completion = worker.await_enqueued_invocation(idempotency_key);
         tokio::pin!(result);
         tokio::pin!(completion);
-        let (value, output_mappings) = tokio::select! {
+        let result = tokio::select! {
             result = &mut result => result
                 .map_err(|details| RpcError::RemoteInternalError { details })?,
             output = &mut completion => {
@@ -1673,14 +1683,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             }
         };
         Ok(DurableRpcInvocationResult {
-            value,
-            output_mappings,
+            output_mappings: result.proto_mappings(),
+            value: result.value,
         })
     }
 
     async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         let key = request.operation.key();
@@ -1730,15 +1740,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn read_durable_stream_segment(
         &self,
-        request: DurableStreamReadRequestV1,
+        request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         let producer = match &request {
-            DurableStreamReadRequestV1::AttachedConsumer(request) => OwnedAgentId::new(
+            DurableStreamReadRequest::AttachedConsumer(request) => OwnedAgentId::new(
                 request.attachment.producer_environment_id,
                 &request.attachment.producer,
             ),
-            DurableStreamReadRequestV1::AuthorizedExport(request) => OwnedAgentId::new(
+            DurableStreamReadRequest::AuthorizedExport(request) => OwnedAgentId::new(
                 request.handle.producer_environment_id,
                 &request.handle.producer,
             ),
@@ -1758,7 +1768,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         debug!(producer = %producer, "Routing durable stream segment read within the local shard");
 
         match &request {
-            DurableStreamReadRequestV1::AttachedConsumer(_) => {
+            DurableStreamReadRequest::AttachedConsumer(_) => {
                 self.direct_invocation_auth
                     .check(
                         auth_ctx.actor_account_id(),
@@ -1769,7 +1779,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     )
                     .await?;
             }
-            DurableStreamReadRequestV1::AuthorizedExport(_) => auth_ctx
+            DurableStreamReadRequest::AuthorizedExport(_) => auth_ctx
                 .authorize_system_only("read authorized durable stream export")
                 .map_err(|error| RpcError::Denied {
                     details: error.to_string(),
@@ -1793,7 +1803,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         .await
         .map_err(RpcError::from)?;
         match request {
-            DurableStreamReadRequestV1::AttachedConsumer(request) => {
+            DurableStreamReadRequest::AttachedConsumer(request) => {
                 let events = worker
                     .read_durable_stream_segment(*request)
                     .await
@@ -1803,7 +1813,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .map_err(RpcError::from)
                     .map_err(Into::into)
             }
-            DurableStreamReadRequestV1::AuthorizedExport(request) => worker
+            DurableStreamReadRequest::AuthorizedExport(request) => worker
                 .read_durable_stream_by_handle(*request)
                 .await
                 .map_err(|error| error.map_other(RpcError::from)),

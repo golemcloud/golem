@@ -1,5 +1,6 @@
 use super::claims::{RequestClaimIdentity, StartClaim, recorded_request_payload_matches};
 use super::*;
+use crate::durable_host::PositionalRead;
 #[cfg(feature = "test-utils")]
 use std::pin::Pin;
 
@@ -2673,69 +2674,29 @@ impl ReplayState {
         }
     }
 
-    /// Reads a primary Store's atomic begin without consuming a pending Start belonging to an
-    /// independently running reconstructed Store. Same-Store work must never be waited on here.
-    pub(crate) async fn get_primary_atomic_begin(
+    /// Atomically classifies the next positional read as either an entry or the replay tail.
+    /// A reserved completion-delivery boundary is waited out rather than mistaken for the tail.
+    pub async fn get_oplog_entry_or_replay_end(
         &self,
-    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        let mut bodies = self.historical_reconstruction_bodies();
+    ) -> Result<PositionalRead, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
-            let entry = self
+            let (read, blocked) = self
                 .with_tx(async |tx| {
-                    let mut candidate = None;
-                    let matched = tx
-                        .try_get_oplog_entry(|entry| {
-                            if matches!(entry, OplogEntry::BeginAtomicRegion { .. }) {
-                                true
-                            } else {
-                                candidate = Some(entry.clone());
-                                false
-                            }
-                        })
-                        .await?;
-                    if matched.is_some() {
-                        return Ok(matched);
-                    }
-                    if let Some(entry) = candidate {
-                        let active = bodies.borrow_and_update().clone();
-                        let index = tx.st.replay_buffer.front().unwrap().0;
-                        let mut current = entry.clone();
-                        let mut child = index;
-                        while let OplogEntry::Start {
-                            parent_start_index: Some(parent),
-                            ..
-                        } = current
-                        {
-                            if parent >= child || tx.st.skipped_regions.is_in_deleted_region(parent)
-                            {
-                                break;
-                            }
-                            if active.contains(&parent) {
-                                return Ok(None);
-                            }
-                            current = tx.cursor.oplog.read(parent).await;
-                            child = parent;
-                        }
-                        return Ok(Some((index, entry)));
-                    }
-                    Ok(None)
+                    let entry = tx.try_get_oplog_entry(|_| true).await?;
+                    let read = match entry {
+                        Some((index, entry)) => PositionalRead::Entry(index, entry),
+                        None => PositionalRead::ReplayEnded,
+                    };
+                    Ok((read, tx.blocked_on_completion_delivery))
                 })
                 .await?;
-            if let Some(entry) = entry {
-                return Ok(entry);
+            if !blocked {
+                return Ok(read);
             }
-            if self.is_live() {
-                return Err(self.end_of_replay_error());
-            }
-            tokio::select! {
-                _ = progress => {}
-                changed = bodies.changed() => {
-                    changed.map_err(|_| WorkerExecutorError::runtime("reconstruction body tracker closed"))?;
-                }
-            }
+            progress.await;
         }
     }
 
@@ -2770,11 +2731,11 @@ impl ReplayState {
         }
     }
 
-    /// Reads the next positional entry on an owned task, returning `None` at the replay tail.
-    pub(crate) async fn try_get_oplog_entry_owned(
+    /// Owned-task variant of [`Self::get_oplog_entry_or_replay_end`].
+    pub async fn get_oplog_entry_or_replay_end_owned(
         &self,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.run_owned_cursor_op(|state| async move { state.try_get_oplog_entry(|_| true).await })
+    ) -> Result<PositionalRead, WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move { state.get_oplog_entry_or_replay_end().await })
             .await
     }
 
@@ -3096,6 +3057,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::Suspend { .. }
+        | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
@@ -3114,6 +3076,7 @@ pub(super) fn scope_entry_owner(
             ..
         }
         | OplogEntry::Restart { .. }
+        | OplogEntry::Resumed { .. }
         | OplogEntry::ActivatePlugin { .. }
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }
@@ -3185,6 +3148,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
+        | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
@@ -3200,6 +3164,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }
         | OplogEntry::Restart { .. }
+        | OplogEntry::Resumed { .. }
         | OplogEntry::ActivatePlugin { .. }
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }

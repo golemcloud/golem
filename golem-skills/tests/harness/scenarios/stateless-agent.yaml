@@ -38,6 +38,16 @@ steps:
         agent must expose two externally invokable methods: `to_upper` which takes a
         string and returns it uppercased, and `to_lower` which takes a string and
         returns it lowercased. Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, use Effect v4 and
+        `@golemcloud/effect-golem` to add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh implementation for every invocation with no shared state between calls
+        and no Snapshot state. Its Effect-based handlers must expose two externally
+        invokable methods: `toUpper` which takes a string and returns it uppercased,
+        and `toLower` which takes a string and returns it lowercased. Register the
+        implementation and make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-stateless-agent-rust"
@@ -47,6 +57,8 @@ steps:
         - "golem-stateless-agent-scala"
       moonbit:
         - "golem-stateless-agent-moonbit"
+      effect:
+        - "golem-stateless-agent-effect"
     verify:
       build: true
       deploy: true
@@ -67,6 +79,7 @@ steps:
         ts: "toUpper"
         scala: "toUpper"
         moonbit: "to_upper"
+        effect: "toUpper"
       args: '"hello world"'
     expect:
       result_json:
@@ -81,6 +94,7 @@ steps:
         ts: "toLower"
         scala: "toLower"
         moonbit: "to_lower"
+        effect: "toLower"
       args: '"HELLO WORLD"'
     expect:
       result_json:
