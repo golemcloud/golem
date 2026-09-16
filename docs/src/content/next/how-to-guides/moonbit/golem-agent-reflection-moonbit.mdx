@@ -40,6 +40,20 @@ let result = counter.invoke_json(
 
 For explicit reflected packing, call `add.input.pack_json`, invoke through
 `invoke_value`, await the result, and call the output `SchemaRef::unpack_json`.
+Reflected schema-native constructor and method inputs are checked locally
+against the selected schema graph before opening RPC. Declared native outputs
+are checked after invocation.
+
+Reflected factories accept optional creation-time overrides. Use
+`get_json_with_config(input, entries)` with `ReflectedConfigJsonValue` entries,
+or `get_value_with_config(input, entries)` with `ReflectedConfigValue` entries;
+known and fresh phantom factories provide corresponding `*_with_config`
+methods. The reflected type rejects unknown paths, secret fields, and values
+that do not match their declarations before creating transport. Component
+defaults may satisfy required declarations. The host validates the effective
+config when it creates the worker and supplies secrets. An existing durable
+worker retains its initial config; overrides supplied when reaching its ID do
+not reconfigure it.
 
 For direct values, manually construct the positional record and use a dynamic
 client:
@@ -121,6 +135,11 @@ let exact = @reflection.CallerCodecClient::bind_complete(
   (@schema.type_tag() : @schema.TypeTag[CounterId]),
 )
 ```
+
+`bind_complete_with_config` accepts the same typed override carrier after
+checking the complete identity. A binding-only caller uses `bind_with_config`
+with raw `TypedAgentConfigValue` entries; it has no declarations to validate
+those entries against locally.
 
 For ephemeral contracts, use `ephemeral` for a logical fresh target or
 `ephemeral_phantom` for a known phantom UUID. There is no generic complete

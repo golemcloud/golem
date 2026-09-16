@@ -85,6 +85,8 @@ pub(all) struct CallerCodecClient {
 pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(String, C, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn CallerCodecClient::bind(ParsedAgentId) -> Self raise ReflectError
 pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
+pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::bind_complete_with_config(String, ParsedAgentId, @schema.TypeTag[C], Config) -> Self raise ReflectError
+pub fn CallerCodecClient::bind_with_config(ParsedAgentId, Array[@common.TypedAgentConfigValue]) -> Self raise ReflectError
 pub fn CallerCodecClient::drop(Self) -> Unit
 pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral(String, C) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError

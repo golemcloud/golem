@@ -148,6 +148,24 @@ pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(
 }
 
 ///|
+pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::bind_complete_with_config(
+  type_name : String,
+  agent_id : ParsedAgentId,
+  constructor_type : @schema.TypeTag[C],
+  config : Config,
+) -> CallerCodecClient raise ReflectError {
+  let parts = agent_id.parts()
+  validate_complete_id(type_name, parts, constructor_type)
+  let values = config.typed_values() catch {
+    error =>
+      raise Schema(
+        "failed to encode config overrides: " + agent_error_message(error),
+      )
+  }
+  CallerCodecClient::bind_with_config(agent_id, values)
+}
+
+///|
 fn[C : @schema.FromSchema] validate_complete_id(
   type_name : String,
   parts : ParsedAgentIdParts,
@@ -233,12 +251,22 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecCl
 pub fn CallerCodecClient::bind(
   agent_id : ParsedAgentId,
 ) -> CallerCodecClient raise ReflectError {
+  CallerCodecClient::bind_with_config(agent_id, [])
+}
+
+///|
+/// Raw typed entries are accepted without declaration-aware validation.
+pub fn CallerCodecClient::bind_with_config(
+  agent_id : ParsedAgentId,
+  config : Array[@common.TypedAgentConfigValue],
+) -> CallerCodecClient raise ReflectError {
   let parts = agent_id.parts()
   {
-    transport: Transport::create(
+    transport: Transport::create_with_config(
       parts.type_name,
       parts.constructor_value,
       parts.phantom_id,
+      config,
     ),
     reusable_identity: Some(agent_id),
   }
