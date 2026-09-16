@@ -2554,9 +2554,10 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
+    use super::{DurableStreamConfig, GolemConfig, InvocationResultsConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
+    use std::time::Duration;
     use test_r::test;
 
     #[test]

@@ -1154,7 +1154,10 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   production gRPC/client round trip, denied contexts, stale feedback and a peer
   takeover that cannot restart the refresh budget. Bug-finder run 1 returned
   **no bugs found**, clean terminal with no checkpoint. Registry binary build and
-  scoped config regeneration passed. Consumer regression validation is ongoing.
+  scoped config regeneration passed. Consumer regressions: **147 executor tests**,
+  **153 worker-service tests** and **83 import tests** passed. Disk-full compilation
+  was recovered by removing obsolete build artifacts. The new executor deadline
+  test initially lacked two imports; its corrected version passed in that run.
 - Remaining step-4 work: discovery/bridge consumption of resource-401 feedback
   and metadata-cache invalidation; provider fixtures and combined validation.
   The coordinator is an intermediate checkpoint, not completion of step 4 or
