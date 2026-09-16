@@ -257,7 +257,7 @@ mod tests {
     impl GrepMiddleware for GrepMiddlewareShape {
         async fn grep(
             &self,
-            underlying: &mut GrepUnderlying,
+            underlying: &GrepUnderlying,
             case_sensitive: bool,
             pattern: String,
             files: Vec<String>,
@@ -273,7 +273,7 @@ mod tests {
     impl GrepMiddleware<RemoteUnderlying> for GrepAdapterShape {
         async fn grep(
             &self,
-            _underlying: &mut RemoteUnderlying,
+            _underlying: &RemoteUnderlying,
             _case_sensitive: bool,
             _pattern: String,
             _files: Vec<String>,
@@ -289,7 +289,7 @@ mod tests {
     impl PrincipalAutoInjectedRoundTripMiddleware for PrincipalMiddlewareShape {
         async fn whoami(
             &self,
-            underlying: &mut PrincipalAutoInjectedRoundTripUnderlying,
+            underlying: &PrincipalAutoInjectedRoundTripUnderlying,
             _principal: golem_rust::tool::Principal,
             name: String,
         ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
@@ -304,7 +304,7 @@ mod tests {
     impl GeneratedNameCollisionToolMiddleware for GeneratedNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedNameCollisionToolUnderlying,
+            proxied: &GeneratedNameCollisionToolUnderlying,
             underlying: String,
             __param_values: String,
             __value: String,
@@ -338,7 +338,7 @@ mod tests {
     impl GeneratedRawNameCollisionToolMiddleware for GeneratedRawNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedRawNameCollisionToolUnderlying,
+            proxied: &GeneratedRawNameCollisionToolUnderlying,
             r#underlying: String,
             r#__param_values: String,
             r#__value: String,
@@ -678,7 +678,7 @@ mod tests {
     impl GitMiddleware for GitMiddlewareShape {
         async fn commit(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             message: String,
             config: BTreeMap<String, String>,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<CommitError>> {
@@ -687,7 +687,7 @@ mod tests {
 
         async fn remote__add(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
             url: String,
@@ -697,7 +697,7 @@ mod tests {
 
         async fn remote__remove(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -712,7 +712,7 @@ mod tests {
     impl OuterMiddleware for OuterMiddlewareShape {
         async fn mid__inner__leaf(
             &self,
-            underlying: &mut OuterUnderlying,
+            underlying: &OuterUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -736,7 +736,7 @@ mod tests {
     impl MiddlewareStreamSurfaceMiddleware for MiddlewareStreamShape {
         async fn copy(
             &self,
-            underlying: &mut MiddlewareStreamSurfaceUnderlying,
+            underlying: &MiddlewareStreamSurfaceUnderlying,
             input: golem_rust::tool::InputStream,
         ) -> Result<
             (String, golem_rust::tool::InputStream),
@@ -784,7 +784,7 @@ impl Policy {
 impl EchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut EchoUnderlying,
+        underlying: &EchoUnderlying,
         value: String,
     ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
         underlying.echo(value).await
@@ -858,7 +858,7 @@ impl Policy {
 impl EchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut EchoUnderlying,
+        underlying: &EchoUnderlying,
         value: String,
     ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
         underlying.echo(value).await

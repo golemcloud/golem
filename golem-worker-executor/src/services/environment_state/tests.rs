@@ -1,8 +1,7 @@
 use super::{
     CachedToolDeployment, ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache,
-    ToolDiscoveryError, ToolDiscoverySnapshot, ToolDispatchTarget,
-    get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
-    get_tool_activation_from_deployment,
+    ToolDiscoveryError, ToolDiscoverySnapshot, get_accessible_tool_from_snapshot,
+    get_accessible_tools_from_snapshot, get_tool_activation_from_deployment,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
@@ -11,7 +10,10 @@ use golem_common::model::component::{
     InitialAgentFile,
 };
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::entity::{EntityActivationPolicy, ExecutableTarget, FilesystemCapability};
+use golem_common::model::entity::{
+    EntityActivationPolicy, EntityActivationSource, EntityInvocationPlanLayer, ExecutableTarget,
+    FilesystemCapability,
+};
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
@@ -336,8 +338,9 @@ fn component_dispatch_uses_one_pinned_consumer_snapshot() {
     deployment.registered_tools.clear();
     deployment.agent_tool_bindings.clear();
 
-    let ToolDispatchTarget::Component(entity) = activation.into_dispatch_target().unwrap() else {
-        panic!("component source must dispatch through component activation")
+    let plan = activation.runtime_plan().unwrap();
+    let EntityInvocationPlanLayer::Tool { activation: entity } = plan.layer(0).unwrap() else {
+        panic!("component source must produce a component tool leaf")
     };
     assert_eq!(entity.executable_opt(), Some(&expected_executable));
     assert_eq!(entity.deployment_revision(), registered.deployment_revision);
@@ -382,24 +385,35 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
     let expected_revision = deployment.deployment_revision;
 
     let activation = ready_activation(&deployment, &agent_a, &alpha);
-    let ToolDispatchTarget::Host {
+    let plan = activation.runtime_plan().unwrap();
+    let EntityInvocationPlanLayer::Tool {
+        activation: planned_leaf,
+    } = plan.layer(0).unwrap()
+    else {
+        panic!("direct host tool plan must contain a native leaf")
+    };
+    assert!(matches!(
+        planned_leaf.source(),
+        EntityActivationSource::Host { .. }
+    ));
+    let EntityActivationSource::Host {
         host_tool_id: actual_host_tool_id,
         implementation_version: actual_implementation_version,
-        deployment_revision,
-        provision,
-        binding,
-        filesystem,
-    } = activation.into_dispatch_target().unwrap()
+    } = planned_leaf.source()
     else {
-        panic!("host source must dispatch directly without a component activation")
+        panic!("host source must produce a native tool leaf")
     };
-
-    assert_eq!(actual_host_tool_id, host_tool_id);
-    assert_eq!(actual_implementation_version, implementation_version);
-    assert_eq!(deployment_revision, expected_revision);
-    assert_eq!(provision, expected_provision);
-    assert_eq!(*binding, expected_binding);
-    assert_eq!(filesystem, FilesystemCapability::Capable);
+    assert_eq!(actual_host_tool_id, &host_tool_id);
+    assert_eq!(actual_implementation_version, &implementation_version);
+    assert_eq!(planned_leaf.deployment_revision(), expected_revision);
+    assert_eq!(planned_leaf.filesystem(), FilesystemCapability::Capable);
+    assert_eq!(
+        planned_leaf.policy(),
+        &EntityActivationPolicy::Tool {
+            provision: expected_provision,
+            binding: Box::new(expected_binding),
+        }
+    );
 }
 
 #[test]

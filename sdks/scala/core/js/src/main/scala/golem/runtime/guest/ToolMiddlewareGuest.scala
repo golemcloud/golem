@@ -62,6 +62,7 @@ object ToolMiddlewareGuest {
     middlewareName: String,
     toolName: String,
     toolMetadata: JsTool,
+    parameters: JsTypedSchemaValue,
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
@@ -71,7 +72,7 @@ object ToolMiddlewareGuest {
     ToolMiddlewareRegistry.getInvoker(middlewareName) match {
       case None          => rejectToolError(ToolInvokeError.InvalidToolName(middlewareName))
       case Some(invoker) =>
-        decodeInvocation(toolMetadata, input, stdin, principal, wrapped) match {
+        decodeInvocation(toolMetadata, parameters, input, stdin, principal, wrapped) match {
           case Left(error)    => rejectToolError(error)
           case Right(decoded) =>
             val invocation = invoker match {
@@ -83,6 +84,7 @@ object ToolMiddlewareGuest {
                   toolName,
                   commandPath.toList,
                   decoded.input,
+                  decoded.parameters,
                   decoded.stdin,
                   decoded.principal,
                   validateFinalStdout
@@ -93,6 +95,7 @@ object ToolMiddlewareGuest {
                   decoded.wrapped,
                   toolName,
                   decoded.toolMetadata,
+                  decoded.parameters,
                   commandPath.toList,
                   decoded.input,
                   decoded.stdin,
@@ -114,6 +117,7 @@ object ToolMiddlewareGuest {
 
   private final case class DecodedInvocation(
     toolMetadata: golem.tool.wire.WitTool,
+    parameters: golem.schema.TypedSchemaValue,
     input: golem.schema.TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
     principal: golem.Principal,
@@ -122,6 +126,7 @@ object ToolMiddlewareGuest {
 
   private def decodeInvocation(
     toolMetadata: JsTool,
+    parameters: JsTypedSchemaValue,
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
     principal: js.Dynamic,
@@ -131,6 +136,7 @@ object ToolMiddlewareGuest {
       Right(
         DecodedInvocation(
           ToolWireInterop.toolFromJs(toolMetadata),
+          SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(parameters)),
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(input)),
           stdin.toOption.map(new JsMiddlewareInputStream(_)),
           PrincipalConverter.fromJs(principal),
@@ -226,11 +232,12 @@ object ToolMiddlewareGuest {
     js.Dynamic.literal(
       discoverToolMiddlewares = js.Any.fromFunction0(() => discoverToolMiddlewares()),
       getToolMiddleware = js.Any.fromFunction1((name: String) => getToolMiddleware(name)),
-      invokeToolMiddleware = js.Any.fromFunction8(
+      invokeToolMiddleware = js.Any.fromFunction9(
         (
           middlewareName: String,
           toolName: String,
           toolMetadata: JsTool,
+          parameters: JsTypedSchemaValue,
           commandPath: js.Array[String],
           input: JsTypedSchemaValue,
           stdin: js.UndefOr[JsWasiInputStream],
@@ -241,6 +248,7 @@ object ToolMiddlewareGuest {
             middlewareName,
             toolName,
             toolMetadata,
+            parameters,
             commandPath,
             input,
             stdin,

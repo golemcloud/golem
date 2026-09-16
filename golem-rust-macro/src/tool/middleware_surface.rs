@@ -704,7 +704,7 @@ pub fn emit_tool_middleware_leaf(input: TokenStream) -> syn::Result<TokenStream>
         "middleware" => Ok(quote! {
             async fn #method_ident(
                 &self,
-                #underlying_ident: &mut U
+                #underlying_ident: &U
                 #(, #args)*
             ) -> #result_ty;
         }),
@@ -890,7 +890,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 })?;
             let mut #stdin_ident = #invocation_stdin;
             #principal_setup
-            let mut #underlying_ident =
+            let #underlying_ident =
                 <#target as #sdk::tool::ToolUnderlying>::__golem_from_underlying(
                     #invocation_underlying
                 );
@@ -910,7 +910,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 );
             }
             let #result_ident = #instance
-                .#method_ident(&mut #underlying_ident, #(#args),*)
+                .#method_ident(&#underlying_ident, #(#args),*)
                 .await;
             #encode
         }

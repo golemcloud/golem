@@ -58,9 +58,7 @@ use crate::preview2::golem::tool::host::{
     RegisteredTool as WitRegisteredTool, RpcError, StreamWriteError, TypedSchemaValue,
 };
 use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_exports;
-use crate::services::environment_state::{
-    ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
-};
+use crate::services::environment_state::{ToolActivationOutcome, ToolDiscoveryError};
 use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
@@ -79,9 +77,10 @@ use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::component::ComponentName;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationRequestIdentity, InvocationExecutionMode, NamedToolErrorSchema,
-    ToolInputDecodeFailure, ToolInvocationClaimIdentity, ToolInvocationDescriptor,
-    ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity, ToolOutputContract,
+    EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequestIdentity,
+    InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
+    ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
+    ToolInvocationRejectedIdentity, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
@@ -1264,6 +1263,7 @@ struct PreparedToolCall {
     stdin: Option<Resource<ToolStdinEntry>>,
     permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
+    plan: EntityInvocationPlan,
 }
 
 enum ToolCallPreparation {
@@ -1313,14 +1313,15 @@ impl ToolInvocationAttempt {
                 entity: AgentEntity::Tool(self.rpc.tool_name.clone()),
                 calling_principal,
                 call_mode,
-                operation: Some(EntityInvocationDescriptorIdentity::Tool(
+                operation: EntityInvocationDescriptorIdentity::Tool(
                     ToolInvocationDescriptorIdentity {
                         attempt_ordinal: self.attempt_ordinal,
                         command_path: command_path.to_vec(),
                         has_stdin,
                         has_stdout,
                     },
-                )),
+                ),
+                plan_position: None,
                 input,
             }),
             rejected: ToolInvocationRejectedIdentity {
@@ -1622,33 +1623,18 @@ where
         ));
     }
 
-    let activation = match activation_snapshot.into_dispatch_target() {
-        Ok(ToolDispatchTarget::Component(activation)) => Arc::new(activation),
-        Ok(ToolDispatchTarget::Host {
-            host_tool_id,
-            implementation_version,
-            deployment_revision,
-            provision,
-            binding,
-            filesystem,
-        }) => Arc::new(
-            golem_common::model::entity::EntityActivation::new_host(
-                host_tool_id,
-                implementation_version,
-                deployment_revision,
-                golem_common::model::entity::EntityActivationPolicy::Tool { provision, binding },
-                filesystem,
-            )
-            .map_err(|error| anyhow!("invalid host tool activation: {error}"))?,
-        ),
-        Err(error) => {
-            let kind = classify_tool_discovery_error(&error);
-            return Err(anyhow::Error::new(ClassifiedHostError {
-                kind,
-                message: error.to_string(),
-            }));
-        }
-    };
+    let plan = activation_snapshot.runtime_plan().map_err(|error| {
+        anyhow::Error::new(ClassifiedHostError {
+            kind: classify_tool_discovery_error(&error),
+            message: error.to_string(),
+        })
+    })?;
+    let activation = Arc::new(
+        plan.layer(0)
+            .expect("runtime plan is non-empty")
+            .activation()
+            .clone(),
+    );
 
     let target = accessor.with(|mut access| {
         let component = access.get().owner_component_metadata();
@@ -1741,6 +1727,7 @@ where
         stdin,
         permit,
         operation,
+        plan,
     }))
 }
 
@@ -3016,7 +3003,7 @@ where
     let discard_stdout = call_mode == EntityCallMode::FireAndForget
         && matches!(
             durability.operation(),
-            Some(EntityInvocationDescriptor::Tool(descriptor)) if descriptor.declares_stdout
+            EntityInvocationDescriptor::Tool(descriptor) if descriptor.declares_stdout
         );
     let (
         stdin,
@@ -3711,9 +3698,7 @@ where
             }
             ToolInvocationReplayOutcome::Accepted(durability) => {
                 let durability = *durability;
-                let descriptor = durability.operation().cloned().ok_or_else(|| {
-                    anyhow!("recorded tool entity invocation has no operation descriptor")
-                })?;
+                let descriptor = durability.operation().clone();
                 let operation = accessor.with(|mut access| {
                     access.get().owner_execution.tool_operations().create(
                         operation::OwnerToolOperationContext {
@@ -3767,11 +3752,13 @@ where
                 accessor.getter(),
                 context.parent.clone(),
                 context.activation.entity(),
-                context.activation.clone(),
                 context.calling_principal.clone(),
                 context.principal.clone(),
                 context.call_mode,
-                Some(context.descriptor.clone()),
+                context.descriptor.clone(),
+                EntityInvocationPlanReference::Root {
+                    plan: prepared.plan.clone(),
+                },
                 context.input.clone(),
             )
             .await?;

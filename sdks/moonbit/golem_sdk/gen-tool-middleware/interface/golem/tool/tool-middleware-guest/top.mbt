@@ -10,4 +10,4 @@ declare pub fn get_tool_middleware(name : String) -> Result[@common.ToolMiddlewa
 ///|
 /// Invoke one middleware layer around its runtime-bound next inner layer.
 #warnings("-declaration_unimplemented")
-declare pub async fn invoke_tool_middleware(middleware_name : String, tool_name : String, tool_metadata : @common.Tool, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, wrapped : @common.UnderlyingTool, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]
+declare pub async fn invoke_tool_middleware(middleware_name : String, tool_name : String, tool_metadata : @common.Tool, parameters : @types.TypedSchemaValue, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, wrapped : @common.UnderlyingTool, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]

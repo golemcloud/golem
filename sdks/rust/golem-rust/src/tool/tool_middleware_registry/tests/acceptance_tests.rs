@@ -162,6 +162,9 @@ async fn invoke(
         .unwrap_or_else(|| panic!("middleware `{middleware_name}` is registered"))(
         tool_name.to_string(),
         tool,
+        crate::tool::EmptyMiddlewareParameters {}
+            .into_typed_schema_value()
+            .unwrap(),
         command_path,
         input,
         stdin,
@@ -199,7 +202,7 @@ impl AcceptancePolicy {
 impl AcceptanceEchoMiddleware for AcceptancePolicy {
     async fn echo(
         &self,
-        underlying: &mut AcceptanceEchoUnderlying,
+        underlying: &AcceptanceEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
         match value.as_str() {
@@ -460,7 +463,7 @@ impl AdapterPolicy {
 impl AdapterPresentedMiddleware<AdapterBackendUnderlying> for AdapterPolicy {
     async fn convert(
         &self,
-        underlying: &mut AdapterBackendUnderlying,
+        underlying: &AdapterBackendUnderlying,
         value: u32,
     ) -> Result<String, ToolInvokeError<PresentedError>> {
         underlying
@@ -596,7 +599,7 @@ impl NestedTransparent {
 impl NestedPresentedMiddleware for NestedTransparent {
     async fn branch__leaf(
         &self,
-        underlying: &mut NestedPresentedUnderlying,
+        underlying: &NestedPresentedUnderlying,
         count: u32,
         name: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
@@ -619,7 +622,7 @@ impl NestedAdapter {
 impl NestedPresentedMiddleware<AdapterBackendUnderlying> for NestedAdapter {
     async fn branch__leaf(
         &self,
-        underlying: &mut AdapterBackendUnderlying,
+        underlying: &AdapterBackendUnderlying,
         count: u32,
         name: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
@@ -833,7 +836,7 @@ impl StreamPolicy {
 impl StreamToolMiddleware for StreamPolicy {
     async fn copy(
         &self,
-        underlying: &mut StreamToolUnderlying,
+        underlying: &StreamToolUnderlying,
         input: InputStream,
     ) -> Result<(String, InputStream), ToolInvokeError<Infallible>> {
         underlying.copy(input).await
@@ -1012,7 +1015,7 @@ impl CapabilityPolicy {
 impl CapabilityToolMiddleware for CapabilityPolicy {
     async fn carry(
         &self,
-        underlying: &mut CapabilityToolUnderlying,
+        underlying: &CapabilityToolUnderlying,
         capabilities: Vec<(GuestSecretHandle, GuestQuotaTokenHandle)>,
     ) -> Result<(), ToolInvokeError<Infallible>> {
         underlying.carry(capabilities).await

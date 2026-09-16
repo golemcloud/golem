@@ -61,7 +61,10 @@ use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::tool::{
     CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
 };
-use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::schema::{
+    AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph, SchemaValue,
+    TypedSchemaValue,
+};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -4826,6 +4829,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 version: "1.0.0".to_string(),
                 aliases: Vec::new(),
                 doc: Doc::default(),
+                parameter_schema: SchemaGraph::empty(),
                 scope: ToolMiddlewareScope::Universal,
             },
             provision: ToolProvisionConfig::default(),
@@ -5696,6 +5700,7 @@ pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &
         version: "1.0.0".to_string(),
         aliases: vec!["audit".to_string()],
         doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
         scope: ToolMiddlewareScope::Universal,
     };
     let registered = |revision: i64, definition: ToolMiddleware| RegisteredToolMiddleware {
@@ -6183,6 +6188,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             version: "1.0.0".to_string(),
             aliases: vec![format!("{name}-alias")],
             doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
             scope: ToolMiddlewareScope::Universal,
         };
         let registered_middleware = |name: &str| {
@@ -6310,7 +6316,10 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 effective_definition: effective_definition.clone(),
                 occurrences: vec![CompiledToolMiddlewareOccurrence {
                     middleware: published.clone(),
-                    parameters: universal[0].parameters.clone(),
+                    parameters: TypedSchemaValue::new(
+                        published.definition.parameter_schema.clone(),
+                        SchemaValue::Record { fields: Vec::new() },
+                    ),
                     provision: ToolProvisionConfig::default(),
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,

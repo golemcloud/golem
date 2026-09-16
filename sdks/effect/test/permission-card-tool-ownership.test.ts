@@ -39,6 +39,11 @@ const rawIn = (value: Common.SchemaValueTree): RawPermissionCard => {
 }
 
 describe("permission-card ownership across tool boundaries", () => {
+  const emptyParameters = () => {
+    const codec = Effect.runSync(compile(Schema.Struct({})))
+    return { graph: codec.schemaGraph, value: Effect.runSync(codec.encode({})) }
+  }
+
   beforeEach(() => {
     resetTools()
     resetMiddlewares()
@@ -144,6 +149,7 @@ describe("permission-card ownership across tool boundaries", () => {
     )
     typed({
       name: "card-pass",
+      parameters: Schema.Struct({}),
       presented: definition,
       handler: {
         cardMiddleware: ({ payload }, { underlying }) => underlying({ payload }),
@@ -169,6 +175,7 @@ describe("permission-card ownership across tool boundaries", () => {
         "card-pass",
         "card-middleware",
         toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
+        emptyParameters(),
         [],
         { graph: codec.schemaGraph, value: malformed },
         undefined,
@@ -181,6 +188,7 @@ describe("permission-card ownership across tool boundaries", () => {
       "card-pass",
       "card-middleware",
       toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
+      emptyParameters(),
       [],
       { graph: codec.schemaGraph, value: malformed },
       undefined,

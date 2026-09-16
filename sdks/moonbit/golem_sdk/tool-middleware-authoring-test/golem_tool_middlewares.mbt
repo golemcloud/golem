@@ -1771,6 +1771,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       aliases: [],
       doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Universal,
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_universal_tool_middleware_invoke_audit,
   )
@@ -1784,6 +1785,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         presented: __golem_middleware_tool_def_Presented().to_tool(),
         expected: Some(__golem_middleware_tool_def_Presented().to_tool()),
       }),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_Policy,
   )
@@ -1797,6 +1799,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         presented: __golem_middleware_tool_def_Presented().to_tool(),
         expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
       }),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_Adapter,
   )

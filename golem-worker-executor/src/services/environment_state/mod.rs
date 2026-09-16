@@ -20,13 +20,14 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{
-    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
+    ExecutableTarget, FilesystemCapability, ToolMiddlewareName,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess,
-    ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::schema::tool::DiscoveredTool;
@@ -191,19 +192,6 @@ pub enum ToolActivationOutcome {
     NotRegistered,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ToolDispatchTarget {
-    Component(EntityActivation),
-    Host {
-        host_tool_id: HostToolId,
-        implementation_version: String,
-        deployment_revision: golem_common::model::deployment::DeploymentRevision,
-        provision: ToolProvisionConfig,
-        binding: Box<CompiledToolBinding>,
-        filesystem: FilesystemCapability,
-    },
-}
-
 impl ToolActivationSnapshot {
     pub fn registered_tool(&self) -> &RegisteredTool {
         &self.registered_tool
@@ -228,34 +216,93 @@ impl ToolActivationSnapshot {
             .unwrap_or(&self.registered_tool.definition)
     }
 
-    pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, ToolDiscoveryError> {
-        match self.registered_tool.source {
+    /// Materializes the deployment-selected chain into a self-contained durable runtime plan.
+    /// This does not enable middleware dispatch; callers still apply the fail-closed gate.
+    pub fn runtime_plan(&self) -> Result<EntityInvocationPlan, ToolDiscoveryError> {
+        let mut layers = Vec::new();
+        if let Some(chain) = &self.middleware_chain {
+            for occurrence in &chain.occurrences {
+                let golem_common::model::tool_middleware::ToolMiddlewareSource::Component {
+                    component_id,
+                    component_revision,
+                    ..
+                } = &occurrence.middleware.source;
+                let filesystem =
+                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
+                let activation = EntityActivation::new(
+                    ExecutableTarget::new(component_id.clone(), *component_revision),
+                    occurrence.middleware.deployment_revision,
+                    EntityActivationPolicy::ToolMiddleware {
+                        middleware_name: ToolMiddlewareName::try_from(
+                            occurrence.middleware.definition.name.as_str(),
+                        )
+                        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?,
+                        provision: occurrence.provision.clone(),
+                        secret_keys_readable: occurrence.secret_keys_readable.clone(),
+                        secret_keys_revealable: occurrence.secret_keys_revealable.clone(),
+                        filesystem_access: occurrence.filesystem_access,
+                    },
+                    filesystem,
+                )
+                .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?;
+                layers.push(EntityInvocationPlanLayer::Middleware {
+                    activation,
+                    parameters: occurrence.parameters.clone(),
+                    expected_definition: occurrence.expected_definition.clone(),
+                    presented_definition: occurrence.presented_definition.clone(),
+                    next_effective_definition: occurrence.next_effective_definition.clone(),
+                    compatibility: occurrence.compatibility.clone(),
+                });
+            }
+        }
+        let leaf = match &self.registered_tool.source {
             ToolSource::Component {
                 component_id,
                 component_revision,
                 ..
             } => EntityActivation::new(
-                ExecutableTarget::new(component_id, component_revision),
+                ExecutableTarget::new(component_id.clone(), *component_revision),
                 self.registered_tool.deployment_revision,
                 EntityActivationPolicy::Tool {
-                    provision: self.registered_tool.provision,
-                    binding: Box::new(self.binding),
+                    provision: self.registered_tool.provision.clone(),
+                    binding: Box::new(self.binding.clone()),
                 },
                 self.filesystem,
-            )
-            .map(ToolDispatchTarget::Component)
-            .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details }),
+            ),
             ToolSource::Host {
                 host_tool_id,
                 implementation_version,
-            } => Ok(ToolDispatchTarget::Host {
-                host_tool_id,
-                implementation_version,
-                deployment_revision: self.registered_tool.deployment_revision,
-                provision: self.registered_tool.provision,
-                binding: Box::new(self.binding),
-                filesystem: self.filesystem,
-            }),
+            } => EntityActivation::new_host(
+                host_tool_id.clone(),
+                implementation_version.clone(),
+                self.registered_tool.deployment_revision,
+                EntityActivationPolicy::Tool {
+                    provision: self.registered_tool.provision.clone(),
+                    binding: Box::new(self.binding.clone()),
+                },
+                self.filesystem,
+            ),
+        }
+        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?;
+        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+        EntityInvocationPlan::new(layers)
+            .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })
+    }
+}
+
+fn filesystem_capability(
+    access: ToolFilesystemAccess,
+    provision: &ToolProvisionConfig,
+) -> Result<FilesystemCapability, ToolDiscoveryError> {
+    match (access, provision.files.is_empty()) {
+        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+            Ok(FilesystemCapability::Capable)
+        }
+        (ToolFilesystemAccess::Denied, false) => Err(ToolDiscoveryError::InconsistentSnapshot {
+            details: "filesystem-denied middleware cannot provision files".to_string(),
+        }),
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+            Ok(FilesystemCapability::Incapable)
         }
     }
 }

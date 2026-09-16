@@ -17,6 +17,7 @@ pub(all) struct ToolMiddleware {
   aliases : Array[String]
   doc : @toolCommon.Doc
   scope : ToolMiddlewareScope
+  parameter_schema : @model.SchemaGraph
 }
 
 ///|
@@ -55,7 +56,29 @@ fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
         })
       Universal => @toolCommon.ToolMiddlewareScope::Universal
     },
+    parameter_schema: try! @model.schema_graph_to_wit(self.parameter_schema),
   }
+}
+
+///|
+#doc(hidden)
+pub fn empty_parameter_schema() -> @model.SchemaGraph {
+  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::Record([])), }
+}
+
+///|
+fn validate_installation_parameters(
+  declared : @model.SchemaGraph,
+  supplied : @model.TypedSchemaValue,
+) -> Bool {
+  if @model.validate_graph(supplied.graph).length() > 0 ||
+    supplied.graph != declared {
+    return false
+  }
+  if declared == empty_parameter_schema() {
+    return supplied.value is @model.SchemaValue::Record([])
+  }
+  true
 }
 
 ///|
@@ -137,6 +160,7 @@ pub async fn invoke_registered_tool_middleware(
   middleware_name : String,
   tool_name : String,
   tool_metadata : @toolCommon.Tool,
+  parameters : @types.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
@@ -144,9 +168,33 @@ pub async fn invoke_registered_tool_middleware(
   underlying : UnderlyingTool,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let context = underlying.ownership_context()
+  let decoded_parameters = @model_host.typed_schema_value_from_wit(parameters) catch {
+    error =>
+      return Err(
+        @toolCommon.ToolError::InvalidInput(
+          "failed to decode tool middleware parameters: \{Repr(error)}",
+        ),
+      )
+  }
+  context.register_cleanup(fn() {
+    @model.drop_owned_capabilities(decoded_parameters.value)
+  })
   let invocation = RawToolInvocation::from_wit(
-    context, tool_name, tool_metadata, command_path, input, stdin, principal,
+    context, tool_name, tool_metadata, decoded_parameters, command_path, input, stdin,
+    principal,
   )
+  let parameter_schema = match
+    tool_middleware_state.descriptors.get(middleware_name) {
+    Some(middleware) => middleware.parameter_schema
+    None => return Err(@toolCommon.ToolError::InvalidToolName(middleware_name))
+  }
+  if !validate_installation_parameters(parameter_schema, decoded_parameters) {
+    return Err(
+      @toolCommon.ToolError::InvalidInput(
+        "tool middleware parameters do not match the declared parameter schema",
+      ),
+    )
+  }
   let invoker = match tool_middleware_state.invokers.get(middleware_name) {
     Some(invoker) => invoker
     None => return Err(@toolCommon.ToolError::InvalidToolName(middleware_name))

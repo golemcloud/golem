@@ -44,6 +44,7 @@ async function invokeToolMiddleware(
   middlewareName: string,
   toolName: string,
   toolMetadata: Tool,
+  parameters: TypedSchemaValue,
   commandPath: string[],
   input: TypedSchemaValue,
   stdin: AsyncIterable<number> | undefined,
@@ -57,6 +58,7 @@ async function invokeToolMiddleware(
   return await invoke({
     toolName,
     toolMetadata,
+    parameters,
     commandPath,
     input,
     stdin,

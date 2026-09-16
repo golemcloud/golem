@@ -53,6 +53,7 @@ async fn invoke_generated(
     middleware_name,
     "presented",
     generated_presented_tool(middleware_name),
+    empty_parameter_value(),
     command_path,
     input,
     stdin,

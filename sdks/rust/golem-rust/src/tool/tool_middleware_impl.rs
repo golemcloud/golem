@@ -40,6 +40,7 @@ pub(crate) async fn invoke_tool_middleware(
     middleware_name: String,
     tool_name: String,
     tool_metadata: wire::Tool,
+    parameters: crate::schema::wit::wire::TypedSchemaValue,
     command_path: Vec<String>,
     input: crate::schema::wit::wire::TypedSchemaValue,
     stdin: Option<InputStream>,
@@ -52,10 +53,13 @@ pub(crate) async fn invoke_tool_middleware(
         .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
     let input = decode_typed_schema_value_owned(input)
         .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
+    let parameters = decode_typed_schema_value_owned(parameters)
+        .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
 
     match invoker(
         tool_name,
         tool_metadata,
+        parameters,
         command_path,
         input,
         stdin,
@@ -140,6 +144,7 @@ impl crate::golem_tool_middleware::exports::golem::tool::tool_middleware_guest::
         middleware_name: String,
         tool_name: String,
         tool_metadata: wire::Tool,
+        parameters: crate::schema::wit::wire::TypedSchemaValue,
         command_path: Vec<String>,
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<InputStream>,
@@ -150,6 +155,7 @@ impl crate::golem_tool_middleware::exports::golem::tool::tool_middleware_guest::
             middleware_name,
             tool_name,
             tool_metadata,
+            parameters,
             command_path,
             input,
             stdin,
@@ -184,6 +190,7 @@ impl crate::golem_agentic_tool_middleware::exports::golem::tool::tool_middleware
         middleware_name: String,
         tool_name: String,
         tool_metadata: wire::Tool,
+        parameters: crate::schema::wit::wire::TypedSchemaValue,
         command_path: Vec<String>,
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<InputStream>,
@@ -194,6 +201,7 @@ impl crate::golem_agentic_tool_middleware::exports::golem::tool::tool_middleware
             middleware_name,
             tool_name,
             tool_metadata,
+            parameters,
             command_path,
             input,
             stdin,

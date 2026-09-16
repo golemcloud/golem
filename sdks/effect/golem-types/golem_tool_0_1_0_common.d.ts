@@ -426,6 +426,8 @@ declare module 'golem:tool/common@0.1.0' {
     aliases: string[];
     doc: Doc;
     scope: ToolMiddlewareScope;
+    /** Schema of the static configuration supplied for each installation. */
+    parameterSchema: SchemaGraph;
   };
   /**
    * Invocation contract — shared between guest and host.

@@ -214,7 +214,7 @@ pub(all) enum ToolMiddlewareScope {
 } derive(Debug, Eq)
 ///|
 pub(all) struct ToolMiddleware {
-      name : String; version : String; aliases : Array[String]; doc : Doc; scope : ToolMiddlewareScope
+      name : String; version : String; aliases : Array[String]; doc : Doc; scope : ToolMiddlewareScope; parameter_schema : @types.SchemaGraph
 } derive(Debug, Eq)
 ///|
 /// Invocation contract — shared between guest and host.

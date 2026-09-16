@@ -20,13 +20,14 @@ import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool._
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.runtime.guest.ToolMiddlewareGuest
-import golem.schema.{SchemaValue, TypedSchemaValue}
+import golem.schema.{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 import golem.tool.wire.{WitCustomToolError, WitToolError}
 import golem.{FutureInterop, Principal}
 import zio.test._
 import zio.ZIO
+import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -34,12 +35,16 @@ import scala.scalajs.js
 object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
   import ToolTestFixtures._
 
-  private val universalName   = "guest-middleware-universal"
-  private val monomorphicName = "guest-middleware-monomorphic"
-  private val universalTool   = richTool("guest-middleware-tool")
-  private val monomorphicTool = echoTool("guest-middleware-echo")
-  private val anonymous       = js.Dynamic.literal("tag" -> "anonymous")
-  private val noStdin: js.Any = js.undefined.asInstanceOf[js.Any]
+  private val universalName      = "guest-middleware-universal"
+  private val typedUniversalName = "guest-middleware-typed-universal"
+  private val monomorphicName    = "guest-middleware-monomorphic"
+  private val universalTool      = richTool("guest-middleware-tool")
+  private val monomorphicTool    = echoTool("guest-middleware-echo")
+  private val anonymous          = js.Dynamic.literal("tag" -> "anonymous")
+  private val noStdin: js.Any    = js.undefined.asInstanceOf[js.Any]
+
+  private final case class NestedParameters(label: String, nested: NestedParameter) derives Schema
+  private final case class NestedParameter(values: List[Int]) derives Schema
 
   private def guest: js.Dynamic = ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest
 
@@ -48,6 +53,9 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
 
   private def input(value: String): JsTypedSchemaValue =
     SchemaWireInterop.typedToJs(typed(value))
+
+  private val noParameters: JsTypedSchemaValue =
+    SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(ToolMiddleware.noParametersValue))
 
   private lazy val monomorphicInput: JsTypedSchemaValue = {
     val schema = monomorphicTool.canonicalInputRecordSchema(0).toOption.get
@@ -98,11 +106,35 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     underlying: JsUnderlyingTool,
     principal: js.Dynamic = anonymous
   ): js.Promise[JsInvocationResult] =
+    invokeWithParameters(
+      middlewareName,
+      toolName,
+      metadata,
+      noParameters,
+      commandPath,
+      invocationInput,
+      stdin,
+      underlying,
+      principal
+    )
+
+  private def invokeWithParameters(
+    middlewareName: String,
+    toolName: String,
+    metadata: JsTool,
+    parameters: JsTypedSchemaValue,
+    commandPath: js.Array[String],
+    invocationInput: JsTypedSchemaValue,
+    stdin: js.Any,
+    underlying: JsUnderlyingTool,
+    principal: js.Dynamic = anonymous
+  ): js.Promise[JsInvocationResult] =
     guest
       .invokeToolMiddleware(
         middlewareName,
         toolName,
         metadata,
+        parameters,
         commandPath,
         invocationInput,
         stdin,
@@ -113,7 +145,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
 
   private final class ForwardingUniversal extends UniversalToolMiddleware {
     def invoke(
-      invocation: UniversalToolMiddlewareInvocation,
+      invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
       underlying: UniversalToolUnderlying
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
       UniversalCaptured.toolName = invocation.toolName
@@ -127,6 +159,20 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     var toolName: String                              = ""
     var toolMetadata: Option[golem.tool.wire.WitTool] = None
     var principal: Principal                          = Principal.Anonymous
+  }
+
+  private object TypedUniversalCaptured {
+    var parameters: List[NestedParameters] = Nil
+  }
+
+  private final class TypedUniversal extends UniversalToolMiddleware.WithParameters[NestedParameters] {
+    def invoke(
+      invocation: UniversalToolMiddlewareInvocation[NestedParameters],
+      underlying: UniversalToolUnderlying
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
+      TypedUniversalCaptured.parameters = TypedUniversalCaptured.parameters :+ invocation.parameters
+      underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+    }
   }
 
   private object MonomorphicCaptured {
@@ -145,7 +191,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
 
   private final class InvalidStdoutUniversal(stdout: ToolMiddlewareOutputHandle) extends UniversalToolMiddleware {
     def invoke(
-      invocation: UniversalToolMiddlewareInvocation,
+      invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
       underlying: UniversalToolUnderlying
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
       Future.successful(Right(ToolMiddlewareResult(None, Some(stdout))))
@@ -157,11 +203,28 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
         universalName,
         List("universal-alias"),
         Doc("universal summary", "universal description"),
-        ToolMiddlewareScope.Universal
+        ToolMiddlewareScope.Universal,
+        ToolMiddleware.noParametersSchema
       ),
+      _ => Right(ToolMiddleware.NoParameters()),
       () => new ForwardingUniversal
     )
     ToolMiddlewareImplementationRuntime.registerUniversal(universalHandle)
+
+    val parameterCodec = IntoSchema[NestedParameters]
+    ToolMiddlewareImplementationRuntime.registerUniversal(
+      UniversalToolMiddlewareHandle(
+        ToolMiddlewareDescriptor(
+          typedUniversalName,
+          Nil,
+          Doc.empty,
+          ToolMiddlewareScope.Universal,
+          parameterCodec.graph
+        ),
+        value => FromSchema[NestedParameters].fromValue(value.value).left.map(_.message).map(identity[Any]),
+        () => new TypedUniversal
+      )
+    )
 
     val wire    = monomorphicTool.tryToTool.toOption.get
     val schema  = monomorphicTool.canonicalInputRecordSchema(0).toOption.get
@@ -186,7 +249,8 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
             monomorphicName,
             List("monomorphic-alias"),
             Doc("monomorphic summary", "monomorphic description"),
-            ToolMiddlewareScope.Monomorphic(wire, Some(wire))
+            ToolMiddlewareScope.Monomorphic(wire, Some(wire)),
+            ToolMiddleware.noParametersSchema
           )
         ),
       _ => Right(monomorphicTool),
@@ -315,6 +379,76 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           UniversalCaptured.principal == expectedPrincipal
         )
       },
+      test("declared nested parameters are decoded distinctly for successive invocations") {
+        registered
+        TypedUniversalCaptured.parameters = Nil
+        val underlying                          = wrapped((_, value, _) => resolved(JsInvocationResult(value, js.undefined)))
+        def parameters(value: NestedParameters) =
+          SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(IntoSchema[NestedParameters].toTyped(value)))
+        for {
+          _ <- fromPromise(
+                 invokeWithParameters(
+                   typedUniversalName,
+                   universalTool.toolName,
+                   toolToJs(universalTool),
+                   parameters(NestedParameters("first", NestedParameter(List(1, 2)))),
+                   js.Array("run"),
+                   input("one"),
+                   noStdin,
+                   underlying,
+                   anonymous
+                 )
+               )
+          _ <- fromPromise(
+                 invokeWithParameters(
+                   typedUniversalName,
+                   universalTool.toolName,
+                   toolToJs(universalTool),
+                   parameters(NestedParameters("second", NestedParameter(List(8, 13)))),
+                   js.Array("run"),
+                   input("two"),
+                   noStdin,
+                   underlying,
+                   anonymous
+                 )
+               )
+        } yield assertTrue(
+          TypedUniversalCaptured.parameters == List(
+            NestedParameters("first", NestedParameter(List(1, 2))),
+            NestedParameters("second", NestedParameter(List(8, 13)))
+          )
+        )
+      },
+      test("typed parameters reject wrong schema and wrong value type") {
+        registered
+        val codec                            = IntoSchema[NestedParameters]
+        val valid                            = codec.toTyped(NestedParameters("valid", NestedParameter(List(1))))
+        val wrongValue                       = valid.copy(value = SchemaValue.StringValue("not-a-tuple"))
+        val underlying                       = wrapped((_, value, _) => resolved(JsInvocationResult(value, js.undefined)))
+        def encoded(value: TypedSchemaValue) =
+          SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(value))
+        def call(parameters: JsTypedSchemaValue) =
+          rejectionOf(
+            invokeWithParameters(
+              typedUniversalName,
+              universalTool.toolName,
+              toolToJs(universalTool),
+              parameters,
+              js.Array("run"),
+              input("payload"),
+              noStdin,
+              underlying,
+              anonymous
+            )
+          )
+        for {
+          wrongSchema <- call(input("wrong-schema"))
+          wrongType   <- call(encoded(wrongValue))
+        } yield assertTrue(
+          wrongSchema.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input",
+          wrongType.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input"
+        )
+      },
       test("wrapped declared errors preserve all protocol and custom tags") {
         registered
         val errors = List(
@@ -380,8 +514,10 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
               middlewareName,
               Nil,
               Doc.empty,
-              ToolMiddlewareScope.Universal
+              ToolMiddlewareScope.Universal,
+              ToolMiddleware.noParametersSchema
             ),
+            _ => Right(ToolMiddleware.NoParameters()),
             () => new InvalidStdoutUniversal(stdout)
           )
         )

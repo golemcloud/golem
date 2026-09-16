@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Context, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { compile } from "../src/WitCodec.js"
 import { err, toolDefinition } from "../src/Tool.js"
+import * as WitTypes from "../src/WitTypes.js"
 import {
   resetMiddlewares,
   toolMiddlewareGuest,
@@ -52,6 +53,82 @@ const gate = () => {
 describe("typed tool middleware", () => {
   beforeEach(resetMiddlewares)
 
+  it("exports and decodes author-declared installation parameters", async () => {
+    const definition = toolDefinition("configured").body((body) => body.returns(Schema.String))
+    typed({
+      name: "configured-policy",
+      parameters: Schema.Struct({ prefix: Schema.String, retries: Schema.Number }),
+      presented: definition,
+      handler: {
+        configured: (_input, { parameters }) =>
+          Effect.succeed(`${parameters.prefix}:${parameters.retries}`),
+      },
+    })
+    const middleware = toolMiddlewareGuest.getToolMiddleware("configured-policy")
+    const parameters = wire(Schema.Struct({ prefix: Schema.String, retries: Schema.Number }), {
+      prefix: "attempts",
+      retries: 3,
+    })
+    expect(middleware.parameterSchema).toEqual(parameters.graph)
+
+    const result = await toolMiddlewareGuest.invokeToolMiddleware(
+      "configured-policy",
+      "configured",
+      metadata,
+      parameters,
+      [],
+      wire(Schema.Struct({}), {}),
+      undefined,
+      { tag: "anonymous" },
+      { invoke: vi.fn() } as never,
+    )
+    await expect(
+      Effect.runPromise(Effect.runSync(compile(Schema.String)).decode(result.result!.value)),
+    ).resolves.toBe("attempts:3")
+  })
+
+  it("rejects incompatible installation parameter payloads at the guest boundary", async () => {
+    universal({
+      name: "configured-audit",
+      parameters: Schema.Struct({ enabled: Schema.Boolean }),
+      handler: () => Effect.succeed({}),
+    })
+    await expect(
+      toolMiddlewareGuest.invokeToolMiddleware(
+        "configured-audit",
+        "target",
+        metadata,
+        wire(Schema.Struct({ enabled: Schema.String }), { enabled: "yes" }),
+        [],
+        wire(Schema.Void, undefined),
+        undefined,
+        { tag: "anonymous" },
+        { invoke: vi.fn() } as never,
+      ),
+    ).rejects.toMatchObject({ tag: "invalid-input" })
+  })
+
+  it("rejects nested capability-bearing installation parameter schemas", () => {
+    expect(() =>
+      universal({
+        name: "stream-parameters",
+        parameters: Schema.Struct({
+          nested: Schema.Struct({ value: WitTypes.AgentStream(Schema.String) }),
+        }),
+        handler: () => Effect.succeed({}),
+      }),
+    ).toThrow(/stream/)
+    expect(() =>
+      universal({
+        name: "secret-parameters",
+        parameters: Schema.Struct({
+          nested: Schema.Struct({ value: WitTypes.Secret(Schema.String) }),
+        }),
+        handler: () => Effect.succeed({}),
+      }),
+    ).toThrow(/secret/)
+  })
+
   it("decodes, transforms, invokes the typed underlying command, and encodes output", async () => {
     const presented = toolDefinition("presented").body((body) =>
       body.positional("message", Schema.String).returns(Schema.String),
@@ -61,6 +138,7 @@ describe("typed tool middleware", () => {
     )
     typed({
       name: "adapter",
+      parameters: Schema.Struct({}),
       presented,
       expected,
       handler: {
@@ -81,6 +159,7 @@ describe("typed tool middleware", () => {
         commands: { nodes: [] },
         schema: { root: 0, typeNodes: [], defs: [] },
       },
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Struct({ message: Schema.String }), { message: "abc" }),
       undefined,
@@ -112,6 +191,7 @@ describe("typed tool middleware", () => {
     }
     typed({
       name: "streaming-policy",
+      parameters: Schema.Struct({}),
       presented: definition,
       layer: Layer.succeed(Prefix, { value: 10 }),
       handler: {
@@ -135,6 +215,7 @@ describe("typed tool middleware", () => {
       "streaming-policy",
       "streaming",
       toolMiddlewareGuest.getToolMiddleware("streaming-policy") as never,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Struct({}), {}),
       undefined,
@@ -153,6 +234,7 @@ describe("typed tool middleware", () => {
     const a = tracked(2)
     universal({
       name: "fresh",
+      parameters: Schema.Struct({}),
       handler: (_invocation, underlying) =>
         Effect.gen(function* () {
           yield* underlying.invoke([], wire(Schema.Void, undefined))
@@ -167,6 +249,7 @@ describe("typed tool middleware", () => {
       "fresh",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       stdin.iterable,
@@ -186,6 +269,7 @@ describe("typed tool middleware", () => {
     let call = 0
     universal({
       name: "combine",
+      parameters: Schema.Struct({}),
       handler: (_invocation, underlying) =>
         Effect.gen(function* () {
           const first = yield* underlying.invoke([], wire(Schema.Void, undefined))
@@ -202,6 +286,7 @@ describe("typed tool middleware", () => {
       "combine",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       undefined,
@@ -219,6 +304,7 @@ describe("typed tool middleware", () => {
     const raw = tracked(19, 43)
     universal({
       name: "lazy-echo",
+      parameters: Schema.Struct({}),
       handler: (invocation, underlying) =>
         underlying.invoke([], invocation.input, invocation.stdin),
     })
@@ -226,6 +312,7 @@ describe("typed tool middleware", () => {
       "lazy-echo",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       raw.iterable,
@@ -248,6 +335,7 @@ describe("typed tool middleware", () => {
     const release = vi.fn()
     universal({
       name: "cancel-lazy",
+      parameters: Schema.Struct({}),
       layer: Layer.effectDiscard(Effect.acquireRelease(Effect.void, () => Effect.sync(release))),
       handler: () => Effect.succeed({ stdout: Stream.toAsyncIterable(Stream.make(7)) }),
     })
@@ -255,6 +343,7 @@ describe("typed tool middleware", () => {
       "cancel-lazy",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       raw.iterable,
@@ -276,6 +365,7 @@ describe("typed tool middleware", () => {
     const definition = toolDefinition("blocked").body((body) => body.output({ required: true }))
     typed({
       name: "blocked-layer",
+      parameters: Schema.Struct({}),
       presented: definition,
       layer: Layer.effect(
         Value,
@@ -295,6 +385,7 @@ describe("typed tool middleware", () => {
       "blocked-layer",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Struct({}), {}),
       undefined,
@@ -318,6 +409,7 @@ describe("typed tool middleware", () => {
     const definition = toolDefinition("gated").body((body) => body.output({ required: true }))
     typed({
       name: "async-interruption-finalizer",
+      parameters: Schema.Struct({}),
       presented: definition,
       layer: Layer.effectDiscard(
         Effect.acquireRelease(Effect.void, () => Effect.sync(releaseLayer)),
@@ -348,6 +440,7 @@ describe("typed tool middleware", () => {
       "async-interruption-finalizer",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Struct({}), {}),
       undefined,
@@ -381,6 +474,7 @@ describe("typed tool middleware", () => {
     })
     universal({
       name: "late-underlying-output",
+      parameters: Schema.Struct({}),
       handler: (_invocation, underlying) =>
         Effect.gen(function* () {
           const waiter = yield* Effect.forkChild(
@@ -395,6 +489,7 @@ describe("typed tool middleware", () => {
       "late-underlying-output",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       undefined,
@@ -423,6 +518,7 @@ describe("typed tool middleware", () => {
     })
     universal({
       name: "stdout-primary-error",
+      parameters: Schema.Struct({}),
       handler: () =>
         Effect.succeed({
           stdout: {
@@ -439,6 +535,7 @@ describe("typed tool middleware", () => {
       "stdout-primary-error",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       undefined,
@@ -457,6 +554,7 @@ describe("typed tool middleware", () => {
     const release = vi.fn()
     typed({
       name: "failed-output",
+      parameters: Schema.Struct({}),
       presented: definition,
       layer: Layer.effectDiscard(Effect.acquireRelease(Effect.void, () => Effect.sync(release))),
       handler: {
@@ -467,6 +565,7 @@ describe("typed tool middleware", () => {
       "failed-output",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Struct({}), {}),
       undefined,
@@ -496,12 +595,14 @@ describe("typed tool middleware", () => {
     }
     universal({
       name: "blocked-forward",
+      parameters: Schema.Struct({}),
       handler: (_invocation, underlying) => underlying.invoke([], wire(Schema.Void, undefined)),
     })
     const result = await toolMiddlewareGuest.invokeToolMiddleware(
       "blocked-forward",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       undefined,
@@ -528,6 +629,7 @@ describe("typed tool middleware", () => {
     }
     universal({
       name: "throwing-cleanup",
+      parameters: Schema.Struct({}),
       layer: Layer.effectDiscard(Effect.acquireRelease(Effect.void, () => Effect.sync(release))),
       handler: (_invocation, underlying) =>
         Effect.gen(function* () {
@@ -539,6 +641,7 @@ describe("typed tool middleware", () => {
       "throwing-cleanup",
       "target",
       metadata,
+      wire(Schema.Struct({}), {}),
       [],
       wire(Schema.Void, undefined),
       undefined,
@@ -552,6 +655,7 @@ describe("typed tool middleware", () => {
     const stdin = tracked(1)
     universal({
       name: "sync-throw",
+      parameters: Schema.Struct({}),
       handler: (() => {
         throw new Error("handler failed")
       }) as never,
@@ -561,6 +665,7 @@ describe("typed tool middleware", () => {
         "sync-throw",
         "target",
         metadata,
+        wire(Schema.Struct({}), {}),
         [],
         wire(Schema.Void, undefined),
         stdin.iterable,
@@ -576,9 +681,15 @@ describe("typed tool middleware", () => {
     const required = toolDefinition("required").body((body) =>
       body.input({ required: true }).output({ required: true }),
     )
-    typed({ name: "absent-streams", presented: absent, handler: { absent: () => Effect.void } })
+    typed({
+      name: "absent-streams",
+      parameters: Schema.Struct({}),
+      presented: absent,
+      handler: { absent: () => Effect.void },
+    })
     typed({
       name: "required-streams",
+      parameters: Schema.Struct({}),
       presented: required,
       handler: { required: () => Effect.void },
     })
@@ -597,6 +708,7 @@ describe("typed tool middleware", () => {
         name,
         name,
         {} as never,
+        wire(Schema.Struct({}), {}),
         [],
         wire(Schema.Struct({}), {}),
         stdin,
@@ -625,6 +737,7 @@ describe("typed tool middleware", () => {
     )
     typed({
       name: "guard",
+      parameters: Schema.Struct({}),
       presented,
       handler: { guarded: () => Effect.succeed(err("rejected", { reason: "no" })) },
     })
@@ -634,6 +747,7 @@ describe("typed tool middleware", () => {
         "guard",
         "guarded",
         metadata.scope.tag === "monomorphic" ? metadata.scope.val.presented : ({} as never),
+        wire(Schema.Struct({}), {}),
         [],
         wire(Schema.Struct({ value: Schema.Number }), { value: 1 }),
         undefined,
@@ -646,6 +760,7 @@ describe("typed tool middleware", () => {
         "guard",
         "guarded",
         metadata.scope.tag === "monomorphic" ? metadata.scope.val.presented : ({} as never),
+        wire(Schema.Struct({}), {}),
         [],
         wire(Schema.Struct({ value: Schema.String }), { value: "blocked" }),
         undefined,
@@ -664,6 +779,7 @@ describe("typed tool middleware", () => {
       )
       typed({
         name: `decode-${carrier}`,
+        parameters: Schema.Struct({}),
         presented: definition,
         handler: {
           fallible: (_input, { underlying }) =>
@@ -687,6 +803,7 @@ describe("typed tool middleware", () => {
         `decode-${carrier}`,
         "fallible",
         metadata.scope.tag === "monomorphic" ? metadata.scope.val.presented : ({} as never),
+        wire(Schema.Struct({}), {}),
         [],
         wire(Schema.Struct({}), {}),
         undefined,
@@ -710,6 +827,7 @@ describe("typed tool middleware", () => {
     let drained = false
     typed({
       name: "nested-adapter",
+      parameters: Schema.Struct({}),
       presented: definition,
       handler: {
         nestedTool: {
@@ -722,6 +840,7 @@ describe("typed tool middleware", () => {
       "nested-adapter",
       "nested-tool",
       metadata.scope.tag === "monomorphic" ? metadata.scope.val.presented : ({} as never),
+      wire(Schema.Struct({}), {}),
       ["child-command"],
       wire(Schema.Struct({}), {}),
       undefined,
@@ -749,6 +868,7 @@ describe("typed tool middleware", () => {
     expect(() =>
       typed({
         name: "incomplete-adapter",
+        parameters: Schema.Struct({}),
         presented: definition,
         handler: { incomplete: {} },
       } as never),
@@ -769,6 +889,7 @@ describe("typed tool middleware", () => {
     )
     typed({
       name: "recursive-middleware",
+      parameters: Schema.Struct({}),
       presented: definition,
       handler: { recursive: (input) => Effect.succeed(input.root) },
     })

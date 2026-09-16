@@ -104,6 +104,8 @@ interface common {
     aliases: list<string>,
     doc:     doc,
     scope:   tool-middleware-scope,
+    /// Schema of the static configuration supplied for each installation.
+    parameter-schema: schema-graph,
   }
 
   variant tool-middleware-scope {

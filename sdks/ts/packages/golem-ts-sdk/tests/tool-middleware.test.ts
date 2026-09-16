@@ -86,6 +86,7 @@ function invoke(
     {
       toolName: 'runtime-name-is-not-a-codec-input',
       toolMetadata: { intentionally: 'malformed and ignored' } as unknown as Tool,
+      parameters: wireValue(z.object({}), {}),
       ...options,
     },
     raw,
@@ -682,5 +683,61 @@ describe('monomorphic tool middleware dispatch', () => {
         raw,
       ),
     ).rejects.toMatchObject({ cause: { tag: 'invalid-result' } });
+  });
+
+  it('exports a nested parameter schema and decodes typed parameters per occurrence', async () => {
+    const parameterSchema = z.object({
+      policy: z.object({ mode: z.enum(['audit', 'enforce']), labels: z.array(z.string()) }),
+      retries: z.number().int().optional(),
+    });
+    const definition = toolDefinition('configured').body((body) => body.returns(z.string()));
+    const observed: Array<z.infer<typeof parameterSchema>> = [];
+    definition.middleware({
+      name: 'configured-policy',
+      parameterSchema,
+      implementation: {
+        configured: async (_args, { parameters }) => {
+          observed.push(parameters);
+          return `${parameters.policy.mode}:${parameters.policy.labels.join(',')}`;
+        },
+      },
+    });
+
+    const encoded = ToolMiddlewareRegistry.get('configured-policy')!.encoded;
+    expect(encoded.parameterSchema).toEqual(
+      wireValue(parameterSchema, {
+        policy: { mode: 'audit', labels: [] },
+      }).graph,
+    );
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+    const run = (parameters: TypedSchemaValue) =>
+      invoke(
+        'configured-policy',
+        {
+          parameters,
+          commandPath: [],
+          input: commandInput(definition, [], {}),
+          stdin: undefined,
+          principal: anonymous,
+        },
+        raw,
+      );
+
+    await run(wireValue(parameterSchema, { policy: { mode: 'audit', labels: ['one'] } }));
+    await run(
+      wireValue(parameterSchema, {
+        policy: { mode: 'enforce', labels: ['two'] },
+        retries: 3,
+      }),
+    );
+    expect(observed).toEqual([
+      { policy: { mode: 'audit', labels: ['one'] } },
+      { policy: { mode: 'enforce', labels: ['two'] }, retries: 3 },
+    ]);
+
+    await expect(
+      run(wireValue(z.object({ policy: z.string() }), { policy: 'audit' })),
+    ).rejects.toMatchObject({ cause: { tag: 'invalid-input' } });
+    expect(observed).toHaveLength(2);
   });
 });

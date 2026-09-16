@@ -22,6 +22,8 @@ use crate::model::tool::{
     ToolProvisionConfig,
 };
 use crate::schema::TypedSchemaValue;
+use crate::schema::tool::Tool;
+use crate::schema::tool::compatibility::CompiledToolCompatibility;
 use desert_rust::BinaryCodec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -644,6 +646,108 @@ pub enum EntityInvocationDescriptor {
     Tool(ToolInvocationDescriptor),
 }
 
+/// Immutable, outermost-to-innermost entity activations selected for one tool call. The complete
+/// plan is stored only on the root entity `Start`; child invocations identify a layer in that
+/// record with [`EntityInvocationPlanReference::Descendant`].
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct EntityInvocationPlan {
+    layers: Vec<EntityInvocationPlanLayer>,
+}
+
+impl EntityInvocationPlan {
+    pub fn new(layers: Vec<EntityInvocationPlanLayer>) -> Result<Self, String> {
+        Self::validate_layers(&layers)?;
+        Ok(Self { layers })
+    }
+
+    fn validate_layers(layers: &[EntityInvocationPlanLayer]) -> Result<(), String> {
+        if layers.is_empty() {
+            return Err("Entity invocation plan cannot be empty".to_string());
+        }
+        if !matches!(layers.last(), Some(EntityInvocationPlanLayer::Tool { .. })) {
+            return Err("Entity invocation plan must end in a tool activation".to_string());
+        }
+        if layers[..layers.len() - 1]
+            .iter()
+            .any(|layer| !matches!(layer, EntityInvocationPlanLayer::Middleware { .. }))
+        {
+            return Err("Only middleware activations may precede the tool leaf".to_string());
+        }
+        for layer in layers {
+            let valid = matches!(
+                (layer, layer.activation().policy()),
+                (
+                    EntityInvocationPlanLayer::Middleware { .. },
+                    EntityActivationPolicy::ToolMiddleware { .. }
+                ) | (
+                    EntityInvocationPlanLayer::Tool { .. },
+                    EntityActivationPolicy::Tool { .. }
+                )
+            );
+            if !valid {
+                return Err(
+                    "Entity invocation plan layer does not match its activation policy".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        Self::validate_layers(&self.layers)
+    }
+
+    pub fn layer(&self, position: u32) -> Result<&EntityInvocationPlanLayer, String> {
+        self.layers
+            .get(position as usize)
+            .ok_or_else(|| format!("Entity invocation plan position {position} is out of bounds"))
+    }
+
+    pub fn len(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub enum EntityInvocationPlanLayer {
+    Middleware {
+        activation: EntityActivation,
+        parameters: TypedSchemaValue,
+        expected_definition: Option<Tool>,
+        presented_definition: Option<Tool>,
+        next_effective_definition: Tool,
+        compatibility: Option<CompiledToolCompatibility>,
+    },
+    Tool {
+        activation: EntityActivation,
+    },
+}
+
+impl EntityInvocationPlanLayer {
+    pub fn activation(&self) -> &EntityActivation {
+        match self {
+            Self::Middleware { activation, .. } | Self::Tool { activation } => activation,
+        }
+    }
+}
+
+/// Durable location of an entity invocation in a pinned chain plan.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub enum EntityInvocationPlanReference {
+    Root {
+        plan: EntityInvocationPlan,
+    },
+    Descendant {
+        root_start_index: OplogIndex,
+        position: u32,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
 pub struct ToolInvocationDescriptor {
     pub attempt_ordinal: u64,
@@ -675,8 +779,15 @@ pub struct EntityInvocationRequestIdentity {
     pub entity: AgentEntity,
     pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
-    pub operation: Option<EntityInvocationDescriptorIdentity>,
+    pub operation: EntityInvocationDescriptorIdentity,
+    pub plan_position: Option<EntityInvocationPlanPositionIdentity>,
     pub input: TypedSchemaValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntityInvocationPlanPositionIdentity {
+    pub root_start_index: OplogIndex,
+    pub position: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -732,7 +843,18 @@ impl EntityInvocationRequestIdentity {
         self.entity == request.entity
             && self.calling_principal == request.calling_principal
             && self.call_mode == request.call_mode
-            && self.operation == request.operation.as_ref().map(Into::into)
+            && self.operation == (&request.operation).into()
+            && self.plan_position
+                == match &request.plan {
+                    EntityInvocationPlanReference::Root { .. } => None,
+                    EntityInvocationPlanReference::Descendant {
+                        root_start_index,
+                        position,
+                    } => Some(EntityInvocationPlanPositionIdentity {
+                        root_start_index: *root_start_index,
+                        position: *position,
+                    }),
+                }
             && &self.input == input
     }
 }
@@ -758,18 +880,15 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-#[desert(evolution(
-    FieldAdded("operation", None::<EntityInvocationDescriptor>),
-    FieldAdded("principal", None::<Principal>)
-))]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
-    pub activation: EntityActivation,
     pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
-    pub operation: Option<EntityInvocationDescriptor>,
-    pub principal: Option<Principal>,
+    pub operation: EntityInvocationDescriptor,
+    pub principal: Principal,
+    pub plan: EntityInvocationPlanReference,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -1305,7 +1424,16 @@ mod tests {
     use crate::model::environment::EnvironmentId;
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{SecretKeyScope, ToolSource};
+    use crate::schema::tool::CommandTree;
     use test_r::test;
+
+    fn tool_definition() -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: crate::schema::SchemaGraph::empty(),
+        }
+    }
 
     fn owner() -> OwnedAgentId {
         OwnedAgentId::new(
@@ -1464,14 +1592,14 @@ mod tests {
     #[test]
     fn entity_invocation_request_binary_roundtrip_preserves_activation() {
         let owner = owner();
+        let activation = activation();
         let request = EntityInvocationRequest {
             entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
             calling_principal: Principal::Agent(AgentPrincipal {
                 agent_id: owner.agent_id,
             }),
             call_mode: EntityCallMode::Asynchronous,
-            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
                 args: vec!["--ignore-case".to_string(), "needle".to_string()],
@@ -1482,16 +1610,115 @@ mod tests {
                     result: None,
                     errors: Vec::new(),
                 },
-            })),
-            principal: Some(Principal::GolemUser(GolemUserPrincipal {
+            }),
+            principal: Principal::GolemUser(GolemUserPrincipal {
                 account_id: AccountId::new(),
-            })),
+            }),
+            plan: EntityInvocationPlanReference::Root {
+                plan: EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
+                    activation,
+                }])
+                .unwrap(),
+            },
         };
 
         let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
         let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn entity_invocation_plan_roundtrip_and_descendant_reference_do_not_repeat_plan() {
+        let parameters = TypedSchemaValue::new(
+            crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::string()),
+            crate::schema::SchemaValue::String("outer".to_string()),
+        );
+        let definition = tool_definition();
+        let plan = EntityInvocationPlan::new(vec![
+            EntityInvocationPlanLayer::Middleware {
+                activation: middleware_activation(),
+                parameters: parameters.clone(),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: definition.clone(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Middleware {
+                activation: middleware_activation(),
+                parameters: TypedSchemaValue::new(
+                    crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::u64()),
+                    crate::schema::SchemaValue::U64(7),
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: definition,
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Tool {
+                activation: host_activation(),
+            },
+        ])
+        .unwrap();
+        let root = EntityInvocationPlanReference::Root { plan: plan.clone() };
+        let descendant = EntityInvocationPlanReference::Descendant {
+            root_start_index: OplogIndex::from_u64(41),
+            position: 1,
+        };
+
+        let root_bytes = desert_rust::serialize_to_byte_vec(&root).unwrap();
+        let descendant_bytes = desert_rust::serialize_to_byte_vec(&descendant).unwrap();
+        let decoded: EntityInvocationPlanReference = desert_rust::deserialize(&root_bytes).unwrap();
+
+        assert_eq!(decoded, root);
+        let EntityInvocationPlanLayer::Middleware {
+            parameters: decoded_parameters,
+            ..
+        } = plan.layer(0).unwrap()
+        else {
+            panic!("outer layer must be middleware")
+        };
+        assert_eq!(decoded_parameters, &parameters);
+        assert!(matches!(
+            plan.layer(2).unwrap().activation().source(),
+            EntityActivationSource::Host { .. }
+        ));
+        assert!(descendant_bytes.len() < root_bytes.len());
+    }
+
+    #[test]
+    fn entity_invocation_plan_rejects_middleware_activation_in_tool_layer() {
+        let result = EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
+            activation: middleware_activation(),
+        }]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn entity_invocation_plan_rejects_tool_activation_in_middleware_layer() {
+        let result = EntityInvocationPlan::new(vec![
+            EntityInvocationPlanLayer::Middleware {
+                activation: activation(),
+                parameters: TypedSchemaValue::new(
+                    crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(
+                        Vec::new(),
+                    )),
+                    crate::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: tool_definition(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Tool {
+                activation: activation(),
+            },
+        ]);
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1505,12 +1732,11 @@ mod tests {
         );
         let request = EntityInvocationRequest {
             entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
             calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
+                agent_id: owner.agent_id.clone(),
             }),
             call_mode: EntityCallMode::Asynchronous,
-            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
                 args: vec!["--recorded-rendering".to_string()],
@@ -1521,51 +1747,44 @@ mod tests {
                     result: None,
                     errors: Vec::new(),
                 },
-            })),
-            principal: None,
+            }),
+            principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            plan: EntityInvocationPlanReference::Root {
+                plan: EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
+                    activation: activation(),
+                }])
+                .unwrap(),
+            },
         };
         let identity = EntityInvocationRequestIdentity {
             entity: request.entity.clone(),
             calling_principal: request.calling_principal.clone(),
             call_mode: request.call_mode,
-            operation: request.operation.as_ref().map(Into::into),
+            operation: (&request.operation).into(),
+            plan_position: None,
             input: input.clone(),
         };
         let mut differently_pinned = request.clone();
-        differently_pinned.activation = activation();
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.args = vec!["--new-rendering".to_string()];
-            descriptor.declares_stdout = true;
-        }
+        let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+        descriptor.args = vec!["--new-rendering".to_string()];
+        descriptor.declares_stdout = true;
 
         assert!(identity.matches(&differently_pinned, &input));
 
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.attempt_ordinal = 8;
-        }
+        let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+        descriptor.attempt_ordinal = 8;
         assert!(!identity.matches(&differently_pinned, &input));
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.attempt_ordinal = 7;
-        }
+        let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+        descriptor.attempt_ordinal = 7;
 
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.command_path.push("other".to_string());
-        }
+        let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+        descriptor.command_path.push("other".to_string());
         assert!(!identity.matches(&differently_pinned, &input));
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.command_path.pop();
-            descriptor.has_stdout = true;
-        }
+        let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+        descriptor.command_path.pop();
+        descriptor.has_stdout = true;
         assert!(!identity.matches(&differently_pinned, &input));
 
         let different_input = TypedSchemaValue::new(
@@ -1577,37 +1796,25 @@ mod tests {
             },
         );
         assert!(!identity.matches(&request, &different_input));
-    }
 
-    #[test]
-    fn legacy_entity_invocation_request_decodes_without_operation_descriptor() {
-        #[derive(BinaryCodec)]
-        #[desert(evolution())]
-        struct LegacyEntityInvocationRequest {
-            entity: AgentEntity,
-            activation: EntityActivation,
-            calling_principal: CallingAgentPrincipal,
-            call_mode: EntityCallMode,
-        }
-
-        let owner = owner();
-        let legacy = LegacyEntityInvocationRequest {
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            call_mode: EntityCallMode::Synchronous,
+        let mut descendant_request = request.clone();
+        descendant_request.plan = EntityInvocationPlanReference::Descendant {
+            root_start_index: OplogIndex::from_u64(40),
+            position: 2,
         };
-        let bytes = desert_rust::serialize_to_byte_vec(&legacy).unwrap();
-        let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
-
-        assert_eq!(decoded.entity, legacy.entity);
-        assert_eq!(decoded.activation, legacy.activation);
-        assert_eq!(decoded.calling_principal, legacy.calling_principal);
-        assert_eq!(decoded.call_mode, legacy.call_mode);
-        assert_eq!(decoded.operation, None);
-        assert_eq!(decoded.principal, None);
+        assert!(!identity.matches(&descendant_request, &input));
+        let mut descendant_identity = identity.clone();
+        descendant_identity.plan_position = Some(EntityInvocationPlanPositionIdentity {
+            root_start_index: OplogIndex::from_u64(40),
+            position: 2,
+        });
+        assert!(descendant_identity.matches(&descendant_request, &input));
+        descendant_identity
+            .plan_position
+            .as_mut()
+            .unwrap()
+            .root_start_index = OplogIndex::from_u64(41);
+        assert!(!descendant_identity.matches(&descendant_request, &input));
     }
 
     #[test]
@@ -1641,7 +1848,7 @@ mod tests {
     #[test]
     fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
         let owner = owner();
-        let activation = Arc::new(middleware_activation());
+        let middleware_activation = Arc::new(middleware_activation());
         let scope = EntityInvocationScope::new(
             EntityInvocationId::new(
                 OwnedAgentEntityId {
@@ -1654,7 +1861,7 @@ mod tests {
             )
             .unwrap(),
             OplogIndex::from_u64(84),
-            activation.clone(),
+            middleware_activation.clone(),
             Principal::Agent(AgentPrincipal {
                 agent_id: owner.agent_id.clone(),
             }),
@@ -1663,11 +1870,44 @@ mod tests {
         .unwrap();
         let request = EntityInvocationRequest {
             entity: scope.invocation_id().entity().clone(),
-            activation: activation.as_ref().clone(),
             calling_principal: scope.calling_principal().clone(),
             call_mode: EntityCallMode::Synchronous,
-            operation: None,
-            principal: None,
+            operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 1,
+                command_path: vec!["test".to_string()],
+                args: Vec::new(),
+                has_stdin: false,
+                has_stdout: false,
+                declares_stdout: false,
+                output_contract: ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
+            }),
+            principal: scope.calling_principal().clone(),
+            plan: EntityInvocationPlanReference::Root {
+                plan: EntityInvocationPlan::new(vec![
+                    EntityInvocationPlanLayer::Middleware {
+                        activation: middleware_activation.as_ref().clone(),
+                        parameters: TypedSchemaValue::new(
+                            crate::schema::SchemaGraph::anonymous(
+                                crate::schema::SchemaType::tuple(Vec::new()),
+                            ),
+                            crate::schema::SchemaValue::Tuple {
+                                elements: Vec::new(),
+                            },
+                        ),
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: tool_definition(),
+                        compatibility: None,
+                    },
+                    EntityInvocationPlanLayer::Tool {
+                        activation: activation(),
+                    },
+                ])
+                .unwrap(),
+            },
         };
 
         let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();

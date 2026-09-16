@@ -64,6 +64,7 @@ impl From<ToolMiddleware> for proto::ToolMiddleware {
             aliases: value.aliases,
             doc: Some(value.doc.into()),
             scope: Some(value.scope.into()),
+            parameter_schema: Some(value.parameter_schema.into()),
         }
     }
 }
@@ -78,6 +79,8 @@ impl TryFrom<proto::ToolMiddleware> for ToolMiddleware {
             aliases: value.aliases,
             doc: required(value.doc, "ToolMiddleware.doc")?.into(),
             scope: required(value.scope, "ToolMiddleware.scope")?.try_into()?,
+            parameter_schema: required(value.parameter_schema, "ToolMiddleware.parameter_schema")?
+                .try_into()?,
         })
     }
 }
@@ -909,6 +912,30 @@ impl From<Example> for proto::Example {
             title: value.title,
             body: value.body,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::graph::SchemaGraph;
+    use test_r::test;
+
+    #[test]
+    fn tool_middleware_protobuf_roundtrip_preserves_parameter_schema() {
+        let middleware = ToolMiddleware {
+            name: "audit".into(),
+            version: "1".into(),
+            aliases: vec![],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+            parameter_schema: SchemaGraph::anonymous(SchemaType::tuple(vec![
+                SchemaType::string(),
+                SchemaType::list(SchemaType::u32()),
+            ])),
+        };
+        let proto: proto::ToolMiddleware = middleware.clone().into();
+        assert_eq!(ToolMiddleware::try_from(proto).unwrap(), middleware);
     }
 }
 

@@ -931,6 +931,7 @@ type OptionalMiddlewareContext = Parameters<
 const optionalMiddlewareContextWithoutStdin: OptionalMiddlewareContext = {
   principal: undefined as never,
   underlying: undefined as never,
+  parameters: {},
 };
 void optionalMiddlewareContextWithoutStdin;
 

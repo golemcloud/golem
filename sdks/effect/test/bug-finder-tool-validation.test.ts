@@ -12,6 +12,11 @@ import {
 } from "../src/internal/tool/middleware.js"
 
 describe("tool metadata WIT validation", () => {
+  const emptyParameters = () => {
+    const codec = Effect.runSync(compile(Schema.Struct({})))
+    return { graph: codec.schemaGraph, value: Effect.runSync(codec.encode({})) }
+  }
+
   beforeEach(() => {
     resetTools()
     resetMiddlewares()
@@ -289,6 +294,7 @@ describe("tool metadata WIT validation", () => {
     let escaped: Parameters<Parameters<typeof universal>[0]["handler"]>[1] | undefined
     universal({
       name: "audit",
+      parameters: Schema.Struct({}),
       handler: (invocation, underlying) =>
         Effect.gen(function* () {
           escaped = underlying
@@ -306,6 +312,7 @@ describe("tool metadata WIT validation", () => {
       "audit",
       "target",
       metadata,
+      emptyParameters(),
       [],
       { graph: metadata.schema, value: { node: 0 } as never },
       (async function* () {
@@ -348,6 +355,7 @@ describe("tool metadata WIT validation", () => {
     }
     universal({
       name: "cleanup",
+      parameters: Schema.Struct({}),
       handler: (_invocation, underlying) => Effect.as(underlying.invoke([], typedUnit), {}),
     })
     await toolMiddlewareGuest.invokeToolMiddleware(
@@ -358,6 +366,7 @@ describe("tool metadata WIT validation", () => {
         commands: { nodes: [] },
         schema: { root: 0, typeNodes: [], defs: [] },
       },
+      emptyParameters(),
       [],
       typedUnit,
       iterable(stdinReturn),

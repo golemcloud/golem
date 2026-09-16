@@ -244,6 +244,13 @@ Tool middleware '<middleware>' references tool '<tool>' outside its package; GOL
 
 ### Universal middleware
 
+Middleware may declare an installation parameter type with `parameters="Type"`. The type must
+implement `IntoSchema` and `FromSchema` (use `#derive.golem_schema` for records), and the generated
+handler signature receives `parameters : Type` first. This works for both monomorphic and universal
+middleware. When omitted, metadata uses an empty-record schema matching the manifest's normalized
+`{}` value; no parameter argument is added to the handler. Values are decoded exactly as supplied,
+without applying defaults or filling omitted fields.
+
 A universal annotation applies to exactly one async free function. The grouped invocation and
 underlying wrappers keep tool metadata, typed input/results, errors, streams, and principal in the
 generated WIT carrier types:

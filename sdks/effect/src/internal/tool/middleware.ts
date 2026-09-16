@@ -1,7 +1,8 @@
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
-import { Context, Effect, Exit, Layer, Scope, Stream } from "effect"
+import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
+import { type CompiledWitCodec, compile } from "../../WitCodec.js"
 import {
   type BodyModel,
   type CommandError,
@@ -65,8 +66,9 @@ export type TypedUnderlying<D extends ToolDefinition<any, any>> = TypedUnderlyin
 >
 
 /** Context passed to a definition-derived middleware command. @since 1.6.0 @category models */
-export interface TypedHandlerContext<D extends ToolDefinition<any, any>> {
+export interface TypedHandlerContext<D extends ToolDefinition<any, any>, Parameters> {
   readonly principal: Agent.Principal
+  readonly parameters: Parameters
   readonly stdin?: Stream.Stream<Uint8Array, MiddlewareError>
   readonly stdout?: <R2>(
     stream: Stream.Stream<Uint8Array, MiddlewareError, R2>,
@@ -74,18 +76,22 @@ export interface TypedHandlerContext<D extends ToolDefinition<any, any>> {
   readonly underlying: TypedUnderlying<D>
 }
 
-type TypedHandler<B extends BodyModel, D extends ToolDefinition<any, any>, R> = (
+type TypedHandler<B extends BodyModel, D extends ToolDefinition<any, any>, Parameters, R> = (
   input: CommandInput<B>,
-  context: TypedHandlerContext<D>,
+  context: TypedHandlerContext<D, Parameters>,
 ) => Effect.Effect<CommandOutput<B> | CommandError<B>, MiddlewareError | CommandError<B>, R>
 type TypedImplementationNode<
   M extends CommandModel,
   D extends ToolDefinition<any, any>,
+  Parameters,
   R,
-> = (M extends { readonly body: infer B extends BodyModel } ? TypedHandler<B, D, R> : object) & {
+> = (M extends { readonly body: infer B extends BodyModel }
+  ? TypedHandler<B, D, Parameters, R>
+  : object) & {
   readonly [K in keyof M["children"] as CamelCase<string & K>]: TypedImplementationNode<
     M["children"][K],
     D,
+    Parameters,
     R
   >
 }
@@ -93,38 +99,42 @@ type TypedImplementationNode<
 export type TypedImplementation<
   P extends ToolDefinition<any, any>,
   D extends ToolDefinition<any, any> = P,
+  Parameters = Record<string, never>,
   R = never,
 > = {
   readonly [K in P["name"] as CamelCase<string & K>]: TypedImplementationNode<
     DefinitionModel<P>,
     D,
+    Parameters,
     R
   >
 }
 
 /** Universal middleware invocation metadata. @since 1.6.0 @category models */
-export interface MiddlewareInvocation {
+export interface MiddlewareInvocation<Parameters> {
   readonly toolName: string
   readonly tool: Common.Tool
   readonly commandPath: readonly string[]
   readonly input: Common.TypedSchemaValue
   readonly stdin?: Stream.Stream<Uint8Array, MiddlewareError>
   readonly principal: Agent.Principal
+  readonly parameters: Parameters
 }
 
 /** Universal middleware handler. @since 1.6.0 @category models */
-export type UniversalHandler<R = never> = (
-  invocation: MiddlewareInvocation,
+export type UniversalHandler<Parameters, R = never> = (
+  invocation: MiddlewareInvocation<Parameters>,
   underlying: Underlying,
 ) => Effect.Effect<Common.InvocationResult, MiddlewareError, R>
 
 /** Universal middleware declaration. @since 1.6.0 @category models */
-export interface MiddlewareOptions<N extends string, R = never> {
+export interface MiddlewareOptions<N extends string, S extends Schema.Top, R = never> {
   readonly name: N
   readonly version?: string
   readonly aliases?: readonly string[]
   readonly doc?: string | Partial<Common.Doc>
-  readonly handler: UniversalHandler<R>
+  readonly parameters: S
+  readonly handler: UniversalHandler<S["Type"], R>
   readonly layer?: Layer.Layer<R>
 }
 
@@ -135,21 +145,49 @@ export interface ImplementedMiddleware<N extends string = string> {
 
 interface Entry {
   readonly wire: Common.ToolMiddleware
-  readonly handler: UniversalHandler<any>
+  readonly parameters: CompiledWitCodec<Schema.Top>
+  readonly handler: UniversalHandler<any, any>
   readonly layer?: Layer.Layer<any>
 }
 const entries = new Map<string, Entry>()
-const normalizeDoc = (d: MiddlewareOptions<string>["doc"]): Common.Doc =>
+const normalizeDoc = (d: MiddlewareOptions<string, Schema.Top>["doc"]): Common.Doc =>
   typeof d === "string"
     ? { summary: d, description: "", examples: [] }
     : { summary: d?.summary ?? "", description: d?.description ?? "", examples: d?.examples ?? [] }
 
-const register = <N extends string, R>(
-  options: MiddlewareOptions<N, R>,
+const forbiddenParameterTypes = new Set([
+  "future",
+  "stream",
+  "secret",
+  "quota-token",
+  "permission-card",
+])
+
+const assertStaticParameterSchema = (parameters: CompiledWitCodec<Schema.Top>): void => {
+  const visit = (value: unknown): void => {
+    if (typeof value !== "object" || value === null) return
+    if (value instanceof Map) {
+      for (const entry of value.values()) visit(entry)
+      return
+    }
+    const tag = (value as { readonly tag?: unknown }).tag
+    if (typeof tag === "string" && forbiddenParameterTypes.has(tag))
+      throw new Error(`Middleware installation parameters cannot contain ${tag}`)
+    for (const child of Object.values(value)) visit(child)
+  }
+  visit(parameters.graph)
+}
+
+const register = <N extends string, S extends Schema.Top, R>(
+  options: MiddlewareOptions<N, S, R>,
   scope: Common.ToolMiddlewareScope,
 ): ImplementedMiddleware<N> => {
   if (entries.has(options.name))
     throw new Error(`Middleware '${options.name}' is already registered`)
+  const parameters = Effect.runSync(
+    compile(options.parameters),
+  ) as unknown as CompiledWitCodec<Schema.Top>
+  assertStaticParameterSchema(parameters)
   entries.set(options.name, {
     wire: {
       name: options.name,
@@ -157,7 +195,9 @@ const register = <N extends string, R>(
       aliases: [...(options.aliases ?? [])],
       doc: normalizeDoc(options.doc),
       scope,
+      parameterSchema: parameters.schemaGraph,
     },
+    parameters,
     handler: options.handler,
     layer: options.layer,
   })
@@ -165,31 +205,41 @@ const register = <N extends string, R>(
 }
 
 /** Define universal transparent middleware. @since 1.6.0 @category constructors */
-export const universal = <N extends string, R = never>(options: MiddlewareOptions<N, R>) =>
-  register(options, { tag: "universal" })
+export const universal = <N extends string, S extends Schema.Top, R = never>(
+  options: MiddlewareOptions<N, S, R>,
+) => register(options, { tag: "universal" })
+
+/** Empty installation parameters for middleware that has no configuration. @since 1.6.0 @category schemas */
+export const NoParameters = Schema.Struct({})
 
 /** Define typed middleware projected from presented and expected tool definitions. @since 1.6.0 @category constructors */
 export function typed<
   N extends string,
   P extends ToolDefinition<any, any>,
   D extends ToolDefinition<any, any>,
+  S extends Schema.Top,
   R = never,
 >(
-  options: Omit<MiddlewareOptions<N, R>, "handler"> & {
+  options: Omit<MiddlewareOptions<N, S, R>, "handler"> & {
     readonly presented: P
     readonly expected: D
-    readonly handler: TypedImplementation<P, D, R>
+    readonly handler: TypedImplementation<P, D, S["Type"], R>
   },
 ): ImplementedMiddleware<N>
-export function typed<N extends string, P extends ToolDefinition<any, any>, R = never>(
-  options: Omit<MiddlewareOptions<N, R>, "handler"> & {
+export function typed<
+  N extends string,
+  P extends ToolDefinition<any, any>,
+  S extends Schema.Top,
+  R = never,
+>(
+  options: Omit<MiddlewareOptions<N, S, R>, "handler"> & {
     readonly presented: P
     readonly expected?: undefined
-    readonly handler: TypedImplementation<P, P, R>
+    readonly handler: TypedImplementation<P, P, S["Type"], R>
   },
 ): ImplementedMiddleware<N>
-export function typed<N extends string, R = never>(
-  options: Omit<MiddlewareOptions<N, R>, "handler"> & {
+export function typed<N extends string, S extends Schema.Top, R = never>(
+  options: Omit<MiddlewareOptions<N, S, R>, "handler"> & {
     readonly presented: ToolDefinition<any, any>
     readonly expected?: ToolDefinition<any, any>
     readonly handler: ToolImplementation
@@ -241,7 +291,7 @@ const typedHandler =
     presented: ReturnType<typeof compileDefinition>,
     expected: ReturnType<typeof compileDefinition>,
     implementation: ToolImplementation,
-  ): UniversalHandler<any> =>
+  ): UniversalHandler<any, any> =>
   (invocation, rawUnderlying) =>
     Effect.gen(function* () {
       const body = presented.bodies.get(invocation.commandPath.join("/"))
@@ -279,6 +329,7 @@ const typedHandler =
         | undefined
       const result = yield* (commandHandler as any)(input, {
         principal: invocation.principal,
+        parameters: invocation.parameters,
         stdin: invocation.stdin,
         stdout: body.model.stdout
           ? (stream: Stream.Stream<Uint8Array, MiddlewareError, any>) =>
@@ -535,6 +586,7 @@ export const toolMiddlewareGuest = {
     middlewareName: string,
     toolName: string,
     tool: Common.Tool,
+    parameters: Common.TypedSchemaValue,
     commandPath: string[],
     input: Common.TypedSchemaValue,
     stdin: AsyncIterable<number> | undefined,
@@ -583,12 +635,36 @@ export const toolMiddlewareGuest = {
           })
         }),
     }
-    const effect = Effect.suspend(() =>
-      entry.handler(
-        { toolName, tool, commandPath, input, stdin: middlewareStdin, principal },
+    const effect = Effect.gen(function* () {
+      if (!sameWireGraph(entry.parameters.schemaGraph, parameters.graph))
+        return yield* Effect.fail(
+          new MiddlewareError({
+            tag: "invalid-input",
+            val: "installation parameters do not match the declared schema",
+          }),
+        )
+      const decodedParameters = yield* entry.parameters.decode(parameters.value).pipe(
+        Effect.mapError(
+          (cause) =>
+            new MiddlewareError({
+              tag: "invalid-input",
+              val: `invalid installation parameters: ${String(cause)}`,
+            }),
+        ),
+      )
+      return yield* entry.handler(
+        {
+          toolName,
+          tool,
+          commandPath,
+          input,
+          stdin: middlewareStdin,
+          principal,
+          parameters: decodedParameters,
+        },
         underlying,
-      ),
-    )
+      )
+    })
     const closeLayer = () => Effect.runPromise(Scope.close(invocationScope, Exit.void))
     const cleanup = async (primary?: unknown): Promise<void> => {
       const ownershipResult = await Promise.allSettled([ownership.dispose()])

@@ -200,6 +200,7 @@ fn add_unimplemented_middleware(
             aliases: Vec::new(),
             doc: Doc::default(),
             scope: ToolMiddlewareScope::Universal,
+            parameter_schema: SchemaGraph::empty(),
         },
         provision: ToolProvisionConfig::default(),
         source: ToolMiddlewareSource::Component {
@@ -215,7 +216,10 @@ fn add_unimplemented_middleware(
     let effective_definition = deployment.registered_tools[tool_name].definition.clone();
     let occurrence = CompiledToolMiddlewareOccurrence {
         middleware: registered.clone(),
-        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        parameters: golem_common::schema::TypedSchemaValue::new(
+            registered.definition.parameter_schema.clone(),
+            golem_common::schema::SchemaValue::Record { fields: vec![] },
+        ),
         provision: ToolProvisionConfig::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,

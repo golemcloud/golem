@@ -44,8 +44,7 @@ test "universal middleware emitter registers metadata and a raw async adapter" {
     generated.contains("@toolMiddleware.ToolMiddlewareScope::Universal"),
   )
   assert_true(generated.contains("@toolMiddleware.register_tool_middleware"))
-  assert_true(!generated.contains("@model"))
-  assert_true(!generated.contains("@schema"))
+  assert_true(generated.contains("empty_parameter_schema"))
   assert_true(!generated.contains("@tool."))
 }
 
@@ -76,6 +75,24 @@ test "universal middleware emitter handles multiple declarations and empty input
     ),
     "",
   )
+}
+
+///|
+test "universal middleware emits typed installation parameters" {
+  let source =
+    #|#derive.universal_tool_middleware("audit", parameters="AuditParameters")
+    #|pub async fn audit(parameters : AuditParameters, invocation : @toolMiddleware.RawToolInvocation, underlying : @toolMiddleware.UnderlyingTool) -> Result[@toolMiddleware.RawInvocationResult, @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue]] { ... }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_middleware_registration(
+      @lib.parse_tool_middlewares([("audit.mbt", source)]),
+      [],
+      @lib.ComponentRole::ToolMiddleware,
+    ),
+  )
+  assert_true(generated.contains("AuditParameters"))
+  assert_true(generated.contains("invocation.decode_parameters()"))
+  assert_true(generated.contains("@schema.TypeTag[AuditParameters]"))
+  assert_true(generated.contains("audit(parameters, invocation, underlying)"))
 }
 
 ///|
@@ -123,7 +140,9 @@ test "monomorphic emitter generates namespaced descriptors wrappers dispatch and
     ),
   )
   assert_true(generated.contains("presented: __golem_middleware_tool_def_Echo"))
-  assert_true(generated.contains("expected: Some(__golem_middleware_tool_def_Echo"))
+  assert_true(
+    generated.contains("expected: Some(__golem_middleware_tool_def_Echo"),
+  )
 }
 
 ///|

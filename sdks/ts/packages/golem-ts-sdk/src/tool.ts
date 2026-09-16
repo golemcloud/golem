@@ -72,7 +72,10 @@ import {
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
-import { ToolMiddlewareRegistry } from './internal/registry/toolMiddlewareRegistry';
+import {
+  emptyMiddlewareParameterCodec,
+  ToolMiddlewareRegistry,
+} from './internal/registry/toolMiddlewareRegistry';
 import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterable';
 import { compileSchema } from './schema/adapter';
 import type { SchemaCodec } from './schema/codec';
@@ -590,10 +593,12 @@ export type ToolUnderlyingErrors<Method> = ToolClientErrors<Method>;
 export type ToolMiddlewareInvocationContext<
   UnderlyingDefinition,
   Stdin extends StreamPresence = StreamPresence,
+  Parameters = {},
 > = Simplify<
   {
     readonly principal: Principal;
     readonly underlying: ToolUnderlying<UnderlyingDefinition>;
+    readonly parameters: Parameters;
   } & StreamContextField<'stdin', Stdin, AsyncIterable<number>>
 >;
 
@@ -602,22 +607,23 @@ export type ToolMiddlewareHandler<Args, Result, Context> = (
   context: Context,
 ) => Result | Promise<Result>;
 
-type MiddlewareHandlerFor<Model, Inherited, UnderlyingDefinition> =
+type MiddlewareHandlerFor<Model, Inherited, UnderlyingDefinition, Params> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
     ? Body extends AnyToolBodyModel
       ? ToolMiddlewareHandler<
           GlobalArguments<MergeGlobalArguments<Inherited, Globals>> & BodyArgs<Body>,
           UnderlyingResult<Body>,
-          ToolMiddlewareInvocationContext<UnderlyingDefinition, BodyStdin<Body>>
+          ToolMiddlewareInvocationContext<UnderlyingDefinition, BodyStdin<Body>, Params>
         >
       : never
     : never;
 
-type MiddlewareChildImplementations<Children, Inherited, UnderlyingDefinition> = {
+type MiddlewareChildImplementations<Children, Inherited, UnderlyingDefinition, Params> = {
   [Name in keyof Children]: MiddlewareNodeImplementation<
     Children[Name],
     Inherited,
-    UnderlyingDefinition
+    UnderlyingDefinition,
+    Params
   >;
 };
 
@@ -625,10 +631,11 @@ type MiddlewareNodeImplementation<
   Model,
   Inherited,
   UnderlyingDefinition,
+  Params,
   Reconcile extends boolean = false,
 > =
   Model extends ToolSubtreeModel<infer Command>
-    ? MiddlewareNodeImplementation<Command, Inherited, UnderlyingDefinition, true>
+    ? MiddlewareNodeImplementation<Command, Inherited, UnderlyingDefinition, Params, true>
     : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
       ? MiddlewareNodeImplementationWithGlobals<
           Model,
@@ -636,7 +643,8 @@ type MiddlewareNodeImplementation<
           UnderlyingDefinition,
           Reconcile extends true ? ReconcileGlobalArguments<Globals, Inherited> : Globals,
           Reconcile extends true ? ReconcileBodyModel<Body, Inherited> : Body,
-          Children
+          Children,
+          Params
         >
       : never;
 
@@ -647,6 +655,7 @@ type MiddlewareNodeImplementationWithGlobals<
   Globals,
   Body,
   Children,
+  Params,
 > =
   Model extends ToolCommandModel<infer Name, unknown, AnyToolBodyModel | undefined, object>
     ? keyof Children extends never
@@ -654,7 +663,8 @@ type MiddlewareNodeImplementationWithGlobals<
         ? MiddlewareHandlerFor<
             ToolCommandModel<Name, Globals, Body, Children>,
             Inherited,
-            UnderlyingDefinition
+            UnderlyingDefinition,
+            Params
           >
         : NestedCommandImplementation<undefined, {}>
       : Body extends AnyToolBodyModel
@@ -662,12 +672,14 @@ type MiddlewareNodeImplementationWithGlobals<
             MiddlewareHandlerFor<
               ToolCommandModel<Name, Globals, Body, Children>,
               Inherited,
-              UnderlyingDefinition
+              UnderlyingDefinition,
+              Params
             >,
             MiddlewareChildImplementations<
               Children,
               MergeGlobalArguments<Inherited, Globals>,
-              UnderlyingDefinition
+              UnderlyingDefinition,
+              Params
             >
           >
         : NestedCommandImplementation<
@@ -675,27 +687,33 @@ type MiddlewareNodeImplementationWithGlobals<
             MiddlewareChildImplementations<
               Children,
               MergeGlobalArguments<Inherited, Globals>,
-              UnderlyingDefinition
+              UnderlyingDefinition,
+              Params
             >
           >
     : never;
 
-type RootMiddlewareImplementation<Model, UnderlyingDefinition> =
+type RootMiddlewareImplementation<Model, UnderlyingDefinition, Parameters> =
   Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
     ? Simplify<
         (Body extends AnyToolBodyModel
           ? {
-              [Key in Name]: MiddlewareHandlerFor<Model, {}, UnderlyingDefinition>;
+              [Key in Name]: MiddlewareHandlerFor<Model, {}, UnderlyingDefinition, Parameters>;
             }
           : {}) &
-          MiddlewareChildImplementations<Children, Globals, UnderlyingDefinition>
+          MiddlewareChildImplementations<Children, Globals, UnderlyingDefinition, Parameters>
       >
     : never;
 
 export type ToolMiddlewareImplementation<
   PresentedDefinition,
   ExpectedDefinition = PresentedDefinition,
-> = RootMiddlewareImplementation<ToolCommandModelOf<PresentedDefinition>, ExpectedDefinition>;
+  Parameters = {},
+> = RootMiddlewareImplementation<
+  ToolCommandModelOf<PresentedDefinition>,
+  ExpectedDefinition,
+  Parameters
+>;
 
 export interface ImplementedToolMiddleware<Name extends string = string> {
   readonly name: Name;
@@ -706,31 +724,45 @@ interface ToolMiddlewareMetadataOptions<Name extends string> {
   readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
+  readonly parameterSchema?: StandardSchemaV1;
 }
 
 export type ToolMiddlewareOptions<
   Name extends string,
   PresentedDefinition,
   ExpectedDefinition = PresentedDefinition,
+  ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
 > =
-  | TransparentToolMiddlewareOptions<Name, PresentedDefinition>
-  | AdapterToolMiddlewareOptions<Name, PresentedDefinition, ExpectedDefinition>;
+  | TransparentToolMiddlewareOptions<Name, PresentedDefinition, ParameterSchema>
+  | AdapterToolMiddlewareOptions<Name, PresentedDefinition, ExpectedDefinition, ParameterSchema>;
 
 type TransparentToolMiddlewareOptions<
   Name extends string,
   Definition,
+  ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
 > = ToolMiddlewareMetadataOptions<Name> & {
+  readonly parameterSchema?: ParameterSchema;
   readonly wraps?: undefined;
-  readonly implementation: ToolMiddlewareImplementation<Definition>;
+  readonly implementation: ToolMiddlewareImplementation<
+    Definition,
+    Definition,
+    SchemaOutput<ParameterSchema>
+  >;
 };
 
 type AdapterToolMiddlewareOptions<
   Name extends string,
   PresentedDefinition,
   ExpectedDefinition,
+  ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
 > = ToolMiddlewareMetadataOptions<Name> & {
+  readonly parameterSchema?: ParameterSchema;
   readonly wraps: ExpectedDefinition;
-  readonly implementation: ToolMiddlewareImplementation<PresentedDefinition, ExpectedDefinition>;
+  readonly implementation: ToolMiddlewareImplementation<
+    PresentedDefinition,
+    ExpectedDefinition,
+    SchemaOutput<ParameterSchema>
+  >;
 };
 
 export interface UniversalToolUnderlying {
@@ -755,21 +787,26 @@ export interface UniversalToolMiddlewareInvocation {
   readonly principal: Principal;
 }
 
-export interface UniversalToolMiddlewareContext {
+export interface UniversalToolMiddlewareContext<Parameters = {}> {
   readonly underlying: UniversalToolUnderlying;
+  readonly parameters: Parameters;
 }
 
-export type UniversalToolMiddlewareInvoke = (
+export type UniversalToolMiddlewareInvoke<Parameters = {}> = (
   invocation: UniversalToolMiddlewareInvocation,
-  context: UniversalToolMiddlewareContext,
+  context: UniversalToolMiddlewareContext<Parameters>,
 ) => WireInvocationResult | Promise<WireInvocationResult>;
 
-export interface UniversalToolMiddlewareOptions<Name extends string> {
+export interface UniversalToolMiddlewareOptions<
+  Name extends string,
+  ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
+> {
   readonly name: Name;
   readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
-  readonly invoke: UniversalToolMiddlewareInvoke;
+  readonly parameterSchema?: ParameterSchema;
+  readonly invoke: UniversalToolMiddlewareInvoke<SchemaOutput<ParameterSchema>>;
 }
 
 export interface ToolClientInvocationResult {
@@ -1451,19 +1488,28 @@ export class CommandBuilder<
     );
   }
 
-  middleware<const MiddlewareName extends string>(
+  middleware<
+    const MiddlewareName extends string,
+    ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
+  >(
     this: CommandBuilder<Name, Globals, Body, Children, true>,
     options: TransparentToolMiddlewareOptions<
       MiddlewareName,
-      CommandBuilder<Name, Globals, Body, Children, true>
+      CommandBuilder<Name, Globals, Body, Children, true>,
+      ParameterSchema
     >,
   ): ImplementedToolMiddleware<MiddlewareName>;
-  middleware<const MiddlewareName extends string, ExpectedDefinition extends AnyToolDefinition>(
+  middleware<
+    const MiddlewareName extends string,
+    ExpectedDefinition extends AnyToolDefinition,
+    ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
+  >(
     this: CommandBuilder<Name, Globals, Body, Children, true>,
     options: AdapterToolMiddlewareOptions<
       MiddlewareName,
       CommandBuilder<Name, Globals, Body, Children, true>,
-      ExpectedDefinition
+      ExpectedDefinition,
+      ParameterSchema
     >,
   ): ImplementedToolMiddleware<MiddlewareName>;
   middleware(
@@ -1490,6 +1536,10 @@ export class CommandBuilder<
         return {
           kind: 'monomorphic',
           ...metadata,
+          parameterCodec:
+            options.parameterSchema === undefined
+              ? emptyMiddlewareParameterCodec
+              : compileSchema(options.parameterSchema),
           presented,
           expected,
           runtime: bindToolImplementation(presented, options.implementation, []),
@@ -1580,9 +1630,10 @@ export function toolDefinition<const Name extends string>(name: Name): ToolDefin
   return CommandBuilder.root(name);
 }
 
-export function universalToolMiddleware<const Name extends string>(
-  options: UniversalToolMiddlewareOptions<Name>,
-): ImplementedToolMiddleware<Name> {
+export function universalToolMiddleware<
+  const Name extends string,
+  ParameterSchema extends StandardSchemaV1 = StandardSchemaV1<{}, {}>,
+>(options: UniversalToolMiddlewareOptions<Name, ParameterSchema>): ImplementedToolMiddleware<Name> {
   try {
     ToolMiddlewareRegistry.registerSource(options.name, () => {
       if (typeof options.invoke !== 'function') {
@@ -1591,6 +1642,10 @@ export function universalToolMiddleware<const Name extends string>(
       return {
         kind: 'universal',
         ...normalizeMiddlewareMetadata(options),
+        parameterCodec:
+          options.parameterSchema === undefined
+            ? emptyMiddlewareParameterCodec
+            : compileSchema(options.parameterSchema),
         invoke: options.invoke,
       };
     });

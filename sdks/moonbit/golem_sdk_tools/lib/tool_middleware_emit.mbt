@@ -25,8 +25,19 @@ fn emit_universal_tool_middleware_invoker(
     "///|\nasync fn " +
     universal_invoker_name(middleware) +
     "(\n  invocation : @toolMiddleware.RawToolInvocation,\n  underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n  " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "let parameters : " +
+        emit_type(parameter_type) +
+        " = match invocation.decode_parameters() { Ok(value) => value; Err(message) => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(message)) }\n  "
+      None => ""
+    }) +
     universal.handler_name +
-    "(invocation, underlying)\n}\n\n",
+    (if middleware.parameter_type is Some(_) {
+      "(parameters, invocation, underlying)\n}\n\n"
+    } else {
+      "(invocation, underlying)\n}\n\n"
+    }),
   )
 }
 
@@ -44,7 +55,15 @@ fn emit_universal_tool_middleware_registration(
     emit_strings(middleware.aliases) +
     ",\n        doc: " +
     emit_doc(middleware.description, []) +
-    ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Universal,\n      },\n      " +
+    ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Universal,\n        parameter_schema: " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "@schema.schema_graph_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[" +
+        emit_type(parameter_type) +
+        "]))"
+      None => "@toolMiddleware.empty_parameter_schema()"
+    }) +
+    "\n      },\n      " +
     universal_invoker_name(middleware) +
     ",\n    )\n",
   )
@@ -332,7 +351,15 @@ fn emit_monomorphic_tool_middleware_invoker(
   buf.write_string(
     "///|\nasync fn " +
     monomorphic_invoker_name(middleware) +
-    "(\n  __golem_invocation : @toolMiddleware.RawToolInvocation,\n  __golem_underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n  let __golem_command_path = __golem_invocation.command_path()\n  let __golem_def = " +
+    "(\n  __golem_invocation : @toolMiddleware.RawToolInvocation,\n  __golem_underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n" +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "  let parameters : " +
+        emit_type(parameter_type) +
+        " = match __golem_invocation.decode_parameters() { Ok(value) => value; Err(message) => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(message)) }\n"
+      None => ""
+    }) +
+    "  let __golem_command_path = __golem_invocation.command_path()\n  let __golem_def = " +
     descriptor_name(monomorphic.presented, "middleware") +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = match __golem_invocation.decode_input(__golem_def, __golem_index, \"tool middleware " +
     escape_string_lit(middleware.name) +
@@ -354,6 +381,11 @@ fn emit_monomorphic_tool_middleware_invoker(
       "__golem_expected"
     } else {
       "__golem_expected, " + args.join(", ")
+    }
+    let call_args = if middleware.parameter_type is Some(_) {
+      "parameters, " + call_args
+    } else {
+      call_args
     }
     buf.write_string(
       "    let __golem_expected = " +
@@ -395,7 +427,15 @@ fn emit_monomorphic_tool_middleware_registration(
     descriptor_name(monomorphic.presented, "middleware") +
     "().to_tool(),\n          expected: Some(" +
     descriptor_name(monomorphic.expected, "middleware") +
-    "().to_tool()),\n        }),\n      },\n      " +
+    "().to_tool()),\n        }),\n        parameter_schema: " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "@schema.schema_graph_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[" +
+        emit_type(parameter_type) +
+        "]))"
+      None => "@toolMiddleware.empty_parameter_schema()"
+    }) +
+    ",\n      },\n      " +
     monomorphic_invoker_name(middleware) +
     ",\n    )\n",
   )

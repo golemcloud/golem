@@ -208,6 +208,18 @@ object ToolMiddlewareCodegen {
       tool.flattenedLeaves.foreach { leaf =>
         sb.append(methodSignature(leaf, leaf.params, Some("U"), "    ")).append("\n")
       }
+      sb.append("  }\n\n")
+      sb.append(s"  trait WithParameters[P] extends AdapterWithParameters[$underlyingName, P]\n\n")
+      sb.append("  trait AdapterWithParameters[U, P] {\n")
+      tool.flattenedLeaves.foreach { leaf =>
+        val declarations = "underlying: U" ::
+          ("@_root_.golem.runtime.annotations.internalToolMiddlewareParameters parameters: P" :: leaf.params.map(
+            paramDecl
+          ))
+        sb.append(
+          s"    def ${leaf.name}(${declarations.mkString(", ")}): ${ToolProjectionRendering.returnType(leaf.codec, InvocationUnderlying)}"
+        ).append("\n")
+      }
       sb.append("  }\n")
       sb.append("}\n")
       sb.toString

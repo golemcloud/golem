@@ -25499,12 +25499,15 @@ components:
           $ref: '#/components/schemas/Doc'
         scope:
           $ref: '#/components/schemas/ToolMiddlewareScope'
+        parameter_schema:
+          $ref: '#/components/schemas/SchemaGraph'
       required:
       - name
       - version
       - aliases
       - doc
       - scope
+      - parameter_schema
     ToolMiddlewareDeploymentMetadata:
       title: ToolMiddlewareDeploymentMetadata
       type: object

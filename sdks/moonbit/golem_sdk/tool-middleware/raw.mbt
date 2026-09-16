@@ -312,6 +312,7 @@ pub struct RawToolInvocation {
   priv context : OwnershipContext
   priv tool_name : String
   priv tool_metadata : @toolCommon.Tool
+  priv parameters : @model.TypedSchemaValue
   priv command_path : Array[String]
   priv input : RawTypedSchemaValue
   priv stdin : MiddlewareStdin?
@@ -324,6 +325,7 @@ pub fn RawToolInvocation::from_wit(
   context : OwnershipContext,
   tool_name : String,
   tool_metadata : @toolCommon.Tool,
+  parameters : @model.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
@@ -333,10 +335,35 @@ pub fn RawToolInvocation::from_wit(
     context,
     tool_name,
     tool_metadata,
+    parameters,
     command_path,
     input: context.own_raw_typed_schema_value(input),
     stdin: stdin.map(stream => context.own_stdin(stream)),
     principal,
+  }
+}
+
+///|
+#doc(hidden)
+pub fn[T : @schema.FromSchema + @schema.IntoSchema] RawToolInvocation::decode_parameters(
+  self : RawToolInvocation,
+) -> Result[T, String] {
+  let declared = @schema.schema_graph_of_tag(
+    (@schema.type_tag() : @schema.TypeTag[T]),
+  ) catch {
+    error =>
+      return Err(
+        "invalid declared middleware installation parameter schema: \{Repr(error)}",
+      )
+  }
+  if @model.validate_graph(self.parameters.graph).length() > 0 ||
+    self.parameters.graph != declared {
+    return Err(
+      "middleware installation parameters do not match the declared parameter schema",
+    )
+  }
+  try @schema.from_value_as(self.parameters.value) |> Ok catch {
+    error => Err("invalid middleware installation parameters: \{Repr(error)}")
   }
 }
 

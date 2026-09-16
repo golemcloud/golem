@@ -255,6 +255,7 @@ pub(all) struct ToolMiddleware {
   aliases : Array[String]
   doc : Doc
   scope : ToolMiddlewareScope
+  parameter_schema : @types.SchemaGraph
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ToolMiddlewareScope {

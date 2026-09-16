@@ -17,7 +17,7 @@
 package golem.tool
 
 import golem.Principal
-import golem.schema.{FromSchema, SchemaValue, TypedSchemaValue}
+import golem.schema.{FromSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, TypedSchemaValue}
 import golem.schema.validation.{ValueValidation, WellFormedness}
 import golem.tool.wire.WitTool
 
@@ -30,6 +30,7 @@ final case class ToolMiddlewareDescriptor(
   aliases: List[String],
   doc: Doc,
   scope: ToolMiddlewareScope,
+  parameterSchema: SchemaGraph,
   version: String = "0.0.0"
 )
 
@@ -56,8 +57,9 @@ object ToolMiddlewareParamDecoder {
     decode: CanonicalInputValue => Either[String, Any]
   ) extends ToolMiddlewareParamDecoder
 
-  case object PrincipalParam extends ToolMiddlewareParamDecoder
-  case object StdinParam     extends ToolMiddlewareParamDecoder
+  case object PrincipalParam                                     extends ToolMiddlewareParamDecoder
+  case object StdinParam                                         extends ToolMiddlewareParamDecoder
+  final case class InstallationParameters(from: FromSchema[Any]) extends ToolMiddlewareParamDecoder
 }
 
 final case class MonomorphicToolMiddlewareHandle(
@@ -70,7 +72,8 @@ final case class MonomorphicToolMiddlewareHandle(
 
 final case class UniversalToolMiddlewareHandle(
   descriptor: ToolMiddlewareDescriptor,
-  newInstance: () => UniversalToolMiddleware
+  decodeParameters: TypedSchemaValue => Either[String, Any],
+  newInstance: () => UniversalToolMiddleware.Internal
 )
 
 sealed trait ToolMiddlewareScope extends Product with Serializable
@@ -93,6 +96,7 @@ trait RawToolUnderlying {
 
 final class ToolMiddlewareInvocationContext(
   val fields: List[CanonicalInputValue],
+  val parameters: TypedSchemaValue,
   val stdin: Option[ToolMiddlewareInputHandle],
   val principal: Principal
 )
@@ -108,45 +112,56 @@ object ToolMiddlewareInvokerRuntime {
     toolName: String,
     commandPath: List[String],
     input: TypedSchemaValue,
+    parameters: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
     principal: Principal,
     validateFinalStdout: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalStdout) { underlying =>
-      val instance = handle.newInstance()
-      if (toolName != presented.toolName)
-        failed(ToolInvokeError.InvalidToolName(toolName))
-      else
-        presented.commandIndexByPath(commandPath) match {
-          case None               => failed(ToolInvokeError.InvalidCommandPath(commandPath))
-          case Some(commandIndex) =>
-            validateInput(presented, commandIndex, input) match {
-              case Left(error) => failed(error)
-              case Right(_)    =>
-                presented.decodeCanonicalInputRecord(commandIndex, input.value) match {
-                  case Left(error)   => failed(ToolInvokeError.InvalidInput(error.message))
-                  case Right(fields) =>
-                    handle.bindings
-                      .find(binding => presented.commandIndexByPath(binding.commandPath).contains(commandIndex)) match {
-                      case None                                                     => failed(ToolInvokeError.InvalidCommandPath(commandPath))
-                      case Some(binding) if stdin.nonEmpty && !binding.expectsStdin =>
-                        failed(ToolInvokeError.InvalidInput("tool invocation contained unexpected stdin stream"))
-                      case Some(binding) =>
-                        binding
-                          .run(
-                            instance,
-                            underlying,
-                            new ToolMiddlewareInvocationContext(fields, stdin, principal)
-                          )
-                          .map(outcome =>
-                            ToolMiddlewareOwnershipRuntime.validateFinal(underlying, outcome) { tracked =>
-                              validateOutcome(presented, commandIndex, tracked)
-                            }
-                          )
-                    }
-                }
-            }
-        }
+      handle.descriptor(new ToolBuildCtx) match {
+        case Left(error) =>
+          failed(ToolInvokeError.InvalidInput(s"tool middleware descriptor build failed: ${error.message}"))
+        case Right(descriptor) if !ToolGraphs.schemaShapesMatch(parameters.graph, descriptor.parameterSchema) =>
+          failed(
+            ToolInvokeError.InvalidInput("middleware installation parameter schema does not match its declaration")
+          )
+        case Right(_) if toolName != presented.toolName =>
+          failed(ToolInvokeError.InvalidToolName(toolName))
+        case Right(_) =>
+          val instance = handle.newInstance()
+          presented.commandIndexByPath(commandPath) match {
+            case None               => failed(ToolInvokeError.InvalidCommandPath(commandPath))
+            case Some(commandIndex) =>
+              validateInput(presented, commandIndex, input) match {
+                case Left(error) => failed(error)
+                case Right(_)    =>
+                  presented.decodeCanonicalInputRecord(commandIndex, input.value) match {
+                    case Left(error)   => failed(ToolInvokeError.InvalidInput(error.message))
+                    case Right(fields) =>
+                      handle.bindings
+                        .find(binding =>
+                          presented.commandIndexByPath(binding.commandPath).contains(commandIndex)
+                        ) match {
+                        case None                                                     => failed(ToolInvokeError.InvalidCommandPath(commandPath))
+                        case Some(binding) if stdin.nonEmpty && !binding.expectsStdin =>
+                          failed(ToolInvokeError.InvalidInput("tool invocation contained unexpected stdin stream"))
+                        case Some(binding) =>
+                          binding
+                            .run(
+                              instance,
+                              underlying,
+                              new ToolMiddlewareInvocationContext(fields, parameters, stdin, principal)
+                            )
+                            .map(outcome =>
+                              ToolMiddlewareOwnershipRuntime.validateFinal(underlying, outcome) { tracked =>
+                                validateOutcome(presented, commandIndex, tracked)
+                              }
+                            )
+                      }
+                  }
+              }
+          }
+      }
     }
 
   private def validateInput(
@@ -195,6 +210,11 @@ object ToolMiddlewareInvokerRuntime {
             case Some(stream) => args += stream
             case None         =>
               return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stdin stream"))
+          }
+        case ToolMiddlewareParamDecoder.InstallationParameters(from) =>
+          from.fromValue(ctx.parameters.value) match {
+            case Left(error)  => return Left(ToolInvokeError.InvalidInput(error.message))
+            case Right(value) => args += value
           }
       }
     }
@@ -564,20 +584,49 @@ object ToolUnderlyingRuntime {
 
 trait UniversalToolUnderlying extends RawToolUnderlying
 
-final case class UniversalToolMiddlewareInvocation(
+final case class UniversalToolMiddlewareInvocation[Parameters](
   toolName: String,
   toolMetadata: WitTool,
+  parameters: Parameters,
   commandPath: List[String],
   input: TypedSchemaValue,
   stdin: Option[ToolMiddlewareInputHandle],
   principal: Principal
 )
 
-trait UniversalToolMiddleware {
+trait UniversalToolMiddleware extends UniversalToolMiddleware.Internal {
   def invoke(
-    invocation: UniversalToolMiddlewareInvocation,
+    invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
     underlying: UniversalToolUnderlying
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
+
+  final private[golem] def invokeAny(
+    invocation: UniversalToolMiddlewareInvocation[Any],
+    underlying: UniversalToolUnderlying
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+    invoke(invocation.asInstanceOf[UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters]], underlying)
+}
+
+object UniversalToolMiddleware {
+  private[golem] trait Internal {
+    private[golem] def invokeAny(
+      invocation: UniversalToolMiddlewareInvocation[Any],
+      underlying: UniversalToolUnderlying
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
+  }
+
+  trait WithParameters[Parameters] extends Internal {
+    def invoke(
+      invocation: UniversalToolMiddlewareInvocation[Parameters],
+      underlying: UniversalToolUnderlying
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
+
+    final private[golem] def invokeAny(
+      invocation: UniversalToolMiddlewareInvocation[Any],
+      underlying: UniversalToolUnderlying
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+      invoke(invocation.asInstanceOf[UniversalToolMiddlewareInvocation[Parameters]], underlying)
+  }
 }
 
 object UniversalToolMiddlewareInvokerRuntime {
@@ -589,6 +638,7 @@ object UniversalToolMiddlewareInvokerRuntime {
     wrapped: RawToolUnderlying,
     toolName: String,
     toolMetadata: WitTool,
+    parameters: TypedSchemaValue,
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
@@ -598,35 +648,56 @@ object UniversalToolMiddlewareInvokerRuntime {
     ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalStdout) { scoped =>
       val instance = handle.newInstance()
       ToolMiddlewareInvokerRuntime.validateRawInput(input) match {
-        case Left(error) => Future.successful(Left(error))
-        case Right(_)    =>
-          val underlying = new UniversalToolUnderlying {
-            def invoke(
-              commandPath: List[String],
-              input: TypedSchemaValue,
-              stdin: Option[ToolMiddlewareInputHandle]
-            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
-              scoped.invoke(commandPath, input, stdin)
+        case Left(error)                                                                                    => Future.successful(Left(error))
+        case Right(_) if !ToolGraphs.schemaShapesMatch(parameters.graph, handle.descriptor.parameterSchema) =>
+          Future.successful(
+            Left(
+              ToolInvokeError.InvalidInput("middleware installation parameter schema does not match its declaration")
+            )
+          )
+        case Right(_) =>
+          handle.decodeParameters(parameters) match {
+            case Left(error)              => Future.successful(Left(ToolInvokeError.InvalidInput(error)))
+            case Right(decodedParameters) =>
+              val underlying = new UniversalToolUnderlying {
+                def invoke(
+                  commandPath: List[String],
+                  input: TypedSchemaValue,
+                  stdin: Option[ToolMiddlewareInputHandle]
+                ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+                  scoped.invoke(commandPath, input, stdin)
+              }
+              instance
+                .invokeAny(
+                  UniversalToolMiddlewareInvocation(
+                    toolName,
+                    toolMetadata,
+                    decodedParameters,
+                    commandPath,
+                    input,
+                    stdin,
+                    principal
+                  ),
+                  underlying
+                )
+                .map(outcome =>
+                  ToolMiddlewareOwnershipRuntime.validateFinal(scoped, outcome)(
+                    ToolMiddlewareInvokerRuntime.validateRawOutcome
+                  )
+                )
           }
-          instance
-            .invoke(
-              UniversalToolMiddlewareInvocation(
-                toolName,
-                toolMetadata,
-                commandPath,
-                input,
-                stdin,
-                principal
-              ),
-              underlying
-            )
-            .map(outcome =>
-              ToolMiddlewareOwnershipRuntime.validateFinal(scoped, outcome)(
-                ToolMiddlewareInvokerRuntime.validateRawOutcome
-              )
-            )
       }
     }
+}
+
+object ToolMiddleware {
+  final case class NoParameters()
+
+  val noParametersSchema: SchemaGraph =
+    SchemaGraph(scala.collection.immutable.ListMap.empty, SchemaType(SchemaTypeBody.RecordType(Nil)))
+
+  val noParametersValue: TypedSchemaValue =
+    TypedSchemaValue(noParametersSchema, SchemaValue.RecordValue(Nil))
 }
 
 private[golem] object ToolMiddlewareOwnershipRuntime {

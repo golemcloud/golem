@@ -17,6 +17,7 @@ interface tool-middleware-guest {
     middleware-name: string,
     tool-name:       string,
     tool-metadata:   tool,
+    parameters:      typed-schema-value,
     command-path:    list<string>,
     input:           typed-schema-value,
     stdin:           option<stream<u8>>,

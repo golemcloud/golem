@@ -3,7 +3,10 @@ use golem_rust::tool::{
     InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
     UnderlyingTool,
 };
-use golem_rust::{TypedSchemaValue, tool_definition, tool_middleware, universal_tool_middleware};
+use golem_rust::{
+    FromSchema, IntoSchema, TypedSchemaValue, tool_definition, tool_middleware,
+    universal_tool_middleware,
+};
 use std::convert::Infallible;
 use std::future::Future;
 use std::task::Poll;
@@ -40,7 +43,7 @@ macro_rules! streaming_middleware {
         impl MiddlewareProbeMiddleware for $type {
             async fn apply(
                 &self,
-                $underlying: &mut MiddlewareProbeUnderlying,
+                $underlying: &MiddlewareProbeUnderlying,
                 $value: String,
             ) -> Result<String, ToolInvokeError<Infallible>> $body
         }
@@ -96,3 +99,50 @@ streaming_middleware!(
         Ok(format!("early-return({value})"))
     }
 );
+
+#[derive(IntoSchema, FromSchema)]
+struct PrefixParameters {
+    prefix: String,
+    rules: Vec<PrefixRule>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+struct PrefixRule {
+    label: String,
+    enabled: bool,
+}
+
+struct Parameterized {
+    parameters: PrefixParameters,
+}
+
+impl Parameterized {
+    fn new(parameters: PrefixParameters) -> Self {
+        Self { parameters }
+    }
+}
+
+#[tool_middleware(
+    name = "streaming-parameterized",
+    constructor = Parameterized::new,
+    parameters = PrefixParameters
+)]
+impl MiddlewareProbeMiddleware for Parameterized {
+    async fn apply(
+        &self,
+        underlying: &MiddlewareProbeUnderlying,
+        value: String,
+    ) -> Result<String, ToolInvokeError<Infallible>> {
+        let labels = self
+            .parameters
+            .rules
+            .iter()
+            .filter(|rule| rule.enabled)
+            .map(|rule| rule.label.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        underlying
+            .apply(format!("{}[{labels}]({value})", self.parameters.prefix))
+            .await
+    }
+}

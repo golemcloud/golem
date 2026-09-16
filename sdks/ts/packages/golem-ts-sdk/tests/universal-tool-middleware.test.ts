@@ -89,10 +89,11 @@ function controllableStream(...values: number[]): {
 
 function invocation(
   overrides: Partial<UniversalToolMiddlewareInvocation> = {},
-): UniversalToolMiddlewareInvocation {
+): UniversalToolMiddlewareInvocation & { parameters: TypedSchemaValue } {
   return {
     toolName: 'runtime-tool',
     toolMetadata: { raw: 'metadata' } as unknown as Tool,
+    parameters: wireValue(z.object({}), {}),
     commandPath: ['nested', 'run'],
     input: wireValue(z.string(), 'input'),
     principal: sdkPrincipalFromHost({ tag: 'anonymous' }),

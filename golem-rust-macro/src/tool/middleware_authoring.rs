@@ -18,12 +18,44 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
 use std::hash::{Hash, Hasher};
 use syn::ext::IdentExt;
-use syn::parse::Parser;
+use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::{
     Error, Expr, ExprLit, FnArg, GenericArgument, Ident, ImplItem, Item, ItemFn, ItemImpl, Lit,
-    LitStr, MetaNameValue, Pat, Path, PathArguments, ReturnType, Token, Type,
+    LitStr, Pat, Path, PathArguments, ReturnType, Token, Type,
 };
+
+enum MiddlewareAttributeValue {
+    Expr(Expr),
+    Type(Type),
+}
+
+impl ToTokens for MiddlewareAttributeValue {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        match self {
+            Self::Expr(value) => value.to_tokens(tokens),
+            Self::Type(value) => value.to_tokens(tokens),
+        }
+    }
+}
+
+struct MiddlewareNameValue {
+    path: Path,
+    value: MiddlewareAttributeValue,
+}
+
+impl Parse for MiddlewareNameValue {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let path = input.parse::<Path>()?;
+        input.parse::<Token![=]>()?;
+        let value = if path.is_ident("parameters") {
+            MiddlewareAttributeValue::Type(input.parse()?)
+        } else {
+            MiddlewareAttributeValue::Expr(input.parse()?)
+        };
+        Ok(Self { path, value })
+    }
+}
 
 pub fn tool_middleware_impl(
     attrs: TokenStream,
@@ -49,11 +81,13 @@ struct MonomorphicArgs {
     name: LitStr,
     version: LitStr,
     constructor: Path,
+    parameters: Option<Type>,
 }
 
 struct UniversalArgs {
     name: LitStr,
     version: LitStr,
+    parameters: Option<Type>,
 }
 
 fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
@@ -61,6 +95,7 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
     let mut name = None;
     let mut version = None;
     let mut constructor = None;
+    let mut parameters = None;
     for value in values {
         let Some(key) = value.path.get_ident() else {
             return Err(Error::new_spanned(
@@ -72,7 +107,7 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
             "name" => set_once(&mut name, parse_string(value.value, "name")?, key)?,
             "version" => set_once(&mut version, parse_string(value.value, "version")?, key)?,
             "constructor" => {
-                let Expr::Path(path) = value.value else {
+                let MiddlewareAttributeValue::Expr(Expr::Path(path)) = value.value else {
                     return Err(Error::new_spanned(
                         value.value,
                         "`constructor` must be a synchronous zero-argument function path",
@@ -86,11 +121,20 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
                 }
                 set_once(&mut constructor, path.path, key)?;
             }
+            "parameters" => {
+                let MiddlewareAttributeValue::Type(Type::Path(path)) = value.value else {
+                    return Err(Error::new_spanned(
+                        value.value,
+                        "`parameters` must be a type path",
+                    ));
+                };
+                set_once(&mut parameters, Type::Path(path), key)?;
+            }
             other => {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown #[tool_middleware] key `{other}`; expected `name`, `version`, or `constructor`"
+                        "unknown #[tool_middleware] key `{other}`; expected `name`, `version`, `constructor`, or `parameters`"
                     ),
                 ));
             }
@@ -114,6 +158,7 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
         name,
         version,
         constructor,
+        parameters,
     })
 }
 
@@ -121,6 +166,7 @@ fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
     let values = parse_name_values(attrs)?;
     let mut name = None;
     let mut version = None;
+    let mut parameters = None;
     for value in values {
         let Some(key) = value.path.get_ident() else {
             return Err(Error::new_spanned(
@@ -131,11 +177,20 @@ fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
         match key.to_string().as_str() {
             "name" => set_once(&mut name, parse_string(value.value, "name")?, key)?,
             "version" => set_once(&mut version, parse_string(value.value, "version")?, key)?,
+            "parameters" => {
+                let MiddlewareAttributeValue::Type(Type::Path(path)) = value.value else {
+                    return Err(Error::new_spanned(
+                        value.value,
+                        "`parameters` must be a type path",
+                    ));
+                };
+                set_once(&mut parameters, Type::Path(path), key)?;
+            }
             other => {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown #[universal_tool_middleware] key `{other}`; expected `name` or `version`"
+                        "unknown #[universal_tool_middleware] key `{other}`; expected `name`, `version`, or `parameters`"
                     ),
                 ));
             }
@@ -149,14 +204,26 @@ fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
     })?;
     validate_middleware_name(&name)?;
     let version = version.unwrap_or_else(|| LitStr::new("0.0.0", name.span()));
-    Ok(UniversalArgs { name, version })
+    Ok(UniversalArgs {
+        name,
+        version,
+        parameters,
+    })
 }
 
-fn parse_name_values(attrs: TokenStream2) -> syn::Result<Punctuated<MetaNameValue, Token![,]>> {
-    Punctuated::<MetaNameValue, Token![,]>::parse_terminated.parse2(attrs)
+fn parse_name_values(
+    attrs: TokenStream2,
+) -> syn::Result<Punctuated<MiddlewareNameValue, Token![,]>> {
+    Punctuated::<MiddlewareNameValue, Token![,]>::parse_terminated.parse2(attrs)
 }
 
-fn parse_string(expr: Expr, key: &str) -> syn::Result<LitStr> {
+fn parse_string(value: MiddlewareAttributeValue, key: &str) -> syn::Result<LitStr> {
+    let MiddlewareAttributeValue::Expr(expr) = value else {
+        return Err(Error::new_spanned(
+            value,
+            format!("`{key}` must be a string literal"),
+        ));
+    };
     let Expr::Lit(ExprLit {
         lit: Lit::Str(value),
         ..
@@ -221,6 +288,10 @@ fn expand_tool_middleware(
     let constructor = &args.constructor;
     let name = &args.name;
     let version = &args.version;
+    let parameter_ty: Type = args
+        .parameters
+        .clone()
+        .unwrap_or_else(|| syn::parse_quote!(#golem_rust::tool::EmptyMiddlewareParameters));
     let doc = parse_doc(&item_impl.attrs);
     let summary = doc.summary;
     let description = doc.description;
@@ -246,6 +317,26 @@ fn expand_tool_middleware(
     let assert_constructor_result_ident = format_ident!(
         "__golem_tool_middleware_constructor_must_be_synchronous_infallible_zero_argument_and_return_self_result_{trait_name}_{suffix:016x}"
     );
+    let (constructor_bound, constructor_call, constructor_diagnostic) = if args.parameters.is_some()
+    {
+        (
+            quote! { ::std::ops::FnOnce(#parameter_ty) -> Output },
+            quote! { constructor(parameters) },
+            "tool middleware `constructor` must be synchronous, infallible, accept the declared parameters type, and return the middleware implementation type (`fn(Parameters) -> Self`)",
+        )
+    } else {
+        (
+            quote! { ::std::ops::FnOnce() -> Output },
+            quote! { constructor() },
+            "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)",
+        )
+    };
+    let construct_middleware = quote! {
+        {
+            let constructor = #assert_constructor_ident::<_, _>(#constructor);
+            #assert_constructor_result_ident::<#self_ty, _>(#constructor_call)
+        }
+    };
     let register_ident =
         format_ident!("__golem_register_tool_middleware_{trait_name}_{suffix:016x}");
 
@@ -261,13 +352,13 @@ fn expand_tool_middleware(
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
         #[diagnostic::on_unimplemented(
-            message = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)"
+            message = #constructor_diagnostic
         )]
         trait #constructor_trait_ident<Output> {}
 
         impl<Constructor, Output> #constructor_trait_ident<Output> for Constructor
         where
-            Constructor: ::std::ops::FnOnce() -> Output,
+            Constructor: #constructor_bound,
         {}
 
         #[doc(hidden)]
@@ -281,7 +372,7 @@ fn expand_tool_middleware(
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
         #[diagnostic::on_unimplemented(
-            message = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)"
+            message = #constructor_diagnostic
         )]
         trait #constructor_result_trait_ident<Expected> {
             fn into_expected(self) -> Expected;
@@ -320,6 +411,8 @@ fn expand_tool_middleware(
                         ),
                     })
                 ),
+                parameter_schema: #golem_rust::schema::try_into_schema_graph::<#parameter_ty>()
+                    .expect("tool middleware parameter schema build failed"),
             }
         }
 
@@ -327,6 +420,7 @@ fn expand_tool_middleware(
         fn #invoker_ident(
             _tool_name: ::std::string::String,
             _tool_metadata: #golem_rust::tool::Tool,
+            parameters: #golem_rust::TypedSchemaValue,
             command_path: ::std::vec::Vec<::std::string::String>,
             input: #golem_rust::TypedSchemaValue,
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
@@ -334,8 +428,8 @@ fn expand_tool_middleware(
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
             ::std::boxed::Box::pin(async move {
-                let constructor = #assert_constructor_ident::<_, _>(#constructor);
-                let middleware = #assert_constructor_result_ident::<#self_ty, _>(constructor());
+                let parameters = #golem_rust::tool::decode_middleware_parameters::<#parameter_ty>(parameters)?;
+                let middleware = #construct_middleware;
                 <#self_ty as #trait_path>::__golem_invoke_tool_middleware(
                     &middleware,
                     command_path,
@@ -454,9 +548,26 @@ fn expand_universal_tool_middleware(
         ));
     };
     validate_universal_function(&item_fn)?;
+    let expected_parameter_count = if args.parameters.is_some() { 8 } else { 7 };
+    if item_fn.sig.inputs.len() != expected_parameter_count {
+        return Err(Error::new_spanned(
+            &item_fn.sig.inputs,
+            "the universal middleware function parameter list must match its `parameters` declaration",
+        ));
+    }
     let function_ident = &item_fn.sig.ident;
     let name = &args.name;
     let version = &args.version;
+    let parameter_ty: Type = args
+        .parameters
+        .clone()
+        .unwrap_or_else(|| syn::parse_quote!(#golem_rust::tool::EmptyMiddlewareParameters));
+    let parameter_binding = if args.parameters.is_some() {
+        quote! { let parameters = #golem_rust::tool::decode_middleware_parameters::<#parameter_ty>(parameters)?; }
+    } else {
+        quote! { #golem_rust::tool::decode_middleware_parameters::<#parameter_ty>(parameters)?; }
+    };
+    let parameter_argument = args.parameters.as_ref().map(|_| quote! { parameters, });
     let doc = parse_doc(&item_fn.attrs);
     let summary = doc.summary;
     let description = doc.description;
@@ -487,6 +598,8 @@ fn expand_universal_tool_middleware(
                     examples: ::std::vec::Vec::new(),
                 },
                 scope: #golem_rust::tool::ToolMiddlewareScope::Universal,
+                parameter_schema: #golem_rust::schema::try_into_schema_graph::<#parameter_ty>()
+                    .expect("tool middleware parameter schema build failed"),
             }
         }
 
@@ -494,21 +607,26 @@ fn expand_universal_tool_middleware(
         fn #invoker_ident(
             tool_name: ::std::string::String,
             tool_metadata: #golem_rust::tool::Tool,
+            parameters: #golem_rust::TypedSchemaValue,
             command_path: ::std::vec::Vec<::std::string::String>,
             input: #golem_rust::TypedSchemaValue,
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
             principal: #golem_rust::tool::Principal,
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
-            ::std::boxed::Box::pin(#function_ident(
-                tool_name,
-                tool_metadata,
-                command_path,
-                input,
-                stdin,
-                principal,
-                underlying,
-            ))
+            ::std::boxed::Box::pin(async move {
+                #parameter_binding
+                #function_ident(
+                    #parameter_argument
+                    tool_name,
+                    tool_metadata,
+                    command_path,
+                    input,
+                    stdin,
+                    principal,
+                    underlying,
+                ).await
+            })
         }
 
         #golem_rust::ctor::__support::ctor_parse!(
@@ -565,22 +683,26 @@ fn validate_universal_function(item_fn: &ItemFn) -> syn::Result<()> {
             Ok(argument.ty.as_ref())
         })
         .collect::<syn::Result<Vec<_>>>()?;
-    if inputs.len() != 7 {
+    let has_parameters = inputs.len() == 8;
+    if inputs.len() != 7 && !has_parameters {
         return Err(Error::new_spanned(
             &signature.inputs,
-            "universal tool middleware functions require exactly seven parameters",
+            "universal tool middleware functions require seven parameters, or eight when `parameters` is declared",
         ));
     }
+    let offset = usize::from(has_parameters);
     let expected = [
-        type_is_ident(inputs[0], "String"),
-        type_is_ident(inputs[1], "Tool"),
-        type_is_container(inputs[2], "Vec", |inner| type_is_ident(inner, "String")),
-        type_is_ident(inputs[3], "TypedSchemaValue"),
-        type_is_container(inputs[4], "Option", |inner| {
+        type_is_ident(inputs[offset], "String"),
+        type_is_ident(inputs[offset + 1], "Tool"),
+        type_is_container(inputs[offset + 2], "Vec", |inner| {
+            type_is_ident(inner, "String")
+        }),
+        type_is_ident(inputs[offset + 3], "TypedSchemaValue"),
+        type_is_container(inputs[offset + 4], "Option", |inner| {
             type_is_ident(inner, "InputStream")
         }),
-        type_is_ident(inputs[5], "Principal"),
-        type_is_ident(inputs[6], "UnderlyingTool"),
+        type_is_ident(inputs[offset + 5], "Principal"),
+        type_is_ident(inputs[offset + 6], "UnderlyingTool"),
     ];
     if let Some((index, _)) = expected.iter().enumerate().find(|(_, valid)| !**valid) {
         return Err(Error::new_spanned(
@@ -681,6 +803,95 @@ mod tests {
     }
 
     #[test]
+    fn middleware_parameters_accept_generic_type_paths() {
+        let monomorphic = parse_monomorphic_args(quote! {
+            name = "policy",
+            constructor = Policy::new,
+            parameters = crate::config::Config<Vec<String>, Result<u32, crate::Error>>
+        })
+        .expect("a generic Rust type path is a valid parameter type");
+        let universal = parse_universal_args(quote! {
+            name = "audit",
+            parameters = ::config::Config<Vec<String>, Result<u32, ::config::Error>>
+        })
+        .expect("a qualified generic Rust type path is valid for both middleware macros");
+
+        let monomorphic = monomorphic.parameters.expect("parameters should be parsed");
+        let universal = universal.parameters.expect("parameters should be parsed");
+        assert_eq!(
+            quote!(#monomorphic).to_string(),
+            "crate :: config :: Config < Vec < String > , Result < u32 , crate :: Error > >"
+        );
+        assert_eq!(
+            quote!(#universal).to_string(),
+            ":: config :: Config < Vec < String > , Result < u32 , :: config :: Error > >"
+        );
+
+        let invalid = parse_monomorphic_args(quote! {
+            name = "policy",
+            constructor = Policy::new,
+            parameters = (String, u32)
+        })
+        .err()
+        .expect("non-path parameter types must be rejected");
+        assert!(
+            invalid
+                .to_string()
+                .contains("`parameters` must be a type path")
+        );
+    }
+
+    #[test]
+    fn parameterized_monomorphic_impl_expands_with_constructor_assertions() {
+        let expanded = expand_tool_middleware(
+            quote! {
+                name = "path-policy",
+                constructor = PathPolicy::new,
+                parameters = crate::Config<Vec<String>, Result<u32, crate::Error>>
+            },
+            quote! { impl FileToolMiddleware for PathPolicy {} },
+            &sdk(),
+        )
+        .unwrap();
+
+        syn::parse2::<syn::File>(expanded.clone()).unwrap();
+        let text = expanded.to_string();
+        assert!(text.contains("FnOnce (crate :: Config < Vec < String > , Result"));
+        assert!(text.contains("< PathPolicy , _ > (constructor (parameters))"));
+        assert!(text.contains("accept the declared parameters type"));
+
+        let universal = expand_universal_tool_middleware(
+            quote! {
+                name = "audit",
+                parameters = ::config::Config<Vec<String>, Result<u32, ::config::Error>>
+            },
+            quote! {
+                async fn audit(
+                    _parameters: ::config::Config<Vec<String>, Result<u32, ::config::Error>>,
+                    _tool_name: String,
+                    _tool_metadata: golem_rust::tool::Tool,
+                    command_path: Vec<String>,
+                    input: golem_rust::TypedSchemaValue,
+                    stdin: Option<golem_rust::tool::InputStream>,
+                    _principal: golem_rust::tool::Principal,
+                    underlying: golem_rust::tool::UnderlyingTool,
+                ) -> Result<
+                    golem_rust::tool::InvocationResult,
+                    golem_rust::tool::ToolInvokeError<golem_rust::tool::RawCustomToolError>,
+                > {
+                    underlying.invoke(command_path, input, stdin).await
+                }
+            },
+            &sdk(),
+        )
+        .unwrap();
+        syn::parse2::<syn::File>(universal.clone()).unwrap();
+        assert!(universal.to_string().contains(
+            "decode_middleware_parameters :: < :: config :: Config < Vec < String > , Result"
+        ));
+    }
+
+    #[test]
     fn transparent_monomorphic_impl_expands_with_constructor_assertion() {
         let expanded = expand_tool_middleware(
             quote! { name = "path-policy", constructor = PathPolicy::new },
@@ -689,7 +900,7 @@ mod tests {
                 impl FileToolMiddleware for PathPolicy {
                     async fn read(
                         &self,
-                        underlying: &mut FileToolUnderlying,
+                        underlying: &FileToolUnderlying,
                         path: String,
                     ) -> Result<Vec<u8>, golem_rust::tool::ToolInvokeError<FileError>> {
                         underlying.read(path).await
@@ -863,7 +1074,7 @@ mod tests {
                 })
                 .next()
                 .expect("expansion should contain an invoker adapter");
-            assert_eq!(invoker.sig.inputs.len(), 7);
+            assert_eq!(invoker.sig.inputs.len(), 8);
             let text = expansion.to_string();
             assert!(text.contains("sdk_alias :: tool :: register_tool_middleware"));
         }

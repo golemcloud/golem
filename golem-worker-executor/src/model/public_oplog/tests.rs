@@ -20,7 +20,8 @@ use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
-    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
+    EntityInvocationPlanReference, ExecutableTarget, FilesystemCapability,
     ToolInvocationDescriptor, ToolMiddlewareName,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -55,7 +56,10 @@ use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, TransactionId,
 };
 use golem_common::read_only_lock;
-use golem_common::schema::{IntoTypedSchemaValue, SecretValuePayload};
+use golem_common::schema::tool::{CommandTree, Tool};
+use golem_common::schema::{
+    IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, SecretValuePayload,
+};
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use prost::Message;
@@ -67,6 +71,14 @@ use uuid::Uuid;
 /// Component service stub for entries whose rendering must not need component
 /// metadata (`Start`/`End`/`Cancelled` host call entries).
 struct PanicComponentService;
+
+fn test_tool_definition() -> Tool {
+    Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: Vec::new() },
+        schema: SchemaGraph::empty(),
+    }
+}
 
 #[async_trait]
 impl ComponentService for PanicComponentService {
@@ -200,15 +212,57 @@ fn test_entity_request(
     operation: Option<EntityInvocationDescriptor>,
     input: TypedSchemaValue,
 ) -> HostRequest {
+    let activation = test_entity_activation(&entity);
+    let plan = match &entity {
+        AgentEntity::Tool(_) => {
+            EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool { activation }])
+        }
+        AgentEntity::ToolMiddleware(_) => EntityInvocationPlan::new(vec![
+            EntityInvocationPlanLayer::Middleware {
+                activation,
+                parameters: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+                    SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: test_tool_definition(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Tool {
+                activation: test_entity_activation(&AgentEntity::Tool(
+                    ToolName::try_from("test").unwrap(),
+                )),
+            },
+        ]),
+    }
+    .unwrap();
     let metadata = EntityInvocationRequest {
-        activation: test_entity_activation(&entity),
         entity,
         calling_principal: Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         }),
         call_mode,
-        operation,
-        principal: None,
+        operation: operation.unwrap_or_else(|| {
+            EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 0,
+                command_path: vec!["test".to_string()],
+                args: Vec::new(),
+                has_stdin: false,
+                has_stdout: false,
+                declares_stdout: false,
+                output_contract: golem_common::model::entity::ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
+            })
+        }),
+        principal: Principal::Agent(AgentPrincipal {
+            agent_id: owner.agent_id.clone(),
+        }),
+        plan: EntityInvocationPlanReference::Root { plan },
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),

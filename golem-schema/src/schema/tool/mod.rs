@@ -145,6 +145,7 @@ pub struct ToolMiddleware {
     pub aliases: Vec<String>,
     pub doc: Doc,
     pub scope: ToolMiddlewareScope,
+    pub parameter_schema: SchemaGraph,
 }
 
 #[derive(

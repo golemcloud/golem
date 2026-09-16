@@ -639,11 +639,12 @@ object JsToolMiddlewareScope {
 
 @js.native
 sealed trait JsToolMiddleware extends js.Object {
-  def name: String                 = js.native
-  def version: String              = js.native
-  def aliases: js.Array[String]    = js.native
-  def doc: JsDoc                   = js.native
-  def scope: JsToolMiddlewareScope = js.native
+  def name: String                                        = js.native
+  def version: String                                     = js.native
+  def aliases: js.Array[String]                           = js.native
+  def doc: JsDoc                                          = js.native
+  def scope: JsToolMiddlewareScope                        = js.native
+  def parameterSchema: golem.host.js.schema.JsSchemaGraph = js.native
 }
 object JsToolMiddleware {
   def apply(
@@ -651,10 +652,18 @@ object JsToolMiddleware {
     version: String,
     aliases: js.Array[String],
     doc: JsDoc,
-    scope: JsToolMiddlewareScope
+    scope: JsToolMiddlewareScope,
+    parameterSchema: golem.host.js.schema.JsSchemaGraph
   ): JsToolMiddleware =
     js.Dynamic
-      .literal("name" -> name, "version" -> version, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .literal(
+        "name"            -> name,
+        "version"         -> version,
+        "aliases"         -> aliases,
+        "doc"             -> doc,
+        "scope"           -> scope,
+        "parameterSchema" -> parameterSchema
+      )
       .asInstanceOf[JsToolMiddleware]
 }
 

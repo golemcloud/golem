@@ -20,10 +20,12 @@ import type {
   UnderlyingTool as WireUnderlyingTool,
 } from 'golem:tool/common@0.1.0';
 import {
+  deepEqual,
   drainUnconsumedQuotaAndPermissionCardHandles,
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
 } from '../schema-model';
+import type { SchemaCodec } from '../../schema/codec';
 import { schemaValueConforms } from './validation';
 import type { ExtendedCommandBody } from './model';
 import { closeAsyncIterable, isAsyncIterable } from './asyncIterable';
@@ -139,6 +141,7 @@ export function createUnderlyingToolClient<Definition extends AnyToolDefinition>
 export interface MonomorphicToolMiddlewareInvocation {
   readonly toolName: string;
   readonly toolMetadata: WireTool;
+  readonly parameters: WireTypedSchemaValue;
   readonly commandPath: readonly string[];
   readonly input: WireTypedSchemaValue;
   readonly stdin: AsyncIterable<number> | undefined;
@@ -150,7 +153,7 @@ export async function invokeMonomorphicToolMiddleware(
   invocation: MonomorphicToolMiddlewareInvocation,
   raw: RawUnderlyingTool,
 ): Promise<WireInvocationResult> {
-  const { commandPath, input, stdin: rawStdin, principal } = invocation;
+  const { commandPath, input, parameters, stdin: rawStdin, principal } = invocation;
   return withInvocationScopedUnderlying(raw, rawStdin, async (underlying, stdin) => {
     let resolved;
     try {
@@ -178,6 +181,7 @@ export async function invokeMonomorphicToolMiddleware(
 
     const context: Record<string, unknown> = {
       principal,
+      parameters: decodeMiddlewareParameters(source.parameterCodec, parameters),
       underlying: createToolUnderlyingForExtendedTool(
         source.expected,
         {
@@ -211,7 +215,7 @@ export async function invokeMonomorphicToolMiddleware(
 
 export async function invokeUniversalToolMiddleware(
   source: UniversalToolMiddlewareSource,
-  invocation: UniversalToolMiddlewareInvocation,
+  invocation: UniversalToolMiddlewareInvocation & { readonly parameters: WireTypedSchemaValue },
   raw: RawUnderlyingTool,
 ): Promise<WireInvocationResult> {
   try {
@@ -232,12 +236,36 @@ export async function invokeUniversalToolMiddleware(
               stdin,
               principal: invocation.principal,
             },
-        { underlying },
+        {
+          underlying,
+          parameters: decodeMiddlewareParameters(
+            source.parameterCodec,
+            invocation.parameters,
+          ) as {},
+        },
       );
     });
   } catch (error) {
     throw encodeRawMiddlewareError(error);
   }
+}
+
+function decodeMiddlewareParameters(codec: SchemaCodec, wire: WireTypedSchemaValue): unknown {
+  preflightTypedSchemaValue(wire);
+  const typed = typedSchemaValueFromWit(wire);
+  if (!deepEqual(typed.graph, codec.graph)) {
+    throw new ToolInvokeError({
+      tag: 'invalid-input',
+      val: 'middleware parameter schema does not match the local definition',
+    });
+  }
+  if (!schemaValueConforms(codec.graph, codec.graph.root, typed.value)) {
+    throw new ToolInvokeError({
+      tag: 'invalid-input',
+      val: 'middleware parameters do not conform to the local definition',
+    });
+  }
+  return codec.fromValue(typed.value);
 }
 
 export async function withInvocationScopedUnderlying(

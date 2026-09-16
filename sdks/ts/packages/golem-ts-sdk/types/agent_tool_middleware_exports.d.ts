@@ -22,7 +22,7 @@ declare module 'agent-tool-middleware-guest' {
      * Invoke one middleware layer around its runtime-bound next inner layer.
      * @throws ToolError
      */
-    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined, principal: Principal, wrapped: UnderlyingTool): Promise<InvocationResult>;
+    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, parameters: TypedSchemaValue, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined, principal: Principal, wrapped: UnderlyingTool): Promise<InvocationResult>;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
