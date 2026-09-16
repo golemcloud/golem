@@ -999,9 +999,9 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
 // --------------------------------------------------------------------------
 
 #[test]
-fn named_type_shared_across_routes_appears_once_in_components() {
+fn named_type_shared_across_routes_appears_once_per_direction_in_components() {
     // A named record used as both a request body and a response should appear
-    // exactly once in components/schemas, referenced by `$ref`.
+    // once per direction in components/schemas, referenced by `$ref`.
     let named = SchemaGraph {
         defs: vec![SchemaTypeDef {
             id: TypeId("User".to_string()),
@@ -1043,8 +1043,8 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         .collect();
     assert_eq!(
         user_keys.len(),
-        1,
-        "named type should appear exactly once, got keys: {:?}",
+        2,
+        "named type should appear once per direction, got keys: {:?}",
         schemas.keys().collect::<Vec<_>>()
     );
 
@@ -1055,13 +1055,19 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         body_schema["$ref"]
             .as_str()
             .unwrap()
-            .starts_with("#/components/schemas/"),
+            .starts_with("#/components/schemas/Input_"),
         "request body should reference the component, got: {body_schema}"
     );
-    // The response on the other route references the same component.
+    // The response references the output component for the same named type.
     let response_schema =
         &spec["paths"]["/b"]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
-    assert_eq!(response_schema["$ref"], body_schema["$ref"]);
+    assert_eq!(
+        response_schema["$ref"],
+        body_schema["$ref"]
+            .as_str()
+            .unwrap()
+            .replacen("/Input_", "/Output_", 1)
+    );
 }
 
 #[test]

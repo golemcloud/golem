@@ -609,7 +609,8 @@ const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () =>
 void wrongRootKey;
 
 declare const grepClient: ToolClient<typeof grepDef>;
-declare const clientStdin: AsyncIterable<number>;
+declare const clientStdin: ReadableStream<Uint8Array>;
+declare const legacyClientStdin: AsyncIterable<number>;
 const grepCall = grepClient.grep({
   pattern: 'TODO',
   files: ['./src'],
@@ -618,17 +619,15 @@ const grepCall = grepClient.grep({
   color: 'auto',
   stdin: clientStdin,
 });
-const grepResult: Promise<{
-  result: Array<{ file: unknown; line: number; text: string }>;
-  stdout: AsyncIterable<number>;
-}> = grepCall;
+const grepResult: import('../src/bridge/tool').StartedToolInvocation<
+  Array<{ file: unknown; line: number; text: string }>
+> = grepCall;
 type GrepClientResult = Expect<
   Equal<
     typeof grepCall,
-    Promise<{
-      result: Array<{ file: unknown; line: number; text: string }>;
-      stdout: AsyncIterable<number>;
-    }>
+    import('../src/bridge/tool').StartedToolInvocation<
+      Array<{ file: unknown; line: number; text: string }>
+    >
   >
 >;
 void grepResult;
@@ -712,11 +711,12 @@ const requiredStdoutDef = toolDefinition('required-stdout').body((body) =>
   body.stdout({ required: true }).returns(z.void()),
 );
 declare const requiredStdoutClient: ToolClient<typeof requiredStdoutDef>;
-const requiredStdout: Promise<AsyncIterable<number>> = requiredStdoutClient['required-stdout']({});
+const requiredStdout: import('../src/bridge/tool').StartedToolInvocation<undefined> =
+  requiredStdoutClient['required-stdout']({});
 type RequiredStdoutResult = Expect<
   Equal<
     ReturnType<(typeof requiredStdoutClient)['required-stdout']>,
-    Promise<AsyncIterable<number>>
+    import('../src/bridge/tool').StartedToolInvocation<undefined>
   >
 >;
 void requiredStdout;
@@ -728,13 +728,12 @@ const optionalStdoutDef = toolDefinition('optional-stdout').body((body) =>
   body.stdout({ required: false }).returns(z.void()),
 );
 declare const optionalStdoutClient: ToolClient<typeof optionalStdoutDef>;
-const optionalStdout: Promise<AsyncIterable<number> | undefined> = optionalStdoutClient[
-  'optional-stdout'
-]({});
+const optionalStdout: import('../src/bridge/tool').StartedToolInvocation<undefined> =
+  optionalStdoutClient['optional-stdout']({});
 type OptionalStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStdoutClient)['optional-stdout']>,
-    Promise<AsyncIterable<number> | undefined>
+    import('../src/bridge/tool').StartedToolInvocation<undefined>
   >
 >;
 void optionalStdout;
@@ -744,14 +743,12 @@ const optionalStructuredStdoutDef = toolDefinition('optional-structured-stdout')
   body.stdout({ required: false }).returns(z.string()),
 );
 declare const optionalStructuredStdoutClient: ToolClient<typeof optionalStructuredStdoutDef>;
-const optionalStructuredStdout: Promise<{
-  result: string;
-  stdout?: AsyncIterable<number>;
-}> = optionalStructuredStdoutClient['optional-structured-stdout']({});
+const optionalStructuredStdout: import('../src/bridge/tool').StartedToolInvocation<string> =
+  optionalStructuredStdoutClient['optional-structured-stdout']({});
 type OptionalStructuredStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStructuredStdoutClient)['optional-structured-stdout']>,
-    Promise<{ result: string; stdout?: AsyncIterable<number> }>
+    import('../src/bridge/tool').StartedToolInvocation<string>
   >
 >;
 void optionalStructuredStdout;
@@ -773,8 +770,8 @@ requiredStdinClient['required-stdin']({ stdin: clientStdin });
 // @ts-expect-error required stdin must be supplied by the caller
 requiredStdinClient['required-stdin']({});
 requiredStdinClient['required-stdin']({
-  // @ts-expect-error caller-side typed clients accept Preview 3 byte async iterables
-  stdin: new ReadableStream<Uint8Array>(),
+  // @ts-expect-error caller-side stdin must support cancellation of a pending read
+  stdin: legacyClientStdin,
 });
 
 const clientSubtreeDef = toolDefinition('client-subtree')

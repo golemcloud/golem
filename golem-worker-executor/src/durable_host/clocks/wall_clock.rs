@@ -23,6 +23,14 @@ use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Datetime> {
+        #[cfg(feature = "test-utils")]
+        if self.test_should_skip_wall_clock_now_durability() {
+            let mut view = self.as_wasi_view();
+            return Host::now(&mut view.clocks()).await;
+        }
+        #[cfg(feature = "test-utils")]
+        self.owner_execution.test_before_wall_clock_now().await;
+
         // Re-executable `ReadLocal`: the `DurableCallSession::run` combinator reads the clock on the live /
         // incomplete-replay paths and replays a recorded value otherwise.
         let handle = DurableCallSession::<host_functions::WallClockNow, NotCancellable>::start(

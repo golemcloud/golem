@@ -96,7 +96,9 @@ function formatToolCallError(cause: ToolCallErrorCause<unknown>): string {
   }
   return cause.error.tag === 'remote-tool-error'
     ? `Remote tool call failed: ${cause.error.val.tag}`
-    : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
+    : cause.error.tag === 'cancelled'
+      ? 'Remote tool call failed: cancelled'
+      : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
 }
 
 function isRecord(value: unknown): value is Record<PropertyKey, unknown> {

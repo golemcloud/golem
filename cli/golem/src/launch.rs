@@ -63,6 +63,7 @@ use uuid::uuid;
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub struct LaunchArgs {
+    pub system_memory_override: Option<std::num::NonZeroU64>,
     pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
@@ -313,11 +314,22 @@ fn registry_service_config(
                 },
             );
             accounts.insert(
-                "builtin-plugin-owner".to_string(),
+                "builtin_plugin_owner".to_string(),
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
                     email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                    token: None,
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
+            accounts.insert(
+                "builtin_tool_owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                    name: "Builtin Tool Owner".to_string(),
+                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
@@ -457,6 +469,7 @@ fn worker_executor_config(
         ..Default::default()
     };
 
+    config.memory.system_memory_override = args.system_memory_override.map(|value| value.get());
     config.add_port_to_tracing_file_name_if_enabled();
     Ok(config)
 }
@@ -512,9 +525,14 @@ async fn run_shard_manager(
 ) -> Result<golem_shard_manager::RunDetails, anyhow::Error> {
     let prometheus_registry = prometheus::default_registry().clone();
     let span = tracing::info_span!("shard-manager");
-    golem_shard_manager::run(&config, prometheus_registry, join_set)
-        .instrument(span)
-        .await
+    golem_shard_manager::run(
+        &config,
+        golem_shard_manager::Deployment::Embedded,
+        prometheus_registry,
+        join_set,
+    )
+    .instrument(span)
+    .await
 }
 
 async fn run_component_compilation_service(
@@ -573,6 +591,7 @@ mod tests {
 
     fn launch_args() -> LaunchArgs {
         LaunchArgs {
+            system_memory_override: None,
             router_addr: "127.0.0.1".to_string(),
             router_port: 0,
             custom_request_port: 0,
@@ -676,5 +695,20 @@ mod tests {
                 .to_string()
                 .contains("cannot be combined")
         );
+    }
+
+    #[test]
+    fn local_server_system_memory_override_reaches_executor_config() {
+        for system_memory_override in [None, std::num::NonZeroU64::new(2_147_483_648)] {
+            let mut args = launch_args();
+            args.system_memory_override = system_memory_override;
+            let config = worker_executor_config(&args, 0, 0, 0).unwrap();
+            assert_eq!(
+                config.memory.system_memory_override,
+                system_memory_override.map(|value| value.get())
+            );
+            assert_eq!(config.memory.worker_memory_ratio, 0.8);
+            assert!(config.memory.enable_measured_admission);
+        }
     }
 }

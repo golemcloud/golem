@@ -775,7 +775,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "h2 0.3.27",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 0.2.12",
  "http 1.5.0",
  "http-body 0.4.6",
@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "623ecd066d1ec74037f703e5a5833304a5621a0c0201ad72ea04a80054483fc7"
+checksum = "ac6b6856f399753c591dcdb7b57fd651eee3e07787672392cf551b8ba1725bdd"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -2647,6 +2647,7 @@ dependencies = [
  "chrono-tz",
  "flate2",
  "hashbrown 0.16.1",
+ "im",
  "lazy_static",
  "mac_address",
  "nonempty-collections",
@@ -2658,9 +2659,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9ed06e04bc6899b2609b595a931e84d79a5f4187225d6f4cd942b2ebf54db81"
+checksum = "4573798d7c0123902a9fc19f43c1c0dd2daf587c121119fd5ebcdab46f4e984a"
 dependencies = [
  "bytes",
  "desert_core",
@@ -2672,12 +2673,13 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fd78c31bbbee1a0cd9203362cb1b00306344759d064fc1e8636d5c8c64bfc61"
+checksum = "88084a4ce8019c315bcc0142f2fa97c1d7b389a96cfadea6f07a5607126667a0"
 dependencies = [
  "desert_core",
  "desert_macro",
+ "im",
 ]
 
 [[package]]
@@ -3736,8 +3738,10 @@ dependencies = [
  "golem-api-grpc",
  "golem-client",
  "golem-common",
+ "golem-schema",
  "heck",
  "http 1.5.0",
+ "humanize-rs",
  "humansize",
  "include_dir",
  "indexmap 2.14.0",
@@ -3817,8 +3821,10 @@ name = "golem-client"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
+ "futures-util",
  "golem-common",
  "golem-openapi-client-generator",
  "http 1.5.0",
@@ -3829,6 +3835,8 @@ dependencies = [
  "serde_yaml",
  "test-r",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
 ]
@@ -3996,6 +4004,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-native-tool"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "golem-rust-macro",
+ "golem-schema",
+ "golem-tool-metadata",
+ "test-r",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 dependencies = [
@@ -4031,6 +4051,8 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
+ "golem-schema",
  "golem-service-base",
  "heck",
  "http 1.5.0",
@@ -4086,6 +4108,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rust-macro"
+version = "0.0.0"
+dependencies = [
+ "heck",
+ "humantime",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "test-r",
+]
+
+[[package]]
 name = "golem-schema"
 version = "0.0.0"
 dependencies = [
@@ -4129,6 +4164,7 @@ dependencies = [
  "chrono",
  "darling 0.20.11",
  "golem-common",
+ "golem-schema",
  "heck",
  "poem-openapi",
  "proc-macro-crate",
@@ -4166,6 +4202,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "h2 0.4.19",
  "headers",
  "hex",
  "hmac 0.12.1",
@@ -4248,11 +4285,13 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic 0.14.6",
  "tonic-health",
  "tonic-reflection",
  "tonic-tracing-opentelemetry",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "url",
  "uuid",
@@ -4311,6 +4350,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
+ "test-r",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -4347,6 +4394,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4392,6 +4440,7 @@ dependencies = [
  "sqlparser",
  "sqlx",
  "sqlx-core",
+ "stacker",
  "sysinfo",
  "system-interface",
  "tempfile",
@@ -4431,6 +4480,7 @@ dependencies = [
  "chrono",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4478,9 +4528,11 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "headers",
+ "hmac 0.12.1",
  "http 1.5.0",
  "http-body-util",
  "humantime-serde",
@@ -4512,6 +4564,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "strum_macros",
@@ -4584,9 +4637,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "839c0e8a181239723652be9062bb56ca5bf5f64011f73b623f6f4fc59086a228"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4842,6 +4895,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humanize-rs"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016b02deb8b0c415d8d56a6f0ab265e50c22df61194e37f9be75ed3a722de8a6"
+
+[[package]]
 name = "humansize"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4909,7 +4968,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "httparse",
@@ -8411,7 +8470,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
@@ -10437,6 +10496,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "slab",
@@ -10604,7 +10664,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",

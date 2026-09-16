@@ -29,8 +29,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
-    HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
+    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
+    HasOplogService, HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
@@ -123,6 +123,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub http_connection_pool: Option<HttpConnectionPool>,
     pub websocket_connection_pool: WebSocketConnectionPool,
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
+    pub native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     pub extra_deps: Ctx::ExtraDeps,
     pub leak_sentinel: Arc<()>,
 }
@@ -335,6 +336,12 @@ impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DefaultWorkerFork<Ctx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.native_tool_catalog.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -370,6 +377,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -408,6 +416,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -449,6 +458,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             http_connection_pool,
             websocket_connection_pool,
             environment_state_service,
+            native_tool_catalog,
             extra_deps,
             leak_sentinel,
         }
@@ -471,7 +481,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_agent_id).await;
+        let target_metadata = self.worker_service.get(&owned_target_agent_id).await?;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -480,14 +490,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        // We assume the source worker belongs to this executor
-        self.shard_service.check_worker(source_agent_id)?;
+        // ADMISSION: this is the only ownership check on the
+        // fork path and it rejects rather than routing, so a fork started after
+        // the lease lapsed must be refused.
+        self.shard_service.check_admission(source_agent_id)?;
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
         self.worker_service
             .get(&owned_source_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
@@ -1010,6 +1022,7 @@ mod tests {
         let remote = agent_id("remote");
         let entry = OplogEntry::CardTransferStarted {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
             source_holder: Some(CardHolder::Agent(AgentCardHolder {

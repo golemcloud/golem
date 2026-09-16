@@ -24,9 +24,7 @@ package golem.bridge.runtime
  * names, case names, or named-ref identifiers — those come from the schema.
  *
  * Mirrors the Golem Scala SDK's `golem.schema.SchemaValue` so the generated
- * client's type mapping stays close to the SDK. Capability nodes (quantity,
- * secret, quota-token) and the streaming nodes are not part of the agent IO
- * surface exercised by the bridge and are intentionally omitted.
+ * client's type mapping stays close to the SDK.
  */
 sealed trait SchemaValue extends Product with Serializable
 
@@ -65,6 +63,16 @@ object SchemaValue {
   final case class UrlValue(value: String)                                    extends SchemaValue
   final case class DatetimeValue(value: String)                               extends SchemaValue
   final case class DurationValue(nanoseconds: Long)                           extends SchemaValue
+  final case class QuantityValue(mantissa: Long, scale: Int, unit: String)     extends SchemaValue
+
+  // Public invocation-session stream leaf. Before acceptance only
+  // provisionalRef is populated; server values carry streamToken.
+  final case class StreamReferenceValue(
+    provisionalRef: Option[String],
+    streamToken: Option[String],
+    private[runtime] val binding: Option[StreamBinding] = None
+  )
+      extends SchemaValue
 
   // Discriminated union
   final case class UnionValue(unionTag: String, body: SchemaValue) extends SchemaValue

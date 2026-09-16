@@ -265,14 +265,56 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_environment_list_result
     ),
     registry_entry!(
+        "EnvironmentToolGrantCreateView",
+        "tool.grant.create",
+        arb_environment_tool_grant_create_result
+    ),
+    registry_entry!(
+        "EnvironmentToolGrantGetView",
+        "tool.grant.get",
+        arb_environment_tool_grant_get_result
+    ),
+    registry_entry!(
+        "EnvironmentToolGrantListView",
+        "tool.grant.list",
+        arb_environment_tool_grant_list_result
+    ),
+    registry_entry!(
+        "EnvironmentToolGrantDeleteView",
+        "tool.grant.delete",
+        arb_environment_tool_grant_delete_result
+    ),
+    registry_entry!(
+        "EnvironmentToolGrantRestoreView",
+        "tool.grant.restore",
+        arb_environment_tool_grant_restore_result
+    ),
+    registry_entry!(
         "EnvironmentSyncDeploymentOptionsResult",
         "environment.sync-deployment-options",
         arb_environment_sync_deployment_options_result
+    ),
+    registry_entry!("ToolReleaseView", "tool.release", arb_tool_release_result),
+    registry_entry!(
+        "ToolReleaseListView",
+        "tool.release.list",
+        arb_tool_release_list_result
+    ),
+    registry_entry!("DeployedToolView", "tool.get", arb_deployed_tool_result),
+    registry_entry!(
+        "DeployedToolListView",
+        "tool.list",
+        arb_deployed_tool_list_result
     ),
     registry_entry!(
         "EnvironmentSetupPlanView",
         "deploy.environment-setup-plan",
         arb_environment_setup_plan_result
+    ),
+    registry_entry!(
+        "EnvironmentToolGrantPlanView",
+        "deploy.environment-tool-grants",
+        arb_environment_tool_grant_plan_result
     ),
     registry_entry!(
         "PluginRegistrationGetView",
@@ -585,6 +627,8 @@ fn cli_output_schema_focus_prunes_unrelated_definitions() {
 
     assert!(definitions.contains_key("agent.oplog"));
     assert!(definitions.contains_key("PublicOplogEntry"));
+    assert!(definitions.contains_key("PublicOplogEntryAttribution"));
+    assert!(definitions.contains_key("PublicEntityInvocation"));
     assert!(!definitions.contains_key("agent.list"));
     assert!(!definitions.contains_key("component.list"));
 
@@ -746,6 +790,7 @@ fn deploy_diff_and_plan_structured_outputs_mask_secret_payloads() {
     let diff_value = hidden_structured_output(diff.clone());
     let plan_value = hidden_structured_output(DeployPlanView {
         deployment_diff: &diff,
+        tool_publications: &Default::default(),
         environment_setup: None,
     });
 
@@ -1084,9 +1129,12 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
         secret_type: golem_common::schema::SchemaGraph::anonymous(
             golem_common::schema::SchemaType::string(),
         ),
-        secret_value: Some(golem_common::schema::SchemaValue::String(
-            "super-secret".to_string(),
-        )),
+        secret_value: Some(
+            golem_common::schema::ExternalSchemaValue::try_from(
+                golem_common::schema::SchemaValue::String("super-secret".to_string()),
+            )
+            .unwrap(),
+        ),
     };
 
     let outputs = vec![
@@ -1139,6 +1187,88 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
 }
 
 #[test]
+fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() {
+    use golem_common::model::oplog::public_oplog_entry::StartParams;
+    use golem_common::model::oplog::{
+        PublicAgentEntity, PublicAgentEntityKind, PublicDurableFunctionType, PublicEntityCallMode,
+        PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
+        PublicOplogEntry, PublicOplogEntryAttribution, PublicToolInvocationOperation,
+    };
+    use golem_common::model::{Empty, OplogIndex, Timestamp};
+    use golem_common::schema::schema_type::SecretSpec;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, SecretValuePayload};
+
+    let secret_id = uuid::Uuid::from_u128(1);
+    let request = golem_common::schema::TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default())),
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id,
+            config_key: Some(vec!["database".to_string(), "password".to_string()]),
+            version: 7,
+            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            category: Some("api-key".to_string()),
+        }),
+    );
+    let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+        index: 12,
+        attribution: PublicOplogEntryAttribution::entity(PublicEntityInvocationContext {
+            invocation: PublicEntityInvocation {
+                entity: PublicAgentEntity {
+                    kind: PublicAgentEntityKind::Tool,
+                    name: "filesystem".to_string(),
+                },
+                start_index: OplogIndex::from_u64(11),
+                call_mode: PublicEntityCallMode::Synchronous,
+                operation: Some(PublicEntityInvocationOperation::Tool(
+                    PublicToolInvocationOperation {
+                        command_path: vec!["files".to_string(), "lookup".to_string()],
+                        has_stdin: false,
+                        has_stdout: true,
+                        declares_stdout: true,
+                    },
+                )),
+            },
+            ancestors: Vec::new(),
+        }),
+        entry: PublicOplogEntry::Start(StartParams {
+            timestamp: Timestamp::from(0),
+            parent_start_index: None,
+            function_name: "golem::entity::invoke".to_string(),
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(request),
+            durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
+        }),
+    })
+    .expect("agent.oplog should serialize");
+
+    let validator = jsonschema::options()
+        .build(&load_command_output_schema())
+        .expect("command output schema must be valid");
+    assert!(
+        validator.is_valid(&output),
+        "schema rejected agent.oplog secret metadata: {:?}",
+        validator
+            .iter_errors(&output)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+    );
+
+    let metadata = &output["entry"]["request"]["value"]["value"];
+    assert_eq!(metadata["secretId"], json!(secret_id));
+    assert_eq!(metadata["configKey"], json!(["database", "password"]));
+    assert_eq!(metadata["version"], json!(7));
+    assert_eq!(metadata["resolvedAt"], json!("2023-11-14T22:13:20Z"));
+    assert_eq!(metadata["category"], json!("api-key"));
+    assert!(metadata.get("secretValue").is_none());
+
+    let operation = &output["attribution"]["invocation"]["operation"];
+    assert_eq!(operation["hasStdout"], json!(true));
+    assert_eq!(operation["declaresStdout"], json!(true));
+    assert!(operation.get("stdout").is_none());
+}
+
+#[test]
 fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
     let schema = load_command_output_schema();
     let validator = jsonschema::options()
@@ -1168,6 +1298,7 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
         .expect("agent-type.list should serialize"),
         to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
             index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
             entry: sample_public_oplog_entries()
                 .into_iter()
                 .next()
@@ -1677,6 +1808,8 @@ fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         components: BTreeMap::new(),
         http_api_deployments: BTreeMap::new(),
         mcp_deployments: BTreeMap::new(),
+        remote_tools: BTreeMap::new(),
+        published_tools: Default::default(),
     }
 }
 
@@ -2024,6 +2157,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             message: "message".to_string(),
         }),
         PublicOplogEntry::Restart(RestartParams {
+            timestamp: timestamp(),
+        }),
+        PublicOplogEntry::Resumed(ResumedParams {
             timestamp: timestamp(),
         }),
         PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
@@ -2781,15 +2917,84 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
     serialized_output(
         (
             arb_small_u64(),
+            arb_public_oplog_entry_attribution(),
             prop_oneof![
                 proptest::sample::select(sample_public_oplog_entries()),
                 arb_typed_value_oplog_entry(),
             ],
         )
-            .prop_map(
-                |(index, entry)| crate::model::agent::oplog::AgentOplogEntryView { index, entry },
-            ),
+            .prop_map(|(index, attribution, entry)| {
+                crate::model::agent::oplog::AgentOplogEntryView {
+                    index,
+                    attribution,
+                    entry,
+                }
+            }),
     )
+}
+
+fn arb_public_oplog_entry_attribution()
+-> BoxedStrategy<golem_common::model::oplog::PublicOplogEntryAttribution> {
+    use golem_common::model::oplog::{
+        PublicAgentEntity, PublicAgentEntityKind, PublicEntityCallMode, PublicEntityInvocation,
+        PublicEntityInvocationContext, PublicEntityInvocationOperation,
+        PublicOplogEntryAttribution, PublicToolInvocationOperation,
+    };
+
+    let invocation = || {
+        (
+            prop_oneof![
+                Just(PublicAgentEntityKind::Tool),
+                Just(PublicAgentEntityKind::ToolMiddleware),
+            ],
+            arb_small_string(),
+            1u64..1000,
+            prop_oneof![
+                Just(PublicEntityCallMode::Synchronous),
+                Just(PublicEntityCallMode::Asynchronous),
+                Just(PublicEntityCallMode::FireAndForget),
+            ],
+            proptest::option::of(
+                (
+                    proptest::collection::vec(arb_small_string(), 0..4),
+                    any::<bool>(),
+                    any::<bool>(),
+                    any::<bool>(),
+                )
+                    .prop_map(
+                        |(command_path, has_stdin, has_stdout, declares_stdout)| {
+                            PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
+                                command_path,
+                                has_stdin,
+                                has_stdout,
+                                declares_stdout,
+                            })
+                        },
+                    ),
+            ),
+        )
+            .prop_map(|(kind, name, start_index, call_mode, operation)| {
+                PublicEntityInvocation {
+                    entity: PublicAgentEntity { kind, name },
+                    start_index: golem_common::model::OplogIndex::from_u64(start_index),
+                    call_mode,
+                    operation,
+                }
+            })
+    };
+
+    prop_oneof![
+        Just(PublicOplogEntryAttribution::agent()),
+        (invocation(), proptest::collection::vec(invocation(), 0..4)).prop_map(
+            |(invocation, ancestors)| PublicOplogEntryAttribution::entity(
+                PublicEntityInvocationContext {
+                    invocation,
+                    ancestors,
+                }
+            )
+        ),
+    ]
+    .boxed()
 }
 
 /// Oplog entry carrying a structurally-comprehensive [`TypedSchemaValue`]
@@ -4265,6 +4470,34 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             let mut properties = crate::model::app::ComponentLayerProperties::default();
             let selection = selection.as_ref();
 
+            properties.dependency_agents.apply_layer(
+                &layer_id,
+                selection,
+                (
+                    crate::model::cascade::property::vec::VecMergeMode::Append,
+                    vec![
+                        crate::model::app_raw::ComponentDependencyReference::Structured(
+                            crate::model::app_raw::ComponentDependencyReferenceStruct {
+                                component: "app:provider".to_string(),
+                                name: "GeneratedAgent".to_string(),
+                            },
+                        ),
+                    ],
+                ),
+            );
+            properties.dependency_tools.apply_layer(
+                &layer_id,
+                selection,
+                (
+                    crate::model::cascade::property::vec::VecMergeMode::Append,
+                    vec![
+                        crate::model::app_raw::ComponentDependencyReference::Shortcut(
+                            "search".to_string(),
+                        ),
+                    ],
+                ),
+            );
+
             properties
                 .component_wasm
                 .apply_layer(&layer_id, selection, None);
@@ -4733,6 +4966,7 @@ fn arb_deploy_plan_result() -> OutputDocumentStrategy {
             to_structured_output_value_masked(
                 DeployPlanView {
                     deployment_diff: &deployment_diff,
+                    tool_publications: &Default::default(),
                     environment_setup: environment_setup.as_ref(),
                 },
                 MaskingConfig::hide_secrets(),
@@ -4756,6 +4990,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
             arb_small_string(),
             arb_small_string(),
             arb_small_string(),
+            arb_small_string(),
             arb_hash(),
             arb_hash(),
             arb_hash(),
@@ -4763,7 +4998,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
             arb_hash(),
             arb_hash(),
         )
-            .prop_map(|(component_key, http_key, mcp_key, current_component_hash, new_component_hash, current_file_hash, new_file_hash, current_mcp_hash, new_mcp_hash)| {
+            .prop_map(|(component_key, http_key, mcp_key, remote_tool_key, current_component_hash, new_component_hash, current_file_hash, new_file_hash, current_mcp_hash, new_mcp_hash)| {
                 use golem_common::model::diff::Diffable;
 
                 let mut current = golem_common::model::diff::Deployment::default();
@@ -4904,6 +5139,64 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     ),
                 );
 
+                let release_id = golem_common::model::tool_release::ToolReleaseId::new();
+                let owner_account_id = golem_common::model::account::AccountId::new();
+                let binding = golem_common::model::diff::EffectiveToolBinding {
+                    parameters: golem_common::model::json::NormalizedJsonValue::new(json!({
+                        "limit": 5
+                    })),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                    secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(
+                        BTreeSet::new(),
+                    ),
+                    filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Allowed,
+                };
+                current.remote_tools.insert(
+                    remote_tool_key.clone(),
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::RemoteToolDeployment {
+                            release_id,
+                            version: "1.0.0".to_string(),
+                            source_digest: current_component_hash,
+                            owner_account_id,
+                            owner_account_email: golem_common::model::account::AccountEmail::new(
+                                "publisher@example.com",
+                            ),
+                            metadata_version: "0.1.0".to_string(),
+                            metadata_digest: current_file_hash,
+                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            bindings: BTreeMap::from_iter([(
+                                golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                binding.clone(),
+                            )]),
+                        },
+                    ),
+                );
+                new.remote_tools.insert(
+                    remote_tool_key,
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::RemoteToolDeployment {
+                            release_id,
+                            version: "1.1.0".to_string(),
+                            source_digest: new_component_hash,
+                            owner_account_id,
+                            owner_account_email: golem_common::model::account::AccountEmail::new(
+                                "publisher@example.com",
+                            ),
+                            metadata_version: "0.1.0".to_string(),
+                            metadata_digest: new_file_hash,
+                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            bindings: BTreeMap::from_iter([(
+                                golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                binding,
+                            )]),
+                        },
+                    ),
+                );
+                current.published_tools.insert("old-tool".to_string());
+                new.published_tools.insert("new-tool".to_string());
+
                 golem_common::model::diff::Deployment::diff(&new, &current)
                     .expect("generated deployments should diff")
                     .expect("generated deployments should differ")
@@ -4918,6 +5211,42 @@ fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
                 .expect("generated environment setup plan should serialize")
         })
         .boxed()
+}
+
+fn arb_environment_tool_grant_plan_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(
+            (
+                prop_oneof![
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Create),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::UpdateReference),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Delete),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged),
+                ],
+                proptest::option::of(arb_uuid()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_uuid()),
+            )
+                .prop_map(|(action, release_id, account, name, version, grant_id)| {
+                    crate::model::deploy::EnvironmentToolGrantPlanEntry {
+                        action,
+                        release_id: release_id
+                            .map(golem_common::model::tool_release::ToolReleaseId),
+                        account,
+                        name,
+                        version,
+                        grant_id: grant_id.map(
+                            golem_common::model::environment_tool_grant::EnvironmentToolGrantId,
+                        ),
+                    }
+                }),
+            0..5,
+        )
+        .prop_map(|entries| crate::model::deploy::EnvironmentToolGrantPlanView { entries }),
+    )
 }
 
 fn arb_environment_setup_plan() -> BoxedStrategy<crate::model::deploy::EnvironmentSetupPlan> {
@@ -5043,6 +5372,155 @@ fn arb_environment_list_result() -> OutputDocumentStrategy {
 fn arb_environment_sync_deployment_options_result() -> OutputDocumentStrategy {
     serialized_output(any::<bool>().prop_map(|updated| {
         crate::model::environment::EnvironmentSyncDeploymentOptionsResult { updated }
+    }))
+}
+
+fn arb_environment_tool_grant_view()
+-> BoxedStrategy<crate::model::environment::EnvironmentToolGrantView> {
+    (
+        arb_uuid(),
+        arb_uuid(),
+        arb_small_string(),
+        arb_small_string(),
+        arb_small_string(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(id, release_id, tool_name, tool_version, owner, protected, automatic, deleted)| {
+            crate::model::environment::EnvironmentToolGrantView {
+                grant_id: golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId(id),
+                release_id: golem_common::base_model::tool_release::ToolReleaseId(release_id),
+                tool_name,
+                tool_version,
+                owner,
+                protected,
+                automatic,
+                lifecycle: if deleted {
+                    golem_common::base_model::environment_tool_grant::EnvironmentToolGrantLifecycle::Deleted
+                } else {
+                    golem_common::base_model::environment_tool_grant::EnvironmentToolGrantLifecycle::Active
+                },
+            }
+        })
+        .boxed()
+}
+
+fn arb_environment_tool_grant_list_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(arb_environment_tool_grant_view(), 0..5)
+            .prop_map(|grants| crate::model::environment::EnvironmentToolGrantListView { grants }),
+    )
+}
+
+fn arb_environment_tool_grant_create_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_environment_tool_grant_view()
+            .prop_map(|grant| crate::model::environment::EnvironmentToolGrantCreateView { grant }),
+    )
+}
+
+fn arb_environment_tool_grant_get_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_environment_tool_grant_view()
+            .prop_map(|grant| crate::model::environment::EnvironmentToolGrantGetView { grant }),
+    )
+}
+
+fn arb_environment_tool_grant_delete_result() -> OutputDocumentStrategy {
+    serialized_output(arb_uuid().prop_map(|id| {
+        crate::model::environment::EnvironmentToolGrantDeleteView {
+            grant_id: golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId(id),
+        }
+    }))
+}
+
+fn arb_environment_tool_grant_restore_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_environment_tool_grant_view()
+            .prop_map(|grant| crate::model::environment::EnvironmentToolGrantRestoreView { grant }),
+    )
+}
+
+fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
+    use golem_common::model::tool_release::{ToolReleaseLifecycle, ToolReleaseOrigin};
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+
+    let owner_account_id = golem_common::model::account::AccountId::new();
+    golem_common::model::tool_release::ToolRelease {
+        id: golem_common::model::tool_release::ToolReleaseId::new(),
+        owner_account_id,
+        name: golem_common::model::tool::ToolName::try_from("search").unwrap(),
+        version: "1.0.0".to_string(),
+        source: golem_common::model::tool::ToolSource::Component {
+            component_id: golem_common::model::component::ComponentId::new(),
+            component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+            component_name: golem_common::model::component::ComponentName("tools".to_string()),
+        },
+        definition: Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "search".to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: golem_common::schema::SchemaGraph::empty(),
+        },
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: golem_common::model::diff::Hash::new(blake3::hash(b"metadata")),
+        immutable: true,
+        lifecycle: ToolReleaseLifecycle::Published,
+        origin: ToolReleaseOrigin::Ordinary,
+        system_availability: None,
+        created_at: fixed_datetime(),
+        created_by: owner_account_id,
+        state_changed_at: fixed_datetime(),
+        state_changed_by: owner_account_id,
+    }
+}
+
+fn sample_deployed_tool() -> golem_common::model::tool::DeployedRegisteredTool {
+    let release = sample_tool_release();
+    golem_common::model::tool::DeployedRegisteredTool {
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
+        release_id: Some(release.id),
+        definition: release.definition,
+        source: release.source,
+        owner_account_id: release.owner_account_id,
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            "owner@example.com".to_string(),
+        ),
+        metadata_version: release.metadata_version,
+        metadata_digest: release.metadata_digest,
+    }
+}
+
+fn arb_deployed_tool_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_deployment::DeployedToolView {
+        tool: sample_deployed_tool(),
+    }))
+}
+
+fn arb_deployed_tool_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_deployment::DeployedToolListView {
+        tools: vec![sample_deployed_tool()],
+    }))
+}
+
+fn arb_tool_release_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_release::ToolReleaseView {
+        release: sample_tool_release(),
+    }))
+}
+
+fn arb_tool_release_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_release::ToolReleaseListView {
+        releases: vec![sample_tool_release()],
     }))
 }
 
@@ -5901,7 +6379,9 @@ fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
                     revision: golem_common::model::agent_secret::AgentSecretRevision::new(revision)
                         .expect("generated revision should be valid"),
                     secret_type,
-                    secret_value,
+                    secret_value: secret_value.map(|value| {
+                        golem_common::schema::ExternalSchemaValue::try_from(value).unwrap()
+                    }),
                 }
             },
         )

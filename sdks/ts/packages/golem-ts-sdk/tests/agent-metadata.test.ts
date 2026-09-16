@@ -143,6 +143,97 @@ describe('agent metadata (Phase 3)', () => {
     expect(get('snapDisabled')!.snapshotting).toEqual({ tag: 'disabled' });
   });
 
+  it('requires a custom save/load pair when enabled snapshotting has no state schema', () => {
+    defineAgent({
+      name: 'SnapshotMissingLoader',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+    });
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotMissingLoader')).toEqual([
+      'Implementation failed: snapshotting without a state schema requires snapshot.save and snapshot.load',
+    ]);
+  });
+
+  it('rejects partial custom snapshot implementations at registration', () => {
+    defineAgent({
+      name: 'SnapshotLoadOnly',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: { load: () => ({}) },
+    } as never);
+
+    defineAgent({
+      name: 'SnapshotSaveOnly',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: { save: () => new Uint8Array() },
+    } as never);
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotLoadOnly')).toEqual([
+      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
+    ]);
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotSaveOnly')).toEqual([
+      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
+    ]);
+
+    defineAgent({
+      name: 'SnapshotSchemaLoadOnly',
+      snapshotting: { state: z.object({ count: z.number() }) },
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({ count: 0 }),
+      methods: {},
+      snapshot: { load: () => ({ count: 1 }) },
+    });
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotSchemaLoadOnly')).toBeUndefined();
+  });
+
+  it.each([123, null, false, 'invalid'])(
+    'rejects non-function snapshot save %s with a state schema',
+    (save) => {
+      const name = `SnapshotInvalidSave${String(save)}`;
+      defineAgent({
+        name,
+        snapshotting: { state: z.object({ count: z.number() }) },
+        id: {},
+        methods: {},
+      }).implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: { save, load: () => ({ count: 1 }) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
+
+  it.each([undefined, 'disabled'] as const)(
+    'rejects schema-less load-only snapshots with policy %s',
+    (snapshotting) => {
+      const name = `SnapshotLoadOnlyPolicy${String(snapshotting)}`;
+      defineAgent({ name, snapshotting, id: {}, methods: {} }).implement({
+        init: () => ({}),
+        methods: {},
+        snapshot: { load: () => ({}) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
+
   it('emits an agent-dependency record from a declared dependency', () => {
     const childDef = defineAgent({
       name: 'depChild',
@@ -217,7 +308,7 @@ describe('agent metadata (Phase 3)', () => {
       methods: { ping: () => 'ok' },
       snapshot: {
         save: () => new Uint8Array(),
-        load: () => undefined,
+        load: () => ({}),
       },
     };
     invalidDef.implement(implementation);
@@ -269,6 +360,150 @@ describe('agent metadata (Phase 3)', () => {
     expect(typeof rejection).toBe('string');
     expect(rejection).toContain('MalformedSnapshotDeferredInvalid');
     expect(rejection).toContain('implement() was called more than once');
+  });
+
+  it('installs principal and restored state only after the restoration factory succeeds', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
+      await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
+
+    let initializeCalls = 0;
+    let restoreCalls = 0;
+    isolatedDefineAgent({
+      name: 'AtomicSnapshotRestore',
+      id: { name: z.string() },
+      snapshotting: 'default',
+      methods: { get: isolatedMethod({ input: {}, returns: z.number() }) },
+    }).implement({
+      init: () => {
+        initializeCalls += 1;
+        return { count: 0 };
+      },
+      methods: {
+        get() {
+          return this.count;
+        },
+      },
+      snapshot: {
+        save() {
+          return new TextEncoder().encode(JSON.stringify({ count: this.count }));
+        },
+        load(bytes, _ctx) {
+          restoreCalls += 1;
+          const state = JSON.parse(new TextDecoder().decode(bytes));
+          if (state.fail) throw new Error('rejected snapshot');
+          return state;
+        },
+      },
+    });
+
+    const idValue = v.record([v.string('counter')]);
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
+    const envelope = (state: object) => ({
+      payload: new TextEncoder().encode(
+        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    await expect(isolatedGuest.loadSnapshot.load(envelope({ fail: true }))).rejects.toContain(
+      'rejected snapshot',
+    );
+    await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
+    expect(initializeCalls).toBe(0);
+    expect(restoreCalls).toBe(1);
+
+    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }));
+    const saved = await isolatedGuest.saveSnapshot.save();
+    const principalLength = new DataView(
+      saved.payload.buffer,
+      saved.payload.byteOffset,
+      saved.payload.byteLength,
+    ).getUint32(1, false);
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalLength)))).toEqual({
+      count: 9,
+    });
+    expect(initializeCalls).toBe(0);
+    expect(restoreCalls).toBe(2);
+  });
+
+  it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, isolatedGuest, { encodeMultipart }] =
+      await Promise.all([
+        import('../src/defineAgent'),
+        import('../src'),
+        import('../src/internal/multipart'),
+      ]);
+
+    isolatedDefineAgent({
+      name: 'StrictSnapshotEnvelope',
+      id: {},
+      snapshotting: 'default',
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: {
+        save: () => new Uint8Array(),
+        load: () => ({}),
+      },
+    });
+    const emptyInput = schemaValueToWit(v.record([]));
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `StrictSnapshotEnvelope(${JSON.stringify(emptyInput)})`;
+
+    const jsonSnapshot = (envelope: object) => ({
+      payload: new TextEncoder().encode(JSON.stringify(envelope)),
+      mimeType: 'application/json',
+    });
+    const invalidJsonEnvelopes: Array<[object, string]> = [
+      [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
+      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 1, state: {} }, "missing 'principal' field"],
+      [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+    ];
+    for (const [envelope, message] of invalidJsonEnvelopes) {
+      await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(
+        message,
+      );
+    }
+
+    const multipart = encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(
+          JSON.stringify({ principal: { tag: 'anonymous' }, state: {} }),
+        ),
+      },
+    ]);
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: multipart.data,
+        mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
+      }),
+    ).rejects.toContain("multipart state part missing 'version' field");
+
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array(),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('Snapshot is empty');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal length');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal data');
   });
 
   it('attributes deferred implementation failures to the agent definition name', async () => {

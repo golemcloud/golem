@@ -33,13 +33,13 @@ import {
   isDeclaredToolError,
 } from './invocationResult';
 import {
-  createToolClient,
-  createToolClientForExtendedTool,
+  createToolUnderlyingForExtendedTool,
   decodeDeclaredToolError,
+  getExtendedToolDefinition,
   ToolInvokeError,
   type AnyToolDefinition,
-  type ToolClient,
   type ToolClientFailureContext,
+  type ToolUnderlying,
   type UniversalToolMiddlewareInvocation,
   type UniversalToolUnderlying,
 } from '../../tool';
@@ -98,16 +98,16 @@ export function encodeToolInvokeError<Errors>(
 export function createUnderlyingToolClient<Definition extends AnyToolDefinition>(
   definition: Definition,
   underlying: UniversalToolUnderlying,
-): ToolClient<Definition> {
-  return createToolClient(
-    definition,
+): ToolUnderlying<Definition> {
+  return createToolUnderlyingForExtendedTool(
+    getExtendedToolDefinition(definition),
     {
       invokeAndAwait(commandPath, input, stdin) {
         return underlying.invoke(commandPath, input, stdin);
       },
     },
     mapUnderlyingClientFailure,
-  );
+  ) as ToolUnderlying<Definition>;
 }
 
 export interface MonomorphicToolMiddlewareInvocation {
@@ -152,7 +152,7 @@ export async function invokeMonomorphicToolMiddleware(
 
     const context: Record<string, unknown> = {
       principal,
-      underlying: createToolClientForExtendedTool(
+      underlying: createToolUnderlyingForExtendedTool(
         source.expected,
         {
           invokeAndAwait(path, expectedInput, expectedStdin) {

@@ -1121,6 +1121,7 @@ mod tests {
                             environment_id: durable.then(|| start.environment_id.unwrap()),
                             callee_fingerprint: durable
                                 .then(|| start.expected_callee_fingerprint.unwrap()),
+                            method_name: start.method_name.clone(),
                         },
                     )),
                 };

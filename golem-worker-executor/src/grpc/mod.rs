@@ -15,7 +15,7 @@
 mod invocation;
 mod invocation_session;
 
-pub(crate) use invocation_session::build_durable_streaming_request;
+pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
 
 use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
@@ -23,8 +23,9 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, ReadFileResult};
+use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
+use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
@@ -75,13 +76,15 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
+use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
+    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome,
+    ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -113,6 +116,9 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    /// Same arrangement for the assignment-changed hook: the shard manager service holds a Weak
+    /// to it (see `GrpcShardManagerService::assignment_changed_hook`); this is the strong one.
+    _assignment_changed_hook: ShardAssignmentChangedHook,
     ctx: PhantomData<Ctx>,
 }
 
@@ -123,6 +129,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self {
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
+            _assignment_changed_hook: self._assignment_changed_hook.clone(),
             ctx: PhantomData,
         }
     }
@@ -156,13 +163,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         lazy_worker_activator.set(worker_activator.clone());
 
+        // A re-registration after `LeaseNotFound`, and a renewal that corrected the set, must
+        // announce the new assignment exactly as this function and `assign_shards_internal` do.
+        // The renewal loop cannot name `Ctx`, so it is handed this hook — installed before
+        // `register`, which is what starts that loop.
+        let hook_services = services.clone();
+        let assignment_changed_hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let services = hook_services.clone();
+            Box::pin(async move { Self::apply_shard_assignment_effects(&services).await })
+        });
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
             _worker_activator: worker_activator,
+            _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,
         };
 
         info!(port, "Registering worker executor");
+
+        worker_executor
+            .shard_manager_service()
+            .set_assignment_changed_hook(&assignment_changed_hook);
 
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
@@ -170,38 +192,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .register(port, pod_name)
             .await?;
 
-        info!(
-            "Received initial shard assignment (n_shards={}, assigned_shards={:?})",
-            shard_assignment.number_of_shards, shard_assignment.shard_ids
-        );
+        info!(assignment = %shard_assignment, "Received initial shard assignment");
 
         worker_executor.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
+            shard_assignment.revision,
         );
 
-        Ctx::on_shard_assignment_changed(&worker_executor)
+        // Deliberately fatal to startup, unlike the same failure on a running executor.
+        //
+        // This reads the running-worker recovery index, so a failure here means the executor does
+        // not know which workers it is meant to resume. It refuses to start rather than serve with
+        // an unknown recovery set, and the restart policy retries it - which costs nothing, because
+        // an executor that has not started yet is holding no agents.
+        //
+        // That is the whole reason the same storage failure is *not* fatal once agents are running:
+        // there, aborting would force every one of them to replay from oplog or snapshot, which is
+        // far more expensive than stalling through a failover that resolves in tens of seconds.
+        Self::apply_shard_assignment_effects(&worker_executor)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
 
         Ok(worker_executor)
     }
 
+    /// Takes the agent's latest status record rather than its whole metadata, so the invoke path
+    /// can hand over the status the resident agent already publishes instead of materialising an
+    /// [`AgentMetadata`] around a copy of it.
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        metadata: &AgentMetadata,
+        status: &AgentStatusRecord,
     ) -> Result<(), WorkerExecutorError> {
-        match &metadata.last_known_status.status {
+        match &status.status {
             AgentStatus::Failed => {
-                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
-                    self,
-                    owned_agent_id,
-                    agent_mode,
-                    &metadata.last_known_status,
-                )
-                .await;
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(self, owned_agent_id, agent_mode, status)
+                        .await;
                 if let Some(last_error) = error_and_retry_count {
                     Err(WorkerExecutorError::PreviousInvocationFailed {
                         error: last_error.error,
@@ -219,11 +249,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    /// The single ownership check behind every inbound `WorkerExecutor` RPC
+    /// that names an agent. Every one of those is an ADMISSION decision — there
+    /// is no remote fallback, rejecting is the only outcome — so this is where
+    /// the self-fence goes.
     fn ensure_worker_belongs_to_this_executor(
         &self,
         agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
-        self.shard_service().check_worker(agent_id.as_ref())
+        self.shard_service().check_admission(agent_id.as_ref())
     }
 
     /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
@@ -299,7 +333,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             // Compare the existing entry's plain (schema-guided) JSON (the same
             // form the request DTO carries) against the requested value.
-            let existing_json = golem_common::schema::render::to_json_value(
+            let existing_json = golem_schema::schema::render::to_json_value(
                 existing_entry.value.graph(),
                 existing_entry.value.root_type(),
                 existing_entry.value.value(),
@@ -355,7 +389,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ));
                 }
             } else {
-                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                let existing_worker = self.worker_service().get(&owned_agent_id).await?;
                 if let Some(existing) = existing_worker
                     && !Self::is_same_worker_creation_request(
                         &existing.initial_worker_metadata,
@@ -528,7 +562,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
         Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -599,7 +633,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
         Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -749,13 +783,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .into();
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
 
-        if metadata
-            .last_known_status
+        let status = &metadata.last_known_status;
+        if status
             .pending_invocations
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
@@ -773,14 +807,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
             worker.cancel_invocation(idempotency_key).await?;
             Ok(true)
-        } else if metadata
-            .last_known_status
-            .invocation_results
-            .contains_key(&idempotency_key)
-        {
+        } else if status.invocation_results.contains_key(&idempotency_key) {
             Ok(false)
-        } else {
+        } else if status.current_idempotency_key.as_ref() == Some(&idempotency_key)
+            || status.invocation_results.is_exact_complete()
+            || !status.invocation_results.might_contain(&idempotency_key)
+        {
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
+        } else {
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &owned_agent_id,
+                None,
+                Vec::new(),
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+                principal,
+            )
+            .await?;
+            match worker.lookup_invocation_result(&idempotency_key).await {
+                LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
+                LookupResult::Pending => {
+                    let status = worker.get_last_known_status().await;
+                    if status
+                        .pending_invocations
+                        .iter()
+                        .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
+                    {
+                        worker.cancel_invocation(idempotency_key).await?;
+                        Ok(true)
+                    } else {
+                        Err(WorkerExecutorError::invalid_request("Invocation not found"))
+                    }
+                }
+                LookupResult::New => {
+                    Err(WorkerExecutorError::invalid_request("Invocation not found"))
+                }
+            }
         }
     }
 
@@ -873,7 +937,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
         if is_ephemeral
             && Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-                .await
+                .await?
                 .is_none()
         {
             return Ok(None);
@@ -913,16 +977,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
-        let metadata = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+        // This runs on every invocation. For a resident agent, read the status the worker already
+        // publishes; only an agent that is not resident has its record materialised (from the
+        // cache and the oplog), which is the same cold path as before.
+        let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
+        } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
+            Some((worker.agent_mode(), worker.get_last_known_status().await))
         } else {
-            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                .await?
+                .map(|metadata| (metadata.agent_mode, Arc::new(metadata.last_known_status)))
         };
 
-        if let Some(metadata) = &metadata
-            && metadata.agent_mode != AgentMode::Ephemeral
+        if let Some((agent_mode, status)) = &failure_check
+            && *agent_mode != AgentMode::Ephemeral
         {
-            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+            self.ensure_not_failed(&owned_agent_id, *agent_mode, status)
                 .await?;
         }
 
@@ -952,8 +1023,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
+        let revision = ShardLeaseRevision(request.revision);
 
-        self.shard_service().revoke_shards(&shard_ids)?;
+        if let ShardDeliveryOutcome::Stale { delivered, applied } =
+            self.shard_service().revoke_shards(&shard_ids, revision)?
+        {
+            // A newer delivery has already been applied and its set is the
+            // authority; taking shards out of it would be acting on stale news.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring a RevokeShards older than the last delivery applied"
+            );
+            return Ok(());
+        }
 
         for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
@@ -961,53 +1044,105 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
-                await_interrupted.recv().await.unwrap();
+                // A closed channel means the interrupt already ran its course,
+                // which is all this waits for.
+                let _ = await_interrupted.recv().await;
             }
         }
 
         Ok(())
     }
 
+    /// Full replace: the request carries this executor's complete shard set
+    /// with epochs and the cluster's shard count. Anything absent from the
+    /// set is dropped, and any agent whose shard went away is restarted.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let proto_shard_ids = request.shard_ids;
+        let shard_epochs: HashMap<ShardId, ShardEpoch> =
+            shard_epochs_from_proto(request.shard_epochs)
+                .map_err(WorkerExecutorError::invalid_request)?;
 
-        let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
+        let number_of_shards: usize = request
+            .number_of_shards
+            .try_into()
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
 
-        self.shard_service().assign_shards(&shard_ids)?;
-        Ctx::on_shard_assignment_changed(self).await?;
+        // `ShardId::from_agent_id` divides by it.
+        if number_of_shards == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "AssignShardsRequest.number_of_shards must not be 0",
+            ));
+        }
 
+        let revision = ShardLeaseRevision(request.revision);
+        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+            .shard_service()
+            .assign_shards(number_of_shards, &shard_epochs, revision)?
+        {
+            // Crossed on the network with a newer delivery, which has already
+            // been applied; applying this one would put the older set back.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring an AssignShards push older than the last delivery applied"
+            );
+            return Ok(());
+        }
+
+        Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
-    async fn set_shard_assignment_internal(
-        &self,
-        request: golem::workerexecutor::v1::SetShardAssignmentRequest,
-    ) -> Result<(), WorkerExecutorError> {
-        let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
-        let number_of_shards = request
-            .number_of_shards
-            .try_into()
-            .map_err(|_| WorkerExecutorError::runtime("Invalid number of shards"))?;
+    /// The one receipt path for a delivered shard set, whichever way it came:
+    /// a registration, an `AssignShards` push, or a renewal reply that
+    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// the executor the new set to recover agents for. The sweep runs for
+    /// every path, because a renewal can narrow the set as well as widen it:
+    /// a path without it would leave agents running on shards this executor
+    /// no longer owns. The recovery runs only under a live lease: a fenced
+    /// executor starts nothing, so a push that lands after the local lease
+    /// lapsed - the first one after a manager outage does - reports the
+    /// recovery deferred, and the grant that revives the lease runs it.
+    ///
+    /// The owed-recovery ticket is taken here, before anything runs, and handed
+    /// back only after a recovery ran, so the startup registration and the push
+    /// cannot disagree about it and a grant that revives the lease meanwhile
+    /// cannot find nothing owed. An error keeps it owed, which is what a retry
+    /// needs, and an attempt that completes after a newer delivery deferred its
+    /// own does not retire that one. One run more than needed is idempotent.
+    pub(crate) async fn apply_shard_assignment_effects<T>(
+        this: &T,
+    ) -> Result<RecoveryOutcome, anyhow::Error>
+    where
+        T: HasAll<Ctx> + Send + Sync + 'static,
+    {
+        let ticket = this.shard_manager_service().recovery_deferred();
 
-        self.shard_service()
-            .set_shard_assignment(number_of_shards, &shard_ids)?;
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err()
+        // Pure set membership on purpose: a lapsed lease must not restart every
+        // running agent: a lapsed lease refuses new work and leaves running work alone.
+        for (agent_id, worker_details) in this.active_agents().snapshot().await {
+            if this.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
-                await_interrupted.recv().await.unwrap();
+                // A closed channel means the interrupt already ran its course,
+                // which is all this waits for.
+                let _ = await_interrupted.recv().await;
             }
         }
 
-        Ctx::on_shard_assignment_changed(self).await?;
-
-        Ok(())
+        if !this.shard_service().is_ready() {
+            tracing::info!(
+                "Shard lease has lapsed; agents for the delivered set are recovered once it is renewed"
+            );
+            return Ok(RecoveryOutcome::DeferredUntilLeaseIsLive);
+        }
+        Ctx::on_shard_assignment_changed(this).await?;
+        this.shard_manager_service().recovery_succeeded(ticket);
+        Ok(RecoveryOutcome::Recovered)
     }
 
     async fn get_agent_metadata_internal(
@@ -1020,7 +1155,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1172,13 +1307,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let principal = extract_principal(&request.principal);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
-            .await?;
+        self.ensure_not_failed(
+            &owned_agent_id,
+            metadata.agent_mode,
+            &metadata.last_known_status,
+        )
+        .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
@@ -1224,7 +1363,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
@@ -1328,7 +1467,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
@@ -1405,14 +1544,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         entries: chunk
                             .entries
                             .into_iter()
-                            .map(|(idx, entry)| {
-                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
-                                    golem::worker::OplogEntryWithIndex {
-                                        oplog_index: idx.into(),
-                                        entry: Some(entry),
-                                    }
-                                })
-                            })
+                            .map(|entry| entry.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(WorkerExecutorError::unknown)?,
                         next,
@@ -1745,7 +1877,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .is_none()
         {
             let component = self
@@ -2138,42 +2270,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
                             golem::workerexecutor::v1::assign_shards_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn set_shard_assignment(
-        &self,
-        request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!("set_shard_assignment",);
-
-        match self
-            .set_shard_assignment_internal(request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::SetShardAssignmentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::SetShardAssignmentResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),

@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use scc::hash_map::Entry;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct InMemoryKeyValueStorage {
@@ -73,7 +74,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
         self.kvs
             .upsert_async(Self::composite_key(&namespace, key), value.to_vec())
@@ -88,7 +89,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
         for (key, value) in pairs {
             self.kvs
@@ -96,6 +97,35 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
                 .await;
         }
         Ok(())
+    }
+
+    async fn compare_and_set_many(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, KeyValueStorageError> {
+        let _guard = self.kvs_lock.write().await;
+        let matches = self
+            .kvs
+            .read_async(&Self::composite_key(&namespace, key), |_, value| {
+                expected == Some(value.as_slice())
+            })
+            .await
+            .unwrap_or(expected.is_none());
+        if !matches {
+            return Ok(false);
+        }
+        for (field_key, value) in pairs {
+            self.kvs
+                .upsert_async(Self::composite_key(&namespace, field_key), value.to_vec())
+                .await;
+        }
+        Ok(true)
     }
 
     async fn set_if_not_exists(
@@ -106,7 +136,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
         match self
             .kvs
@@ -128,7 +158,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         let _guard = self.kvs_lock.read().await;
         Ok(self
             .kvs
@@ -144,15 +174,15 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+        keys: Arc<[String]>,
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         // Single read lock for the whole batch so the returned values are a consistent snapshot.
         let _guard = self.kvs_lock.read().await;
         let mut result = Vec::new();
-        for key in keys {
+        for key in keys.iter() {
             result.push(
                 self.kvs
-                    .read_async(&Self::composite_key(&namespace, &key), |_, value| {
+                    .read_async(&Self::composite_key(&namespace, key), |_, value| {
                         Bytes::from(value.clone())
                     })
                     .await,
@@ -167,7 +197,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         // Single read lock for the whole scan so the returned pairs are a consistent snapshot.
         let _guard = self.kvs_lock.read().await;
         let prefix = Self::composite_key(&namespace, "");
@@ -189,7 +219,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
         self.kvs
             .remove_async(&Self::composite_key(&namespace, key))
@@ -202,12 +232,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<(), String> {
+        keys: Arc<[String]>,
+    ) -> Result<(), KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
-        for key in keys {
+        for key in keys.iter() {
             self.kvs
-                .remove_async(&Self::composite_key(&namespace, &key))
+                .remove_async(&Self::composite_key(&namespace, key))
                 .await;
         }
         Ok(())
@@ -219,7 +249,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         let _guard = self.kvs_lock.read().await;
         Ok(self
             .kvs
@@ -232,7 +262,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         let _guard = self.kvs_lock.read().await;
         let prefix = Self::composite_key(&namespace, "");
         let mut result = Vec::new();
@@ -255,7 +285,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let set = self
             .sets
             .entry_async(Self::composite_key(&namespace, key))
@@ -273,7 +303,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         match self
             .sets
             .entry_async(Self::composite_key(&namespace, key))
@@ -294,7 +324,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         match self
             .sets
             .get_async(&Self::composite_key(&namespace, key))
@@ -323,7 +353,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let mut entry = self
             .sorted_sets
             .entry_async(Self::composite_key(&namespace, key))
@@ -343,7 +373,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let mut entry = self
             .sorted_sets
             .entry_async(Self::composite_key(&namespace, key))
@@ -361,7 +391,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         Ok(self
             .sorted_sets
             .read_async(&Self::composite_key(&namespace, key), |_, entry| {
@@ -383,7 +413,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         Ok(self
             .sorted_sets
             .read_async(&Self::composite_key(&namespace, key), |_, entry| {

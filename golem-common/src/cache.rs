@@ -580,6 +580,26 @@ impl<
         snapshotted_pairs
     }
 
+    /// Returns a snapshot of cached entries whose last access was at least
+    /// `ttl` ago without refreshing their access time. Pending entries are
+    /// excluded.
+    pub async fn entries_older_than(&self, ttl: Duration) -> Vec<(K, V)> {
+        let mut snapshotted_pairs = vec![];
+        self.state
+            .items
+            .iter_async(|key, item| {
+                if let Item::Cached { value, last_access } = item
+                    && last_access.elapsed() >= ttl
+                {
+                    snapshotted_pairs.push((key.clone(), value.clone()));
+                }
+                true
+            })
+            .await;
+
+        snapshotted_pairs
+    }
+
     pub async fn keys(&self) -> Vec<K> {
         let mut keys = vec![];
         self.state
@@ -613,6 +633,34 @@ impl<
             .items
             .remove_if_async(key, |item| match item {
                 Item::Cached { value, .. } => predicate(value),
+                Item::Pending { .. } => false,
+            })
+            .await
+            .is_some();
+        if removed {
+            let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
+            record_cache_size(self.name, count.saturating_sub(1));
+        }
+        removed
+    }
+
+    /// Removes the cached value for `key` only if it has not been accessed for
+    /// at least `ttl` and satisfies `predicate`. Age and value are checked in
+    /// the same atomic map operation, so a completed access or replacement is
+    /// observed before removal. The predicate can additionally reject removal
+    /// while a value cloned by an in-progress access is still in use. Pending
+    /// entries are never removed.
+    pub async fn remove_if_cached_older_than<F>(&self, key: &K, ttl: Duration, predicate: F) -> bool
+    where
+        F: Fn(&V) -> bool,
+    {
+        let removed = self
+            .state
+            .items
+            .remove_if_async(key, |item| match item {
+                Item::Cached { value, last_access } => {
+                    last_access.elapsed() >= ttl && predicate(value)
+                }
                 Item::Pending { .. } => false,
             })
             .await
@@ -1095,6 +1143,64 @@ mod tests {
         proceed.notify_one();
         let _ = producer.await.unwrap();
         assert_eq!(cache.try_get(&1).await, Some(42));
+    }
+
+    #[test]
+    async fn entries_older_than_only_returns_expired_cached_entries_without_refreshing_them() {
+        let cache = test_cache("entries_older_than");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(42u64) })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            cache.entries_older_than(Duration::from_millis(20)).await,
+            vec![(1, 42)]
+        );
+
+        assert_eq!(
+            cache.entries_older_than(Duration::from_millis(20)).await,
+            vec![(1, 42)],
+            "inspecting an expired entry must not make it fresh"
+        );
+        assert_eq!(cache.get(&1).await, Some(42));
+        assert!(
+            cache
+                .entries_older_than(Duration::from_millis(20))
+                .await
+                .is_empty(),
+            "a normal cache lookup must refresh the entry"
+        );
+    }
+
+    #[test]
+    async fn remove_if_cached_older_than_requires_both_expiry_and_predicate() {
+        let cache = test_cache("remove_if_cached_older_than");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(42u64) })
+            .await
+            .unwrap();
+
+        assert!(
+            !cache
+                .remove_if_cached_older_than(&1, Duration::from_millis(20), |_| true)
+                .await,
+            "a fresh entry must not be removed"
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !cache
+                .remove_if_cached_older_than(&1, Duration::from_millis(20), |value| *value == 100)
+                .await,
+            "an expired entry whose value does not match must not be removed"
+        );
+        assert!(
+            cache
+                .remove_if_cached_older_than(&1, Duration::from_millis(20), |value| *value == 42)
+                .await
+        );
+        assert!(!cache.contains_key(&1).await);
     }
 
     #[test]

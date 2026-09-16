@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
@@ -27,7 +28,8 @@ use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
-    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -229,6 +231,7 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         };
 
         let config = IndexedStoragePostgresConfig {
@@ -313,6 +316,157 @@ fn ns2() -> IndexedStorageNamespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+
+#[test]
+async fn postgres_singleton_append_many_preserves_storage_contract(
+    #[tagged_as("postgres")] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] primary: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] compressed: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let value = Bytes::from_static(&[0, 255, 17, 3]);
+    for ns in [primary, compressed] {
+        storage
+            .append_many("svc", "api", "entity", &ns.ns, "singleton", Arc::from([]))
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("svc", "api", ns.ns.clone(), "singleton")
+                .await
+                .unwrap()
+        );
+        storage
+            .append_many(
+                "svc",
+                "api",
+                "entity",
+                &ns.ns,
+                "singleton",
+                Arc::from([(17, value.clone())]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .read("svc", "api", "entity", ns.ns.clone(), "singleton", 0, 100)
+                .await
+                .unwrap(),
+            vec![(17, value.to_vec())]
+        );
+        assert_eq!(
+            storage
+                .length("svc", "api", ns.ns.clone(), "singleton")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            storage
+                .last("svc", "api", "entity", ns.ns.clone(), "singleton")
+                .await
+                .unwrap(),
+            Some((17, value.to_vec()))
+        );
+        let (_, keys) = storage
+            .scan(
+                "svc",
+                "api",
+                ns.meta.clone(),
+                Some("singleton"),
+                ScanCursor::default(),
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(keys, vec!["singleton".to_string()]);
+        assert!(matches!(
+            storage
+                .append_many(
+                    "svc",
+                    "api",
+                    "entity",
+                    &ns.ns,
+                    "singleton",
+                    Arc::from([(u64::MAX, value.clone())])
+                )
+                .await,
+            Err(IndexedStorageError::Other(_))
+        ));
+        assert_eq!(
+            storage
+                .length("svc", "api", ns.ns.clone(), "singleton")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    assert!(matches!(
+        storage
+            .append_many(
+                "svc",
+                "api",
+                "entity",
+                &primary.ns,
+                "singleton",
+                Arc::from([(17, Bytes::from_static(b"replacement"))])
+            )
+            .await,
+        Err(IndexedStorageError::Conflict(_))
+    ));
+    assert_eq!(
+        storage
+            .read(
+                "svc",
+                "api",
+                "entity",
+                primary.ns.clone(),
+                "singleton",
+                0,
+                100
+            )
+            .await
+            .unwrap(),
+        vec![(17, value.to_vec())]
+    );
+}
+
+#[test]
+async fn postgres_append_many_rolls_back_across_statement_chunks(
+    #[tagged_as("postgres")] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    storage
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            "atomic",
+            1025,
+            b"original".to_vec(),
+        )
+        .await
+        .unwrap();
+    let pairs: Arc<[(u64, Bytes)]> = (1..=1025)
+        .map(|id| (id, Bytes::from_static(b"new")))
+        .collect::<Vec<_>>()
+        .into();
+    assert!(matches!(
+        storage
+            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs)
+            .await,
+        Err(IndexedStorageError::Conflict(_))
+    ));
+    assert_eq!(
+        storage
+            .read("svc", "api", "entity", ns.ns.clone(), "atomic", 0, 2000)
+            .await
+            .unwrap(),
+        vec![(1025, b"original".to_vec())]
+    );
+}
 
 #[test]
 #[tracing::instrument]

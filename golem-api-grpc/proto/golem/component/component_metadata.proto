@@ -28,6 +28,16 @@ message ComponentMetadata {
   repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
+  map<string, AgentMethodStreams> agent_method_streams = 12;
+}
+
+message AgentMethodStreams {
+  map<string, AgentMethodStreamMetadata> methods = 1;
+}
+
+message AgentMethodStreamMetadata {
+  bool input = 1;
+  bool output = 2;
 }
 
 message ToolDeploymentMetadata {
@@ -50,6 +60,22 @@ message ToolBindingInput {
   optional string account = 3;
   SecretKeyScope secret_keys_readable = 4;
   SecretKeyScope secret_keys_revealable = 5;
+  ConfigKeyScope config_keys_readable = 6;
+}
+
+message ConfigKeyScope {
+  oneof value {
+    golem.common.Empty all = 1;
+    ConfigKeyPaths keys = 2;
+  }
+}
+
+message ConfigKeyPaths {
+  repeated ConfigKeyPath paths = 1;
+}
+
+message ConfigKeyPath {
+  repeated string segments = 1;
 }
 
 message SecretKeyScope {

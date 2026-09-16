@@ -25,7 +25,7 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        crate::schema::render::to_json_value(
+        golem_schema::schema::render::to_json_value(
             self.value.graph(),
             self.value.root_type(),
             self.value.value(),
@@ -46,6 +46,14 @@ impl TypedAgentConfigEntry {
             .iter()
             .filter_map(TypedAgentConfigEntry::to_flat_pair)
             .collect()
+    }
+}
+
+impl AgentMetadataDto {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        for entry in &mut self.config {
+            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        }
     }
 }
 

@@ -9,13 +9,9 @@
 // returned value.
 
 ///|
-/// Decodes an invocation/constructor input wire value into its ordered
-/// parameter values, validating that it is a record of exactly `arity` fields.
-/// Decode and shape errors are mapped to `AgentError::InvalidInput`.
-#warnings("-unused_async")
-pub async fn decode_invocation_input(
+/// Decodes a wire input record into its ordered fields.
+fn decode_input_record(
   input : @types.SchemaValueTree,
-  arity : Int,
   context : String,
 ) -> Array[@model.SchemaValue] raise @common.AgentError {
   let drops = @model_host.resource_drops()
@@ -33,13 +29,38 @@ pub async fn decode_invocation_input(
       )
     }
   }
+  fields
+}
+
+///|
+/// Decodes an invocation/constructor input wire value into its ordered
+/// parameter values, validating that it is a record of exactly `arity` fields.
+/// Decode and shape errors are mapped to `AgentError::InvalidInput`.
+#warnings("-unused_async")
+pub async fn decode_invocation_input(
+  input : @types.SchemaValueTree,
+  arity : Int,
+  context : String,
+) -> Array[@model.SchemaValue] raise @common.AgentError {
+  let fields = decode_input_record(input, context)
   guard fields.length() == arity else {
-    value.release_resources(drops)
+    @model.SchemaValue::Record(fields).release_resources(
+      @model_host.resource_drops(),
+    )
     raise @common.AgentError::InvalidInput(
       "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
     )
   }
   fields
+}
+
+///|
+/// Decodes the identity record from a parsed agent ID for snapshot restoration.
+#warnings("-unused_async")
+pub async fn decode_snapshot_identity(
+  input : @types.SchemaValueTree,
+) -> Array[@model.SchemaValue] raise @common.AgentError {
+  decode_input_record(input, "snapshot restoration")
 }
 
 ///|
@@ -85,12 +106,17 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
 
 ///|
 /// Encodes a method/constructor return value into a wire output value.
-/// Serialization errors are mapped to `AgentError::InvalidType`.
+/// Serialization errors are mapped to `AgentError::InvalidType`; operation
+/// cancellation is propagated unchanged.
 pub async fn[T : @schema.IntoSchema] encode_output(
   value : T,
-) -> @types.SchemaValueTree raise @common.AgentError {
+) -> @types.SchemaValueTree {
   let model_value = @schema.to_value_as(value)
   @model.schema_value_to_wit_async(model_value) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      model_value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidType(
@@ -123,9 +149,13 @@ pub fn encode_invocation_input(
 /// invocation, including native streams nested anywhere in the input record.
 pub async fn encode_invocation_input_async(
   values : Array[@model.SchemaValue],
-) -> @types.SchemaValueTree raise @common.AgentError {
+) -> @types.SchemaValueTree {
   let model_value = @model.SchemaValue::Record(values)
   @model.schema_value_to_wit_async(model_value) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      model_value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(

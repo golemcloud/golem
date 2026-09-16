@@ -53,12 +53,12 @@ pub trait ShardAssignmentCheck {
 impl ShardAssignmentCheck for ShardAssignment {
     fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         let shard_id = ShardId::from_agent_id(agent_id, self.number_of_shards);
-        if self.shard_ids.contains(&shard_id) {
+        if self.contains(&shard_id) {
             Ok(())
         } else {
             Err(WorkerExecutorError::invalid_shard_id(
                 shard_id,
-                self.shard_ids.clone(),
+                self.shard_id_set(),
             ))
         }
     }
@@ -74,7 +74,7 @@ pub enum SnapshotSource {
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
-    pub deleted_regions: DeletedRegions,
+    pub skipped_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
@@ -88,7 +88,7 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn new(
-        deleted_regions: DeletedRegions,
+        skipped_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
@@ -100,7 +100,7 @@ impl AgentConfig {
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
-            deleted_regions,
+            skipped_regions,
             total_linear_memory_size,
             component_revision_for_replay,
             created_by,

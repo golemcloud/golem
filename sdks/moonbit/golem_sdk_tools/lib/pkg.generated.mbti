@@ -34,7 +34,7 @@ pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
-pub fn generate_client_code(Array[AgentInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl]
+pub fn generate_client_code(Array[AgentInfo], value_types? : Array[ValueTypeInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl] raise AgentParseError
 
 pub fn generate_config_field_impls(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
@@ -61,8 +61,6 @@ pub fn is_config_type(ParamType) -> Bool
 pub fn is_multimodal_type(ParamType) -> Bool
 
 pub fn is_principal_type(ParamType) -> Bool
-
-pub fn is_rpc_incompatible_type(ParamType) -> Bool
 
 pub fn is_secret_type(ParamType) -> Bool
 

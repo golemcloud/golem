@@ -11,6 +11,9 @@ license-file = "../LICENSE"
 
 autotests = false
 
+[features]
+test-utils = []
+
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -29,6 +32,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-native-tool = { workspace = true }
 golem-schema = { workspace = true, features = ["host"] }
 
 golem-service-base = { workspace = true, features = ["worker-executor"] }
@@ -92,6 +96,7 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
+stacker = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
@@ -125,6 +130,10 @@ harness = false
 
 [[bench]]
 name = "authorization"
+harness = false
+
+[[bench]]
+name = "event_broadcast_allocations"
 harness = false
 
 [[bench]]

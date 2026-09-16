@@ -447,6 +447,22 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
         static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
             "golem_agent_filesystem_lifecycle_seconds",
             "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
@@ -515,6 +531,17 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
     }
 
     pub fn record_agent_filesystem_lifecycle(
@@ -931,10 +958,55 @@ pub mod sharding {
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
             register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+        static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
+            "stale_shard_delivery_total",
+            "Number of shard deliveries dropped for naming a revision older than the last applied",
+            &["delivery"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardDelivery {
+        Register,
+        Assign,
+        Revoke,
+        Renewal,
+    }
+
+    impl ShardDelivery {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Register => "register",
+                Self::Assign => "assign",
+                Self::Revoke => "revoke",
+                Self::Renewal => "renewal",
+            }
+        }
+    }
+
+    /// A delivery was dropped for arriving older than the last one applied.
+    ///
+    /// One of these is not a fault: a push and a renewal response that cross on the network
+    /// always produce one, and dropping the older is the point of the revision gate. A sustained
+    /// rate is the fault, and a warning per occurrence does not make a rate visible.
+    pub fn record_stale_shard_delivery(delivery: ShardDelivery) {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .inc();
+    }
+
+    /// How many deliveries of `delivery` have been dropped as stale.
+    #[cfg(test)]
+    pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .get()
     }
 }
 
@@ -1136,7 +1208,7 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
         )
         .unwrap();
@@ -1392,7 +1464,7 @@ pub mod durable_stream {
         .unwrap();
         static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
             "golem_durable_stream_journal_lag_events",
-            "Committed source events not yet recorded in the value-only consumer journal",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
             EVENT_COUNT_BUCKETS.to_vec()
         )
         .unwrap();

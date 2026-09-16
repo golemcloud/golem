@@ -20,7 +20,7 @@ import golem.schema.{FromSchema, IntoSchema, TypedSchemaValue}
 import zio.ZIO
 import zio.test._
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future, Promise}
 
 /**
  * The Scala port of the Rust SDK's `tool_client.rs` unit tests: custom-error
@@ -41,17 +41,35 @@ object ToolClientSpec extends ZIOSpecDefault {
 
   private val unitInput: TypedSchemaValue = ToolErrorSupport.unitPayload
 
+  private final class ChunkStream(initial: List[Either[ByteStreamFailure, Option[Array[Byte]]]])
+      extends ToolInputStream {
+    private var remaining                                                       = initial
+    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = {
+      val next = remaining.head
+      remaining = remaining.tail
+      Future.successful(next)
+    }
+    override def cancel(): Future[Unit] = Future.successful(())
+  }
+
   private def stringPayload(text: String): TypedSchemaValue =
     implicitly[IntoSchema[String]].toTyped(text)
 
   private final class FakeToolRpc extends ToolRpcTransport {
-    def invokeAndAwait(
+    def start(
       commandPath: List[String],
       input: TypedSchemaValue,
-      stdin: Option[ToolInputStream]
-    ): Future[Either[ToolRpcFailure, ToolInvokeResult]] =
-      Future.successful(
-        Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(stringPayload("bad flag"))))
+      stdin: Option[ToolInputStream],
+      stdout: Boolean
+    ): Either[ToolRpcFailure, ToolRpcStarted] =
+      Right(
+        ToolRpcStarted(
+          None,
+          Future.successful(
+            Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(stringPayload("bad flag"))))
+          ),
+          () => ()
+        )
       )
   }
 
@@ -62,16 +80,23 @@ object ToolClientSpec extends ZIOSpecDefault {
   }
 
   private final class FailingToolRpc(failure: FakeFailure) extends ToolRpcTransport {
-    def invokeAndAwait(
+    def start(
       commandPath: List[String],
       input: TypedSchemaValue,
-      stdin: Option[ToolInputStream]
-    ): Future[Either[ToolRpcFailure, ToolInvokeResult]] =
-      Future.successful(Left(failure match {
-        case FakeFailure.Denied             => ToolRpcFailure.Denied("no access")
-        case FakeFailure.RemoteInvalidInput =>
-          ToolRpcFailure.RemoteToolError(ToolInvokeError.InvalidInput("bad wire input"))
-      }))
+      stdin: Option[ToolInputStream],
+      stdout: Boolean
+    ): Either[ToolRpcFailure, ToolRpcStarted] =
+      Right(
+        ToolRpcStarted(
+          None,
+          Future.successful(Left(failure match {
+            case FakeFailure.Denied             => ToolRpcFailure.Denied("no access")
+            case FakeFailure.RemoteInvalidInput =>
+              ToolRpcFailure.RemoteToolError(ToolInvokeError.InvalidInput("bad wire input"))
+          })),
+          () => ()
+        )
+      )
   }
 
   def spec: Spec[Any, Any] = suite("ToolClientSpec")(
@@ -89,6 +114,59 @@ object ToolClientSpec extends ZIOSpecDefault {
           case Left(ToolError.Tool(Usage(message))) => assertTrue(message == "bad flag")
           case other                                => assertNever(s"expected declared tool error, got: $other")
         }
+    },
+    test("started invocation collect drains chunks in order concurrently with the result") {
+      val stream = new ChunkStream(
+        List(
+          Right(Some(Array[Byte](1, 2))),
+          Right(Some(Array[Byte](3))),
+          Right(None)
+        )
+      )
+      val invocation = ToolInvocation[Nothing, String](stream, Future.successful(Right("done")), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(result.exists { case (value, bytes) => value == "done" && bytes.sameElements(Array[Byte](1, 2, 3)) })
+      }
+    },
+    test("started invocation collect waits for stdout after an observer failure") {
+      val eof    = Promise[Either[ByteStreamFailure, Option[Array[Byte]]]]()
+      val stream = new ToolInputStream {
+        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = eof.future
+        override def cancel(): Future[Unit]                                         = Future.successful(())
+      }
+      val failure    = new RuntimeException("observer failed")
+      val invocation = ToolInvocation[Nothing, Unit](stream, Future.failed(failure), () => ())
+      val collected  = invocation.collect()(ExecutionContext.global)
+      for {
+        _     <- ZIO.yieldNow
+        before = !collected.isCompleted
+        _      = eof.success(Right(None))
+        error <- ZIO.fromFuture(_ => collected.failed)
+      } yield assertTrue(before, error eq failure)
+    },
+    test("started invocation collect preserves a declared error when stdout also fails") {
+      val declared   = Usage("bad flag")
+      val stream     = new ChunkStream(List(Left(ByteStreamFailure.ResourceExhausted)))
+      val invocation = ToolInvocation[CliError, Unit](
+        stream,
+        Future.successful(Left(ToolError.Tool(declared))),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(result == Left(ToolError.Tool(declared)))
+      }
+    },
+    test("started invocation cancellation is explicit and observer drop does not invoke it") {
+      var cancelled  = false
+      val invocation = ToolInvocation[Nothing, Unit](
+        new ChunkStream(List(Right(None))),
+        Future.successful(Right(())),
+        () => cancelled = true
+      )
+      val dropped = invocation
+      val before  = !cancelled && dropped.result.isCompleted
+      invocation.cancel()
+      assertTrue(before, cancelled)
     },
     test("invoke_and_await_maps_framing_errors_to_rpc_errors") {
       for {

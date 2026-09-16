@@ -41,6 +41,7 @@ use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
+use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
 
 use wasmtime_wasi::cli::{WasiCliCtxView, WasiCliView};
@@ -200,6 +201,12 @@ where
     let response = match live().await {
         Ok(response) => response,
         Err(err) => {
+            if err.root_cause().downcast_ref::<InterruptKind>().is_some() {
+                // Interrupts and sleep-suspend are non-error control flow. Leave the Start
+                // incomplete for replay without attaching a durable-call trap context.
+                handle.abandon_for_trap();
+                return Err(err);
+            }
             // Mark the escaping trap with this call's own scope so post-trap retry grouping is
             // immune to ambient state a sibling subtask could have clobbered. The context is pure
             // (call-owned), so no store access is needed here.

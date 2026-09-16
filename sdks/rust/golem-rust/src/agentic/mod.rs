@@ -13,7 +13,9 @@
 // limitations under the License.
 
 pub use crate::golem_agentic::golem::agent::common::Principal;
-pub type InputStream = wit_bindgen::StreamReader<u8>;
+pub type InputStream = wit_bindgen::StreamReader<
+    Result<Vec<u8>, crate::golem_agentic::golem::tool::host::ByteStreamFailure>,
+>;
 pub use agent::*;
 pub use agent_config::*;
 #[cfg(feature = "export_golem_agentic_tool_middleware")]
@@ -31,7 +33,7 @@ pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
 pub use tool_client::*;
-pub use tool_impl::{OutputStream, new_tool_stdout};
+pub use tool_impl::OutputStream;
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{

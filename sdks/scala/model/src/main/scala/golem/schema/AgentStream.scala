@@ -308,11 +308,22 @@ object AgentStream {
             pull().flatMap {
               case None        => Future.successful(None)
               case Some(value) =>
-                AgentStreamOwnership
-                  .capture(ownership.flatMap(_.activeOwner)) {
-                    element.fromValue(value)
+                val result = Try {
+                  AgentStreamOwnership.capture(ownership.flatMap(_.activeOwner)) {
+                    element.fromValue(value).fold(throw _, identity)
                   }
-                  .fold(e => Future.failed(e), a => Future.successful(Some(a)))
+                }
+                result match {
+                  case Success(item) =>
+                    ownership.foreach(_.handoffDecodedItem())
+                    Future.successful(Some(item))
+                  case Failure(error) =>
+                    AgentStreamOwnership
+                      .cleanup(
+                        ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
+                      )
+                      .flatMap(_ => Future.failed(error))
+                }
             },
           finalize,
           directTransfer,
@@ -475,6 +486,9 @@ private[golem] final class AgentStreamOwnership {
 
   private[golem] def pendingEntries: Int = entries.size
 
+  /** Successful decoding transfers all acquired streams to the caller. */
+  def handoff(): Unit = entries.toList.foreach(_.commit())
+
   def close(): Future[Unit] = {
     val owned =
       if (closed) Nil
@@ -560,6 +574,11 @@ private[golem] object AgentStreamOwnership {
         case Left(true)  => transferredOwnership
         case Right(_)    => None
       }
+
+    /**
+     * Only an already handed-off reader owns a private per-item child scope.
+     */
+    def handoffDecodedItem(): Unit = transferredOwnership.foreach(_.handoff())
 
     def closeTransferredOwnership(): Future[Unit] = {
       val transferred = {

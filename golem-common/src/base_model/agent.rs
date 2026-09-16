@@ -37,6 +37,15 @@ impl std::fmt::Display for AgentFileContentHash {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct InitialAgentFileUpload {
+    pub content_hash: AgentFileContentHash,
+    pub size: u64,
+}
+
 #[cfg(feature = "full")]
 impl desert_rust::BinarySerializer for AgentFileContentHash {
     fn serialize<Output: desert_rust::BinaryOutput>(

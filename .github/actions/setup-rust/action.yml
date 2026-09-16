@@ -56,7 +56,9 @@ runs:
         save-if: ${{ inputs.cache-save-if }}
     - name: Install cargo-make
       if: inputs.install-cargo-make == 'true'
-      uses: davidB/rust-cargo-make@v1
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-make
     - name: Install cargo-binstall
       if: inputs.install-cargo-binstall == 'true'
       uses: cargo-bins/cargo-binstall@main

@@ -44,6 +44,10 @@ pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
 
+/// Environment variable holding extra `RUST_LOG` directives that are appended to the log
+/// filter of every spawned Golem service.
+pub const LOG_FILTER_ENV_VAR: &str = "GOLEM_LOG_FILTER";
+
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
     _err_handle: JoinHandle<()>,
@@ -416,8 +420,17 @@ impl EnvVarBuilder {
         self
     }
 
+    /// Builds the `RUST_LOG` of a spawned service from the verbosity, the usual dependency
+    /// defaults, and the extra directives in `GOLEM_LOG_FILTER` (comma separated, e.g.
+    /// `golem_worker_executor::durable_host=debug`) so selected targets can be turned up
+    /// without raising the verbosity of every service.
     fn with_rust_log_with_dep_defaults(self, verbosity: Level) -> Self {
         let rust_log_level_str = verbosity.as_str().to_lowercase();
+        let extra = std::env::var(LOG_FILTER_ENV_VAR)
+            .ok()
+            .filter(|extra| !extra.trim().is_empty())
+            .map(|extra| format!(",{}", extra.trim()))
+            .unwrap_or_default();
         self.with(
             "RUST_LOG",
             format!(
@@ -430,7 +443,7 @@ impl EnvVarBuilder {
                 hyper=warn,\
                 tower=warn,\
                 fred=warn,\
-                golem_client=warn"
+                golem_client=warn{extra}"
             ),
         )
     }

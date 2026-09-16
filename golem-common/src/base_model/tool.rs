@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::base_model::account::{AccountEmail, AccountId};
+use crate::base_model::agent_config::CanonicalAgentConfigPath;
 use crate::base_model::agent_secret::CanonicalAgentSecretPath;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+use crate::base_model::diff::Hash;
 use crate::base_model::json::NormalizedJsonValue;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
+use crate::model::tool_release::{ToolReleaseId, ToolReleaseReference};
 use crate::schema::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,6 +98,37 @@ pub enum SecretKeyScope {
     Keys(BTreeSet<CanonicalAgentSecretPath>),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "keys", rename_all = "camelCase")]
+pub enum ConfigKeyScope {
+    #[default]
+    All,
+    Keys(BTreeSet<CanonicalAgentConfigPath>),
+}
+
+impl ConfigKeyScope {
+    pub fn contains(&self, key: &CanonicalAgentConfigPath) -> bool {
+        match self {
+            Self::All => true,
+            Self::Keys(keys) => keys.contains(key),
+        }
+    }
+
+    pub fn intersection(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::All, value) | (value, Self::All) => value.clone(),
+            (Self::Keys(left), Self::Keys(right)) => {
+                Self::Keys(left.intersection(right).cloned().collect())
+            }
+        }
+    }
+}
+
 impl SecretKeyScope {
     pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
         match self {
@@ -133,6 +167,7 @@ pub struct ToolBindingInput {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
 }
@@ -143,6 +178,7 @@ impl Default for ToolBindingInput {
             version: None,
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             account: None,
+            config_keys_readable: ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
         }
@@ -211,7 +247,56 @@ pub struct ToolDeploymentMetadata {
     pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::derive_partial_eq_without_eq)]
+pub struct RemoteToolDeployment {
+    pub name: ToolName,
+    pub release: ToolReleaseReference,
+    pub provision: ToolProvisionConfig,
+    pub environment_binding: Option<ToolBindingInput>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
+}
+
 pub const TOOL_METADATA_WIT_VERSION: &str = "0.1.0";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[serde(try_from = "String", into = "String")]
+pub struct HostToolId(String);
+
+impl HostToolId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for HostToolId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_lower_kebab_case_identifier("Host tool id", &value)?;
+        Ok(Self(value))
+    }
+}
+
+impl From<HostToolId> for String {
+    fn from(value: HostToolId) -> Self {
+        value.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
@@ -229,6 +314,12 @@ pub enum ToolSource {
         #[serde(rename = "componentName")]
         component_name: ComponentName,
     },
+    Host {
+        #[serde(rename = "hostToolId")]
+        host_tool_id: HostToolId,
+        #[serde(rename = "implementationVersion")]
+        implementation_version: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,12 +333,18 @@ pub enum ToolSource {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct RegisteredTool {
     pub deployment_revision: DeploymentRevision,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    pub release_id: Option<ToolReleaseId>,
     pub definition: Tool,
     pub provision: ToolProvisionConfig,
     pub source: ToolSource,
     pub owner_account_id: AccountId,
     pub owner_account_email: AccountEmail,
     pub metadata_version: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    pub metadata_digest: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,13 +357,20 @@ pub struct RegisteredTool {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledToolBinding {
     pub deployment_revision: DeploymentRevision,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    pub release_id: Option<ToolReleaseId>,
     pub agent_type_name: AgentTypeName,
     pub tool_name: ToolName,
     pub version: String,
     pub metadata_version: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    pub metadata_digest: Hash,
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub parameters: NormalizedJsonValue,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     #[serde(default)]
@@ -283,22 +387,26 @@ pub struct CompiledToolBinding {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct DeployedRegisteredTool {
     pub deployment_revision: DeploymentRevision,
+    pub release_id: Option<ToolReleaseId>,
     pub definition: Tool,
     pub source: ToolSource,
     pub owner_account_id: AccountId,
     pub owner_account_email: AccountEmail,
     pub metadata_version: String,
+    pub metadata_digest: Hash,
 }
 
 impl From<RegisteredTool> for DeployedRegisteredTool {
     fn from(value: RegisteredTool) -> Self {
         Self {
             deployment_revision: value.deployment_revision,
+            release_id: value.release_id,
             definition: value.definition,
             source: value.source,
             owner_account_id: value.owner_account_id,
             owner_account_email: value.owner_account_email,
             metadata_version: value.metadata_version,
+            metadata_digest: value.metadata_digest,
         }
     }
 }
@@ -314,7 +422,8 @@ pub struct ToolDeploymentState {
 
 #[cfg(test)]
 mod tests {
-    use super::{SecretKeyScope, ToolName};
+    use super::{ConfigKeyScope, SecretKeyScope, ToolName};
+    use crate::model::agent_config::CanonicalAgentConfigPath;
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -348,5 +457,18 @@ mod tests {
         assert!(left.contains(&a));
         assert!(!right.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
         assert!(SecretKeyScope::All.contains(&CanonicalAgentSecretPath(vec!["c".to_string()])));
+    }
+
+    #[test]
+    fn config_key_scope_intersection_allows_only_shared_keys() {
+        let a = CanonicalAgentConfigPath(vec!["a".to_string()]);
+        let b = CanonicalAgentConfigPath(vec!["b".to_string()]);
+        let environment = ConfigKeyScope::Keys(BTreeSet::from([a.clone(), b]));
+        let agent = ConfigKeyScope::Keys(BTreeSet::from([a.clone()]));
+
+        let effective = environment.intersection(&agent);
+        assert!(effective.contains(&a));
+        assert!(!effective.contains(&CanonicalAgentConfigPath(vec!["b".to_string()])));
+        assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
     }
 }

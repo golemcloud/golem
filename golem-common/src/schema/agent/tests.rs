@@ -18,13 +18,14 @@ use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
     AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
     ParsedAgentId, contains_stream_in_graph, json_input_schema_value_to_typed_schema_value,
-    typed_schema_value_with_projected_defs,
+    reachable_defs, typed_schema_value_with_projected_defs,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
 use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
 use crate::schema::stream::SchemaValueStream;
+use crate::schema::validation::validate_value;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -775,15 +776,103 @@ fn method_input_validation_accepts_a_live_stream_handle() {
         )],
         OutputSchema::Unit,
     );
+    let stream = SchemaValueStream::from_host_endpoint(());
     let input = SchemaValue::Record {
-        fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-            (),
-        ))],
+        fields: vec![SchemaValue::Stream(stream.clone())],
     };
 
     method
         .validate_input(&SchemaGraph::empty(), &input)
         .unwrap();
+    assert!(stream.is_present());
+}
+
+#[test]
+fn method_input_validation_matches_owned_conversion() {
+    fn assert_matches_owned_conversion(
+        method: &AgentMethodSchema,
+        graph: &SchemaGraph,
+        input: SchemaValue,
+    ) {
+        let fields = method
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect();
+        let root = SchemaType::record(fields);
+        let projected_graph = SchemaGraph {
+            defs: reachable_defs(graph, &root),
+            root,
+        };
+        let expected =
+            validate_value(&projected_graph, &projected_graph.root, &input).map_err(|errors| {
+                errors
+                    .into_iter()
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            });
+        assert_eq!(method.validate_input(graph, &input), expected);
+    }
+
+    let scalar_method = method(
+        "compare",
+        vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::string(),
+            ),
+            NamedField::user_supplied("count", SchemaType::u64()),
+        ],
+        OutputSchema::Unit,
+    );
+    for input in [
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("ok".to_string()), SchemaValue::U64(1)],
+        },
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("missing-count".to_string())],
+        },
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U64(1),
+                SchemaValue::String("wrong".to_string()),
+            ],
+        },
+        SchemaValue::String("not-a-record".to_string()),
+    ] {
+        assert_matches_owned_conversion(&scalar_method, &SchemaGraph::empty(), input);
+    }
+
+    let graph = registry(vec![proj_def(
+        "Payload",
+        SchemaType::record(vec![proj_field("value", SchemaType::string())]),
+    )]);
+    let method = method(
+        "compare-ref",
+        vec![NamedField::user_supplied(
+            "payload",
+            SchemaType::ref_to(TypeId::new("Payload")),
+        )],
+        OutputSchema::Unit,
+    );
+    assert_matches_owned_conversion(
+        &method,
+        &graph,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Record {
+                fields: vec![SchemaValue::String("ok".to_string())],
+            }],
+        },
+    );
 }
 
 #[test]

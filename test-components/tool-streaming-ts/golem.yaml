@@ -1,0 +1,34 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+
+manifestVersion: 1.6.0
+
+app: tool-streaming-ts
+
+includes:
+  - ../golem-test-components-common.yaml
+
+components:
+  golem-it:tool-streaming-ts-provider:
+    dir: provider
+    templates: ts, ts-test-component
+  golem-it:tool-streaming-ts-caller:
+    dir: caller
+    templates: ts, ts-test-component
+    dependencies:
+      tools:
+        - golem-it:tool-streaming-ts-provider/ts-streaming
+
+tools:
+  ts-streaming: {}
+
+agents:
+  TsToolStreamingCaller:
+    tools:
+      ts-streaming: {}
+
+environments:
+  local:
+    server: local

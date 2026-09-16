@@ -23,6 +23,7 @@ use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -30,6 +31,8 @@ use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
+use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
@@ -102,6 +105,7 @@ async fn start_plain_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) 
         username: "postgres".to_string(),
         password: "postgres".to_string(),
         schema: Some("test".to_string()),
+        acquire_timeout: None,
         max_connections: 10,
     };
 
@@ -140,6 +144,7 @@ async fn start_tls_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
         username: "postgres".to_string(),
         password: "postgres".to_string(),
         schema: Some("test_tls".to_string()),
+        acquire_timeout: None,
         max_connections: 10,
     };
 
@@ -214,8 +219,10 @@ async fn make_deps(pool: PostgresPool) -> Deps {
             pool.clone(),
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
+        retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
+        environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
@@ -224,6 +231,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
+        tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
@@ -433,6 +441,13 @@ async fn test_agent_secret_get_revision_include_deleted(
 }
 
 #[test]
+async fn test_retry_policy_and_agent_secret_natural_key_lookups(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
+}
+
+#[test]
 async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
 }
@@ -476,6 +491,13 @@ async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
 ) {
     crate::repo::common::test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps)
         .await;
+}
+
+#[test]
+async fn test_component_delete_rejects_retained_source_references(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_delete_rejects_retained_source_references(deps).await;
 }
 
 #[test]
@@ -826,6 +848,13 @@ async fn test_registry_change_cursor_expired_detection(#[dimension(postgres_vari
 #[test]
 async fn test_registry_change_mixed_event_types(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_registry_change_mixed_event_types(deps).await;
+}
+
+#[test]
+async fn test_tool_release_and_grant_repository_contracts(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
 }
 
 /// Tests that Postgres LISTEN/NOTIFY propagates events through the

@@ -1878,7 +1878,7 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(test)]
-    fn update_usage_revision(&self, new_revision: u64) {
+    fn update_policy_revision(&self, new_revision: u64) {
         self.flush_active_resource_usage();
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         self.update_usage_revision_locked(&mut revision_state, new_revision);
@@ -2211,8 +2211,8 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(test)]
-    pub(crate) fn update_usage_revision_for_test(&self, new_revision: u64) {
-        self.update_usage_revision(new_revision);
+    pub(crate) fn update_policy_revision_for_test(&self, new_revision: u64) {
+        self.update_policy_revision(new_revision);
     }
 
     #[cfg(test)]
@@ -3374,7 +3374,7 @@ mod tests {
         assert!(entry.record_http_call());
         assert!(entry.record_rpc_call());
 
-        entry.update_usage_revision(4);
+        entry.update_policy_revision(4);
         assert_eq!(entry.effective_fuel(), 9_900);
         assert!(entry.borrow_fuel(200));
         entry.record_resource_usage(AgentMode::Durable, 20, 40);
@@ -3382,7 +3382,7 @@ mod tests {
         let before_opt_in = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(before_opt_in.update.monthly_usage_mode_revision, 3);
+        assert_eq!(before_opt_in.update.monthly_policy_revision, 3);
         assert_eq!(before_opt_in.update.fuel_delta, 100);
         assert_eq!(before_opt_in.update.memory_gb_seconds_delta, 15);
         assert_eq!(before_opt_in.update.http_call_count_delta, 1);
@@ -3413,7 +3413,7 @@ mod tests {
         let after_opt_in = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(after_opt_in.update.monthly_usage_mode_revision, 4);
+        assert_eq!(after_opt_in.update.monthly_policy_revision, 4);
         assert_eq!(after_opt_in.update.fuel_delta, 200);
         assert_eq!(after_opt_in.update.memory_gb_seconds_delta, 20);
         assert_eq!(after_opt_in.update.durable_storage_byte_seconds_delta, 40);
@@ -3423,7 +3423,7 @@ mod tests {
     fn older_policy_revision_cannot_roll_back_usage_attribution() {
         let entry = metered_entry_with_revision(7);
 
-        entry.update_usage_revision(3);
+        entry.update_policy_revision(3);
 
         assert_eq!(
             entry
@@ -3963,38 +3963,38 @@ mod tests {
     fn revision_rotation_captures_each_usage_dimension_independently() {
         let compute = metered_entry_with_revision(1);
         assert!(compute.borrow_fuel(1));
-        compute.update_usage_revision(2);
+        compute.update_policy_revision(2);
         let compute_update = compute
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(compute_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(compute_update.update.monthly_policy_revision, 1);
         assert_eq!(compute_update.update.fuel_delta, 1);
 
         let memory = metered_entry_with_revision(1);
         memory.record_memory_gb_seconds(AgentMode::Durable, 2);
-        memory.update_usage_revision(2);
+        memory.update_policy_revision(2);
         let memory_update = memory
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(memory_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(memory_update.update.monthly_policy_revision, 1);
         assert_eq!(memory_update.update.memory_gb_seconds_delta, 2);
 
         let http = metered_entry_with_revision(1);
         assert!(http.record_http_call());
-        http.update_usage_revision(2);
+        http.update_policy_revision(2);
         let http_update = http
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(http_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(http_update.update.monthly_policy_revision, 1);
         assert_eq!(http_update.update.http_call_count_delta, 1);
 
         let rpc = metered_entry_with_revision(1);
         assert!(rpc.record_rpc_call());
-        rpc.update_usage_revision(2);
+        rpc.update_policy_revision(2);
         let rpc_update = rpc
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(rpc_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(rpc_update.update.monthly_policy_revision, 1);
         assert_eq!(rpc_update.update.rpc_call_count_delta, 1);
     }
 
@@ -4008,7 +4008,7 @@ mod tests {
                 remainder: BYTE_NANOSECONDS_PER_GB_SECOND - 1,
             },
         );
-        entry.update_usage_revision(4);
+        entry.update_policy_revision(4);
 
         entry.record_resource_settlement(
             AgentMode::Durable,
@@ -4018,7 +4018,7 @@ mod tests {
                 remainder: 1_000_000_000 - 1,
             },
         );
-        entry.update_usage_revision(5);
+        entry.update_policy_revision(5);
 
         entry.record_resource_settlement(
             AgentMode::Ephemeral,
@@ -4028,7 +4028,7 @@ mod tests {
                 remainder: 1_000_000_000 - 1,
             },
         );
-        entry.update_usage_revision(6);
+        entry.update_policy_revision(6);
 
         entry.record_memory_settlement(
             AgentMode::Durable,
@@ -4053,12 +4053,12 @@ mod tests {
                 remainder: 1,
             },
         );
-        entry.update_usage_revision(7);
+        entry.update_policy_revision(7);
 
         let revision_3 = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(revision_3.update.monthly_usage_mode_revision, 3);
+        assert_eq!(revision_3.update.monthly_policy_revision, 3);
         assert_eq!(
             revision_3.update.memory_byte_nanoseconds_remainder,
             BYTE_NANOSECONDS_PER_GB_SECOND as u64 - 1
@@ -4077,7 +4077,7 @@ mod tests {
         let revision_4 = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(revision_4.update.monthly_usage_mode_revision, 4);
+        assert_eq!(revision_4.update.monthly_policy_revision, 4);
         assert_eq!(revision_4.update.memory_byte_nanoseconds_remainder, 0);
         assert_eq!(
             revision_4.update.durable_storage_byte_nanoseconds_remainder,
@@ -4093,7 +4093,7 @@ mod tests {
         let revision_5 = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(revision_5.update.monthly_usage_mode_revision, 5);
+        assert_eq!(revision_5.update.monthly_policy_revision, 5);
         assert_eq!(revision_5.update.memory_byte_nanoseconds_remainder, 0);
         assert_eq!(
             revision_5.update.durable_storage_byte_nanoseconds_remainder,
@@ -4109,7 +4109,7 @@ mod tests {
         let revision_6 = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(revision_6.update.monthly_usage_mode_revision, 6);
+        assert_eq!(revision_6.update.monthly_policy_revision, 6);
         assert_eq!(revision_6.update.memory_byte_nanoseconds_remainder, 1);
         assert_eq!(
             revision_6.update.durable_storage_byte_nanoseconds_remainder,
@@ -4149,20 +4149,20 @@ mod tests {
         assert!(entry.borrow_fuel(100));
         entry.record_storage_byte_seconds(AgentMode::Durable, 10);
 
-        entry.update_usage_revision(9);
+        entry.update_policy_revision(9);
         assert!(entry.borrow_fuel(200));
         entry.record_storage_byte_seconds(AgentMode::Durable, 20);
 
         let before_disable = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(before_disable.update.monthly_usage_mode_revision, 8);
+        assert_eq!(before_disable.update.monthly_policy_revision, 8);
         assert_eq!(before_disable.update.fuel_delta, 100);
         assert_eq!(before_disable.update.durable_storage_byte_seconds_delta, 10);
         let after_disable = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(after_disable.update.monthly_usage_mode_revision, 9);
+        assert_eq!(after_disable.update.monthly_policy_revision, 9);
         assert_eq!(after_disable.update.fuel_delta, 200);
         assert_eq!(after_disable.update.durable_storage_byte_seconds_delta, 20);
     }
@@ -4175,14 +4175,14 @@ mod tests {
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
 
-        entry.update_usage_revision(13);
+        entry.update_policy_revision(13);
         assert!(entry.borrow_fuel(200));
 
-        assert_eq!(in_flight.update.monthly_usage_mode_revision, 12);
+        assert_eq!(in_flight.update.monthly_policy_revision, 12);
         let next = entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        assert_eq!(next.update.monthly_usage_mode_revision, 13);
+        assert_eq!(next.update.monthly_policy_revision, 13);
         assert_eq!(next.update.fuel_delta, 200);
     }
 
@@ -4741,7 +4741,7 @@ mod tests {
             100,
         );
         assert!(pending.borrow_fuel(10));
-        pending.update_usage_revision(8);
+        pending.update_policy_revision(8);
         assert_eq!(pending.effective_fuel(), 90);
 
         let failed = compute_entry(
@@ -5257,7 +5257,7 @@ mod tests {
                 remainder: three_quarters,
             },
         );
-        entry.update_usage_revision(8);
+        entry.update_policy_revision(8);
         entry.record_memory_settlement(
             AgentMode::Ephemeral,
             ByteTimeSettlement {
@@ -5270,15 +5270,15 @@ mod tests {
             entry.monthly_resource_capacity(AgentMode::Durable),
             Err(MonthlyResourceExhaustion::Memory)
         );
-        entry.update_usage_revision(9);
+        entry.update_policy_revision(9);
         let revision_7 = entry.capture_usage_update_for_test();
         let revision_8 = entry.capture_usage_update_for_test();
-        assert_eq!(revision_7.monthly_usage_mode_revision, 7);
+        assert_eq!(revision_7.monthly_policy_revision, 7);
         assert_eq!(
             revision_7.memory_byte_nanoseconds_remainder,
             three_quarters as u64
         );
-        assert_eq!(revision_8.monthly_usage_mode_revision, 8);
+        assert_eq!(revision_8.monthly_policy_revision, 8);
         assert_eq!(
             revision_8.memory_byte_nanoseconds_remainder,
             one_quarter as u64
@@ -5299,7 +5299,7 @@ mod tests {
                 remainder: three_quarters,
             },
         );
-        entry.update_usage_revision(8);
+        entry.update_policy_revision(8);
         let captured = entry.capture_usage_update_for_test();
         entry.begin_monthly_refresh(1, &captured, 0, 0);
 
@@ -5378,7 +5378,7 @@ mod tests {
 
         let pending = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
         pending.record_memory_gb_seconds(AgentMode::Durable, 10);
-        pending.update_usage_revision(8);
+        pending.update_policy_revision(8);
         assert_eq!(pending.effective_memory_gb_seconds(), 90);
 
         let failed = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
@@ -5822,7 +5822,7 @@ mod tests {
     fn newer_generation_with_older_revision_cannot_restore_stale_storage_policy() {
         let period = AccountUsagePeriod::current();
         let entry = storage_entry(period, MonthlyUsageMode::HardLimit, 10, 20);
-        entry.update_usage_revision(8);
+        entry.update_policy_revision(8);
         entry.record_storage_byte_seconds(AgentMode::Durable, 1);
         entry.record_storage_byte_seconds(AgentMode::Ephemeral, 2);
         let captured = entry.capture_usage_update_for_test();
@@ -6213,7 +6213,7 @@ mod tests {
 
         let pending_entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
         assert!(pending_entry.borrow_fuel(60));
-        pending_entry.update_usage_revision(8);
+        pending_entry.update_policy_revision(8);
         assert_eq!(pending_entry.effective_fuel(), 40);
     }
 
@@ -7176,19 +7176,13 @@ mod tests {
     const NO_IDLE_REFRESH_THRESHOLD_SECS: i64 = i64::MAX;
 
     fn make_grpc(mock: Arc<MockRegistryService>) -> Arc<ResourceLimitsGrpc> {
-        // Pass an already-cancelled token so the background batch task exits
-        // immediately in its first select! — before it can call send_batch.
-        // Tests drive the batch cycle manually via send_batch for deterministic,
-        // race-free control.
-        let token = CancellationToken::new();
-        token.cancel();
-        ResourceLimitsGrpc::new(
-            mock,
-            Duration::from_secs(3600),
-            Duration::from_secs(300),
-            ResourceUsageMeteringConfig::all_enabled(),
-            token,
-        )
+        // Tests drive send_batch manually, without a competing background updater.
+        Arc::new(ResourceLimitsGrpc {
+            client: mock,
+            entries: scc::HashMap::new(),
+            metering: ResourceUsageMeteringConfig::all_enabled(),
+            refresh_generation: AtomicU64::new(1),
+        })
     }
 
     fn service_limits(

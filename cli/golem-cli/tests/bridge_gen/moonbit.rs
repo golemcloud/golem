@@ -112,6 +112,23 @@ impl GeneratedPackage {
             String::from_utf8_lossy(&output.stderr),
         );
     }
+
+    fn test_native(&self) {
+        let output = std::process::Command::new("moon")
+            .arg("test")
+            .arg("--target")
+            .arg("native")
+            .current_dir(self.module_dir())
+            .output()
+            .expect("failed to run moon; is it installed?");
+        assert!(
+            output.status.success(),
+            "moon test failed in {}:\nstdout:\n{}\nstderr:\n{}",
+            self.module_dir(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }
 
 fn generate_without_check(agent_type: AgentTypeSchema, mode: MoonBitBridgeMode) -> TempDir {
@@ -172,6 +189,199 @@ fn moon_check_wasm(path: &std::path::Path) {
         path.display(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_streams_compile_and_run_occurrence_codecs() {
+    let mut fixture = crate::bridge_gen::fixtures::guest_streaming_agent_type("moonbit");
+    fixture.schema.defs.push(def(
+        "FailureItem",
+        SchemaType::record(vec![
+            named_field("first", SchemaType::stream(Some(SchemaType::s32()))),
+            named_field("narrow", SchemaType::s8()),
+            named_field(
+                "last",
+                SchemaType::list(SchemaType::stream(Some(SchemaType::s32()))),
+            ),
+        ]),
+    ));
+    fixture.methods.push(method(
+        "failure",
+        vec![field(
+            "items",
+            SchemaType::stream(Some(ref_to("FailureItem"))),
+        )],
+        None,
+    ));
+    let guest = generate_without_check(fixture, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for name in [
+        "consume",
+        "produce",
+        "exchange",
+        "forward",
+        "nested",
+        "recursive",
+        "shapes",
+    ] {
+        assert!(!source.contains(&format!("::trigger_{name}(")));
+        assert!(!source.contains(&format!("::schedule_{name}(")));
+        assert!(!source.contains(&format!("::schedule_cancelable_{name}(")));
+    }
+    assert!(source.contains("::trigger_status("));
+    assert!(source.contains("@agents.encode_invocation_input_async"));
+    assert!(source.contains("@schema.AgentStream[@schema.AgentStream[StreamItem]]"));
+    assert!(!source.contains("StreamEncodeContext"));
+    assert!(!source.contains("register_input_stream"));
+    moon_check_wasm(guest.path());
+    let manifest = guest.path().join("client/moon.pkg");
+    let mut imports = std::fs::read_to_string(&manifest).unwrap();
+    imports.push_str(
+        "\nimport {\n  \"golemcloud/golem_sdk/async-core\" @async_core,\n} for \"wbtest\"\n",
+    );
+    std::fs::write(manifest, imports).unwrap();
+    std::fs::write(guest.path().join("client/streams_wbtest.mbt"), r#"
+///|
+fn run_stream_test(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async_core.with_waitableset(async fn() {
+    body()
+    @async_core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps += 1
+    assert_true(steps < 1000)
+    assert_eq(callback & 0xf, 1)
+    callback = @async_core.cb(0, 0, 0)
+  }
+}
+
+///|
+test "erased schemas keep their occurrence codecs" {
+  assert_true(stream_encode_shapes_input_0(12) is @model.S8(12))
+  assert_true(stream_encode_shapes_input_1(12) is @model.S32(12))
+  assert_true(stream_encode_shapes_input_2(["a"]) is @model.List(_))
+  assert_true(stream_encode_shapes_input_3(["a", "b"]) is @model.FixedList(_))
+  assert_true(stream_encode_shapes_input_5("a") is @model.Tuple([@model.String("a")]))
+  try stream_encode_shapes_input_0(128) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected narrow integer failure") }
+  try stream_encode_shapes_input_3(["a"]) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected fixed-list failure") }
+  run_stream_test(async fn() {
+    let narrow = produce_shapes_input_0_stream(async fn(writer) {
+      assert_true(writer.write_one(12) is @schema.Accepted)
+    })
+    assert_eq(narrow.read(), Some(12))
+    assert_true(narrow.read() is None)
+    let single = produce_shapes_input_5_stream(async fn(writer) {
+      assert_true(writer.write_one("tuple") is @schema.Accepted)
+    })
+    assert_eq(single.read(), Some("tuple"))
+    assert_true(single.read() is None)
+  })
+}
+
+///|
+test "native custom streams are lazy recursive and directly forwardable" {
+  let calls = Ref(0)
+  let released = Ref(0)
+  let stream = produce_produce_output_stream(async fn(writer) {
+    calls.val += 1
+    assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+  }, on_unstarted_drop=() => { released.val += 1 })
+  let bundle : StreamBundle = { optional: Some(stream), siblings: [], named: {}, outcome: Err("empty") }
+  let forwarded = decode_StreamBundle(encode_StreamBundle(bundle))
+  assert_eq(calls.val, 0)
+  release_StreamBundle(forwarded)
+  assert_eq(released.val, 1)
+  run_stream_test(async fn() {
+    let inner = produce_nested_input_0_0_stream(async fn(writer) {
+      assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+    })
+    let inner = stream_decode_nested_input_0(stream_encode_nested_input_0(inner))
+    let item = inner.read().unwrap()
+    assert_eq(item.label, "root")
+    assert_eq(item.children[0].label, "child")
+    assert_true(inner.read() is None)
+  })
+}
+
+///|
+test "generated batch release traverses failing siblings and unconverted items" {
+  let drops = Ref(0)
+  fn endpoint() -> @schema.AgentStream[Int] {
+    @schema.AgentStream::produce(async fn(_) { fail("must not pull") },
+      on_unstarted_drop=() => { drops.val += 1 })
+  }
+  run_stream_test(async fn() {
+    let (writer, stream) = new_failure_input_0_stream()
+    let items : Array[FailureItem] = [
+      { first: endpoint(), narrow: 1, last: [endpoint()] },
+      { first: endpoint(), narrow: 128, last: [endpoint(), endpoint()] },
+      { first: endpoint(), narrow: 2, last: [endpoint()] },
+    ]
+    try writer.write_all(items) catch {
+      CodecError(message) => assert_eq(message, "s8 value out of range")
+      error => fail(repr(error))
+    } noraise { _ => fail("expected encoding failure") }
+    assert_eq(drops.val, 7)
+    writer.close()
+    stream.drop()
+  })
+  let value : @model.SchemaValue = @model.Record([endpoint().to_schema_value(), @model.String("bad"), @model.List([endpoint().to_schema_value()])])
+  try decode_FailureItem(value) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected decoding failure") }
+  assert_eq(drops.val, 9)
+}
+"#).unwrap();
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "generated runtime tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_streams_reject_missing_item_schema() {
+    let fixture = agent(
+        "Untyped",
+        "moonbit",
+        vec![],
+        vec![method("read", vec![], Some(SchemaType::stream(None)))],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let mut generator = MoonBitBridgeGenerator::new_with_mode(
+        fixture,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        MoonBitBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    assert!(
+        generator
+            .generate()
+            .unwrap_err()
+            .to_string()
+            .contains("require an element schema")
     );
 }
 
@@ -480,13 +690,16 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     assert!(!source.contains("@runtime"));
     for expected in [
         "pub(all) struct NewClient",
-        "pub async fn NewClient::new_2(",
-        "pub async fn NewClient::drop_2(",
+        "pub fn NewClient::new_2(",
+        "pub fn NewClient::drop_2(",
+        "pub fn NewClient::new_3(",
         "pub async fn NewClient::client(",
+        "@tool.TypedToolInvocation[String, NewError]",
+        "@tool.TypedToolInvocation[Unit, @tool.NoToolError]",
+        ".client.start(",
+        "@tool.typed_invocation(invocation, fn(result)",
         "stdin : @asyncCore.Stream[Byte]?",
         "stdin : @asyncCore.Stream[Byte]",
-        "@asyncCore.Stream[Byte]?",
-        "@asyncCore.Stream[Byte]",
         "pub(all) enum NewError",
         "Error(String)",
         "Error_2(UnstructuredText)",
@@ -515,6 +728,21 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         r#"pub async fn consume() -> Unit {
   let client = @client.NewClient::new()
   ignore(client.client())
+  match client.new_3() {
+    Ok(invocation) => {
+      ignore(invocation.stdout)
+      invocation.cancel()
+    }
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.get())
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.collect())
+    Err(_) => ()
+  }
   client.drop()
 }
 "#,
@@ -619,6 +847,76 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn guest_mode_moon_checks_host_managed_capability_methods() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        ("secret", SchemaType::secret(Default::default())),
+        ("quota", SchemaType::quota_token(Default::default())),
+        (
+            "permission",
+            SchemaType::permission_card(Default::default()),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    let package = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
+
+    assert!(source.contains("@model.GuestSecretHandle"));
+    assert!(source.contains("@quota.QuotaToken"));
+    assert!(source.contains("@model.GuestPermissionCardHandle"));
+    assert!(source.contains("@schema.to_value_as"));
+    assert!(source.contains("@schema.from_value_as"));
+    assert!(package.contains("\"golemcloud/golem_sdk/quota\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/schema\""));
+    moon_check_wasm(guest.path());
+
+    let without_quota = generate_without_check(
+        agent(
+            "SecretAgent",
+            "moonbit",
+            vec![],
+            vec![method(
+                "transfer",
+                vec![field("secret", SchemaType::secret(Default::default()))],
+                Some(SchemaType::secret(Default::default())),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let package = std::fs::read_to_string(without_quota.path().join("client/moon.pkg")).unwrap();
+    assert!(!package.contains("golemcloud/golem_sdk/quota"));
 }
 
 #[test]
@@ -2109,4 +2407,214 @@ fn unstructured_text_and_binary_restrictions_are_enforced() {
     assert!(client.contains(
         "@runtime.unstructured_binary_from_schema_value(\"output\", value, [\"image/png\"])"
     ));
+}
+
+#[test]
+fn external_recursive_stream_client_compiles() {
+    let recursive = TypeId::new("streaming.Node");
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "exchange",
+            vec![field(
+                "roots",
+                SchemaType::list(SchemaType::ref_to(recursive.clone())),
+            )],
+            Some(SchemaType::option(SchemaType::stream(Some(
+                SchemaType::binary(BinaryRestrictions::default()),
+            )))),
+        )],
+        vec![def(
+            "streaming.Node",
+            SchemaType::record(vec![
+                named_field("name", SchemaType::string()),
+                named_field(
+                    "children",
+                    SchemaType::list(SchemaType::ref_to(TypeId::new("streaming.Node"))),
+                ),
+                named_field(
+                    "events",
+                    SchemaType::stream(Some(SchemaType::stream(Some(SchemaType::u8())))),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.source_language = "rust".to_string();
+    let pkg = GeneratedPackage::new(agent_type);
+    let client = pkg.client_source();
+    assert!(client.contains("@runtime.invoke_streaming_agent"));
+    assert!(client.contains("wire_kind=\"u8\""));
+    assert!(!client.contains("trigger_exchange"));
+    assert!(!client.contains("schedule_exchange"));
+    let runtime_manifest =
+        std::fs::read_to_string(pkg.module_dir().join("runtime/moon.pkg")).unwrap();
+    assert!(runtime_manifest.contains("\"streaming-agent-client/runtime/ws_adapter\" @websocket"));
+    assert!(!runtime_manifest.contains("__GOLEM_MODULE__"));
+    assert!(
+        pkg.module_dir()
+            .join("runtime/ws_adapter/client.mbt")
+            .exists()
+    );
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("golem-client/tests/fixtures/stream-session-v1/binary-messages.json"),
+        pkg.module_dir().join("binary-messages.json"),
+    )
+    .unwrap();
+    for fixture in ["json-messages.json", "malformed.json"] {
+        std::fs::copy(
+            workspace_root()
+                .unwrap()
+                .join("golem-client/tests/fixtures/stream-session-v1")
+                .join(fixture),
+            pkg.module_dir().join(fixture),
+        )
+        .unwrap();
+    }
+    let mod_path = pkg.module_dir().join("moon.mod.json");
+    let mut module: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&mod_path).unwrap()).unwrap();
+    module["deps"]["moonbitlang/x"] = serde_json::json!("0.4.39");
+    std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
+    let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest = manifest.replacen("import {", "import {\n  \"moonbitlang/x/fs\" @fs,", 1);
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
+        r#"///|
+test "binary codec matches every frozen public v1 frame" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("binary-messages.json")))
+  let vectors = expect_array(get_field(fixture, "vectors"))
+  for vector in vectors {
+    let object = expect_object(vector)
+    ignore(expect_string(get_field(object, "name")))
+    let metadata = parse_strict_json(expect_string(get_field(object, "metadata")))
+    let payload_hex = expect_string(get_field(object, "payloadHex"))
+    let payload = Bytes::makei(payload_hex.length() / 2, i => {
+      let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
+      @string.parse_int(pair[:], base=16).to_byte()
+    })
+    let actual = pvc_base64_encode(encode_binary_envelope(metadata, payload))
+    assert_true(actual == expect_string(get_field(object, "frameBase64")))
+  }
+}
+
+///|
+test "text codec directly consumes frozen canonical and malformed fixtures" {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let canonical = expect_string(get_field(expect_object(vector), "canonical"))
+    assert_eq(parse_strict_json(canonical).stringify(), canonical)
+  }
+  let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
+  for vector in expect_array(get_field(malformed, "vectors")) {
+    let object = expect_object(vector)
+    if expect_string(get_field(object, "name")) == "invalid-json" {
+      assert_true((try? parse_strict_json(expect_string(get_field(object, "input")))) is Err(_))
+    }
+  }
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+// GOL-100 requires input ownership to move into an invocation, so a stream
+// already consumed directly must not subsequently be registered as an input.
+#[test]
+fn provisional_consumed_stream_cannot_be_registered_as_invocation_input() {
+    let pkg = GeneratedPackage::new(agent(
+        "AffineStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_affine_wbtest.mbt"),
+        r#"///|
+async test "consumed stream cannot move into an invocation" {
+  let stream = AgentStream::from_next(async fn() { None })
+  ignore(stream.next())
+  let context = StreamEncodeContext::new()
+  inspect(
+    (try? register_input_stream(
+      context,
+      stream,
+      async fn(value) { U8Value(value) },
+      u8_public_codec(),
+    )) is Err(_),
+    content="true",
+  )
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+// GOL-100 requires input ownership to move into an invocation, so application
+// code must not retain cancellation or drop authority after registration.
+#[test]
+fn provisional_invocation_owned_stream_rejects_application_cancel_and_drop() {
+    let pkg = GeneratedPackage::new(agent(
+        "MovedStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_moved_cancel_wbtest.mbt"),
+        r#"///|
+async test "invocation-owned stream rejects application cancellation" {
+  let mut cancellations = 0
+  let cancel_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let drop_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let context = StreamEncodeContext::new()
+  ignore(register_input_stream(
+    context,
+    cancel_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  ignore(register_input_stream(
+    context,
+    drop_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  let cancel_rejected = (try? cancel_stream.cancel()) is Err(_)
+  let drop_rejected = (try? drop_stream.drop()) is Err(_)
+  inspect([cancel_rejected, drop_rejected], content="[true, true]")
+  inspect(cancellations, content="0")
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
 }

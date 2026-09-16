@@ -21,8 +21,7 @@ use crate::model::http_api::domain::{
 
 use crate::command::api::domain::ApiDomainSubcommand;
 use crate::error::NonSuccessfulExit;
-use crate::log::log_error;
-use crate::log::{LogColorize, log_action, log_warn_action, logln};
+use crate::log::{LogColorize, log_action, log_error, log_warn_action, logln};
 use crate::model::environment::EnvironmentResolveMode;
 use anyhow::bail;
 use golem_client::api::ApiDomainClient;
@@ -114,15 +113,20 @@ impl ApiDomainCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let domains = self.list_domains(&environment.environment_id).await?;
+        let domain_to_delete = clients
+            .api_domain
+            .get_environment_domain_registration(&environment.environment_id.0, &domain.0)
+            .await
+            .map_service_error_not_found_as_opt()?;
 
-        let Some(domain_to_delete) = domains.iter().find(|d| d.domain == domain).cloned() else {
+        let Some(domain_to_delete) = domain_to_delete else {
             log_error(format!(
                 "Domain {} not found",
                 domain.0.log_color_highlight()
             ));
             logln("");
 
+            let domains = self.list_domains(&environment.environment_id).await?;
             if domains.is_empty() {
                 logln(format!(
                     "No domains are registered yet for {}",
@@ -138,7 +142,7 @@ impl ApiDomainCommandHandler {
                     .to_string(),
                 );
                 for domain in domains {
-                    logln(format!("- {}", domain.domain.0))
+                    logln(format!("- {}", domain.domain.0));
                 }
             }
 

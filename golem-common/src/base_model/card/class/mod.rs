@@ -17,6 +17,7 @@ mod account_oauth2_identity;
 mod account_permission_share;
 mod account_plugin;
 mod account_token;
+mod account_tool_release;
 mod account_usage;
 mod agent;
 mod application;
@@ -37,6 +38,7 @@ mod environment_plugin_grant;
 mod environment_resource_definition;
 mod environment_retry_policy;
 mod environment_security_scheme;
+mod environment_tool_grant;
 mod filesystem;
 mod kv;
 mod network;
@@ -58,6 +60,7 @@ pub use account_oauth2_identity::*;
 pub use account_permission_share::*;
 pub use account_plugin::*;
 pub use account_token::*;
+pub use account_tool_release::*;
 pub use account_usage::*;
 pub use agent::*;
 pub use application::*;
@@ -78,6 +81,7 @@ pub use environment_plugin_grant::*;
 pub use environment_resource_definition::*;
 pub use environment_retry_policy::*;
 pub use environment_security_scheme::*;
+pub use environment_tool_grant::*;
 pub use filesystem::*;
 pub use kv::*;
 pub use network::*;
@@ -109,9 +113,11 @@ macro_rules! card_permission_classes {
             AccountUsage: AccountUsageClass,
             AccountToken: AccountTokenClass,
             AccountPlugin: AccountPluginClass,
+            AccountToolRelease: AccountToolReleaseClass,
             Application: ApplicationClass,
             Environment: EnvironmentClass,
             EnvironmentPluginGrant: EnvironmentPluginGrantClass,
+            EnvironmentToolGrant: EnvironmentToolGrantClass,
             EnvironmentDomainRegistration: EnvironmentDomainRegistrationClass,
             EnvironmentSecurityScheme: EnvironmentSecuritySchemeClass,
             EnvironmentHttpApiDeployment: EnvironmentHttpApiDeploymentClass,

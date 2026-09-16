@@ -193,6 +193,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             retry_from: start_idx,
             durable_scope: None,
             observational_owner: None,
+            entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
         },
         retry: InFunctionRetryController::new(
@@ -200,6 +201,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -242,6 +244,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -295,6 +298,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 begin_index: idx(4),
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
+                executor_shutdown: tokio_util::sync::CancellationToken::new(),
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -369,7 +373,7 @@ async fn live_delivery_token(
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -380,6 +384,7 @@ async fn live_delivery_token(
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -461,10 +466,11 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     seed_oplog
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -475,6 +481,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -673,6 +680,7 @@ async fn tail_gated_token_over_crash_tail(
     oplog
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         })
         .await;
     oplog
@@ -704,7 +712,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog.add(entry).await;
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -715,6 +723,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -758,7 +767,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
     assert!(!token.is_live_armed());
 
     token
-        .prepare_delivery()
+        .prepare_delivery(None)
         .await
         .expect("tail gating must succeed over a drainable tail");
     assert!(
@@ -790,7 +799,7 @@ async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
     let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     token
-        .prepare_delivery()
+        .prepare_delivery(None)
         .await
         .expect("tail gating must succeed over a drainable tail");
     assert!(token.is_live_armed());
@@ -829,10 +838,68 @@ async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
     token.delivered();
 
     let err = replay_state
-        .await_natural_tail_end()
+        .await_natural_tail_end(None)
         .await
         .expect_err("the poisoned cursor must reject further operations");
     assert!(err.to_string().contains("tail"), "unexpected error: {err}");
+}
+
+#[test]
+async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        vec![
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            OplogEntry::CompletionDelivered {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(2),
+            },
+            OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+        ],
+        None,
+    )
+    .await;
+    token.state = CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
+        replay_state: replay_state.clone(),
+        start_index: idx(2),
+        marker_index: idx(5),
+    });
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut preparation = Box::pin(token.prepare_delivery(Some(&activity)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), preparation.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "recorded delivery must not be parked"
+    );
+    let (index, _) = replay_state.get_oplog_entry().await.unwrap();
+    assert_eq!(index, idx(4));
+    preparation.await.unwrap();
+    assert_eq!(tracker.active_count(), 1);
+    assert_eq!(replay_state.last_replayed_index(), idx(5));
+    let mut next = Box::pin(replay_state.get_oplog_entry());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), next.as_mut())
+            .await
+            .is_err()
+    );
+    token.delivered();
+    assert_eq!(next.await.unwrap().0, idx(6));
+    assert_eq!(oplog.entries.lock().await.len(), 6, "replay adds no marker");
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
 }
 
 #[test]
@@ -847,6 +914,7 @@ async fn completion_delivery_ordered_append_lands_before_marker() {
         let mut token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
         token.append_ordered(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         });
         drop(token);
     }
@@ -1138,7 +1206,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     // permit must stay held and no cleanup event may become visible; both are released only
     // after the append completes (production releases them via `disarm()` after
     // `end_durable_function_access`, strictly downstream of `wait_terminal()`).
-    use golem_common::model::oplog::HostResponseMonotonicClockTimestamp;
+    use golem_common::model::oplog::HostResponseP3HttpClientConsumeBodyChunk;
+    use golem_common::model::oplog::payload::types::SerializableP3HttpBodyChunk;
 
     let (reached_tx, mut reached_rx) = mpsc::unbounded_channel();
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
@@ -1147,7 +1216,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
-            function_name: HostFunctionName::MonotonicClockNow,
+            function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
@@ -1165,6 +1234,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             begin_index: start_idx,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
+            executor_shutdown: tokio_util::sync::CancellationToken::new(),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1178,7 +1248,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
     let persist_oplog: Arc<dyn Oplog> = oplog.clone();
-    let persist_replay_state = ReplayState::new(
+    let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -1189,16 +1259,30 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
     let completion_marker_recorder =
         CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state);
+    let bytes = vec![42u8; 4096];
+    let original_ptr = bytes.as_ptr() as usize;
     let persist = tokio::spawn(async move {
-        let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
-        let result = DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, &response, None)
-            .await;
+        let response = HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(bytes),
+        };
+        let result = DurableCallSession::<
+            host_functions::P3HttpClientConsumeBodyChunk,
+            NotCancellable,
+        >::persist_access_terminal(
+            persist_oplog,
+            completion_marker_recorder,
+            &mut guard,
+            start_idx,
+            response,
+            None,
+        )
+        .await;
         (result, guard)
     });
 
@@ -1226,17 +1310,37 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
 
     gate.add_permits(1);
     let (result, mut guard) = persist.await.expect("persist task must not panic");
-    result.expect("persisting the terminal must succeed");
+    let response = result.expect("persisting the terminal must succeed");
+    let SerializableP3HttpBodyChunk::Data(bytes) = &response.chunk else {
+        panic!("expected the original data chunk");
+    };
+    assert_eq!(bytes.as_ptr() as usize, original_ptr);
 
     // The terminal is durably appended when the persistence stage returns...
-    {
+    let payload = {
         let entries = oplog.entries.lock().await;
         assert_eq!(entries.len(), 2, "expected [Start, End]");
         match &entries[1] {
-            OplogEntry::End { start_index, .. } => assert_eq!(*start_index, start_idx),
+            OplogEntry::End {
+                start_index,
+                response: Some(payload),
+                ..
+            } => {
+                assert_eq!(*start_index, start_idx);
+                assert!(matches!(
+                    payload,
+                    OplogPayload::SerializedInline { cached: None, .. }
+                ));
+                payload.clone()
+            }
             other => panic!("expected End, got {other:?}"),
         }
-    }
+    };
+    let decoded = oplog
+        .download_payload(payload)
+        .await
+        .expect("uncached response must decode");
+    assert_eq!(decoded, response.into());
     // ...while the guard still owns the permit and nothing has been queued: release happens
     // only at the production `disarm()`, strictly after the terminal.
     assert_eq!(
@@ -1320,6 +1424,19 @@ fn drop_not_cancellable_unfinished_signals_policy_violation() {
         }
         other => panic!("expected UnfinishedNotCancellable, got {other:?}"),
     }
+}
+
+#[test]
+fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    {
+        let handle = live_unfinished_handle::<NotCancellable>(idx(8), tx);
+        handle.executor_shutdown.cancel();
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor shutdown must not report cancellation or a policy violation"
+    );
 }
 
 #[test]
@@ -1470,6 +1587,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 
@@ -1486,6 +1604,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
 
@@ -1502,6 +1621,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1526,12 +1646,14 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 
@@ -1573,12 +1695,14 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
     };
 
@@ -1640,6 +1764,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
@@ -1674,12 +1799,14 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
@@ -1731,6 +1858,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(4),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -1745,6 +1873,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(8),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),
@@ -1787,6 +1916,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        entity_parent_start_index: None,
     };
 
     let lease = unregistered_atomic_lease(begun.atomic_region, true);
@@ -1803,6 +1933,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        entity_parent_start_index: None,
     };
 
     let scope = begun.finish(idx(12), None);
@@ -1818,6 +1949,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        entity_parent_start_index: None,
     };
 
     let lease = unregistered_atomic_lease(begun.atomic_region, true);
@@ -1836,6 +1968,7 @@ fn call_execution_scope_owns_call_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 

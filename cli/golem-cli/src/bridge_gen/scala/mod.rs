@@ -46,7 +46,10 @@ use crate::bridge_gen::scala::scala::{
 };
 use crate::bridge_gen::scala::scala_writer::ScalaWriter;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
+use crate::bridge_gen::{
+    BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
+    projected_schema_graph, validate_host_managed_agent_bridge_policy,
+};
 use crate::fs;
 use crate::sdk_overrides::sdk_overrides;
 use crate::versions::scala_dep;
@@ -54,7 +57,7 @@ use anyhow::{Context, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
-use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, reachable_defs};
+use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
 use golem_common::schema::unstructured::{
@@ -480,6 +483,7 @@ impl ScalaBridgeGenerator {
         mode: ScalaBridgeMode,
         extra_reserved_names: impl IntoIterator<Item = String>,
     ) -> anyhow::Result<Self> {
+        validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("scala");
         let runtime_config = ScalaRuntimeConfig::new(mode);
 
@@ -913,6 +917,13 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         let (ret_ty, decode_block) = self.guest_output_return(&method.output_schema)?;
+        let uses_streams = method.uses_streams(&self.agent_type.schema);
+        let result_map = if uses_streams { "flatMap" } else { "map" };
+        let decode_block = if uses_streams {
+            format!("{GUEST_CODEC}.decodeResultAsync {{\n{decode_block}\n}}")
+        } else {
+            decode_block
+        };
         let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
         if ephemeral {
             writer.line(format!(
@@ -926,16 +937,22 @@ impl ScalaBridgeGenerator {
                 "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).flatMap {{ __invocation =>"
             ));
             writer.indent();
-            writer.line("__invocation.result.map { __result =>");
+            writer.line(format!("__invocation.result.{result_map} {{ __result =>"));
             writer.indent();
             writer.line("val __decoded = {");
             writer.indent();
             writer.line(decode_block.clone());
             writer.dedent();
             writer.line("}");
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, __decoded)"
-            ));
+            if uses_streams {
+                writer.line(format!(
+                    "__decoded.map(value => {GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, value))(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)"
+                ));
+            } else {
+                writer.line(format!(
+                    "{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, __decoded)"
+                ));
+            }
             writer.dedent();
             writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.dedent();
@@ -950,7 +967,7 @@ impl ScalaBridgeGenerator {
                 "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).map {{ __result =>"
+                "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).{result_map} {{ __result =>"
             ));
             writer.indent();
             writer.line(decode_block.clone());
@@ -974,7 +991,9 @@ impl ScalaBridgeGenerator {
                 "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).map {{ __invocation =>"
             ));
             writer.indent();
-            writer.line("val __future = __invocation.result.map { __result =>");
+            writer.line(format!(
+                "val __future = __invocation.result.{result_map} {{ __result =>"
+            ));
             writer.indent();
             writer.line(decode_block.clone());
             writer.dedent();
@@ -996,7 +1015,7 @@ impl ScalaBridgeGenerator {
                 "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.map {{ __result =>"
+                "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.{result_map} {{ __result =>"
             ));
             writer.indent();
             writer.line(decode_block.clone());
@@ -1008,6 +1027,12 @@ impl ScalaBridgeGenerator {
             writer.line("}");
         }
         writer.blank();
+
+        if uses_streams {
+            writer.dedent();
+            writer.line("}");
+            return Ok(());
+        }
 
         let trigger_result = if ephemeral {
             format!("{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt")
@@ -1504,6 +1529,7 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         let invoke_args = param_names.join(", ");
+        let uses_streams = method.uses_streams(&self.agent_type.schema);
 
         // apply (await) returns metadata for ephemeral agents.
         let (ret_ty, decode_block) = self.output_return(&method.output_schema)?;
@@ -1519,10 +1545,29 @@ impl ScalaBridgeGenerator {
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
         ));
-        writer.line(format!(
-            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map {{ __result =>",
-            scala_string_literal(MODE_AWAIT)
-        ));
+        if uses_streams {
+            let constructor_codec =
+                self.public_input_codec(&self.agent_type.constructor.input_schema)?;
+            let input_codec = self.public_input_codec(&method.input_schema)?;
+            let output_codec = method
+                .output_schema
+                .schema()
+                .map(|schema| self.public_codec(schema))
+                .transpose()?
+                .map_or_else(
+                    || "_root_.scala.None".to_string(),
+                    |codec| format!("_root_.scala.Some({codec})"),
+                );
+            let config_codecs = self.public_config_codecs()?;
+            writer.line(format!(
+                "{BRIDGE}.invokeStreamingAgent(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs}).map {{ __result =>"
+            ));
+        } else {
+            writer.line(format!(
+                "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map {{ __result =>",
+                scala_string_literal(MODE_AWAIT)
+            ));
+        }
         writer.indent();
         if self.agent_type.mode == AgentMode::Ephemeral {
             writer.line(format!("val __value = {decode_block}"));
@@ -1535,6 +1580,12 @@ impl ScalaBridgeGenerator {
         writer.dedent();
         writer.line("}");
         writer.blank();
+
+        if uses_streams {
+            writer.dedent();
+            writer.line("}");
+            return Ok(());
+        }
 
         // trigger (schedule, no time) — fire-and-forget.
         let receipt_ty = if self.agent_type.mode == AgentMode::Ephemeral {
@@ -1963,6 +2014,46 @@ impl ScalaBridgeGenerator {
         }
         writer.line(format!("{SV}.RecordValue({LIST}({}))", elems.join(", ")));
         Ok(())
+    }
+
+    fn public_codec(&self, root: &SchemaType) -> anyhow::Result<String> {
+        let graph = projected_schema_graph(self.type_naming.graph(), root);
+        let json =
+            serde_json::to_string(&graph).context("failed to serialize public schema graph")?;
+        Ok(format!(
+            "{RUNTIME_PKG}.PublicValueCodec.fromSchemaGraphJson({})",
+            scala_string_literal(&json)
+        ))
+    }
+
+    fn public_input_codec(&self, input: &InputSchema) -> anyhow::Result<String> {
+        let graph = projected_input_schema_graph(self.type_naming.graph(), input);
+        let json = serde_json::to_string(&graph)
+            .context("failed to serialize public input schema graph")?;
+        Ok(format!(
+            "{RUNTIME_PKG}.PublicValueCodec.fromSchemaGraphJson({})",
+            scala_string_literal(&json)
+        ))
+    }
+
+    fn public_config_codecs(&self) -> anyhow::Result<String> {
+        let entries = self
+            .local_configs()
+            .into_iter()
+            .map(|config| {
+                let path = config
+                    .path
+                    .iter()
+                    .map(|part| scala_string_literal(part))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Ok(format!(
+                    "{LIST}({path}) -> {}",
+                    self.public_codec(&config.value_type)?
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(format!("{LIST}({})", entries.join(", ")))
     }
 
     /// The `(name, type)` parameter declarations for a constructor or method's
@@ -2791,6 +2882,15 @@ impl ScalaBridgeGenerator {
             ),
             SchemaType::Datetime { .. } => format!("{SV}.DatetimeValue({val_expr}.toString)"),
             SchemaType::Duration { .. } => format!("{SV}.DurationValue({val_expr})"),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.SecretValue({val_expr})")
+            }
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.QuotaTokenHandle({val_expr}.handle)")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.PermissionCardHandle({val_expr})")
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -2799,16 +2899,46 @@ impl ScalaBridgeGenerator {
                 "Composite schema type reached encode_structural without a registered name: {resolved:?}"
             ),
             SchemaType::Ref { .. } => unreachable!("Ref was resolved to its body via resolve_ref"),
+            SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => {
+                format!("{SV}.BinaryValue({val_expr}.bytes, {val_expr}.mimeType)")
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no Scala bridge encoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala external streams require an element schema"))?;
+                let item = format!("item{depth}");
+                let encoded = self.encode_expr(&item, inner, next)?;
+                let lane = match self.resolve_ref(inner) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let public_codec = self.public_codec(inner)?;
+                format!(
+                    "{RUNTIME_PKG}.StreamSession.input({val_expr}, ({item}) => {encoded}, \"{lane}\", {public_codec})"
+                )
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala guest streams require an element schema"))?;
+                let item = format!("item{depth}");
+                let item_type = self.type_reference(inner)?;
+                let encoded = self.encode_expr(&item, inner, next)?;
+                let graph = self.config_schema_graph(inner);
+                format!(
+                    "_root_.golem.schema.AgentStream.intoSchema[{item_type}](new _root_.golem.schema.IntoSchema[{item_type}] {{ override def graph: _root_.golem.schema.SchemaGraph = {graph}; override def toValue({item}: {item_type}): {GUEST_SCHEMA_VALUE_TYPE} = {encoded} }}).toValue({val_expr})"
+                )
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!("Cannot encode unsupported schema variant in the Scala bridge: {resolved:?}")
             }
         };
@@ -2929,6 +3059,17 @@ impl ScalaBridgeGenerator {
             SchemaType::Url { .. } => format!("{CODEC}.asUrl({val_expr})"),
             SchemaType::Datetime { .. } => format!("{CODEC}.asDatetime({val_expr})"),
             SchemaType::Duration { .. } => format!("{CODEC}.asDuration({val_expr})"),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.SecretValue(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected secret value, got $other\") }}"
+            ),
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new _root_.golem.host.QuotaApi.QuotaToken(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
+            ),
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!(
+                    "{val_expr} match {{ case {GUEST_SV}.PermissionCardHandle(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle, got $other\") }}"
+                )
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -2937,16 +3078,45 @@ impl ScalaBridgeGenerator {
                 "Composite schema type reached decode_structural without a registered name: {resolved:?}"
             ),
             SchemaType::Ref { .. } => unreachable!("Ref was resolved to its body via resolve_ref"),
+            SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => format!(
+                "{{ val b = {val_expr}; {RUNTIME_PKG}.AgentBinary({CODEC}.asBinary(b)._1, {CODEC}.asBinary(b)._2) }}"
+            ),
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no Scala bridge decoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala external streams require an element schema"))?;
+                let item = format!("item{depth}");
+                let decoded = self.decode_expr(&item, inner, next)?;
+                let lane = match self.resolve_ref(inner) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let public_codec = self.public_codec(inner)?;
+                format!(
+                    "{RUNTIME_PKG}.StreamSession.output({val_expr}, ({item}) => {decoded}, \"{lane}\", {public_codec})"
+                )
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala guest streams require an element schema"))?;
+                let item = format!("item{depth}");
+                let item_type = self.type_reference(inner)?;
+                let decoded = self.decode_expr(&item, inner, next)?;
+                format!(
+                    "_root_.golem.schema.AgentStream.fromSchema[{item_type}](new _root_.golem.schema.FromSchema[{item_type}] {{ override def fromValue({item}: {GUEST_SCHEMA_VALUE_TYPE}): _root_.scala.Either[_root_.golem.schema.FromSchemaError, {item_type}] = _root_.scala.Right({decoded}) }}).fromValue({val_expr}).fold(error => throw error, value => value)"
+                )
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!("Cannot decode unsupported schema variant in the Scala bridge: {resolved:?}")
             }
         };
@@ -3124,6 +3294,15 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.schema.GuestSecretHandle".to_string())
+            }
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.host.QuotaApi.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.schema.GuestPermissionCardHandle".to_string())
+            }
             // Named composites should already have been resolved to their name
             // above; reaching here means the walker did not register one.
             SchemaType::Record { .. }
@@ -3136,16 +3315,36 @@ impl ScalaBridgeGenerator {
             SchemaType::Ref { .. } => {
                 unreachable!("Ref was resolved to its body via resolve_ref")
             }
+            SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => {
+                Ok(format!("{RUNTIME_PKG}.AgentBinary"))
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no Scala bridge type; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala external streams require an element schema"))?;
+                Ok(format!(
+                    "{RUNTIME_PKG}.AgentStream[{}]",
+                    self.type_reference(inner)?
+                ))
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Scala guest streams require an element schema"))?;
+                Ok(format!(
+                    "_root_.golem.schema.AgentStream[{}]",
+                    self.type_reference(inner)?
+                ))
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => bail!(
+            | SchemaType::Future { .. } => bail!(
                 "Cannot emit Scala type reference for unsupported schema variant: {resolved:?}"
             ),
         }
@@ -3174,20 +3373,13 @@ impl ScalaBridgeGenerator {
         }
     }
 
-    /// Resolve a [`SchemaType::Ref`] against the agent's schema graph and return
-    /// the def body; inline types are returned unchanged.
+    /// Resolve all [`SchemaType::Ref`] indirections against the agent's schema
+    /// graph; inline types are returned unchanged.
     fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
-        match typ {
-            SchemaType::Ref { id, .. } => {
-                let def: &SchemaTypeDef = self
-                    .type_naming
-                    .graph()
-                    .lookup(id)
-                    .expect("Ref points to a def in the shared graph");
-                &def.body
-            }
-            other => other,
-        }
+        self.type_naming
+            .graph()
+            .resolve_ref(typ)
+            .expect("bridge schemas contain only resolvable references")
     }
 }
 

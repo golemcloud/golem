@@ -29,7 +29,7 @@ object ToolMiddlewareRegistrySpec extends ZIOSpecDefault {
     def invoke(
       invocation: UniversalToolMiddlewareInvocation,
       underlying: UniversalToolUnderlying
-    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
       underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
   }
 

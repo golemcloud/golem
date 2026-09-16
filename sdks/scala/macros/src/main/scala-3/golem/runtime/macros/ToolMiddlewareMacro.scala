@@ -279,7 +279,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     val decoders = Expr.ofList(valueParamSymbols.zip(valueParamTypes).map { case (symbol, tpe) =>
       decoderExpr(symbol, tpe, leaf.method)
     })
-    val expectsStdin = valueParamTypes.exists(core.isStdin)
+    val expectsStdin = valueParamTypes.exists(_ =:= TypeRepr.of[ToolMiddlewareInputHandle])
     validateReturnType(methodType.resType, leaf.method)
 
     '{
@@ -321,7 +321,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
   ): Expr[ToolMiddlewareParamDecoder] = {
     val pos = method.sym.pos.getOrElse(Position.ofMacroExpansion)
     if (core.isPrincipal(tpe)) '{ ToolMiddlewareParamDecoder.PrincipalParam }
-    else if (core.isStdin(tpe)) '{ ToolMiddlewareParamDecoder.StdinParam }
+    else if (tpe =:= TypeRepr.of[ToolMiddlewareInputHandle]) '{ ToolMiddlewareParamDecoder.StdinParam }
     else if (core.isStdout(tpe))
       report.errorAndAbort("generated middleware input methods must not contain stdout parameters", pos)
     else {
@@ -404,9 +404,10 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     }
     val expectedSuccess = (value, hasStdout) match {
       case (None, false)      => TypeRepr.of[Unit]
-      case (None, true)       => TypeRepr.of[ToolOutputStream]
+      case (None, true)       => TypeRepr.of[ToolMiddlewareOutputHandle]
       case (Some(tpe), false) => tpe
-      case (Some(tpe), true)  => TypeRepr.of[Tuple2].appliedTo(List(tpe, TypeRepr.of[ToolOutputStream]))
+      case (Some(tpe), true)  =>
+        TypeRepr.of[Tuple2].appliedTo(List(tpe, TypeRepr.of[ToolMiddlewareOutputHandle]))
     }
     if (!(either._2 =:= expectedSuccess))
       report.errorAndAbort(
@@ -423,7 +424,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     underlying: Expr[Underlying],
     rawUnderlying: Expr[RawToolUnderlying],
     args: Expr[Vector[Any]]
-  ): Expr[Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]] = {
+  ): Expr[Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]] = {
     val arguments = underlying.asTerm :: paramTypes.zipWithIndex.map { case (tpe, index) =>
       tpe.asType match {
         case '[t] => '{ $args(${ Expr(index) }).asInstanceOf[t] }.asTerm
@@ -441,7 +442,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
               case None if hasStdout =>
                 '{
                   val errorSchema = $schema
-                  ${ call.asExprOf[Future[Either[ToolInvokeError[e], ToolOutputStream]]] }.map {
+                  ${ call.asExprOf[Future[Either[ToolInvokeError[e], ToolMiddlewareOutputHandle]]] }.map {
                     case Left(error)   => Left(ToolMiddlewareInvokerRuntime.encodeError(error, errorSchema))
                     case Right(stdout) => ToolMiddlewareInvokerRuntime.encodeStdout(stdout, $rawUnderlying)
                   }(ToolInvokerRuntime.executionContext)
@@ -463,7 +464,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
                         val errorSchema = $schema
                         ${
                           call.asExprOf[
-                            Future[Either[ToolInvokeError[e], (a, ToolOutputStream)]]
+                            Future[Either[ToolInvokeError[e], (a, ToolMiddlewareOutputHandle)]]
                           ]
                         }.map {
                           case Left(error)             => Left(ToolMiddlewareInvokerRuntime.encodeError(error, errorSchema))
@@ -485,7 +486,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
 
       case core.ReturnKind.UnitK if hasStdout =>
         '{
-          ${ call.asExprOf[Future[Either[ToolInvokeError[Nothing], ToolOutputStream]]] }.map {
+          ${ call.asExprOf[Future[Either[ToolInvokeError[Nothing], ToolMiddlewareOutputHandle]]] }.map {
             case Left(error)   => Left(ToolMiddlewareInvokerRuntime.encodeInfallibleError(error))
             case Right(stdout) => ToolMiddlewareInvokerRuntime.encodeStdout(stdout, $rawUnderlying)
           }(ToolInvokerRuntime.executionContext)
@@ -505,7 +506,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
               '{
                 ${
                   call.asExprOf[
-                    Future[Either[ToolInvokeError[Nothing], (a, ToolOutputStream)]]
+                    Future[Either[ToolInvokeError[Nothing], (a, ToolMiddlewareOutputHandle)]]
                   ]
                 }.map {
                   case Left(error)             => Left(ToolMiddlewareInvokerRuntime.encodeInfallibleError(error))

@@ -1,0 +1,7 @@
+# Effect tools and middleware
+
+Build a definition with `Tool.toolDefinition(name).body(...)`. A provider finishes it with `.implement({ camelCaseName: handler })`; a caller uses `Tool.client(definition)`. Handlers and clients return Effects and stream stdin/stdout with Effect `Stream`.
+
+Use `Middleware.typed({ name, presented, handler })` when the presented tool shape is known. Use the universal middleware API only when every tool must be intercepted. Forward input, output, permission cards, and streams exactly once to `underlying`; capability handles are affine.
+
+Combined agent/tool worlds are supported by current SDK artifacts. Standalone middleware attachment and deployment is host-blocked by GOL-39; do not invent a manifest field or claim it can be deployed independently.

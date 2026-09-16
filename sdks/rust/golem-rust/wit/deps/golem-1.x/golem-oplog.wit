@@ -813,6 +813,8 @@ interface oplog {
         log(log-parameters),
         /// The agent has been restarted, forgetting all its history
         restart(timestamp),
+        /// An unfinished durable invocation was admitted to resume
+        resumed(timestamp),
         /// Activates a plugin
         activate-plugin(raw-activate-plugin-parameters),
         /// Deactivates a plugin
@@ -933,6 +935,8 @@ interface oplog {
         log(log-parameters),
         /// The agent's has been restarted, forgetting all its history
         restart(timestamp),
+        /// An unfinished durable invocation was admitted to resume
+        resumed(timestamp),
         /// Activates a plugin
         activate-plugin(activate-plugin-parameters),
         /// Deactivates a plugin

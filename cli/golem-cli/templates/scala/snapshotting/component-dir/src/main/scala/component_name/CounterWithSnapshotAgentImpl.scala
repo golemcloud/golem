@@ -26,13 +26,19 @@ final class CounterWithSnapshotAgentImpl(@unused private val name: String)
         (value & 0xff).toByte
       )
     }
+}
 
-  def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-    Future.successful {
-      value =
-        ((bytes(0) & 0xff) << 24) |
-          ((bytes(1) & 0xff) << 16) |
-          ((bytes(2) & 0xff) << 8) |
-          (bytes(3) & 0xff)
-    }
+object CounterWithSnapshotAgentImpl {
+  def loadSnapshot(
+    bytes: Array[Byte],
+    context: golem.runtime.SnapshotRestoreContext
+  ): Future[CounterWithSnapshotAgentImpl] = Future.successful {
+    val instance = new CounterWithSnapshotAgentImpl(context.identity[String](0))
+    instance.value =
+      ((bytes(0) & 0xff) << 24) |
+        ((bytes(1) & 0xff) << 16) |
+        ((bytes(2) & 0xff) << 8) |
+        (bytes(3) & 0xff)
+    instance
+  }
 }

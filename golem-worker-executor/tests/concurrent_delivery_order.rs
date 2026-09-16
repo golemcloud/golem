@@ -40,11 +40,31 @@
 
 use test_r::test;
 use wasmtime::component::{Accessor, Component, Linker};
-use wasmtime::{Engine, Store};
+use wasmtime::{AsContextMut, Engine, Store};
+
+#[test]
+async fn host_only_materialization_waits_before_ready_root_settlement() -> anyhow::Result<()> {
+    let mut store = Store::new(&engine(), ());
+    let (release, wait) = tokio::sync::oneshot::channel::<u32>();
+    {
+        let materialization = store.run_concurrent(async |_accessor| wait.await);
+        tokio::pin!(materialization);
+        assert!(futures::poll!(&mut materialization).is_pending());
+        release.send(73).unwrap();
+        assert_eq!(materialization.await??, 73);
+    }
+    store
+        .as_context_mut()
+        .run_concurrent_and_settle(async |_accessor| (), &mut |_| true)
+        .await?;
+    Ok(())
+}
 
 /// Host-side state driving the completion order of the bespoke `call` host
 /// function.
 struct DeliveryState {
+    /// Ids in the order the guest initiates their `call`s.
+    initiated: Vec<u32>,
     /// Ids in the order the host releases (completes) their `call`s.
     schedule: Vec<u32>,
     /// Index of the next id to release.
@@ -72,8 +92,8 @@ fn fixture_component(engine: &Engine) -> Component {
 
 /// Runs the fixture's `run(count)` export with the bespoke `host.call`
 /// completing in `schedule` order, returning the order in which the guest
-/// observed the completions (its delivery order).
-async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
+/// initiated the calls and the order in which it observed their completions.
+async fn runtime_orders_for(schedule: Vec<u32>) -> (Vec<u32>, Vec<u32>) {
     let count = schedule.len() as u32;
     let engine = engine();
     let component = fixture_component(&engine);
@@ -85,6 +105,7 @@ async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
         .func_wrap_concurrent(
             "call",
             |accessor: &Accessor<DeliveryState>, (id,): (u32,)| {
+                accessor.with(|mut access| access.data_mut().initiated.push(id));
                 Box::pin(async move {
                     // Complete strictly in `schedule` order: the call whose id
                     // is next in the schedule advances the cursor and returns;
@@ -113,7 +134,14 @@ async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
         )
         .expect("register golem:cmtest/host#call");
 
-    let mut store = Store::new(&engine, DeliveryState { schedule, step: 0 });
+    let mut store = Store::new(
+        &engine,
+        DeliveryState {
+            initiated: Vec::new(),
+            schedule,
+            step: 0,
+        },
+    );
     store.set_fuel(u64::MAX).expect("set test fuel");
     store.set_epoch_deadline(u64::MAX);
     let instance = linker
@@ -127,7 +155,11 @@ async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
         .call_async(&mut store, (count,))
         .await
         .expect("call `run`");
-    order
+    (store.data().initiated.clone(), order)
+}
+
+async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
+    runtime_orders_for(schedule).await.1
 }
 
 /// When the host completes the concurrent calls in the reverse of the order the
@@ -156,4 +188,19 @@ async fn delivery_order_matches_completion_order_for_permutations() {
     ] {
         assert_eq!(delivery_order_for(schedule.clone()).await, schedule);
     }
+}
+
+/// Re-executing the same component must initiate its concurrent host calls in
+/// source order even when their completion order is reversed. Durable host
+/// calls can therefore assign replay-stable attempt ordinals at host entry,
+/// before any asynchronous admission work starts.
+#[test]
+async fn concurrent_host_call_initiation_order_is_stable_across_reexecution() {
+    let first = runtime_orders_for(vec![4, 3, 2, 1, 0]).await;
+    let second = runtime_orders_for(vec![4, 3, 2, 1, 0]).await;
+
+    assert_eq!(first.0, vec![0, 1, 2, 3, 4]);
+    assert_eq!(second.0, first.0);
+    assert_eq!(first.1, vec![4, 3, 2, 1, 0]);
+    assert_eq!(second.1, first.1);
 }

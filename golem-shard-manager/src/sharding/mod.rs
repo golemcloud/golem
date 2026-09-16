@@ -13,8 +13,11 @@
 // limitations under the License.
 
 pub mod error;
+pub mod etcd_connection;
+pub mod etcd_retry;
 pub mod healthcheck;
 pub mod healthcheck_loop;
+pub mod leader_election;
 mod model;
 pub mod persistence;
 pub mod rebalancing;
@@ -22,6 +25,7 @@ pub mod shard_management;
 pub mod worker_executor;
 
 pub use model::{
-    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
-    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
+    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, RegisterAck,
+    ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
+    ShardLeaseState,
 };

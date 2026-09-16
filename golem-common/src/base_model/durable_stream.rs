@@ -911,6 +911,27 @@ pub struct StreamConsumerItemValueRecordV1 {
     pub recursive_mappings: Vec<StreamSessionMappingRecordV1>,
 }
 
+impl StreamConsumerItemValueRecordV1 {
+    pub fn logical_item_count(&self) -> usize {
+        if self.packed_u8 { self.value.len() } else { 1 }
+    }
+
+    pub fn source_offset_at(&self, index: usize) -> Option<StreamOffsetV1> {
+        if index >= self.logical_item_count() {
+            return None;
+        }
+        if !self.packed_u8 {
+            return Some(self.source_offset);
+        }
+        let index = u32::try_from(index).ok()?;
+        let sub_index = self.source_offset.sub_index().checked_add(index)?;
+        Some(StreamOffsetV1::new(
+            self.source_offset.producer_oplog_index(),
+            sub_index,
+        ))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1152,7 +1173,11 @@ impl StreamSessionRecordV1 {
                         .map(|mapping| &mapping.handle)
                         .eq(record.recursive_handles.iter())
                     && if record.packed_u8 {
-                        record.value.len() == 1 && record.recursive_handles.is_empty()
+                        !record.value.is_empty()
+                            && record
+                                .source_offset_at(record.value.len().saturating_sub(1))
+                                .is_some()
+                            && record.recursive_handles.is_empty()
                     } else {
                         true
                     }
@@ -1261,8 +1286,9 @@ fn topology_mapping_matches(
 mod tests {
     use super::{
         AttachmentId, AttemptId, DurableStreamHandleV1, PersistedStreamInvocationDescriptorV1,
-        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamId, StreamInvocationIdV1,
-        StreamOffsetError, StreamOffsetV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
+        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamConsumerItemValueRecordV1, StreamId,
+        StreamInvocationIdV1, StreamOffsetError, StreamOffsetV1, StreamSessionPreparedRecordV1,
+        StreamSessionRecordV1,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
@@ -1327,6 +1353,44 @@ mod tests {
             StreamOffsetV1::from_bytes(invalid),
             Err(StreamOffsetError::ReservedBitsSet)
         );
+    }
+
+    #[test]
+    fn packed_consumer_journal_record_derives_logical_offsets() {
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: environment_id,
+            callee: AgentId {
+                component_id: ComponentId(Uuid::from_u128(2)),
+                agent_id: "consumer".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+        };
+        let mut record = StreamConsumerItemValueRecordV1 {
+            format_version: 1,
+            session_key,
+            stream_id: StreamId(Uuid::from_u128(4)),
+            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(5), 7),
+            consumer_read_ordinal: 0,
+            value: vec![10, 11, 12],
+            packed_u8: true,
+            recursive_handles: Vec::new(),
+            recursive_mappings: Vec::new(),
+        };
+
+        assert_eq!(record.logical_item_count(), 3);
+        assert_eq!(record.source_offset_at(0).unwrap().sub_index(), 7);
+        assert_eq!(record.source_offset_at(2).unwrap().sub_index(), 9);
+        assert!(record.source_offset_at(3).is_none());
+        assert!(StreamSessionRecordV1::ConsumerItemValue(record.clone()).has_supported_format());
+
+        record.value.clear();
+        assert!(!StreamSessionRecordV1::ConsumerItemValue(record.clone()).has_supported_format());
+
+        record.value = vec![10, 11, 12];
+        record.source_offset = StreamOffsetV1::new(OplogIndex::from_u64(5), u32::MAX - 1);
+        assert!(!StreamSessionRecordV1::ConsumerItemValue(record).has_supported_format());
     }
 
     #[test]

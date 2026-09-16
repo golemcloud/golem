@@ -57,6 +57,15 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         Self::with_reader_limit(capacity, MAX_LIVE_READERS_PER_STREAM)
     }
 
+    pub(crate) fn from_committed_high_water(
+        capacity: usize,
+        high_water: Option<StreamOffsetV1>,
+    ) -> Result<Self, DurableLiveStreamBusError> {
+        let mut bus = Self::new(capacity)?;
+        bus.state.get_mut().high_water = high_water;
+        Ok(bus)
+    }
+
     fn with_reader_limit(
         capacity: usize,
         max_readers: usize,
@@ -86,6 +95,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         &self,
     ) -> Result<DurableLiveStreamSubscription<T>, DurableLiveStreamBusError> {
         let mut state = self.state.lock().await;
+        state.readers.retain(|_, sender| !sender.is_closed());
         if state.readers.len() >= self.max_readers {
             crate::metrics::durable_stream::record_limit_violation("live_readers");
             crate::metrics::durable_stream::record_live_join_rejected();
@@ -172,6 +182,17 @@ impl<T: Clone> DurableLiveStreamBus<T> {
     #[cfg(test)]
     async fn reader_count(&self) -> usize {
         self.state.lock().await.readers.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_state_lock_until(
+        &self,
+        acquired: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let _state = self.state.lock().await;
+        let _ = acquired.send(());
+        let _ = release.await;
     }
 }
 

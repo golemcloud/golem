@@ -1,13 +1,10 @@
 # Account API
 The account API allows users to query and manipulate their own account data.
 ## Create a new account. The response is the created account data.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -37,15 +34,10 @@ Path|Method|Protected
 ```
 
 ## Retrieve an account for a given Account ID
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -64,19 +56,16 @@ Path|Method|Protected
 ```
 
 ## Delete an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
-
-
 
 **Example Response JSON**
 
@@ -85,6 +74,7 @@ current_revision|integer|Yes|-
 ```
 
 ## Update account
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}`|PATCH|Yes
@@ -95,8 +85,6 @@ The account email is immutable after account creation.
 
 Changing the planId is not allowed and the request will be rejected.
 The response is the updated account data.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -122,16 +110,33 @@ The response is the updated account data.
 }
 ```
 
+## Retrieve an account by email address.
+
+Path|Method|Protected
+---|---|---
+`/v1/accounts/by-email/{account_email}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b"
+}
+```
+
 ## Get an account's plan
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/plan`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -177,13 +182,10 @@ Path|Method|Protected
 ```
 
 ## Set the plan of an account
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/plan`|PUT|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -211,15 +213,10 @@ Path|Method|Protected
 
 ## List all tokens of an account.
 The format of each element is the same as the data object in the oauth2 endpoint's response.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/tokens`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -237,14 +234,13 @@ Path|Method|Protected
 ```
 
 ## Create new token
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/tokens`|POST|Yes
 
 Creates a new token with a given expiration date.
 The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
-
-
 
 
 **Example Request JSON**
@@ -267,6 +263,7 @@ The response not only contains the token data but also the secret which can be p
 ```
 
 ## Get account usage for a UTC calendar month.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/usage`|GET|Yes
@@ -283,8 +280,6 @@ period. Durable and ephemeral storage both use storage metering.
 Name|Type|Required|Description
 ---|---|---|---
 period|string|No|Billing period in YYYY-MM format. Defaults to the current UTC calendar month.
-
-
 
 **Example Response JSON**
 
@@ -312,6 +307,7 @@ period|string|No|Billing period in YYYY-MM format. Defaults to the current UTC c
 ```
 
 ## Get sparse account usage for closed UTC calendar months, newest first.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/usage/history`|GET|Yes
@@ -324,8 +320,6 @@ does not include plan or limit metadata because historical limits are not snapsh
 Name|Type|Required|Description
 ---|---|---|---
 last|integer|No|-
-
-
 
 **Example Response JSON**
 
@@ -355,6 +349,7 @@ last|integer|No|-
 ```
 
 ## Get the current account resource policy.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/limits`|GET|Yes
@@ -366,10 +361,6 @@ behavior. `unknown` means no producer has reported metering state; it does not m
 or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
 GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
 `includedAllowance`, according to the account's current usage mode.
-
-
-
-
 
 **Example Response JSON**
 
@@ -453,6 +444,7 @@ GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
 ```
 
 ## Explicitly enter or leave paid-overage mode.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/monthly-usage-mode`|PUT|Yes
@@ -461,8 +453,6 @@ Only the account owner can enable overage, and the current Plan Row must permit 
 Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
 Each successful transition records immutable consent history. Requests that repeat the
 current mode are rejected and do not add history.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -484,13 +474,10 @@ current mode are rejected and do not add history.
 ```
 
 ## Set a storage-per-agent override for the authenticated account owner.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|PUT|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -528,15 +515,10 @@ Path|Method|Protected
 ```
 
 ## Clear a storage-per-agent override for an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|DELETE|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -567,13 +549,10 @@ Path|Method|Protected
 ```
 
 ## Set the maximum linear memory per agent for the authenticated account owner.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|PUT|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -611,15 +590,10 @@ Path|Method|Protected
 ```
 
 ## Clear the maximum linear memory per-agent override.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|DELETE|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -650,14 +624,13 @@ Path|Method|Protected
 ```
 
 ## Grant an account additional resources.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-grants/{dimension}`|PUT|Yes
 
 This operation requires an administrator token. Promotional grants require a future
 expiry. Grants do not change the account's paid-overage consent.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -686,15 +659,10 @@ expiry. Grants do not change the account's paid-overage consent.
 ```
 
 ## Clear an active admin resource grant.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-grants/{dimension}`|DELETE|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -715,6 +683,7 @@ Path|Method|Protected
 ```
 
 ## Create an impersonation token for a target account
+
 Path|Method|Protected
 ---|---|---
 `/v1/admin/impersonate/{account_id}`|POST|Yes
@@ -724,8 +693,6 @@ Creates a short-lived token that, when used for authentication, produces an
 target account, but audit writes (created_by fields) record the admin's account ID.
 
 Only users with the `Admin` account role may call this endpoint.
-
-
 
 **Example Request JSON**
 ```json copy

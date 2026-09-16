@@ -8,15 +8,26 @@ steps:
       deploy: true
 
   - id: "invoke-via-repl-script"
-    prompt: >
-      I want to test my CounterAgent using a REPL script. Write a script file in the
-      test-app directory that gets a CounterAgent instance named "c1", calls increment
-      twice, then run it with golem repl in script mode.
+    prompt:
+      rust: &non-effect-repl-script-prompt >
+        I want to test my CounterAgent using a REPL script. Write a script file in the
+        test-app directory that gets a CounterAgent instance named "c1", calls increment
+        twice, then run it with golem repl in script mode.
+      ts: *non-effect-repl-script-prompt
+      effect: >
+        I want to test the `Counter` agent in the Effect-based test-app project using Golem's
+        TypeScript REPL binding. Write a TypeScript script file in the test-app directory that
+        gets the agent instance named "c1" with `Counter.get("c1")`, calls `increment` twice,
+        then run it with `golem repl` in script mode.
+      scala: *non-effect-repl-script-prompt
+      moonbit: *non-effect-repl-script-prompt
     expectedSkills:
       rust:
         - "golem-interactive-repl-rust"
       ts:
         - "golem-interactive-repl-ts"
+      effect:
+        - "golem-interactive-repl-effect"
       scala:
         - "golem-interactive-repl-scala"
       moonbit:
@@ -24,7 +35,12 @@ steps:
 
   - id: "verify-counter-incremented"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

@@ -94,8 +94,8 @@ pub fn Search::search(
   case_sensitive : Bool,
   pattern : String,
   files : Array[@schema.Path],
-  stdin : @streams.InputStream,
-  stdout : @streams.OutputStream,
+  stdin : @asyncCore.Stream[Byte],
+  stdout : @tool.ProviderStdout,
 ) -> Result[Array[String], SearchError] {
   // ...
 }
@@ -127,10 +127,15 @@ Without an explicit mapping, `Bool` is a flag, a final `Array[T]` is a tail posi
 arrays and maps are repeatable options, and other values are positionals. Explicit annotations are
 recommended whenever the command-line surface matters.
 
-The exact qualified runtime types `@tool.Principal`, `@streams.InputStream`, and
-`@streams.OutputStream` are hidden invocation parameters. Principal and output-stream parameters
-are not exposed by generated clients; input streams are accepted as client inputs. Output streams
-are returned either alone or paired with the command's typed result.
+The exact qualified runtime types `@tool.Principal`, `@asyncCore.Stream[Byte]`, and
+`@tool.ProviderStdout` are hidden invocation parameters. Principal and provider-stdout parameters
+are not exposed by generated clients; input streams are accepted as client inputs. Provider stdout
+streams are returned either alone or paired with the command's typed result. A provider can write,
+finish successfully, or select a typed failure terminal through `ProviderStdout`.
+
+Tool middleware remains transfer-oriented: middleware methods that consume or replace the
+underlying invocation's stdout use an exact `@asyncCore.Sink[Byte]`. Raw sinks are not a provider
+authoring API.
 
 ### Constraints and errors
 

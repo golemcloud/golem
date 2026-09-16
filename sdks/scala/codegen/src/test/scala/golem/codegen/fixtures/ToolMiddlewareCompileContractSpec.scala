@@ -61,26 +61,26 @@ object ToolMiddlewareCompileContract {
   final case class TypedValue(value: String)
   final case class ToolMetadata(name: String, version: String)
 
-  trait ToolInputStream
-  trait ToolOutputStream
+  trait ToolMiddlewareInputHandle
+  trait ToolMiddlewareOutputHandle
 
-  final case class ToolInvokeResult(
+  final case class ToolMiddlewareResult(
     result: Option[TypedValue],
-    stdout: Option[ToolOutputStream]
+    stdout: Option[ToolMiddlewareOutputHandle]
   )
 
   final case class RawInvocation(
     commandPath: List[String],
     input: TypedValue,
-    stdin: Option[ToolInputStream]
+    stdin: Option[ToolMiddlewareInputHandle]
   )
 
   trait RawToolUnderlying {
     def invoke(
       commandPath: List[String],
       input: TypedValue,
-      stdin: Option[ToolInputStream]
-    ): Future[Either[ToolInvokeError[TypedValue], ToolInvokeResult]]
+      stdin: Option[ToolMiddlewareInputHandle]
+    ): Future[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]]
   }
 
   trait UniversalToolUnderlying extends RawToolUnderlying
@@ -90,7 +90,7 @@ object ToolMiddlewareCompileContract {
     toolMetadata: ToolMetadata,
     commandPath: List[String],
     input: TypedValue,
-    stdin: Option[ToolInputStream],
+    stdin: Option[ToolMiddlewareInputHandle],
     principal: String
   )
 
@@ -98,22 +98,22 @@ object ToolMiddlewareCompileContract {
     def invoke(
       invocation: UniversalToolMiddlewareInvocation,
       underlying: UniversalToolUnderlying
-    ): Future[Either[ToolInvokeError[TypedValue], ToolInvokeResult]]
+    ): Future[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]]
   }
 
   final class FakeRawToolUnderlying(
-    responses: List[Either[ToolInvokeError[TypedValue], ToolInvokeResult]]
+    responses: List[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]]
   ) extends UniversalToolUnderlying {
     val calls: mutable.ListBuffer[RawInvocation] = mutable.ListBuffer.empty
     private val remaining                        =
-      mutable.Queue.empty[Either[ToolInvokeError[TypedValue], ToolInvokeResult]]
+      mutable.Queue.empty[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]]
     remaining ++= responses
 
     override def invoke(
       commandPath: List[String],
       input: TypedValue,
-      stdin: Option[ToolInputStream]
-    ): Future[Either[ToolInvokeError[TypedValue], ToolInvokeResult]] = {
+      stdin: Option[ToolMiddlewareInputHandle]
+    ): Future[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]] = {
       calls += RawInvocation(commandPath, input, stdin)
       Future.successful(remaining.dequeue())
     }
@@ -129,8 +129,8 @@ object ToolMiddlewareCompileContract {
 
     def copy(
       config: String,
-      stdin: ToolInputStream
-    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolOutputStream)]]
+      stdin: ToolMiddlewareInputHandle
+    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolMiddlewareOutputHandle)]]
 
     def inspect(
       config: String,
@@ -162,8 +162,8 @@ object ToolMiddlewareCompileContract {
       def copy(
         underlying: U,
         config: String,
-        stdin: ToolInputStream
-      ): Future[Either[ToolInvokeError[Nothing], (Long, ToolOutputStream)]]
+        stdin: ToolMiddlewareInputHandle
+      ): Future[Either[ToolInvokeError[Nothing], (Long, ToolMiddlewareOutputHandle)]]
 
       def inspect(
         underlying: U,
@@ -199,8 +199,8 @@ object ToolMiddlewareCompileContract {
     override def copy(
       underlying: PublicEchoUnderlying,
       config: String,
-      stdin: ToolInputStream
-    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolOutputStream)]] =
+      stdin: ToolMiddlewareInputHandle
+    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolMiddlewareOutputHandle)]] =
       underlying.copy(config, stdin)
 
     override def inspect(
@@ -239,8 +239,8 @@ object ToolMiddlewareCompileContract {
     override def copy(
       underlying: BackendEchoUnderlying,
       config: String,
-      stdin: ToolInputStream
-    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolOutputStream)]] =
+      stdin: ToolMiddlewareInputHandle
+    ): Future[Either[ToolInvokeError[Nothing], (Long, ToolMiddlewareOutputHandle)]] =
       Future.successful(Left(ToolInvokeError.ConstraintViolation("copy is not supported")))
 
     override def inspect(
@@ -257,7 +257,7 @@ object ToolMiddlewareCompileContract {
     override def invoke(
       invocation: UniversalToolMiddlewareInvocation,
       underlying: UniversalToolUnderlying
-    ): Future[Either[ToolInvokeError[TypedValue], ToolInvokeResult]] =
+    ): Future[Either[ToolInvokeError[TypedValue], ToolMiddlewareResult]] =
       underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
   }
 }
@@ -266,17 +266,17 @@ class ToolMiddlewareCompileContractSpec extends munit.FunSuite {
   import ToolMiddlewareCompileContract._
 
   test("fake raw underlying records sequential calls and returns configured responses") {
-    val stdin = new ToolInputStream {}
+    val stdin = new ToolMiddlewareInputHandle {}
     val fake  = new FakeRawToolUnderlying(
       List(
-        Right(ToolInvokeResult(Some(TypedValue("first")), None)),
+        Right(ToolMiddlewareResult(Some(TypedValue("first")), None)),
         Left(ToolInvokeError.ConstraintViolation("retry")),
-        Right(ToolInvokeResult(Some(TypedValue("third")), None))
+        Right(ToolMiddlewareResult(Some(TypedValue("third")), None))
       )
     )
 
-    val middleware                                                        = new AuditAllTools
-    def invocation(value: String, stream: Option[ToolInputStream] = None) =
+    val middleware                                                                  = new AuditAllTools
+    def invocation(value: String, stream: Option[ToolMiddlewareInputHandle] = None) =
       UniversalToolMiddlewareInvocation(
         "public-echo",
         ToolMetadata("public-echo", "1.0.0"),
@@ -290,9 +290,9 @@ class ToolMiddlewareCompileContractSpec extends munit.FunSuite {
     val second = Await.result(middleware.invoke(invocation("two"), fake), 1.second)
     val third  = Await.result(middleware.invoke(invocation("three"), fake), 1.second)
 
-    assertEquals(first, Right(ToolInvokeResult(Some(TypedValue("first")), None)))
+    assertEquals(first, Right(ToolMiddlewareResult(Some(TypedValue("first")), None)))
     assertEquals(second, Left(ToolInvokeError.ConstraintViolation("retry")))
-    assertEquals(third, Right(ToolInvokeResult(Some(TypedValue("third")), None)))
+    assertEquals(third, Right(ToolMiddlewareResult(Some(TypedValue("third")), None)))
     assertEquals(fake.calls.toList.map(_.input.value), List("one", "two", "three"))
     assertEquals(fake.calls.head.stdin, Some(stdin))
   }

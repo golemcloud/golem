@@ -24,12 +24,12 @@ import scala.collection.mutable
 import scala.concurrent.{Future, Promise}
 
 object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
-  private type Outcome = Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]
+  private type Outcome = Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
 
   private val unitInput = ToolErrorSupport.unitPayload
-  private val empty     = ToolInvokeResult(None, None)
+  private val empty     = ToolMiddlewareResult(None, None)
 
-  private final class ClosableInput extends ToolInputStream {
+  private final class ClosableInput extends ToolMiddlewareInputHandle {
     var closeCount = 0
 
     override private[golem] def close(): Future[Unit] = {
@@ -38,7 +38,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
     }
   }
 
-  private final class ClosableOutput(failClose: Boolean = false) extends ToolOutputStream {
+  private final class ClosableOutput(failClose: Boolean = false) extends ToolMiddlewareOutputHandle {
     var closeCount = 0
 
     override private[golem] def close(): Future[Unit] = {
@@ -48,26 +48,27 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
     }
   }
 
-  private final class FunctionRaw(run: (List[String], TypedSchemaValue, Option[ToolInputStream]) => Future[Outcome])
-      extends RawToolUnderlying {
-    val calls = mutable.ListBuffer.empty[(List[String], TypedSchemaValue, Option[ToolInputStream])]
+  private final class FunctionRaw(
+    run: (List[String], TypedSchemaValue, Option[ToolMiddlewareInputHandle]) => Future[Outcome]
+  ) extends RawToolUnderlying {
+    val calls = mutable.ListBuffer.empty[(List[String], TypedSchemaValue, Option[ToolMiddlewareInputHandle])]
 
     def invoke(
       commandPath: List[String],
       input: TypedSchemaValue,
-      stdin: Option[ToolInputStream]
+      stdin: Option[ToolMiddlewareInputHandle]
     ): Future[Outcome] = {
       calls += ((commandPath, input, stdin))
       run(commandPath, input, stdin)
     }
   }
 
-  private def rawSuccess(result: ToolInvokeResult = empty): FunctionRaw =
+  private def rawSuccess(result: ToolMiddlewareResult = empty): FunctionRaw =
     new FunctionRaw((_, _, _) => Future.successful(Right(result)))
 
   private def withUnderlying(
     raw: RawToolUnderlying,
-    stdin: Option[ToolInputStream] = None
+    stdin: Option[ToolMiddlewareInputHandle] = None
   )(
     invoke: RawToolUnderlying => Future[Outcome]
   ): Future[Outcome] =
@@ -203,8 +204,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val selected  = new ClosableOutput
         val abandoned = new ClosableOutput
         val responses = mutable.Queue[Outcome](
-          Right(ToolInvokeResult(None, Some(selected))),
-          Right(ToolInvokeResult(None, Some(abandoned)))
+          Right(ToolMiddlewareResult(None, Some(selected))),
+          Right(ToolMiddlewareResult(None, Some(abandoned)))
         )
         val raw = new FunctionRaw((_, _, _) => Future.successful(responses.dequeue()))
         for {
@@ -248,8 +249,9 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val abandoned    = new ClosableOutput
         val selected     = new ClosableOutput
         val abandonedRaw =
-          new FunctionRaw((_, _, _) => Future.successful(Right(ToolInvokeResult(None, Some(abandoned)))))
-        val selectedRaw = new FunctionRaw((_, _, _) => Future.successful(Right(ToolInvokeResult(None, Some(selected)))))
+          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(abandoned)))))
+        val selectedRaw =
+          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(selected)))))
         for {
           _ <- ZIO.fromFuture(_ =>
                  withUnderlying(abandonedRaw) { underlying =>
@@ -276,8 +278,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val malformedOutput = new ClosableOutput
         val failedOutput    = new ClosableOutput
         val malformed       = IntoSchema[Boolean].toTyped(true).copy(value = IntoSchema[String].toValue("wrong"))
-        val malformedRaw    = rawSuccess(ToolInvokeResult(Some(malformed), Some(malformedOutput)))
-        val failedRaw       = rawSuccess(ToolInvokeResult(None, Some(failedOutput)))
+        val malformedRaw    = rawSuccess(ToolMiddlewareResult(Some(malformed), Some(malformedOutput)))
+        val failedRaw       = rawSuccess(ToolMiddlewareResult(None, Some(failedOutput)))
         val failure         = new RuntimeException("handler failed")
         for {
           invalid <- ZIO.fromFuture(_ => withUnderlying(malformedRaw)(_.invoke(Nil, unitInput, None)))
@@ -301,8 +303,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val first     = new ClosableOutput(failClose = true)
         val second    = new ClosableOutput
         val responses = mutable.Queue[Outcome](
-          Right(ToolInvokeResult(None, Some(first))),
-          Right(ToolInvokeResult(None, Some(second)))
+          Right(ToolMiddlewareResult(None, Some(first))),
+          Right(ToolMiddlewareResult(None, Some(second)))
         )
         val raw = new FunctionRaw((_, _, _) => Future.successful(responses.dequeue()))
         ZIO

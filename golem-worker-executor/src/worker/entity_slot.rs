@@ -20,7 +20,8 @@ use golem_common::model::entity::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
-use tokio::task::AbortHandle;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// In-memory registry for one `(owner, entity)` pair.
 ///
@@ -29,6 +30,7 @@ use tokio::task::AbortHandle;
 pub struct EntitySlot {
     entity_id: OwnedAgentEntityId,
     state: Mutex<EntitySlotState>,
+    drained: Notify,
 }
 
 struct EntitySlotState {
@@ -39,18 +41,20 @@ struct EntitySlotState {
 
 struct ActiveEntityInvocation {
     activation_fingerprint: EntityActivationFingerprint,
-    executable: ExecutableTarget,
+    executable: Option<ExecutableTarget>,
     mode: InvocationExecutionMode,
     linear_memory: Option<LinearMemoryTracker>,
-    abort: Option<AbortHandle>,
+    cancellation: CancellationToken,
+    body_finished: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActiveEntityInvocationMetadata {
     pub invocation_id: EntityInvocationId,
     pub activation_fingerprint: EntityActivationFingerprint,
-    pub executable: ExecutableTarget,
+    pub executable: Option<ExecutableTarget>,
     pub mode: InvocationExecutionMode,
+    pub store_attached: bool,
     pub linear_memory_bytes: u64,
 }
 
@@ -63,6 +67,7 @@ impl EntitySlot {
                 fence_generation: 0,
                 active: HashMap::new(),
             }),
+            drained: Notify::new(),
         }
     }
 
@@ -85,6 +90,7 @@ impl EntitySlot {
                     activation_fingerprint: invocation.activation_fingerprint,
                     executable: invocation.executable.clone(),
                     mode: invocation.mode,
+                    store_attached: invocation.linear_memory.is_some(),
                     linear_memory_bytes: invocation
                         .linear_memory
                         .as_ref()
@@ -99,6 +105,16 @@ impl EntitySlot {
 
     pub fn active_invocation_count(&self) -> usize {
         self.state.lock().unwrap().active.len()
+    }
+
+    pub(crate) async fn wait_drained(&self) {
+        loop {
+            let drained = self.drained.notified();
+            if self.state.lock().unwrap().active.is_empty() {
+                return;
+            }
+            drained.await;
+        }
     }
 
     pub fn charged_linear_memory_bytes(&self) -> u64 {
@@ -123,9 +139,18 @@ impl EntitySlot {
         state.fence_generation = state.fence_generation.wrapping_add(1);
         let mut active = state.active.keys().cloned().collect::<Vec<_>>();
         for invocation in state.active.values() {
-            if let Some(abort) = &invocation.abort {
-                abort.abort();
+            if !invocation.body_finished && !invocation.cancellation.is_cancelled() {
+                invocation.cancellation.cancel();
             }
+        }
+        let previous_count = state.active.len();
+        state
+            .active
+            .retain(|_, invocation| !invocation.body_finished);
+        let finished_removed = state.active.len() != previous_count;
+        drop(state);
+        if finished_removed {
+            self.drained.notify_waiters();
         }
         active.sort_by_key(EntityInvocationId::start_index);
         active
@@ -141,6 +166,7 @@ impl EntitySlot {
     pub(crate) fn register(
         self: &Arc<Self>,
         scope: &EntityInvocationScope,
+        cancellation: CancellationToken,
     ) -> Result<EntitySlotRegistration, WorkerExecutorError> {
         if scope.invocation_id().entity_id() != &self.entity_id {
             return Err(WorkerExecutorError::runtime(format!(
@@ -160,10 +186,11 @@ impl EntitySlot {
         let invocation_id = scope.invocation_id().clone();
         let invocation = ActiveEntityInvocation {
             activation_fingerprint: scope.activation().fingerprint(),
-            executable: scope.activation().executable().clone(),
+            executable: scope.activation().executable_opt().cloned(),
             mode: scope.mode(),
             linear_memory: None,
-            abort: None,
+            cancellation,
+            body_finished: false,
         };
         match state.active.entry(invocation_id.clone()) {
             Entry::Vacant(entry) => {
@@ -181,27 +208,6 @@ impl EntitySlot {
             invocation_id: Some(invocation_id),
         })
     }
-
-    pub(crate) fn attach_abort(
-        &self,
-        invocation_id: &EntityInvocationId,
-        abort: AbortHandle,
-    ) -> Result<(), WorkerExecutorError> {
-        let mut state = self.state.lock().unwrap();
-        if !state.accepting {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Entity slot {} was fenced before invocation {invocation_id} started",
-                self.entity_id
-            )));
-        }
-        let invocation = state.active.get_mut(invocation_id).ok_or_else(|| {
-            WorkerExecutorError::runtime(format!(
-                "Entity invocation {invocation_id} is no longer registered"
-            ))
-        })?;
-        invocation.abort = Some(abort);
-        Ok(())
-    }
 }
 
 pub(crate) struct EntitySlotRegistration {
@@ -210,6 +216,23 @@ pub(crate) struct EntitySlotRegistration {
 }
 
 impl EntitySlotRegistration {
+    pub(crate) fn body_finished(&mut self) {
+        let Some(invocation_id) = self.invocation_id.as_ref() else {
+            return;
+        };
+        let mut state = self.slot.state.lock().unwrap();
+        if state.accepting {
+            if let Some(invocation) = state.active.get_mut(invocation_id) {
+                invocation.body_finished = true;
+            }
+            return;
+        }
+        state.active.remove(invocation_id);
+        self.invocation_id = None;
+        drop(state);
+        self.slot.drained.notify_waiters();
+    }
+
     pub(crate) fn attach_linear_memory(
         &self,
         linear_memory: LinearMemoryTracker,
@@ -237,6 +260,7 @@ impl Drop for EntitySlotRegistration {
                 .unwrap()
                 .active
                 .remove(&invocation_id);
+            self.slot.drained.notify_waiters();
         }
     }
 }

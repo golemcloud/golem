@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ReadFileResult, TrapType};
+use crate::durable_host::tool::operation::OwnerFailureWinner;
+use crate::model::{LookupResult, ReadFileResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     LimitTransition, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
@@ -24,7 +25,8 @@ use crate::services::resource_limits::{AtomicResourceEntry, MonthlyResourceExhau
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{HasActiveAgents, HasConfig, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, lower_invocation, run_guest_call_settled,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -72,8 +74,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
-use wasmtime::Store;
 use wasmtime::component::Instance;
+use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -305,7 +307,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         'outer: loop {
             self.release_terminal_interrupt().await;
-            if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
+            // ADMISSION: gates the start of a generation, so
+            // fencing refuses new generations and never interrupts a running one.
+            if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
@@ -317,15 +321,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let entity_generation = self
-                .parent
-                .active_agents()
-                .try_get_active_agent(&self.owned_agent_id)
-                .await
-                .map(|active_agent| {
-                    let generation = active_agent.entity_fence_generation();
-                    (active_agent, generation)
-                });
             let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
                 CreateInstanceResult::Created {
                     agent,
@@ -384,12 +379,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.permit_state.install_window(window);
             *self.filesystem_activity.lock().unwrap() =
                 Some(filesystem_activity(&agent.filesystem));
-            if let Some((active_agent, generation)) = entity_generation {
-                let interrupt_state = self.interrupt_signal.lock().await;
-                if !interrupt_state.has_interrupt() {
-                    active_agent.reopen_entity_admission_if_generation(generation);
-                }
-            }
             let mut final_decision = recovery_decision;
             let mut recovery_failure = None;
             let mut final_interrupt = None;
@@ -509,7 +498,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     .try_get_active_agent(&self.owned_agent_id)
                                     .await
                                 {
-                                    active_agent.fence_entity_bodies();
+                                    let owner_failure = failure.clone().map_or_else(
+                                        || {
+                                            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
+                                                Timestamp::now_utc(),
+                                            ))
+                                        },
+                                        OwnerFailureWinner::Infrastructure,
+                                    );
+                                    active_agent.fence_entity_bodies(owner_failure).await;
                                 }
                                 let cleanup_failure = finish_filesystem_limit_unload(
                                     suspend,
@@ -613,7 +610,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                active_agent.fence_entity_bodies();
+                let owner_failure = final_interrupt
+                    .map(OwnerFailureWinner::Lifecycle)
+                    .or_else(|| {
+                        recovery_failure
+                            .clone()
+                            .map(OwnerFailureWinner::Infrastructure)
+                    })
+                    .unwrap_or_else(|| {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    });
+                active_agent.fence_entity_bodies(owner_failure).await;
             }
             if let Some(error) = Self::unload_running_agent(
                 agent,
@@ -700,7 +709,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_non_detached_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key
+                                            .clone();
                                         match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
@@ -835,7 +845,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            let failure = startup_failure.clone().map_or_else(
+                || OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+                OwnerFailureWinner::Infrastructure,
+            );
+            active_agent.fence_entity_bodies(failure).await;
         }
         self.parent
             .stop_internal(
@@ -857,7 +871,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Infrastructure(error.clone()))
+                .await;
         }
         let pending_failure = error.clone();
         self.parent
@@ -1661,6 +1677,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         parent: self.parent.clone(),
                         instance: self.instance,
                         store: store.deref_mut(),
+                        uses_streams: false,
                     };
                     invocation.external_invocation(timestamped_invocation).await
                 }
@@ -1827,6 +1844,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             parent: self.parent.clone(),
             instance: self.instance,
             store,
+            uses_streams: false,
         };
         invocation.process(message).await
     }
@@ -2042,6 +2060,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
+    uses_streams: bool,
 }
 
 impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
@@ -2084,10 +2103,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             invocation => {
                 if let Some(idempotency_key) = invocation.idempotency_key() {
-                    let has_result = {
-                        let invocation_results = self.parent.invocation_results.read().await;
-                        invocation_results.contains_key(idempotency_key)
-                    };
+                    let has_result = matches!(
+                        self.parent.lookup_invocation_result(idempotency_key).await,
+                        LookupResult::Complete(_) | LookupResult::Interrupted
+                    );
                     if !has_result {
                         self.invoke_agent(invocation).await
                     } else {
@@ -2147,6 +2166,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
+        self.uses_streams = invocation_uses_streams(
+            &invocation,
+            &self.store.data().component_metadata().metadata,
+            self.parent.parsed_agent_id.as_ref(),
+        );
         match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode()) {
             MonthlyResourceAdmission::Admit => {}
             MonthlyResourceAdmission::Suspend => {
@@ -2197,7 +2221,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
-                    if let AgentInvocationResult::AgentMethod { output } = &mut invocation_result {
+                    if self.uses_streams
+                        && let AgentInvocationResult::AgentMethod { output } =
+                            &mut invocation_result
+                    {
                         let component = self.store.data().component_metadata();
                         let Some(agent_type) =
                             self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
@@ -2275,6 +2302,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                     .await;
                             }
                         }
+                        if let Err(error) = run_guest_call_settled(
+                            &mut self.store.as_context_mut(),
+                            async |_accessor| (),
+                        )
+                        .await
+                        {
+                            let error = match error {
+                                GuestCallSettlementError::Infrastructure(error) => error,
+                                GuestCallSettlementError::Trap(error)
+                                | GuestCallSettlementError::Interrupted(error) => {
+                                    WorkerExecutorError::runtime(error.to_string())
+                                }
+                            };
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(error),
+                                )
+                                .await;
+                        }
                     }
                     self.agent_invocation_finished(
                         display_name,
@@ -2343,10 +2391,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = self
-                .parent
-                .rehydrate_durable_streaming_invocation(invocation.clone())
-                .await?;
+            let invocation_for_lowering = if self.uses_streams {
+                self.parent
+                    .rehydrate_durable_streaming_invocation(invocation.clone())
+                    .await?
+            } else {
+                invocation.clone()
+            };
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &component_metadata,
@@ -2411,22 +2462,49 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await
         {
             Ok(()) => {
-                if let Err(error) = self
-                    .parent
-                    .complete_durable_streaming_session(idempotency_key)
-                    .await
-                {
-                    tracing::error!(%error, "Failed to complete durable streaming session");
-                    return failed_agent_invocation_outcome(
-                        self.parent.agent_mode(),
-                        RetryDecision::Immediate,
-                    );
+                if self.uses_streams {
+                    let parent = self.parent.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    // Host stream operations can retain session locks across a pending poll.
+                    // Keep driving the Store while protocol-only completion acquires them.
+                    let result = self
+                        .store
+                        .run_concurrent(async move |_accessor| {
+                            parent
+                                .complete_durable_streaming_session(&idempotency_key)
+                                .await
+                        })
+                        .await;
+                    if let Err(error) = result
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                        .and_then(|result| result)
+                    {
+                        tracing::error!(%error, "Failed to complete durable streaming session");
+                        return failed_agent_invocation_outcome(
+                            self.parent.agent_mode(),
+                            RetryDecision::Immediate,
+                        );
+                    }
                 }
                 successful_agent_invocation_outcome(
                     self.parent.agent_mode(),
                     self.store.data().component_metadata().metadata.is_agent(),
                     kind,
                 )
+            }
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .await;
+                if self.uses_streams {
+                    let _ = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                        .await;
+                }
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
             Err(error) => {
                 self.store
@@ -2442,10 +2520,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
-                let _ = self
-                    .parent
-                    .fail_durable_streaming_session(idempotency_key, error.to_string())
-                    .await;
+                if self.uses_streams {
+                    let _ = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, error.to_string())
+                        .await;
+                }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
@@ -2463,15 +2543,38 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .durable_ctx()
             .begin_stream_runtime_teardown();
         let details = format!("{result:?}");
-        let trap_type = match result {
-            Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                OplogIndex::INITIAL,
-                false,
-                false,
-                self.parent.agent_mode(),
-            )),
+        let owner_failure = self
+            .store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure();
+        debug!(
+            owner_id = %self.parent.owned_agent_id(),
+            owner_failure = ?owner_failure,
+            "Classifying failed invocation after tool owner arbitration"
+        );
+        let trap_type = match owner_failure {
+            Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
+            Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
+            Some(OwnerFailureWinner::Infrastructure(error)) => {
+                Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                ))
+            }
+            None => match result {
+                Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                )),
+            },
         };
         let decision = match trap_type {
             Some(trap_type) => {
@@ -2483,7 +2586,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        if decision == RetryDecision::None {
+        if self.uses_streams && decision == RetryDecision::None {
             let _ = self
                 .parent
                 .fail_durable_streaming_session(idempotency_key, details)
@@ -3846,6 +3949,7 @@ mod tests {
     fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         let result = Ok(InvokeResult::Failed {
             consumed_fuel: 0,
+            timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
             in_atomic_region: false,

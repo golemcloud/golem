@@ -3,6 +3,7 @@ declare module 'agent-guest' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
+  import * as golemTool010Host from 'golem:tool/host@0.1.0';
   /**
    * Interface exported by a component that provides tools. The component
    * declares which tools it exposes, supplies their metadata, and accepts
@@ -36,17 +37,25 @@ declare module 'agent-guest' {
      * on or above the body, each field typed by the matching type node in
      * the body's schema.
      * `stdin` is supplied when the selected body declared a stdin
-     * `stream-spec`. The callee consumes the stream for the duration of the
-     * call; dropping its reader closes further consumption.
+     * `stream-spec`. Clean EOF is underlying stream closure. A final failed
+     * item reports recoverable source failure, abandonment, resource
+     * exhaustion, or cancellation before closure. Dropping the reader closes
+     * further consumption.
+     * `stdout` is supplied when the selected body declared a stdout
+     * `stream-spec`. The implementation writes while this function is still
+     * running and explicitly finishes or fails the endpoint. Dropping an open
+     * writer abandons it. The first selected terminal is immutable.
      * `principal` carries the caller's authenticated identity for
      * authorization and audit, identical in semantics to the parameter
      * of the same name in `golem:agent/guest.invoke`.
      * @throws ToolError
      */
-    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined, principal: Principal): Promise<InvocationResult>;
+    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolStdoutWriter | undefined, principal: Principal): Promise<InvocationResult>;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type InvocationResult = golemTool010Common.InvocationResult;
+    export type ByteStreamItem = golemTool010Host.ByteStreamItem;
+    export type ToolStdoutWriter = golemTool010Host.ToolStdoutWriter;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
     export type Principal = golemAgent200Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };

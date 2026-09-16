@@ -290,7 +290,11 @@ mod tests {
 
     #[async_trait]
     impl PromiseService for UnusedPromiseService {
-        async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
+        async fn create(
+            &self,
+            _agent_id: &AgentId,
+            _oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
             unreachable!("promise service is unused by this test")
         }
 
@@ -439,11 +443,15 @@ mod tests {
 
     #[async_trait]
     impl PromiseService for StubPromiseService {
-        async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
-            PromiseId {
+        async fn create(
+            &self,
+            agent_id: &AgentId,
+            oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
+            Ok(PromiseId {
                 agent_id: agent_id.clone(),
                 oplog_idx,
-            }
+            })
         }
 
         async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {

@@ -90,11 +90,11 @@ foreign_keys = false
 max_connections = 10
 
 [key_value_storage_retry]
-max_attempts = 3
-max_delay = "1s"
+max_attempts = 15
+max_delay = "10s"
 max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
+min_delay = "200ms"
+multiplier = 2.0
 
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
@@ -109,6 +109,7 @@ max_active_agents = 1024
 max_concurrent_streams = 1024
 max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
+max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
 
 [memory]
@@ -147,6 +148,9 @@ count = 10
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 33554432
 port = 9007
 
@@ -174,6 +178,9 @@ query_batch = 50
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 52428800
 port = 8080
 
@@ -378,11 +385,11 @@ without_time = false
 # max_connections = 10
 #
 # [key_value_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
+# max_attempts = 15
+# max_delay = "10s"
 # max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
+# min_delay = "200ms"
+# multiplier = 2.0
 #
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
@@ -397,6 +404,7 @@ without_time = false
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
+# max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
 # [memory]
@@ -435,6 +443,9 @@ without_time = false
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 33554432
 # port = 9007
 #
@@ -462,6 +473,9 @@ without_time = false
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 52428800
 # port = 8080
 #

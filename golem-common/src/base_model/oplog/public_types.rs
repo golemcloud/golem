@@ -20,8 +20,8 @@ use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
-use crate::declare_structs;
 use crate::schema::TypedSchemaValue;
+use crate::{declare_structs, declare_unions};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -37,6 +37,122 @@ use std::fmt::{Display, Formatter};
 pub struct PublicTypedAgentConfigEntry {
     pub path: Vec<String>,
     pub value: TypedSchemaValue,
+}
+
+fn redact_typed_value(value: &mut TypedSchemaValue) {
+    *value = crate::schema::redact_host_managed_typed_value(value.clone());
+}
+
+impl PublicAgentInvocation {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) => {
+                redact_typed_value(&mut params.constructor_parameters)
+            }
+            Self::AgentMethodInvocation(params) => redact_typed_value(&mut params.function_input),
+            _ => {}
+        }
+    }
+}
+
+impl PublicAgentInvocationResult {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) | Self::AgentMethod(params) => {
+                redact_typed_value(&mut params.output)
+            }
+            _ => {}
+        }
+    }
+}
+
+impl PublicOplogEntry {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::Create(params) => {
+                for entry in &mut params.local_agent_config {
+                    redact_typed_value(&mut entry.value);
+                }
+            }
+            Self::Start(params) => {
+                if let Some(value) = &mut params.request {
+                    redact_typed_value(value);
+                }
+            }
+            Self::End(params) => {
+                if let Some(value) = &mut params.response {
+                    redact_typed_value(value);
+                }
+            }
+            Self::Cancelled(params) => {
+                if let Some(value) = &mut params.partial {
+                    redact_typed_value(value);
+                }
+            }
+            Self::AgentInvocationStarted(params) => {
+                params.invocation.redact_host_managed_values_for_external()
+            }
+            Self::AgentInvocationFinished(params) => {
+                params.result.redact_host_managed_values_for_external()
+            }
+            Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
+            Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
+            Self::StreamItems(params) => redact_typed_value(&mut params.record),
+            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
+            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_managed_redaction_tests {
+    use super::*;
+    use crate::base_model::oplog::public_oplog_entry::HostStreamFrameParams;
+    use crate::schema::{
+        SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
+    };
+    use chrono::{TimeZone, Utc};
+    use test_r::test;
+
+    fn secret() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::secret(Default::default())),
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: Some(vec!["credential".to_string()]),
+                version: 7,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn public_oplog_redacts_host_managed_stream_payloads() {
+        let mut entry = PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: OplogIndex::INITIAL,
+            kind: HostStreamKind::P3HttpRequestBody,
+            payload: secret(),
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::HostStreamFrame(parameters) = entry else {
+            unreachable!()
+        };
+        assert!(find_host_managed_value(parameters.payload.value()).is_none());
+        assert!(matches!(
+            parameters.payload.value(),
+            SchemaValue::String(value) if value == "<redacted: secret>"
+        ));
+        assert!(matches!(
+            parameters.payload.root_type(),
+            SchemaType::String { .. }
+        ));
+    }
 }
 
 #[cfg(feature = "full")]
@@ -74,7 +190,79 @@ impl Display for OplogCursor {
 declare_structs! {
     pub struct PublicOplogEntryWithIndex {
         pub oplog_index: OplogIndex,
+        pub attribution: PublicOplogEntryAttribution,
         pub entry: PublicOplogEntry,
+    }
+
+    pub struct PublicAgentEntity {
+        pub kind: PublicAgentEntityKind,
+        pub name: String,
+    }
+
+    /// One entity invocation in an owner-oplog execution chain.
+    pub struct PublicEntityInvocation {
+        pub entity: PublicAgentEntity,
+        pub start_index: OplogIndex,
+        pub call_mode: PublicEntityCallMode,
+        pub operation: Option<PublicEntityInvocationOperation>,
+    }
+
+    /// Attribution for an entry executed by an entity. Ancestors are ordered from the root entity
+    /// invocation to the immediate parent of `invocation`.
+    pub struct PublicEntityInvocationContext {
+        pub invocation: PublicEntityInvocation,
+        pub ancestors: Vec<PublicEntityInvocation>,
+    }
+
+    pub struct PublicToolInvocationOperation {
+        pub command_path: Vec<String>,
+        /// Whether a live stdin attachment was requested.
+        pub has_stdin: bool,
+        /// Whether a live stdout attachment was requested. Stdout bytes are not recorded in the
+        /// oplog.
+        pub has_stdout: bool,
+        /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        pub declares_stdout: bool,
+    }
+}
+
+declare_unions! {
+    pub enum PublicOplogEntryAttribution {
+        Agent(Empty),
+        Entity(PublicEntityInvocationContext),
+    }
+
+    pub enum PublicEntityInvocationOperation {
+        Tool(PublicToolInvocationOperation),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicAgentEntityKind {
+    Tool,
+    ToolMiddleware,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicEntityCallMode {
+    Synchronous,
+    Asynchronous,
+    FireAndForget,
+}
+
+impl PublicOplogEntryAttribution {
+    pub fn agent() -> Self {
+        Self::Agent(Empty {})
+    }
+
+    pub fn entity(context: PublicEntityInvocationContext) -> Self {
+        Self::Entity(context)
     }
 }
 

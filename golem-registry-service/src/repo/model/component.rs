@@ -44,6 +44,8 @@ pub enum ComponentRepoError {
     ComponentViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("Component is referenced by a tool release or deployment snapshot")]
+    ComponentSourceInUse,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
     #[error(transparent)]
@@ -178,7 +180,7 @@ impl ComponentRevisionRecord {
                                     Ok((
                                         e.path.join("."),
                                         NormalizedJsonValue::new(
-                                            golem_common::schema::render::to_json_value(
+                                            golem_schema::schema::render::to_json_value(
                                                 e.value.graph(),
                                                 e.value.root_type(),
                                                 e.value.value(),
