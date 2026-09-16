@@ -358,9 +358,9 @@ fn synthesize_native_invoke(
         let (ok, err) = super::definition::split_result(&command.output);
         let encode = if err.is_some() {
             if ok.is_some() {
-                quote! { match #call { Ok(value) => golem_native_tool::encode_result(&value).map(|value| golem_native_tool::NativeToolStructuredResult { result: Some(value) }), Err(error) => match golem_native_tool::agentic::ToolErrorSchema::to_error_payload_value(&error) { Ok(value) => Err(golem_native_tool::NativeToolRpcError::Custom(value)), Err(error) => Err(golem_native_tool::NativeToolRpcError::InvalidResult(error)) } } }
+                quote! { match #call { Ok(value) => golem_native_tool::encode_result(&value).map(|value| golem_native_tool::NativeToolStructuredResult { result: Some(value) }), Err(error) => match golem_native_tool::agentic::ToolErrorSchema::to_error_payload_value(&error) { Ok((name, payload)) => Err(golem_native_tool::NativeToolRpcError::Custom { name, payload }), Err(error) => Err(golem_native_tool::NativeToolRpcError::InvalidResult(error)) } } }
             } else {
-                quote! { match #call { Ok(()) => Ok(golem_native_tool::NativeToolStructuredResult { result: None }), Err(error) => match golem_native_tool::agentic::ToolErrorSchema::to_error_payload_value(&error) { Ok(value) => Err(golem_native_tool::NativeToolRpcError::Custom(value)), Err(error) => Err(golem_native_tool::NativeToolRpcError::InvalidResult(error)) } } }
+                quote! { match #call { Ok(()) => Ok(golem_native_tool::NativeToolStructuredResult { result: None }), Err(error) => match golem_native_tool::agentic::ToolErrorSchema::to_error_payload_value(&error) { Ok((name, payload)) => Err(golem_native_tool::NativeToolRpcError::Custom { name, payload }), Err(error) => Err(golem_native_tool::NativeToolRpcError::InvalidResult(error)) } } }
             }
         } else if ok.is_some() {
             quote! { golem_native_tool::encode_result(&#call).map(|value| golem_native_tool::NativeToolStructuredResult { result: Some(value) }) }

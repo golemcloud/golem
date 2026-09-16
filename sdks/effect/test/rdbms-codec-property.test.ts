@@ -27,6 +27,24 @@ const bytesArb = fc.uint8Array({ maxLength: 64 })
  * encoders only persist `getUTCMilliseconds() * 1_000_000` worth of nanos. */
 const dateArb = fc.date({ noInvalidDate: true }).map((d) => new Date(d.getTime()))
 
+describe("MySQL early-year temporal decoding", () => {
+  it.each(["0000-02-29T03:04:05.006Z", "0099-12-31T23:59:59.999Z", "0100-01-01T00:00:00.001Z"])(
+    "preserves %s",
+    (iso) => {
+      const value = new Date(iso)
+      const decoded = My.decodeDbValue(My.encodeDbValue(value), "date") as Date
+      expect(decoded.toISOString()).toBe(iso)
+      expect(
+        My.dateOnlyToDate({
+          year: value.getUTCFullYear(),
+          month: value.getUTCMonth() + 1,
+          day: value.getUTCDate(),
+        }).toISOString(),
+      ).toBe(`${iso.slice(0, 10)}T00:00:00.000Z`)
+    },
+  )
+})
+
 const earlyPostgresTimestampArb = fc.record({
   year: fc.integer({ min: 0, max: 99 }),
   month: fc.integer({ min: 1, max: 12 }),

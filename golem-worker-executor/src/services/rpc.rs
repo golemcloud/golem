@@ -1945,6 +1945,7 @@ mod protocol_tests {
             idempotency_key: None,
             agent_id: None,
             component_revision: None,
+            worker_error: None,
         });
 
         assert_eq!(

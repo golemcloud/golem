@@ -91,6 +91,7 @@ describe("registered tool guest runtime", () => {
       invokeRegistered("failure", [], input(), undefined, undefined, {}),
     ).rejects.toMatchObject({
       tag: "custom-error",
+      val: { name: "rejected" },
     })
   })
 

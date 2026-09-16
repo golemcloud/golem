@@ -1966,6 +1966,13 @@ pub fn native_test_tool_metadata() -> golem_common::schema::tool::Tool {
         .metadata()
 }
 
+pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
+    use golem_native_tool::NativeToolInvoker;
+    NativeTestToolImpl(Arc::new(AtomicUsize::new(0)))
+        .native_tool_invoker()
+        .metadata()
+}
+
 fn native_test_helper_definition(
     effects: Arc<AtomicUsize>,
 ) -> golem_native_tool::NativeToolDefinition {

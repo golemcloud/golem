@@ -424,7 +424,7 @@ impl RustToolBridgeGenerator {
         let decode_result = self.started_result_decode(body)?;
         let decode_error = if body.errors.is_empty() {
             quote! {
-                |_| Result::Err("unexpected custom tool error".to_string())
+                |_, _| Ok(None)
             }
         } else {
             let error_ident = ident(
@@ -434,10 +434,12 @@ impl RustToolBridgeGenerator {
             );
             let decode_arms = self.error_decode_arms(&error_ident, body)?;
             quote! {
-                |__value: golem_rust::TypedSchemaValue| -> Result<#error_ident, String> {
+                |__name: String, __value: golem_rust::TypedSchemaValue| -> Result<Option<#error_ident>, String> {
                     let (_, __value) = __value.into_parts();
-                    #(#decode_arms)*
-                    Err("remote tool error payload did not match any declared error case".to_string())
+                    match __name.as_str() {
+                        #(#decode_arms)*
+                        _ => Ok(None),
+                    }
                 }
             }
         };
@@ -484,10 +486,12 @@ impl RustToolBridgeGenerator {
                     &__input,
                     (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                     None,
-                    |__value: golem_rust::TypedSchemaValue| -> Result<#error_ident, String> {
+                    |__name: String, __value: golem_rust::TypedSchemaValue| -> Result<Option<#error_ident>, String> {
                         let (_, __value) = __value.into_parts();
-                        #(#decode_arms)*
-                        Err("remote tool error payload did not match any declared error case".to_string())
+                        match __name.as_str() {
+                            #(#decode_arms)*
+                            _ => Ok(None),
+                        }
                     },
                 ).await
             })
@@ -501,20 +505,19 @@ impl RustToolBridgeGenerator {
     ) -> anyhow::Result<Vec<TokenStream>> {
         let mut arms = Vec::new();
         for (case, variant) in body.errors.iter().zip(error_variant_idents(body)) {
+            let name = &case.name;
             if let Some(payload) = &case.payload {
-                let dec =
-                    self.inner
-                        .emit_decode_expr(quote! { __value.clone() }, payload, false, 0)?;
+                let dec = self
+                    .inner
+                    .emit_decode_expr(quote! { __value }, payload, false, 0)?;
                 arms.push(quote! {
-                    if let Ok(__payload) = (#dec) {
-                        return Ok(#error_ident::#variant(__payload));
-                    }
+                    #name => (#dec).map(|__payload| Some(#error_ident::#variant(__payload))),
                 });
             } else {
                 arms.push(quote! {
-                    if <() as golem_rust::FromSchema>::from_value(&__value).is_ok() {
-                        return Ok(#error_ident::#variant);
-                    }
+                    #name => <() as golem_rust::FromSchema>::from_value(&__value)
+                        .map(|()| Some(#error_ident::#variant))
+                        .map_err(|__error| __error.to_string()),
                 });
             }
         }

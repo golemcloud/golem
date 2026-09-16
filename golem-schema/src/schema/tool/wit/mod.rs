@@ -89,6 +89,50 @@ pub fn decode_tool(tool: wire::Tool) -> Result<Tool, ToolWitError> {
     Tool::try_from(&tool)
 }
 
+/// Encode tool middleware metadata into its WIT representation.
+pub fn tool_middleware_to_wit(
+    middleware: &ToolMiddleware,
+) -> Result<wire::ToolMiddleware, ToolWitError> {
+    let scope = match &middleware.scope {
+        ToolMiddlewareScope::Monomorphic(scope) => {
+            wire::ToolMiddlewareScope::Monomorphic(wire::MonomorphicScope {
+                presented: encode_tool(&scope.presented)?,
+                expected: scope.expected.as_ref().map(encode_tool).transpose()?,
+            })
+        }
+        ToolMiddlewareScope::Universal => wire::ToolMiddlewareScope::Universal,
+    };
+    Ok(wire::ToolMiddleware {
+        name: middleware.name.clone(),
+        version: middleware.version.clone(),
+        aliases: middleware.aliases.clone(),
+        doc: wire::Doc::from(&middleware.doc),
+        scope,
+    })
+}
+
+/// Decode tool middleware metadata from its WIT representation.
+pub fn tool_middleware_from_wit(
+    middleware: wire::ToolMiddleware,
+) -> Result<ToolMiddleware, ToolWitError> {
+    let scope = match middleware.scope {
+        wire::ToolMiddlewareScope::Monomorphic(scope) => {
+            ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented: decode_tool(scope.presented)?,
+                expected: scope.expected.map(decode_tool).transpose()?,
+            }))
+        }
+        wire::ToolMiddlewareScope::Universal => ToolMiddlewareScope::Universal,
+    };
+    Ok(ToolMiddleware {
+        name: middleware.name,
+        version: middleware.version,
+        aliases: middleware.aliases,
+        doc: Doc::from(&middleware.doc),
+        scope,
+    })
+}
+
 fn decode_tool_value(
     value: &crate::schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, DecodeError> {
@@ -857,3 +901,6 @@ fn decode_error_case(dec: &GraphDecoder, e: &wire::ErrorCase) -> Result<ErrorCas
             .transpose()?,
     })
 }
+
+#[cfg(test)]
+mod tests;
