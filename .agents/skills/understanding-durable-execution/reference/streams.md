@@ -76,6 +76,11 @@ writes to its own URL, never future source writes. Other streams retain the stat
 cut. Revert appends an adjacent `Revert` and self-targeted `ForkCut`, drains/fences old producers,
 then refolds and reconstructs through the ordinary worker lifecycle.
 
+When the retained history ends at `AgentInvocationStarted`, `resume_replay` completes the
+guarded replay-to-live transition before entering the guest. It keeps `InvocationMode::Replay`
+to reuse that start record, but publishes stderr and handles traps as live execution even if
+the guest makes no positional host call. Cursor exhaustion alone does not publish liveness.
+
 The export creation receipt also records the original request, resolved anchor and initial-body
 hash. Retries use that receipt before consulting the source, so a later append or tombstone cannot
 move a default-tail cut. Initial content is schema-validated and committed in the hidden stage.
