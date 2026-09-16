@@ -1778,7 +1778,7 @@ const SYMLINK_TARGETS: [&str; 4] = ["missing", "d", "d/new", "e"];
 const RESTORE_PROPERTY_CASES: u32 = 2048;
 
 /// The seed of the restore property. Each run checks the same histories.
-const RESTORE_PROPERTY_SEED: [u8; 32] = *b"golem-577-restore-equals-replay!";
+const RESTORE_PROPERTY_SEED: [u8; 32] = *b"filesystem-restore-equals-replay";
 
 /// One initial file that a history declares, at a path relative to the root.
 #[derive(Clone, Debug)]
@@ -2805,9 +2805,9 @@ impl ReferenceModel {
         self.paths.keys().any(|path| path.starts_with(&prefix))
     }
 
-    /// Tells whether `path` holds Golem's file of the old declaration `old`, as the issue defines
-    /// it: a regular file whose content equals the declared content and that, where the declaration
-    /// is read-only, has no write permission.
+    /// Tells whether `path` holds Golem's file of the old declaration `old`: a regular file whose
+    /// content equals the declared content and that, where the declaration is read-only, has no
+    /// write permission.
     fn holds_golem_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (old, self.object_at(path)) {
             (Some(declared), Some(ModelObject::File { content, writable })) => {
@@ -3113,8 +3113,8 @@ impl ReferenceModel {
         self.install_declarations(component, provisioned)
     }
 
-    /// Applies the initial-file rule of the issue from the current declarations to the declarations
-    /// of `component` and `provisioned` together.
+    /// Applies the initial-file rule from the current declarations to the declarations of
+    /// `component` and `provisioned` together.
     ///
     /// The rule applies at each path where the two declarations differ, in path order, and an equal
     /// declaration changes nothing. At such a path the install expects what the current
