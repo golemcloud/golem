@@ -35,7 +35,7 @@
         {"type": "object", "additionalProperties": false, "required": ["name", "value_hex"], "properties": {"name": {"type": "string"}, "value_hex": {"$ref": "#/$defs/hex"}}}
       ]
     },
-    "headers": {"type": "array", "items": {"$ref": "#/$defs/header"}},
+    "headers": {"description": "Preserve every occurrence and byte value, with ordering within each case-insensitive header name. Relative ordering across different names is unconstrained. Runtime assertions compare per-name occurrence lists; other arrays retain exact ordering.", "type": "array", "items": {"$ref": "#/$defs/header"}},
     "case": {
       "type": "object",
       "additionalProperties": false,
