@@ -1,5 +1,8 @@
 //! Import filtering, tool metadata assembly, and complete response projection.
 
+mod headers;
+pub(crate) use headers::encode as encode_header_value;
+
 use crate::{content, schema};
 use golem_schema::schema::tool::{self, *};
 use golem_schema::schema::{
@@ -35,6 +38,7 @@ pub struct ProjectedTool {
     pub digest: String,
     input: schema::Projection,
     output: Option<schema::Projection>,
+    parameter_headers: Vec<headers::Mapping>,
     limits: Limits,
 }
 
@@ -79,6 +83,7 @@ impl ProjectedTool {
             limits.schema,
         )
         .map_err(|e| e.to_string())?;
+        let parameter_headers = headers::collect(input.source())?;
         if !input.is_object() {
             return Err("inputSchema must project to an object".into());
         }
@@ -241,6 +246,7 @@ impl ProjectedTool {
             digest,
             input,
             output,
+            parameter_headers,
             limits,
         })
     }
@@ -266,6 +272,11 @@ impl ProjectedTool {
         self.input
             .to_json(value)
             .map_err(|e| CallError::InvalidInput(e.to_string()))
+    }
+
+    /// Builds the custom HTTP headers declared by the upstream input schema.
+    pub fn parameter_headers(&self, arguments: &Value) -> Result<Vec<(String, String)>, CallError> {
+        headers::extract(&self.parameter_headers, arguments).map_err(CallError::InvalidInput)
     }
 
     /// Project an already transport-bounded response, applying each payload's own budget.

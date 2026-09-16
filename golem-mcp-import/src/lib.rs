@@ -18,6 +18,7 @@ pub mod content;
 mod limits;
 pub mod schema;
 pub mod tool;
+pub mod transport;
 
 #[cfg(test)]
 test_r::enable!();

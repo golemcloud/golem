@@ -1,8 +1,10 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
 Status: implementation in progress. Steps 1–3 completed after tests, Oracle review,
-and the bug-finder loop; step 4 is in progress. The resource-budget boundary has
-provisional user approval and must be revisited in the final review.
+and the bug-finder loop. Step 4's approved header-parser revision is verified;
+the user approved proceeding beyond its design checkpoint to the remaining work.
+The resource-budget boundary has provisional user approval and must be revisited
+in the final review.
 Middleware remains an implementation dependency. The finalized planning snapshot
 is attached to GOL-36 in Linear.
 
@@ -809,6 +811,129 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   optional arguments and extras. Oracle identified differing pre-existing SDK
   optional-carrier conventions; strict canonical-value tests alone do not close
   that integration gate.
+
+### Step 4 — in progress: transport foundation
+
+- Official live versioning now identifies **2026-07-28** as current. Imports
+  support only that released revision: self-contained request metadata, required
+  method/name/parameter headers, JSON or request-scoped SSE, and no protocol
+  sessions, initialize handshake, GET stream, DELETE, or SSE resumption. Omitted
+  versions select it; an override outside the tested set is rejected before
+  traffic. There is currently no second tested revision to negotiate. References:
+  [versioning](https://modelcontextprotocol.io/specification/versioning) and
+  [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http).
+- Upgraded the shared `rmcp` dependency to released 3.4.0. Oracle's SDK inspection
+  found that the full client worker cannot preserve invalid-definition isolation,
+  raw results, explicit fetch failures, and admission-time header mappings without
+  side channels. Its typed listing parsing, internal metadata cache, automatic
+  continuation handling, and retry machinery conflict with these requirements.
+  Use SDK wire models/metadata and the SDK's SSE parser behind a direct bounded
+  POST sender instead. This is the smallest adapter after inspecting the SDK,
+  not a parallel implementation of legacy transports.
+- `ProjectedTool` now persists validated `x-mcp-header` paths from the original
+  input schema, including nested properties. Calls extract original argument
+  paths, enforce safe integers, and encode unsafe/sentinel-looking header values.
+  Invalid annotations exclude the individual definition during projection.
+- The transport retains whole raw results and paginated raw definitions, with
+  no projection-time metadata fetch. Every call performs one POST; retries remain
+  with the later durable boundary. Bearer/basic headers are validated and marked
+  sensitive. Request IDs remain correlation IDs, not idempotency keys.
+- Initial numerical transport defaults: 8 MiB request, 16 MiB response/event and
+  cumulative listing wire bytes, 64 pages, 1,024 tools/notifications, JSON depth
+  at most 512, 16 concurrent operations per shared client, and a 60-second total
+  deadline including permit acquisition and all pages. SSE framing/comments count
+  toward the same total response budget before the SSE parser sees them. These
+  limits are independent of projection budgets; service policy wiring remains.
+- Oracle identified and prompted fixes for the upgraded export service's new
+  loopback-only Host filter, transient SSE/gateway failures misclassified as
+  terminal protocol errors, and the protocol-mandated default of `complete` when
+  `resultType` is absent. Preserve the export service's existing protocol range
+  and absence of an SDK-level request-size cap, rather than broadening its
+  capabilities or imposing an unrelated new 4 MiB limit during the import work.
+  Import response bounds remain enforced. The customer-domain regression test
+  exercises the real HTTP service adapter, beyond the export projection tests.
+- Bug-finder run 1 reproduced case-sensitive handling of `Content-Encoding:
+  Identity`. Accepted and fixed with a retained regression. Run 2 confirmed it
+  resolved and reproduced an ordinary JSON-RPC error accepted without a request
+  ID. Fixed ordinary-error correlation while retaining the protocol's explicit
+  omitted-ID exception for malformed-request parse/invalid-request errors.
+  Cloned clients also share an increasing request/progress ID allocator so
+  concurrent in-flight operations never reuse the same ID. Both sides of the
+  exception and concurrent calls are covered by tests.
+- Oracle's follow-up found no blockers in the foundation and verified export
+  protocol parity. Its encoding/status ordering hardening was also applied:
+  request identity encoding explicitly, preserve authorization/HTTP status errors
+  without decoding compressed error bodies, and reject compressed successes.
+  Production senders must not introduce transparent unbounded decompression.
+- Bug-finder run 3 confirmed the correlation fix but found that valid surrounding
+  HTTP whitespace in `Content-Encoding: identity` was rejected. The retained
+  regression test is
+  `transport::tests::accepts_optional_whitespace_around_identity_content_encoding`.
+  Fingerprint: `transport-content-encoding-identity-optional-whitespace`.
+  Three successive new findings triggered the mandatory design checkpoint.
+- Checkpoint assessment: two findings share raw HTTP token normalization as their
+  root cause; the request-ID finding is a separate, now-fixed envelope invariant.
+  The user approved a library-first revision: existing `headers::ContentLength`
+  validates repeated length fields; `headers::ContentType` and `mime` parse MIME
+  syntax, with an explicit singleton check. The typed encoding API cannot expose
+  all codings, so a small identity-only check traverses every repeated field and
+  comma-separated token, normalizes case/OWS, and ignores empty list members.
+  Compression cannot hide beside an identity token. JSON-RPC correlation remains
+  independent. No new transport framework or tool behavior was introduced.
+- Oracle approved this revision without blockers. Bug-finder run 4, authorized by
+  that user decision, confirmed the OWS finding resolved with no new findings.
+  All reported transport findings are now resolved. Its returned status still
+  had `designCheckpoint: true`; the user subsequently explicitly approved
+  continuing beyond that checkpoint to the remaining step-4 implementation.
+- Current verification: import suite **59 passed, 0 failed**, including repeated
+  coding fields/lists, mixed case/OWS, conflicting lengths, overflow, and MIME
+  parameter validation. Scoped formatting and strict import Clippy passed.
+  Earlier expanded MCP export suite **105 passed**, including the real HTTP
+  customer-domain regression, and combined import/worker-service all-target checks
+  passed. A disk-full build failure was recovered by clearing superseded build
+  caches, without removing source or guest fixtures.
+  Step 4 remains **not complete**; the reviewed foundations are a separate local
+  implementation checkpoint, not completion of transport/authentication integration.
+- The production HTTP sender now disables reqwest retries (including protocol
+  retries), redirects, automatic decoding, proxy discovery, and Referer synthesis.
+  Admission runs immediately before each request; streaming response conversion
+  does not buffer the body. Sender errors preserve host-specific quota traps.
+  The executor policy adapter reuses live network authorization, per-invocation
+  counting, and monthly accounting; it rejects replay dispatch before consulting
+  current authority. Actual bridge invocation remains step 7.
+- Outbound grant persistence uses the existing private SQL secret-storage boundary.
+  Grants are scoped by environment, scheme identity/revision, credential-owner
+  account, and canonical resource URL, not by ingress bearer tokens. Consent and
+  refresh claims must be durable before exchanges; generation/state compare-and-set
+  prevents concurrent refresh or late exchange completion from undoing revocation
+  or reauthorization. An abandoned in-flight exchange requires reauthorization,
+  not a lease expiry that can repeat a rotating-token exchange.
+  Every refresh claim also rotates the generation: a retained old grant cannot
+  start another refresh after its peer completes, and a late completion cannot
+  overwrite a subsequent cycle. This was reproduced before fixing and is covered
+  by `sqlite_refresh_claim_fences_subsequent_refresh_cycles`.
+- The expanded import suite is **65 passed**, including real HTTP pagination,
+  per-request policy checks, quota-error propagation, raw encoded streaming,
+  redirect/auth-status refusal, response-loss no-resend, and timeout closing the
+  server response stream. Strict import Clippy and scoped formatting pass.
+  Executor library compilation passes (three unrelated pre-existing warnings).
+  The OAuth store's **3 SQLite tests pass**; PostgreSQL migration execution remains
+  an integration check, not yet verified. Oracle reviewed both foundations with
+  no blockers; bug-finder transport run 5 and separate OAuth-store run 1 each
+  returned **no bugs found**, clean terminal results with no checkpoint gate.
+- OAuth service choices: explicit reauthorization immediately invalidates the old
+  grant. Other live callers wait with a finite deadline while refresh is underway;
+  they cannot acquire its old token or repeat its exchange. Failed exchanges are
+  conservatively treated as ambiguous, including connection failures. The native
+  handler owns `&mut Ctx`, so its internal durable live arm can use the current
+  adapter; an accessor-side implementation would instead need serialized access.
+- Remaining step-4 work: registry credential service/policy and accounting;
+  service configuration; OAuth protected-resource and issuer discovery, consent,
+  callback validation, token exchange/refresh integration, disconnect and CLI/API
+  operations; provider fixtures and combined validation. Implement mandatory
+  exact issuer comparisons, advertised S256 verification and resource indicators
+  from the 2026-07-28 authorization spec. The existing inbound OIDC client is not
+  a substitute. A sender and grant repository do not satisfy those requirements.
 
 ## Review and decision history
 
