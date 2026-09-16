@@ -241,9 +241,22 @@ describe("tool metadata WIT validation", () => {
     expect(released).toBe(true)
   })
 
-  it("decodes host-shaped remote tool custom errors", async () => {
+  it("forwards an explicit discovery lookup name to the transport", async () => {
+    const start = vi.fn(() =>
+      Effect.succeed({ result: Effect.succeed({ result: undefined }), cancel: Effect.void }),
+    )
+    const definition = toolDefinition("presented-name").body((body) => body)
+    await Effect.runPromise(
+      client(definition, { transport: { start }, lookupName: "registered-leaf" })({}),
+    )
+    expect(start).toHaveBeenCalledWith("registered-leaf", [], expect.anything(), undefined, false)
+  })
+
+  it("decodes same-shaped host custom errors by authoritative name", async () => {
     const failure = Schema.Struct({ message: Schema.String })
-    const definition = toolDefinition("fallible").body((body) => body.error("bad-request", failure))
+    const definition = toolDefinition("fallible").body((body) =>
+      body.error("bad-request", failure).error("unavailable", failure),
+    )
     const encoded = Effect.runSync(compile(failure))
     const transport: ToolTransport = {
       start: () =>
@@ -253,8 +266,11 @@ describe("tool metadata WIT validation", () => {
             val: {
               tag: "custom-error",
               val: {
-                graph: encoded.schemaGraph,
-                value: Effect.runSync(encoded.encode({ message: "no" })),
+                name: "unavailable",
+                payload: {
+                  graph: encoded.schemaGraph,
+                  value: Effect.runSync(encoded.encode({ message: "no" })),
+                },
               },
             },
           }),
@@ -263,7 +279,10 @@ describe("tool metadata WIT validation", () => {
     }
     const exit = await Effect.runPromiseExit(client(definition, { transport })({}))
     expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") expect(String(exit.cause)).toContain("bad-request")
+    if (exit._tag === "Failure") {
+      expect(String(exit.cause)).toContain("unavailable")
+      expect(String(exit.cause)).not.toContain("bad-request")
+    }
   })
 
   it("keeps universal middleware stdin Effect-native and rejects escaped underlying handles", async () => {

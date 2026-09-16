@@ -62,16 +62,16 @@ use crate::model::oplog::public_oplog_entry::{
     ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
     InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    PublicQueuedCardEventCard, ReadOnlyViolationError,
+    OplogErrorKind, PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -855,6 +855,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
+                kind: oplog_error_kind_from_proto(error.kind)?,
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
                 inside_atomic_region: error.inside_atomic_region,
@@ -863,6 +864,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .map(TryInto::try_into)
                     .transpose()?,
             })),
+            oplog_entry::Entry::RecoverySucceeded(recovery_succeeded) => Ok(
+                PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
+                    timestamp: recovery_succeeded
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                }),
+            ),
             oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -1484,6 +1493,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 entry: Some(oplog_entry::Entry::Error(
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
+                        kind: oplog_error_kind_to_proto(error.kind) as i32,
                         error: error.error,
                         retry_from: error.retry_from.0,
                         inside_atomic_region: error.inside_atomic_region,
@@ -1491,6 +1501,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
+            PublicOplogEntry::RecoverySucceeded(recovery_succeeded) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::RecoverySucceeded(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(recovery_succeeded.timestamp.into()),
+                        },
+                    )),
+                }
+            }
             PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::NoOp(
                     golem_api_grpc::proto::golem::worker::TimestampParameter {
@@ -3232,10 +3251,14 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
                 timestamp: error.timestamp,
                 entity_parent_start_index: None,
+                kind: error.kind,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
+            }),
+            PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
+                timestamp: p.timestamp,
             }),
             PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
                 timestamp: p.timestamp,
@@ -4076,6 +4099,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
@@ -4083,12 +4107,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
+                kind: oplog_error_kind_to_proto(kind) as i32,
                 retry_from: retry_from.into(),
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
             }),
+            OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
             OplogEntry::NoOp { .. } => Entry::NoOp(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
                 jump: Some(RawOplogRegion {
@@ -4661,12 +4687,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Error {
                     timestamp,
                     entity_parent_start_index,
+                    kind: oplog_error_kind_from_proto(p.kind)?,
                     error,
                     retry_from,
                     inside_atomic_region: p.inside_atomic_region,
                     retry_policy_state,
                 })
             }
+            Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
             Entry::NoOp(_) => Ok(OplogEntry::NoOp {
                 timestamp,
                 entity_parent_start_index,
@@ -5096,6 +5124,29 @@ fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
             Ok(HostStreamKind::P3HttpRequestBody)
         }
         Err(_) => Err(format!("Invalid host stream kind: {kind}")),
+    }
+}
+
+fn oplog_error_kind_to_proto(
+    kind: OplogErrorKind,
+) -> golem_api_grpc::proto::golem::worker::OplogErrorKind {
+    match kind {
+        OplogErrorKind::Invocation => {
+            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation
+        }
+        OplogErrorKind::Recovery => golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery,
+    }
+}
+
+fn oplog_error_kind_from_proto(kind: i32) -> Result<OplogErrorKind, String> {
+    match golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind) {
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation) => {
+            Ok(OplogErrorKind::Invocation)
+        }
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery) => {
+            Ok(OplogErrorKind::Recovery)
+        }
+        Err(_) => Err(format!("Unknown oplog error kind: {kind}")),
     }
 }
 

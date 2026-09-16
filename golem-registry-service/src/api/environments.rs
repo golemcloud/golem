@@ -29,6 +29,7 @@ use golem_common::model::deployment::{
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::model::tool::{DeployedRegisteredTool, ToolName};
+use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareName};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -724,6 +725,84 @@ impl EnvironmentsApi {
             .get_deployment_registered_tool(environment_id, deployment_id, &tool_name, &auth)
             .await?;
         Ok(Json(tool))
+    }
+
+    /// List all registered tool middleware in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tool-middlewares",
+        method = "get",
+        operation_id = "list_deployment_registered_tool_middlewares"
+    )]
+    async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<RegisteredToolMiddleware>>> {
+        let record = recorded_http_api_request!(
+            "list_deployment_registered_tool_middlewares",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            let values = self
+                .deployment_service
+                .list_deployment_registered_tool_middlewares(
+                    environment_id.0,
+                    deployment_id.0,
+                    &auth,
+                )
+                .await?;
+            Ok(Json(Page { values }))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+
+    /// Get registered tool middleware in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tool-middlewares/:middleware_name",
+        method = "get",
+        operation_id = "get_deployment_registered_tool_middleware"
+    )]
+    async fn get_deployment_registered_tool_middleware(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        middleware_name: Path<ToolMiddlewareName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<RegisteredToolMiddleware>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_registered_tool_middleware",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+            middleware_name = middleware_name.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            self.deployment_service
+                .list_deployment_registered_tool_middlewares(
+                    environment_id.0,
+                    deployment_id.0,
+                    &auth,
+                )
+                .await?
+                .into_iter()
+                .find(|value| value.definition.name == middleware_name.0.as_str())
+                .map(Json)
+                .ok_or_else(|| {
+                    crate::services::deployment::DeploymentError::ToolNotFound(
+                        ToolName::try_from(middleware_name.0.as_str())
+                            .expect("middleware names are valid tool names"),
+                    )
+                })
+                .map_err(Into::into)
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
     }
 }
 

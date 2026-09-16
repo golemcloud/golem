@@ -18,8 +18,8 @@ use crate::schema::wit::{GuestQuotaTokenHandle, GuestSecretHandle, wire as schem
 use crate::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
 use crate::tool::wire;
 use crate::tool::{
-    InputStream, InvocationResult, Principal, Tool, ToolInvokeError, ToolMiddlewareScope,
-    ToolUnderlying, UnderlyingTool,
+    InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
+    ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use crate::{
     IntoTypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned,
@@ -157,7 +157,7 @@ async fn invoke(
     stdin: Option<InputStream>,
     principal: Principal,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     get_tool_middleware_invoker_by_name(middleware_name)
         .unwrap_or_else(|| panic!("middleware `{middleware_name}` is registered"))(
         tool_name.to_string(),
@@ -171,9 +171,7 @@ async fn invoke(
     .await
 }
 
-fn invocation_error(
-    result: Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>,
-) -> ToolInvokeError<TypedSchemaValue> {
+fn invocation_error<E>(result: Result<InvocationResult, ToolInvokeError<E>>) -> ToolInvokeError<E> {
     match result {
         Ok(_) => panic!("invocation unexpectedly succeeded"),
         Err(error) => error,
@@ -195,6 +193,7 @@ impl AcceptancePolicy {
 
 #[tool_middleware(
     name = "phase-six-transparent-policy",
+    version = "1.2.3",
     constructor = AcceptancePolicy::new
 )]
 impl AcceptanceEchoMiddleware for AcceptancePolicy {
@@ -245,7 +244,7 @@ async fn invoke_echo(
     value: &str,
     stdin: Option<InputStream>,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-transparent-policy",
         "acceptance-echo",
@@ -349,6 +348,9 @@ fn transparent_dispatch_preserves_all_five_protocol_errors_exactly(
                 ToolInvokeError::ConstraintViolation(value) => assert_eq!(value, "constraint"),
                 ToolInvokeError::InvalidResult(value) => assert_eq!(value, "bad-result"),
                 ToolInvokeError::Tool(_) => panic!("protocol error became a custom error"),
+                ToolInvokeError::UnknownCustomError(_) => {
+                    panic!("protocol error became an unknown custom error")
+                }
             }
         }
     });
@@ -419,10 +421,13 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
         Box::pin(async move {
             match result {
                 Ok(value) => Ok(typed_result(value)),
-                Err(message) => Err(wire::ToolError::CustomError(
-                    encode_typed_schema_value_owned(message.into_typed_schema_value().unwrap())
-                        .unwrap(),
-                )),
+                Err(message) => Err(wire::ToolError::CustomError(wire::CustomToolError {
+                    name: "failed".to_string(),
+                    payload: encode_typed_schema_value_owned(
+                        message.into_typed_schema_value().unwrap(),
+                    )
+                    .unwrap(),
+                })),
             }
         })
     }))
@@ -431,7 +436,7 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
 async fn invoke_adapter(
     value: u32,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-adapter-policy",
         "adapter-presented",
@@ -488,8 +493,8 @@ fn adapter_converts_input_output_and_custom_errors_between_exact_descriptors(
             panic!("mapped adapter error is custom")
         };
         assert_eq!(
-            PresentedError::from_error_payload_value(error).unwrap(),
-            PresentedError::Rejected("denied".to_string())
+            PresentedError::from_error_payload_value(error.name, error.payload).unwrap(),
+            Some(PresentedError::Rejected("denied".to_string()))
         );
     });
 }
@@ -578,7 +583,7 @@ fn nested_transparent_underlying(calls: NestedCalls) -> UnderlyingTool {
 async fn invoke_nested(
     middleware_name: &str,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         middleware_name,
         "nested-presented",
@@ -664,7 +669,7 @@ async fn universal_acceptance(
     stdin: Option<InputStream>,
     principal: Principal,
     mut underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     UNIVERSAL_OBSERVATION.with(|observation| {
         *observation.borrow_mut() = Some(UniversalObservation {
             tool_name,
@@ -790,7 +795,7 @@ fn stream_underlying(include_stdout: bool) -> UnderlyingTool {
 async fn invoke_stream(
     stdin: Option<InputStream>,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-stream-policy",
         "stream-tool",

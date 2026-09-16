@@ -64,6 +64,8 @@ import {
 } from './internal/tool';
 import {
   deepEqual,
+  preflightWitTypedSchemaValue,
+  schemaGraphFromWit,
   t,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
@@ -701,6 +703,7 @@ export interface ImplementedToolMiddleware<Name extends string = string> {
 
 interface ToolMiddlewareMetadataOptions<Name extends string> {
   readonly name: Name;
+  readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
 }
@@ -763,6 +766,7 @@ export type UniversalToolMiddlewareInvoke = (
 
 export interface UniversalToolMiddlewareOptions<Name extends string> {
   readonly name: Name;
+  readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
   readonly invoke: UniversalToolMiddlewareInvoke;
@@ -799,7 +803,12 @@ export type ToolClientFailureMapper = (
 
 export type ToolInvokeErrorCause<Errors> =
   | Exclude<WireToolError, { readonly tag: 'custom-error' }>
-  | { readonly tag: 'tool'; readonly error: Errors };
+  | { readonly tag: 'tool'; readonly error: Errors }
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: WireTypedSchemaValue;
+    };
 
 export class ToolInvokeError<Errors = never> extends Error {
   readonly cause: ToolInvokeErrorCause<Errors>;
@@ -1925,18 +1934,28 @@ function isReadableStream(value: unknown): value is ToolInputStream {
 
 export function decodeDeclaredToolError(
   body: ExtendedCommandBody,
-  wirePayload: WireTypedSchemaValue,
+  wireError: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
   callName: string,
-): ToolErr<string, unknown> | ToolErr<string> {
-  const payload = typedSchemaValueFromWit(wirePayload);
-  const unitGraph = { defs: new Map(), root: t.tuple([]) };
-  const errorCase = body.errors.find((errorCase) =>
-    deepEqual(payload.graph, errorCase.payloadCodec?.graph ?? unitGraph),
-  );
+):
+  | ToolErr<string, unknown>
+  | ToolErr<string>
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: WireTypedSchemaValue;
+    } {
+  const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
   if (!errorCase) {
-    throw new Error('remote custom error does not match any declared error schema');
+    preflightWitTypedSchemaValue(wireError.payload);
+    return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
   }
 
+  validateWireSchema(
+    errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
+    wireError.payload,
+    `${callName} custom error "${errorCase.name}"`,
+  );
+  const payload = typedSchemaValueFromWit(wireError.payload);
   if (!errorCase.payloadCodec) {
     if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
       throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
@@ -1956,7 +1975,19 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
+  validateWireSchema(codec.graph, wire, position);
   return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+}
+
+function validateWireSchema(
+  expected: SchemaCodec['graph'],
+  wire: WireTypedSchemaValue,
+  position: string,
+): void {
+  preflightWitTypedSchemaValue(wire);
+  if (!deepEqual(schemaGraphFromWit(wire.graph), expected)) {
+    throw new Error(`${position} schema does not match the local definition`);
+  }
 }
 
 function decodeTypedValue(codec: SchemaCodec, typed: TypedSchemaValue, position: string): unknown {
@@ -1987,6 +2018,8 @@ function formatToolInvokeError(cause: ToolInvokeErrorCause<unknown>): string {
         ? `Underlying tool returned declared error "${name}"`
         : 'Underlying tool returned a declared error';
     }
+    case 'unknown-error':
+      return `Underlying tool returned unknown declared error "${cause.name}"`;
   }
 }
 
@@ -2425,6 +2458,7 @@ function normalizeDoc(input?: DocInput): Doc {
 
 function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<string>): {
   readonly name: string;
+  readonly version: string;
   readonly aliases: readonly string[];
   readonly doc: Doc;
 } {
@@ -2432,6 +2466,10 @@ function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<stri
     throw new Error('tool middleware name must be a string');
   }
   validateToolIdentifier('tool middleware name', options.name);
+  const version = options.version ?? '0.0.0';
+  if (typeof version !== 'string') {
+    throw new Error(`tool middleware "${options.name}" version must be a string`);
+  }
 
   if (options.aliases !== undefined && !Array.isArray(options.aliases)) {
     throw new Error(`tool middleware "${options.name}" aliases must be an array`);
@@ -2476,7 +2514,7 @@ function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<stri
     });
   }
 
-  return { name: options.name, aliases, doc: normalizeDoc(input) };
+  return { name: options.name, version, aliases, doc: normalizeDoc(input) };
 }
 
 function normalizeAnnotations(input: Partial<CommandAnnotations>): CommandAnnotations {

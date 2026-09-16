@@ -39,6 +39,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::OplogErrorKind;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use itertools::Itertools;
@@ -65,6 +66,66 @@ impl From<String> for RawAgentId {
 impl Display for RawAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+/// A failed agent of a best-effort bulk action (update, redeploy, delete-all). Agents are
+/// identified by component and agent id: agent ids are unique within a component only, an
+/// agent type moved to another component leaves its old agents behind in the previous one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionError {
+    pub component_name: ComponentName,
+    pub agent_id: RawAgentId,
+    pub error: String,
+}
+
+impl AgentActionError {
+    pub fn is_for(&self, component_name: &ComponentName, agent_id: &RawAgentId) -> bool {
+        self.component_name == *component_name && self.agent_id == *agent_id
+    }
+}
+
+/// Outcome of a best-effort bulk agent action (redeploy, delete-all): what succeeded, and the
+/// error for each agent it failed on.
+pub struct BulkAgentActionResult<T> {
+    pub succeeded: Vec<T>,
+    pub errors: Vec<AgentActionError>,
+}
+
+impl<T> BulkAgentActionResult<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            succeeded: Vec::with_capacity(capacity),
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl<T> Default for BulkAgentActionResult<T> {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+/// Why redeploying a single agent failed. Redeploying deletes and then recreates the agent, so
+/// the two phases are told apart: after a failed recreation the agent no longer exists.
+pub enum RedeployAgentError {
+    Delete(anyhow::Error),
+    Recreate(anyhow::Error),
+}
+
+impl Display for RedeployAgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Delete(error) => write!(f, "failed to delete the agent: {error:#}"),
+            Self::Recreate(error) => {
+                write!(
+                    f,
+                    "the agent was deleted, but failed to recreate it: {error:#}"
+                )
+            }
+        }
     }
 }
 
@@ -146,6 +207,7 @@ pub struct AgentMetadataView {
     pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,
     pub last_error: Option<String>,
+    pub last_error_kind: Option<OplogErrorKind>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
@@ -173,6 +235,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             updates: value.updates,
             created_at: value.created_at,
             last_error: value.last_error,
+            last_error_kind: value.last_error_kind,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: value.exported_resource_instances,
@@ -228,6 +291,7 @@ pub struct AgentMetadata {
     pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,
     pub last_error: Option<String>,
+    pub last_error_kind: Option<OplogErrorKind>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
@@ -252,6 +316,7 @@ impl AgentMetadata {
             updates: value.updates,
             created_at: value.created_at,
             last_error: value.last_error,
+            last_error_kind: value.last_error_kind,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: HashMap::from_iter(
@@ -603,6 +668,12 @@ impl MessageWithFields for AgentGetView {
                 |n| n.to_string(),
             )
             .fmt_field_optional(
+                "Failure category",
+                &self.metadata.last_error_kind,
+                self.metadata.last_error_kind.is_some(),
+                |kind| format!("{:?}", kind.as_ref().unwrap()),
+            )
+            .fmt_field_optional(
                 "Last error",
                 &self.metadata.last_error,
                 self.metadata.last_error.is_some() && self.precise,
@@ -731,9 +802,13 @@ impl AgentsMetadataResponseView {
                     TableCell::new(agent.component_name.to_string()),
                     TableCell::new(agent.agent_id.0.clone()),
                     TableCell::new(agent.component_revision.to_string()).right(),
-                    TableCell::new(agent.status.to_string())
-                        .right()
-                        .color(Self::status_color(&agent.status, colorize)),
+                    TableCell::new(if agent.last_error_kind == Some(OplogErrorKind::Recovery) {
+                        "Unavailable".to_string()
+                    } else {
+                        agent.status.to_string()
+                    })
+                    .right()
+                    .color(Self::status_color(&agent.status, colorize)),
                     TableCell::new(agent.pending_invocation_count.to_string()).right(),
                     TableCell::new(agent.created_at.to_string()),
                 ]

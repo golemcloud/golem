@@ -63,6 +63,8 @@ export interface Streams {
 /** Typed client options. @since 1.6.0 @category models */
 export interface ClientOptions {
   readonly transport?: ToolTransport
+  /** Registered leaf name used for host lookup when it differs from metadata identity. */
+  readonly lookupName?: string
 }
 
 type Input<B extends BodyModel> = {
@@ -154,7 +156,7 @@ export const liveToolStart = (
 /** Construct an Effect client from a local definition. @since 1.6.0 @category constructors */
 export function client<D extends ToolDefinition<any, any>>(
   definition: D,
-  options: { readonly transport: ToolTransport },
+  options: ClientOptions & { readonly transport: ToolTransport },
 ): Client<D>
 export function client<D extends ToolDefinition<any, any>>(
   definition: D,
@@ -200,7 +202,7 @@ export function client<D extends ToolDefinition<any, any>>(
           : undefined
         if (stdin) yield* Effect.addFinalizer(() => Effect.promise(() => stdin.close()))
         const started = yield* start(
-          definition.name,
+          options.lookupName ?? definition.name,
           path,
           { graph: codec.schemaGraph, value },
           stdin,
@@ -218,27 +220,37 @@ export function client<D extends ToolDefinition<any, any>>(
             (cause: unknown) => {
               const toolError = remoteToolError(cause)
               if (toolError?.tag === "custom-error") {
-                const declared = model.body!.errors.find((entry) =>
-                  sameWireGraph(
-                    Effect.runSync(compile(entry.schema)).schemaGraph,
-                    toolError.val.graph,
-                  ),
+                const declared = model.body!.errors.find(
+                  (entry) => entry.name === toolError.val.name,
                 )
                 if (!declared)
                   return Effect.fail(
-                    new ToolClientError("declared-error", "custom error schema is not declared"),
+                    new ToolClientError("declared-error", {
+                      tag: "unknown-error",
+                      name: toolError.val.name,
+                      payload: toolError.val.payload,
+                    }),
                   )
-                return Effect.flatMap(compile(declared.schema), (codec) =>
-                  Effect.flatMap(codec.decode(toolError.val.value), (value) =>
-                    Effect.fail({ _tag: "ToolFailure", name: declared.name, value } as const),
-                  ),
-                ).pipe(
-                  Effect.mapError((error) =>
-                    typeof error === "object" && error !== null && "_tag" in error
-                      ? error
-                      : new ToolClientError("declared-error", error),
-                  ),
-                )
+                return Effect.gen(function* () {
+                  const codec = yield* compile(declared.schema).pipe(
+                    Effect.mapError((error) => new ToolClientError("declared-error", error)),
+                  )
+                  if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
+                    return yield* Effect.fail(
+                      new ToolClientError(
+                        "declared-error",
+                        `custom error '${declared.name}' schema does not match`,
+                      ),
+                    )
+                  const value = yield* codec
+                    .decode(toolError.val.payload.value)
+                    .pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
+                  return yield* Effect.fail({
+                    _tag: "ToolFailure",
+                    name: declared.name,
+                    value,
+                  } as const)
+                })
               }
               return Effect.fail(new ToolClientError("invoke", cause))
             },
