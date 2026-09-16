@@ -18,9 +18,10 @@ use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
     ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamStore, NestedStreamWrite,
     ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
-    ResultStreamRegistration, RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl,
-    SessionControlMetadata, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-    StreamSegmentSource, StreamStoreError, StreamWriteAdmission, StreamWriteContext,
+    RecoveredMappings, ResultMaterializationState, ResultStreamRegistration,
+    RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl, SessionControlMetadata,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource, StreamStoreError,
+    StreamWriteAdmission, StreamWriteContext,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -49,12 +50,11 @@ use golem_common::base_model::durable_stream::{
     StreamCancelRole, StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
     StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
     StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
-    StreamResumeOperation, StreamRootKind, StreamSessionCancelRequestedRecord,
-    StreamSessionDetachedRecord, StreamSessionInvocationResultRecord, StreamSessionKey,
-    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
-    StreamSessionRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
-    StreamSourceKind, StreamTopologyActivatedRecord, StreamTopologyPreparedRecord,
-    StreamValuePathStep,
+    StreamResumeOperation, StreamRootKind, StreamSessionDetachedRecord,
+    StreamSessionInvocationResultRecord, StreamSessionKey, StreamSessionMapping,
+    StreamSessionMappingRecord, StreamSessionMappingUpdateRecord, StreamSessionRecord,
+    StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord, StreamSourceKind,
+    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
@@ -78,10 +78,11 @@ use wasmtime::component::{Destination, StreamProducer, StreamResult};
 
 const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
 
-pub(crate) struct AuthoritativeAttachmentState {
-    pub(crate) epoch: u64,
-    pub(crate) attempt_id: AttemptId,
-    pub(crate) attached: bool,
+/// Durable attachment authority currently recorded for a stream session.
+pub struct AuthoritativeAttachmentState {
+    pub epoch: u64,
+    pub attempt_id: AttemptId,
+    pub attached: bool,
 }
 
 struct MaterializedResult {
@@ -96,7 +97,7 @@ struct OutputReplay {
 
 #[async_trait::async_trait]
 /// Commits consumer journal entries and queries their durable completion boundary.
-pub(crate) trait DurableStreamConsumerJournal: Send + Sync {
+pub trait DurableStreamConsumerJournal: Send + Sync {
     /// Makes previously appended consumer observations recoverable.
     async fn commit(&self) -> Result<(), String>;
     /// Returns the committed session-finished index, if present.
@@ -109,7 +110,7 @@ pub(crate) trait DurableStreamConsumerJournal: Send + Sync {
 #[derive(Clone)]
 /// Runs one durable Stream Session's disposable mappings and transport collaborators.
 /// Persisted stream records and indexes remain owned by `DurableStreamStore`.
-pub(crate) struct StreamSession {
+pub struct StreamSession {
     pub(crate) producer: Arc<DurableStreamStore>,
     pub(crate) oplog: Arc<dyn Oplog>,
     pub(crate) session_key: StreamSessionKey,
@@ -160,9 +161,9 @@ struct PendingOwnedStreamDrain {
 
 /// A stream-bearing value whose references name its binding-local transport mappings.
 #[derive(Debug, PartialEq)]
-pub(crate) struct SessionValue {
-    pub(crate) value: ProtoSchemaValue,
-    pub(crate) mappings: Vec<StreamSessionMappingRecord>,
+pub struct SessionValue {
+    pub value: ProtoSchemaValue,
+    pub mappings: Vec<StreamSessionMappingRecord>,
 }
 
 impl SessionValue {
@@ -185,7 +186,7 @@ impl SessionValue {
     }
 
     /// Encodes this value's mappings when sending it over the invocation transport.
-    pub(crate) fn proto_mappings(&self) -> Vec<DurableStreamMapping> {
+    pub fn proto_mappings(&self) -> Vec<DurableStreamMapping> {
         self.mappings
             .iter()
             .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
@@ -194,7 +195,7 @@ impl SessionValue {
 }
 
 /// Encodes a fingerprint-bound session mapping for transport.
-pub(crate) fn durable_stream_mapping_to_proto(
+pub fn durable_stream_mapping_to_proto(
     mapping: &StreamSessionMappingRecord,
     high_water: Option<&InputStreamHighWater>,
 ) -> DurableStreamMapping {
@@ -245,7 +246,7 @@ pub(crate) fn durable_stream_mapping_to_proto(
 }
 
 /// Decodes and validates the complete durable identity carried by a mapping.
-pub(crate) fn durable_stream_mapping_from_proto(
+pub fn durable_stream_mapping_from_proto(
     mapping: DurableStreamMapping,
 ) -> Result<StreamSessionMappingRecord, String> {
     let handle = mapping
@@ -354,7 +355,7 @@ fn stream_cancel_reason_to_proto(
 
 impl StreamSession {
     /// Creates session runtime state from its durable identity and known mappings.
-    pub(crate) fn new(
+    pub fn new(
         producer: Arc<DurableStreamStore>,
         oplog: Arc<dyn Oplog>,
         session_key: StreamSessionKey,
@@ -394,7 +395,7 @@ impl StreamSession {
     }
 
     /// Retains an ephemeral response only for the lifetime of this session runtime.
-    pub(crate) fn with_response_lease(
+    pub fn with_response_lease(
         mut self,
         lease: Option<Arc<crate::worker::EphemeralResponseLease>>,
     ) -> Self {
@@ -403,12 +404,12 @@ impl StreamSession {
     }
 
     /// Returns the resident ephemeral-response lease, if one is held.
-    pub(crate) fn response_lease(&self) -> Option<Arc<crate::worker::EphemeralResponseLease>> {
+    pub fn response_lease(&self) -> Option<Arc<crate::worker::EphemeralResponseLease>> {
         self.response_lease.clone()
     }
 
     /// Binds this runtime to one attachment epoch and attempt.
-    pub(crate) fn with_attachment(mut self, epoch: u64, attempt_id: AttemptId) -> Self {
+    pub fn with_attachment(mut self, epoch: u64, attempt_id: AttemptId) -> Self {
         self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));
         self.attachment_epoch = epoch;
         self.attachment_attempt_id = Some(attempt_id);
@@ -416,17 +417,14 @@ impl StreamSession {
     }
 
     /// Sets the invocation identity attributed to consumer journal records.
-    pub(crate) fn with_consumer_invocation(
-        mut self,
-        consumer_invocation: StreamInvocationId,
-    ) -> Self {
+    pub fn with_consumer_invocation(mut self, consumer_invocation: StreamInvocationId) -> Self {
         self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));
         self.consumer_invocation = consumer_invocation;
         self
     }
 
     /// Attributes session records to an entity call in the owner's oplog.
-    pub(crate) fn with_entity_parent_start_index(
+    pub fn with_entity_parent_start_index(
         mut self,
         entity_parent_start_index: Option<OplogIndex>,
     ) -> Self {
@@ -435,13 +433,13 @@ impl StreamSession {
     }
 
     /// Enables routed producer attachment and segment operations.
-    pub(crate) fn with_rpc(mut self, rpc: Arc<dyn Rpc>) -> Self {
+    pub fn with_rpc(mut self, rpc: Arc<dyn Rpc>) -> Self {
         self.rpc = Some(rpc);
         self
     }
 
     /// Installs the journal whose commit makes guest observations durable.
-    pub(crate) fn with_consumer_journal(
+    pub fn with_consumer_journal(
         mut self,
         consumer_journal: Arc<dyn DurableStreamConsumerJournal>,
     ) -> Self {
@@ -450,7 +448,7 @@ impl StreamSession {
     }
 
     /// Commits appended consumer observations before they are returned to the guest.
-    pub(crate) async fn commit_consumer_journal(&self) -> Result<(), String> {
+    pub async fn commit_consumer_journal(&self) -> Result<(), String> {
         self.consumer_journal
             .as_ref()
             .ok_or_else(|| "durable stream consumer journal commit is unavailable".to_string())?
@@ -459,13 +457,13 @@ impl StreamSession {
     }
 
     /// Preserves the original consumer authorization for routed source operations.
-    pub(crate) fn with_auth_ctx(mut self, auth_ctx: AuthCtx) -> Self {
+    pub fn with_auth_ctx(mut self, auth_ctx: AuthCtx) -> Self {
         self.auth_ctx = Some(auth_ctx);
         self
     }
 
     /// Requires durable root attachment activation before open output production.
-    pub(crate) fn require_root_attachment_before_production(mut self) -> Self {
+    pub fn require_root_attachment_before_production(mut self) -> Self {
         self.require_root_attachment_before_production = true;
         self
     }
@@ -479,7 +477,7 @@ impl StreamSession {
     }
 
     /// Pins input element schemas and component revision for this durable session.
-    pub(crate) fn with_input_schema(
+    pub fn with_input_schema(
         mut self,
         graph: Arc<SchemaGraph>,
         component_revision: golem_common::model::component::ComponentRevision,
@@ -494,7 +492,7 @@ impl StreamSession {
     }
 
     /// Resolves a transport-local stream ID to its durable handle.
-    pub(crate) fn handle(&self, transport_stream_id: u64) -> Option<DurableStreamHandle> {
+    pub fn handle(&self, transport_stream_id: u64) -> Option<DurableStreamHandle> {
         self.mappings
             .read()
             .expect("durable stream mapping lock poisoned")
@@ -525,7 +523,7 @@ impl StreamSession {
     }
 
     /// Validates frame epoch, attachment attempt, durable stream ID, and role.
-    pub(crate) async fn validate_frame(
+    pub async fn validate_frame(
         &self,
         transport_stream_id: u64,
         durable_stream_id: Option<golem_api_grpc::proto::golem::common::Uuid>,
@@ -569,12 +567,12 @@ impl StreamSession {
     }
 
     /// Returns the attachment epoch represented by this runtime.
-    pub(crate) fn attachment_epoch(&self) -> u64 {
+    pub fn attachment_epoch(&self) -> u64 {
         self.attachment_epoch
     }
 
     /// Rejects this runtime if durable authority has detached or advanced its epoch.
-    pub(crate) async fn ensure_current_attachment(&self) -> Result<(), String> {
+    pub async fn ensure_current_attachment(&self) -> Result<(), String> {
         let AuthoritativeAttachmentState {
             epoch,
             attempt_id,
@@ -590,7 +588,7 @@ impl StreamSession {
     }
 
     /// Waits until durable attachment authority fences this runtime.
-    pub(crate) async fn wait_for_attachment_revocation(&self) -> Result<(), String> {
+    pub async fn wait_for_attachment_revocation(&self) -> Result<(), String> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
@@ -604,7 +602,7 @@ impl StreamSession {
     }
 
     /// Reads attachment epoch, attempt, and attached state from durable oplog metadata.
-    pub(crate) async fn authoritative_attachment_state(
+    pub async fn authoritative_attachment_state(
         &self,
     ) -> Result<AuthoritativeAttachmentState, String> {
         let raw = self
@@ -632,7 +630,7 @@ impl StreamSession {
     }
 
     /// Durably detaches the current transport without cancelling producer streams.
-    pub(crate) async fn detach_current(&self) -> Result<bool, String> {
+    pub async fn detach_current(&self) -> Result<bool, String> {
         let session = self.clone();
         self.producer
             .run_admitted(None, 0, true, move |_, admission| async move {
@@ -691,7 +689,7 @@ impl StreamSession {
         )
     )]
     /// Commits a resume or takeover attempt before the new epoch is used for frames.
-    pub(crate) async fn commit_resume_attempt(
+    pub async fn commit_resume_attempt(
         &self,
         record: StreamSessionResumeAttemptRecord,
     ) -> Result<(), String> {
@@ -757,7 +755,7 @@ impl StreamSession {
     }
 
     /// Adds a runtime mapping only when its durable stream identity and role agree.
-    pub(crate) fn insert_mapping(&self, mapping: StreamSessionMappingRecord) -> Result<(), String> {
+    fn insert_mapping(&self, mapping: StreamSessionMappingRecord) -> Result<(), String> {
         let StreamSessionMappingRecord {
             transport_stream_id,
             ref handle,
@@ -791,7 +789,7 @@ impl StreamSession {
     }
 
     /// Commits and indexes a session record through the producer's owned write path.
-    pub(crate) async fn append_record(
+    async fn append_record(
         &self,
         context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
@@ -819,7 +817,7 @@ impl StreamSession {
     }
 
     /// Returns the attempt identity recovered from the journal or durably records a fresh one.
-    pub(crate) async fn caller_attempt_id(&self) -> Result<AttemptId, String> {
+    pub async fn caller_attempt_id(&self) -> Result<AttemptId, String> {
         let session = self.clone();
         self.producer
             .run_admitted(None, 0, false, move |_, admission| async move {
@@ -839,12 +837,7 @@ impl StreamSession {
         context: &StreamWriteContext,
     ) -> Result<AttemptId, String> {
         let metadata = self.current_control_metadata().await?;
-        if metadata.caller_attempt_conflict {
-            return Err(
-                "conflicting caller attempt IDs are persisted for the Stream Session".into(),
-            );
-        }
-        if let Some(attempt_id) = metadata.caller_attempt {
+        if let Some(attempt_id) = metadata.caller_attempt_id()? {
             return Ok(attempt_id);
         }
         drop(metadata);
@@ -881,12 +874,8 @@ impl StreamSession {
         let horizon = self.oplog.current_oplog_index().await;
         loop {
             if let Ok(metadata) = self.control_metadata.try_lock() {
-                if metadata.covered_through >= horizon {
-                    if metadata.malformed_record {
-                        return Err(
-                            "unsupported or malformed durable Stream Session record version".into(),
-                        );
-                    }
+                if metadata.covered_through() >= horizon {
+                    metadata.ensure_valid()?;
                     return Ok(metadata);
                 }
             } else {
@@ -903,7 +892,7 @@ impl StreamSession {
 
     async fn refresh_control_metadata(&self) -> Result<(), String> {
         let mut metadata = self.control_metadata.lock().await;
-        if !metadata.covered_through.is_defined()
+        if !metadata.is_loaded()
             && let Some(persisted) = self
                 .producer
                 .persisted_control_metadata(&self.session_key)
@@ -911,24 +900,22 @@ impl StreamSession {
         {
             *metadata = persisted;
         }
-        if metadata.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
+        metadata.ensure_valid()?;
         // This is deliberately the raw horizon, not the last published AgentStatusRecord:
         // local control records remain visible before and after the append buffer is committed.
         let horizon = self.oplog.current_oplog_index().await;
-        while metadata.covered_through < horizon {
-            let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
+        while metadata.covered_through() < horizon {
+            let count = (horizon.as_u64() - metadata.covered_through().as_u64()).min(1024);
             for (index, entry) in self
                 .oplog
-                .read_exact(metadata.covered_through.next(), count)
+                .read_exact(metadata.covered_through().next(), count)
                 .await
             {
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self.download_record(record).await?;
                     metadata.apply(index, &self.session_key, &record);
                 } else {
-                    metadata.covered_through = index;
+                    metadata.advance_coverage(index);
                 }
             }
         }
@@ -950,12 +937,7 @@ impl StreamSession {
         if self
             .current_control_metadata()
             .await?
-            .explicit_mappings
-            .contains(&(
-                mapping.transport_stream_id,
-                mapping.handle.clone(),
-                mapping.role,
-            ))
+            .has_explicit_mapping(&mapping)
         {
             return Ok(());
         }
@@ -976,7 +958,7 @@ impl StreamSession {
     }
 
     /// Activates a prepared forwarded topology after validating producer and consumer identities.
-    pub(crate) async fn activate_forwarded_mapping(
+    pub async fn activate_forwarded_mapping(
         &self,
         attachment: StreamAttachmentKey,
         mapping: StreamSessionMappingRecord,
@@ -1086,7 +1068,7 @@ impl StreamSession {
     }
 
     /// Ensures an open local session is attached before producer output begins.
-    pub(crate) async fn require_local_session_attachment(
+    pub async fn require_local_session_attachment(
         &self,
         attachment: &StreamAttachmentKey,
     ) -> Result<(), String> {
@@ -1201,7 +1183,7 @@ impl StreamSession {
         }
         let local_session_authority = self.has_local_session_authority();
         let attached_epoch = metadata
-            .topology_epoch
+            .topology_epoch()
             .or_else(|| (!local_session_authority).then_some(attachment.epoch));
         match attached_epoch {
             Some(epoch) if epoch == attachment.epoch => Ok(state),
@@ -1214,23 +1196,20 @@ impl StreamSession {
     }
 
     /// Recovers durable mappings discovered inside previously journaled input values.
-    pub(crate) async fn recover_nested_input_mappings(&self) -> Result<(), String> {
+    pub async fn recover_nested_input_mappings(&self) -> Result<(), String> {
         self.recover_session_mappings().await
     }
 
     /// Reconstructs visible mappings and unresolved attachment topology from the journal.
-    pub(crate) async fn recover_session_mappings(&self) -> Result<(), String> {
+    pub async fn recover_session_mappings(&self) -> Result<(), String> {
         // Clones share both the mapping table and its coverage. Keep the cursor locked across
         // validation so another output pump cannot observe coverage before the mappings exist.
         let mut covered = self.recovered_mappings_through.lock().await;
         let metadata = self.current_control_metadata().await?;
-        let horizon = metadata.covered_through;
-        let mappings: Vec<_> = metadata
-            .recoverable_mappings
-            .iter()
-            .filter(|(index, _)| index > &*covered)
-            .map(|(_, mapping)| mapping.clone())
-            .collect();
+        let RecoveredMappings {
+            covered_through: horizon,
+            mappings,
+        } = metadata.recoverable_mappings_after(*covered);
         drop(metadata);
         for mapping in mappings {
             self.validate_recovered_mapping(&mapping).await?;
@@ -1241,31 +1220,12 @@ impl StreamSession {
     }
 
     /// Checks whether the consumer journal already contains a terminal for this stream.
-    pub(crate) async fn has_journaled_consumer_terminal(
+    pub async fn has_journaled_consumer_terminal(
         &self,
         mapping: &StreamSessionMappingRecord,
     ) -> Result<bool, String> {
         let metadata = self.current_control_metadata().await?;
-        if !metadata
-            .closed_consumer_streams
-            .contains(&mapping.handle.stream_id)
-        {
-            return Ok(false);
-        }
-        if metadata.malformed_record {
-            return Err("unsupported or malformed durable Stream Session record version".into());
-        }
-        if let Some(error) = &metadata.topology_error {
-            return Err(error.clone());
-        }
-        if !metadata.persisted_mappings.contains(&(
-            mapping.transport_stream_id,
-            mapping.handle.clone(),
-            mapping.role,
-        )) {
-            return Err("closed consumer stream has no matching persisted mapping".into());
-        }
-        Ok(true)
+        metadata.has_consumer_terminal(mapping)
     }
 
     async fn validate_recovered_mapping(
@@ -1284,7 +1244,7 @@ impl StreamSession {
         }
         {
             let metadata = self.current_control_metadata().await?;
-            if let Some(intent) = metadata.cancel_intents.get(&mapping.handle.stream_id) {
+            if let Some(intent) = metadata.cancellation_intent(mapping.handle.stream_id) {
                 let key = self.attachment_key(&mapping.handle, intent.epoch)?;
                 if metadata.has_committed_cancellation(&key, mapping, intent)? {
                     return Ok(());
@@ -1327,7 +1287,7 @@ impl StreamSession {
     }
 
     /// Rejects resume cursors that skip or contradict committed consumer progress.
-    pub(crate) async fn validate_resume_cursors(
+    pub async fn validate_resume_cursors(
         &self,
         cursors: &[golem_common::model::durable_stream::StreamResumeCursor],
     ) -> Result<(), String> {
@@ -1385,7 +1345,7 @@ impl StreamSession {
     }
 
     /// Commits activation of a prepared cross-agent mapping and its attachment epoch.
-    pub(crate) async fn activate_foreign_mapping(
+    pub async fn activate_foreign_mapping(
         &self,
         mapping: StreamSessionMappingRecord,
         epoch: u64,
@@ -1412,7 +1372,7 @@ impl StreamSession {
     }
 
     /// Prepares the producer attachment before recording the consumer topology.
-    pub(crate) async fn prepare_foreign_mapping(
+    pub async fn prepare_foreign_mapping(
         &self,
         mapping: StreamSessionMappingRecord,
         epoch: u64,
@@ -1504,12 +1464,7 @@ impl StreamSession {
         Ok(self
             .current_control_metadata()
             .await?
-            .persisted_mappings
-            .contains(&(
-                expected.transport_stream_id,
-                expected.handle.clone(),
-                expected.role,
-            )))
+            .has_persisted_mapping(expected))
     }
 
     async fn ensure_nested_mapping(
@@ -1577,7 +1532,7 @@ impl StreamSession {
     }
 
     /// Attaches a fingerprint-validated foreign handle and returns its transport mapping.
-    pub(crate) async fn attach_foreign_handle(
+    async fn attach_foreign_handle(
         &self,
         handle: DurableStreamHandle,
         role: SessionStreamRole,
@@ -1600,7 +1555,7 @@ impl StreamSession {
     }
 
     /// Validates, commits, and acknowledges one input frame for the current attachment.
-    pub(crate) async fn write_input(
+    pub async fn write_input(
         &self,
         context: Option<&Arc<StreamWriteAdmission>>,
         transport_stream_id: u64,
@@ -1876,7 +1831,7 @@ impl StreamSession {
     }
 
     /// Commits the input terminal for the current attachment exactly once.
-    pub(crate) async fn end_input(
+    pub async fn end_input(
         &self,
         transport_stream_id: u64,
         sequence: u64,
@@ -1953,7 +1908,7 @@ impl StreamSession {
     }
 
     /// Durably requests cancellation for all still-open streams in the session.
-    pub(crate) async fn cancel_session_streams(&self) -> Result<bool, String> {
+    pub async fn cancel_session_streams(&self) -> Result<bool, String> {
         if !self.has_local_session_authority() {
             return Err("session cancellation requires the session owner".into());
         }
@@ -1962,45 +1917,14 @@ impl StreamSession {
             .run_admitted(None, 0, true, move |_, admission| async move {
                 let guard = session.session_lock.lock().await;
                 let metadata = session.current_control_metadata().await?;
-                if metadata.prepared.is_none() {
+                if !metadata.can_request_cancellation()? {
                     return Ok::<_, String>(false);
                 }
-                if metadata.malformed_record || metadata.topology_error.is_some() {
-                    return Err("cannot cancel a malformed durable stream session".into());
-                }
                 let epoch = session.authoritative_attachment_state().await?.epoch;
-                let mut records = Vec::new();
-                if !metadata.cancellation_requested {
-                    records.push(StreamSessionRecord::CancelRequested(
-                        StreamSessionCancelRequestedRecord {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: session.session_key.clone(),
-                        },
-                    ));
-                }
-                let mut cancelled = metadata
-                    .cancel_intents
-                    .keys()
-                    .copied()
-                    .collect::<HashSet<_>>();
-                for (_, handle, role) in &metadata.persisted_mappings {
-                    if cancelled.insert(handle.stream_id) {
-                        records.push(StreamSessionRecord::ConsumerCancelIntent(
-                            StreamConsumerCancelIntentRecord {
-                                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                session_key: session.session_key.clone(),
-                                stream_id: handle.stream_id,
-                                epoch,
-                                role: match role {
-                                    SessionStreamRole::Input => StreamCancelRole::InputProducer,
-                                    SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
-                                },
-                                reason: StreamCancelReason::Cancelled,
-                                details: None,
-                            },
-                        ));
-                    }
-                }
+                let Some(records) = metadata.cancellation_records(epoch, &session.session_key)?
+                else {
+                    return Ok::<_, String>(false);
+                };
                 drop(metadata);
                 if !records.is_empty() {
                     let attribution = session.entity_parent_start_index;
@@ -2034,10 +1958,10 @@ impl StreamSession {
             return Err("slot deletion requires the session owner".into());
         }
         let metadata = self.current_control_metadata().await?;
-        if metadata.prepared.is_none() {
+        if !metadata.is_prepared() {
             return Err("unknown durable stream session".into());
         }
-        if metadata.tombstoned_slots.contains_key(&slot) {
+        if metadata.is_slot_tombstoned(&slot) {
             return Ok(false);
         }
         let mut records = vec![StreamSessionRecord::Tombstoned(
@@ -2051,14 +1975,10 @@ impl StreamSession {
             },
         )];
         if let Some((handle, role)) = stream {
-            if !metadata
-                .persisted_mappings
-                .iter()
-                .any(|(_, saved, saved_role)| saved == &handle && saved_role == &role)
-            {
+            if !metadata.has_persisted_handle(&handle, role) {
                 return Err("deleted slot has no persisted stream mapping".into());
             }
-            if !metadata.cancel_intents.contains_key(&handle.stream_id) {
+            if metadata.cancellation_intent(handle.stream_id).is_none() {
                 let epoch = self.authoritative_attachment_state().await?.epoch;
                 records.push(StreamSessionRecord::ConsumerCancelIntent(
                     StreamConsumerCancelIntentRecord {
@@ -2093,7 +2013,7 @@ impl StreamSession {
     }
 
     /// Journals consumer cancellation before forwarding it to the producer.
-    pub(crate) async fn cancel_stream(
+    pub async fn cancel_stream(
         &self,
         transport_stream_id: u64,
         role: StreamCancelRole,
@@ -2185,8 +2105,7 @@ impl StreamSession {
         let persisted_intent = self
             .current_control_metadata()
             .await?
-            .cancel_intents
-            .get(&mapping.handle.stream_id)
+            .cancellation_intent(mapping.handle.stream_id)
             .cloned();
         let intent = match persisted_intent {
             Some(existing) => existing,
@@ -2205,34 +2124,22 @@ impl StreamSession {
     }
 
     /// Applies committed cancellation intents to streams produced by the local agent.
-    pub(crate) async fn reconcile_local_cancellation_intents(
+    pub async fn reconcile_local_cancellation_intents(
         &self,
         admission: Option<&Arc<StreamWriteAdmission>>,
     ) -> Result<(), String> {
         let metadata = self.current_control_metadata().await?;
         let mut pending = Vec::new();
-        for intent in metadata.cancel_intents.values() {
-            if metadata.applied_cancel_intents.contains(intent) {
-                continue;
-            }
-            let (transport_stream_id, handle, role) = metadata
-                .persisted_mappings
-                .iter()
-                .find(|(_, handle, _)| handle.stream_id == intent.stream_id)
-                .ok_or("durable cancellation intent has no persisted stream mapping")?;
-            if self.producer.owns_handle_identity(handle) {
-                pending.push((
-                    StreamSessionMappingRecord {
-                        transport_stream_id: *transport_stream_id,
-                        handle: handle.clone(),
-                        role: *role,
-                    },
-                    intent.clone(),
-                ));
+        for work in metadata.pending_cancellations() {
+            let work = work?;
+            if self.producer.owns_handle_identity(&work.mapping.handle) {
+                pending.push(work);
             }
         }
         drop(metadata);
-        for (mapping, intent) in pending {
+        for work in pending {
+            let mapping = work.mapping;
+            let intent = work.intent;
             let session = self.clone();
             self.producer
                 .run_admitted(
@@ -2288,46 +2195,29 @@ impl StreamSession {
     }
 
     /// Forwards committed cancellation intents and records their durable application.
-    pub(crate) async fn reconcile_foreign_cancellation_intents(
+    pub async fn reconcile_foreign_cancellation_intents(
         &self,
         timeout: Duration,
     ) -> Result<(), String> {
         let metadata = self.current_control_metadata().await?;
         let mut pending = Vec::new();
-        for intent in metadata.cancel_intents.values() {
-            if metadata.applied_cancel_intents.contains(intent) {
+        for work in metadata.pending_cancellations() {
+            let work = work?;
+            let mapping = work.mapping;
+            let intent = work.intent;
+            if self.producer.owns_handle_identity(&mapping.handle) {
                 continue;
             }
-            let (transport_stream_id, handle, role) = metadata
-                .persisted_mappings
-                .iter()
-                .find(|(_, handle, _)| handle.stream_id == intent.stream_id)
-                .ok_or("durable cancellation intent has no persisted stream mapping")?;
-            if self.producer.owns_handle_identity(handle) {
-                continue;
-            }
-            let mapping = StreamSessionMappingRecord {
-                transport_stream_id: *transport_stream_id,
-                handle: handle.clone(),
-                role: *role,
-            };
             let consumer_invocation = if self.has_local_session_authority() {
                 self.session_key.clone()
             } else {
-                metadata
-                    .topologies
-                    .values()
-                    .find(|topology| topology.mapping == mapping)
-                    .ok_or("foreign cancellation has no consumer invocation authority")?
-                    .attachment
-                    .consumer_invocation
-                    .clone()
+                metadata.consumer_invocation(&mapping)?.clone()
             };
             let key = self
                 .clone()
                 .with_consumer_invocation(consumer_invocation)
-                .attachment_key(handle, intent.epoch)?;
-            pending.push((key, mapping, intent.clone()));
+                .attachment_key(&mapping.handle, intent.epoch)?;
+            pending.push((key, mapping, intent));
         }
         drop(metadata);
         let mut first_error = None;
@@ -2394,8 +2284,7 @@ impl StreamSession {
         if self
             .current_control_metadata()
             .await?
-            .applied_cancel_intents
-            .contains(&intent)
+            .is_cancellation_applied(&intent)
         {
             return Ok(());
         }
@@ -2461,9 +2350,7 @@ impl StreamSession {
     }
 
     /// Returns committed resume boundaries for every mapped input stream.
-    pub(crate) async fn input_high_waters(
-        &self,
-    ) -> Result<HashMap<u64, InputStreamHighWater>, String> {
+    pub async fn input_high_waters(&self) -> Result<HashMap<u64, InputStreamHighWater>, String> {
         let mappings = self
             .mappings
             .read()
@@ -2489,7 +2376,7 @@ impl StreamSession {
     }
 
     /// Replaces input stream handles with consumers backed by this session journal.
-    pub(crate) async fn materialize_agent_input(
+    pub async fn materialize_agent_input(
         &self,
         value: &SchemaValue,
         graph: &SchemaGraph,
@@ -2710,7 +2597,7 @@ impl StreamSession {
     }
 
     /// Registers result streams and replaces them with session transport mappings.
-    pub(crate) async fn materialize_result(
+    pub async fn materialize_result(
         &self,
         value: SchemaValue,
         graph: &SchemaGraph,
@@ -2779,19 +2666,12 @@ impl StreamSession {
     ) -> Result<MaterializedResult, String> {
         let session_guard = self.session_lock.lock().await;
         let metadata = self.current_control_metadata().await?;
-        let first_result = metadata.invocation_result.is_none();
-        let cancel_session = metadata.cancellation_requested;
-        let deleted_outputs = metadata
-            .tombstoned_slots
-            .iter()
-            .filter(|(_, role)| **role == SessionStreamRole::Output)
-            .map(|(slot, _)| slot.clone())
-            .collect::<HashSet<_>>();
-        let existing_intents = metadata
-            .cancel_intents
-            .keys()
-            .copied()
-            .collect::<HashSet<_>>();
+        let ResultMaterializationState {
+            first_result,
+            cancel_session,
+            deleted_outputs,
+            existing_intents,
+        } = metadata.materialization_state();
         drop(metadata);
         let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
         {
@@ -3074,7 +2954,7 @@ impl StreamSession {
     }
 
     /// Materializes remote result mappings after validating pinned producer identities.
-    pub(crate) async fn materialize_remote_result(
+    pub async fn materialize_remote_result(
         &self,
         value: ProtoSchemaValue,
         remote_mappings: Vec<StreamSessionMappingRecord>,
@@ -3236,7 +3116,7 @@ impl StreamSession {
     }
 
     /// Reconstructs a previously persisted remote result without reissuing the RPC.
-    pub(crate) async fn replay_remote_result(&self) -> Result<Option<SchemaValue>, String> {
+    pub async fn replay_remote_result(&self) -> Result<Option<SchemaValue>, String> {
         self.recover_session_mappings().await?;
         let Some(record) = self.remote_result_record().await? else {
             return Ok(None);
@@ -3251,7 +3131,7 @@ impl StreamSession {
     async fn remote_result_record(
         &self,
     ) -> Result<Option<StreamSessionInvocationResultRecord>, String> {
-        let index = self.current_control_metadata().await?.invocation_result;
+        let index = self.current_control_metadata().await?.result_position();
         let Some(index) = index else {
             return Ok(None);
         };
@@ -3700,32 +3580,11 @@ impl StreamSession {
 
     async fn validate_topology_complete(&self) -> Result<(), String> {
         let metadata = self.current_control_metadata().await?;
-        if let Some(error) = &metadata.topology_error {
-            return Err(error.clone());
-        }
-        for topology in metadata.topologies.values() {
-            if !topology.is_active() {
-                return Err(
-                    "durable session has prepared but inactive foreign topology".to_string()
-                );
-            }
-            let mapping = &topology.mapping;
-            if !metadata.visible_mappings.contains(&(
-                mapping.transport_stream_id,
-                mapping.handle.clone(),
-                mapping.role,
-            )) {
-                return Err(
-                    "durable session has activated foreign topology without a visible mapping"
-                        .to_string(),
-                );
-            }
-        }
-        Ok(())
+        metadata.validate_topology_complete()
     }
 
     /// Records a failed session terminal after cancelling remaining stream work.
-    pub(crate) async fn fail(&self, details: String) -> Result<(), String> {
+    pub async fn fail(&self, details: String) -> Result<(), String> {
         self.finish(
             Err(details.into_bytes()),
             StreamCancelReason::InvocationFailed,
@@ -3734,7 +3593,7 @@ impl StreamSession {
     }
 
     /// Finalizes streams with invocation-failed semantics and records session failure.
-    pub(crate) async fn fail_invocation(&self, details: String) -> Result<(), String> {
+    pub async fn fail_invocation(&self, details: String) -> Result<(), String> {
         self.finish(
             Err(details.into_bytes()),
             StreamCancelReason::InvocationFailed,
@@ -3743,18 +3602,18 @@ impl StreamSession {
     }
 
     /// Finalizes streams with protocol-error semantics and records session failure.
-    pub(crate) async fn fail_protocol(&self, details: String) -> Result<(), String> {
+    pub async fn fail_protocol(&self, details: String) -> Result<(), String> {
         self.finish(Err(details.into_bytes()), StreamCancelReason::Protocol)
             .await
     }
 
     /// Records successful session completion once all protocol terminals are durable.
-    pub(crate) async fn complete(&self) -> Result<(), String> {
+    pub async fn complete(&self) -> Result<(), String> {
         self.finish(Ok(()), StreamCancelReason::GuestDrop).await
     }
 
     /// Completes now unless forwarded inputs still require later terminal processing.
-    pub(crate) async fn complete_or_defer_for_forwarded_inputs(&self) -> Result<(), String> {
+    pub async fn complete_or_defer_for_forwarded_inputs(&self) -> Result<(), String> {
         if self
             .producer
             .has_open_forwarded_session_input(&self.session_key)
@@ -3768,7 +3627,7 @@ impl StreamSession {
     }
 
     /// Reads the committed invocation result, independently of stream drain progress.
-    pub(crate) async fn persisted_result(&self) -> Result<Option<SessionValue>, String> {
+    pub async fn persisted_result(&self) -> Result<Option<SessionValue>, String> {
         if let Some(result) = self.remote_result_record().await? {
             let value = SessionValue::from_persisted(result)?;
             for mapping in &value.mappings {
@@ -3780,7 +3639,7 @@ impl StreamSession {
     }
 
     /// Waits for a committed invocation result or session failure.
-    pub(crate) async fn wait_persisted_result(&self) -> Result<SessionValue, String> {
+    pub async fn wait_persisted_result(&self) -> Result<SessionValue, String> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
@@ -3793,8 +3652,8 @@ impl StreamSession {
     }
 
     /// Reads the committed session terminal without waiting.
-    pub(crate) async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, String> {
-        let index = self.current_control_metadata().await?.finished;
+    pub async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, String> {
+        let index = self.current_control_metadata().await?.finished_position();
         let Some(index) = index else {
             return Ok(None);
         };
@@ -3807,7 +3666,7 @@ impl StreamSession {
     }
 
     /// Waits until successful or failed session completion is durable.
-    pub(crate) async fn wait_persisted_finished(&self) -> Result<Result<(), Vec<u8>>, String> {
+    pub async fn wait_persisted_finished(&self) -> Result<Result<(), Vec<u8>>, String> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
@@ -3820,7 +3679,7 @@ impl StreamSession {
     }
 
     /// Drives output streams from committed producer history into transport callbacks.
-    pub(crate) async fn pump_output_streams(
+    pub async fn pump_output_streams(
         &self,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
@@ -3842,7 +3701,7 @@ impl StreamSession {
     /// observes the same tree order as during the original invocation. Output streams that were
     /// already mapped but are not reached by that traversal, because a cursor skipped the parent
     /// item that introduced them, are pumped afterwards.
-    pub(crate) async fn pump_output_streams_from(
+    pub async fn pump_output_streams_from(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
@@ -3929,7 +3788,7 @@ impl StreamSession {
     /// client. Inputs whose acceptance already announced a terminal high water are skipped: the
     /// client learned about that cancellation from the acceptance, and re-sending the same
     /// durable offset would violate the strictly increasing offset rule of the session protocol.
-    pub(crate) async fn pump_input_cancellations(
+    pub async fn pump_input_cancellations(
         &self,
         responses: &mpsc::Sender<InvocationResponse>,
         announced_high_waters: &HashMap<u64, InputStreamHighWater>,
@@ -4316,7 +4175,7 @@ impl StreamSession {
     }
 
     /// Returns output IDs whose terminal cursors can be reconstructed from committed records.
-    pub(crate) async fn terminal_output_cursor_stream_ids(
+    pub async fn terminal_output_cursor_stream_ids(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
@@ -4355,12 +4214,16 @@ impl StreamSession {
     }
 
     /// Returns transport IDs durably classified as root outputs.
-    pub(crate) async fn session_root_output_mapping_ids(&self) -> Result<Vec<u64>, String> {
-        Ok(self.current_control_metadata().await?.root_outputs.clone())
+    pub async fn session_root_output_mapping_ids(&self) -> Result<Vec<u64>, String> {
+        Ok(self
+            .current_control_metadata()
+            .await?
+            .root_outputs()
+            .to_vec())
     }
 
     /// Decodes initial transport input while preserving durable stream placeholders.
-    pub(crate) async fn decode_initial(
+    pub async fn decode_initial(
         &self,
         value: ProtoSchemaValue,
         handles: &[DurableStreamHandle],
@@ -4665,7 +4528,7 @@ impl StreamAttachmentConsumerProbe for StreamSession {
 
 /// Owns source reads, journal replay, and read ordinals independently of Wasmtime polling.
 /// Session topology and cancellation remain on its binding-local `StreamSession`.
-pub(crate) struct DurableInputEndpoint {
+pub struct DurableInputEndpoint {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
     streams: StreamSession,
@@ -4676,8 +4539,8 @@ pub(crate) struct DurableInputEndpoint {
 }
 
 /// Foreign source and attachment state for a forwarded durable input.
-pub(crate) struct ForwardedDurableInput {
-    pub(crate) handle: DurableStreamHandle,
+pub struct ForwardedDurableInput {
+    pub handle: DurableStreamHandle,
 }
 
 impl DurableInputEndpoint {
@@ -4937,7 +4800,7 @@ struct DurableInputRead {
 type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, String>>;
 
 /// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
-pub(crate) struct DurableInputProducer {
+pub struct DurableInputProducer {
     input: DurableInputEndpoint,
     pending: Option<DurableReceiveFuture>,
     pending_drop: Option<BoxFuture<'static, Result<(), String>>>,
@@ -4971,7 +4834,7 @@ impl DroppedDurableInput {
     /// finished or another attempt took over, which is also what a replaying guest observes when
     /// it drops the same reader again), the cancellation is no longer ours to author and is
     /// skipped instead of failing the worker.
-    pub(crate) async fn cancel(&self) -> Result<(), String> {
+    pub async fn cancel(&self) -> Result<(), String> {
         match self
             .streams
             .cancel_stream(
@@ -5037,7 +4900,7 @@ impl DurableInputProducer {
     }
 
     /// Creates a producer for an already materialized session endpoint.
-    pub(crate) fn new(endpoint: DurableInputEndpoint) -> Self {
+    pub fn new(endpoint: DurableInputEndpoint) -> Self {
         Self {
             input: endpoint,
             pending: None,
@@ -5572,7 +5435,7 @@ fn stream_element_schema<'a>(
 }
 
 /// Removes runtime stream resources from a result before persisting the RPC value.
-pub(crate) fn strip_streams(value: SchemaValue) -> SchemaValue {
+pub fn strip_streams(value: SchemaValue) -> SchemaValue {
     match value {
         SchemaValue::Stream(_) => SchemaValue::Tuple {
             elements: Vec::new(),

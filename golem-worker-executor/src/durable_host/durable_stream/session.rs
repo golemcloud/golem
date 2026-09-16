@@ -18,16 +18,12 @@ use super::*;
 
 impl DurableStreamStore {
     /// Installs the runtime service used to project durable session control metadata.
-    pub(crate) fn set_control_metadata_provider(
-        &self,
-        service: Arc<dyn WorkerService>,
-        mode: AgentMode,
-    ) {
+    pub fn set_control_metadata_provider(&self, service: Arc<dyn WorkerService>, mode: AgentMode) {
         assert!(self.control_metadata_provider.set((service, mode)).is_ok());
     }
 
     /// Loads control metadata reconstructed from committed session records.
-    pub(crate) async fn persisted_control_metadata(
+    pub async fn persisted_control_metadata(
         &self,
         key: &StreamSessionKey,
     ) -> Result<Option<SessionControlMetadata>, String> {
@@ -47,7 +43,7 @@ impl DurableStreamStore {
     }
 
     /// Loads committed per-stream consumer ordinals and source offsets.
-    pub(crate) async fn persisted_consumer_positions(
+    pub async fn persisted_consumer_positions(
         &self,
         key: &StreamSessionKey,
         stream: StreamId,
@@ -66,11 +62,7 @@ impl DurableStreamStore {
                 let metadata = service
                     .lookup_durable_stream_control_metadata(&owner, *mode, key)
                     .await?;
-                let count = metadata
-                    .consumer_record_counts
-                    .get(&stream)
-                    .copied()
-                    .unwrap_or_default();
+                let count = metadata.consumer_record_count(stream);
                 let page_size =
                     crate::services::stream_session_index::CONSUMER_JOURNAL_INDEX_PAGE_SIZE;
                 let mut positions = Vec::new();
@@ -86,13 +78,13 @@ impl DurableStreamStore {
                     }
                     positions.extend_from_slice(&records[..needed]);
                 }
-                Ok(Some((metadata.covered_through, positions)))
+                Ok(Some((metadata.covered_through(), positions)))
             })
             .await
     }
 
     /// Appends a session fact under the producer's default attribution.
-    pub(crate) async fn append_session_record(
+    pub async fn append_session_record(
         &self,
         context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
@@ -102,7 +94,7 @@ impl DurableStreamStore {
     }
 
     /// Appends a session fact with explicit entity ownership attribution.
-    pub(crate) async fn append_session_record_attributed(
+    pub async fn append_session_record_attributed(
         &self,
         context: Option<&StreamWriteContext>,
         entity_parent_start_index: Option<OplogIndex>,
@@ -235,7 +227,7 @@ impl DurableStreamStore {
     }
 
     /// Rejects new records once the durable session has reached a terminal state.
-    pub(crate) async fn ensure_session_accepts_new_events(
+    pub async fn ensure_session_accepts_new_events(
         &self,
         session_key: &StreamSessionKey,
     ) -> Result<(), StreamStoreError> {
@@ -252,7 +244,7 @@ impl DurableStreamStore {
     }
 
     /// Returns the notification used to recheck durable session state.
-    pub(crate) fn session_records_changed(&self) -> &Notify {
+    pub fn session_records_changed(&self) -> &Notify {
         &self.session_records_changed
     }
 
@@ -267,7 +259,7 @@ impl DurableStreamStore {
     }
 
     /// Atomically persists root inputs, the session descriptor, and invocation attachment before acceptance.
-    pub(crate) async fn prepare_session(
+    pub async fn prepare_session(
         &self,
         context: Option<&StreamWriteContext>,
         requests: Vec<(u64, ProducerRegistrationRequest)>,
@@ -494,7 +486,7 @@ impl DurableStreamStore {
     }
 
     /// Returns whether a forwarded input still requires source history or a terminal.
-    pub(crate) async fn has_open_forwarded_session_input(
+    pub async fn has_open_forwarded_session_input(
         &self,
         session_key: &StreamSessionKey,
     ) -> Result<bool, StreamStoreError> {
@@ -524,7 +516,7 @@ impl DurableStreamStore {
     }
 
     /// Bounds terminal copies and serialization buffers retained during session finalization.
-    pub(crate) fn finish_session_retained_bytes(result: &Result<(), Vec<u8>>) -> usize {
+    pub fn finish_session_retained_bytes(result: &Result<(), Vec<u8>>) -> usize {
         let terminal_bytes = result
             .as_ref()
             .err()
@@ -536,7 +528,7 @@ impl DurableStreamStore {
     }
 
     /// Records the session terminal after all required stream finalization is durable.
-    pub(crate) async fn finish_session(
+    pub async fn finish_session(
         &self,
         context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,

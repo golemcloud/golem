@@ -566,8 +566,7 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
             .current_control_metadata()
             .await
             .unwrap()
-            .persisted_mappings
-            .len(),
+            .persisted_mapping_count(),
         1
     );
 }
@@ -1588,7 +1587,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
         }],
     );
     let metadata = recovered.current_control_metadata().await.unwrap();
-    let intent = metadata.cancel_intents.get(&handle.stream_id).unwrap();
+    let intent = metadata.cancellation_intent(handle.stream_id).unwrap();
     assert_eq!(intent.epoch, 1);
     assert_eq!(intent.role, StreamCancelRole::InputConsumer);
     assert_eq!(intent.reason, StreamCancelReason::GuestDrop);
@@ -1745,8 +1744,11 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             role: SessionStreamRole::Output,
         };
         let mut metadata = recovered.current_control_metadata().await.unwrap().clone();
-        metadata.topology_epoch = Some(9);
-        let intent = metadata.cancel_intents[&handle.stream_id].clone();
+        metadata.set_topology_epoch_for_test(9);
+        let intent = metadata
+            .cancellation_intent(handle.stream_id)
+            .unwrap()
+            .clone();
         assert!(
             metadata
                 .has_committed_cancellation(&key, &mapping, &intent)
@@ -1773,7 +1775,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .has_committed_cancellation(&key, &wrong_mapping, &intent)
                 .unwrap()
         );
-        metadata.cancel_intents.clear();
+        metadata.clear_cancellation_intents_for_test();
         assert!(
             !metadata
                 .has_committed_cancellation(&key, &mapping, &intent)
@@ -1872,8 +1874,8 @@ async fn session_cancellation_retains_history_and_is_idempotent_under_backpressu
     assert!(streams.cancel_session_streams().await.unwrap());
     let committed = streams.oplog.current_oplog_index().await;
     let metadata = streams.current_control_metadata().await.unwrap();
-    assert!(metadata.cancellation_requested);
-    let intent = metadata.cancel_intents.get(&handle.stream_id).unwrap();
+    assert!(metadata.cancellation_requested());
+    let intent = metadata.cancellation_intent(handle.stream_id).unwrap();
     assert_eq!(intent.role, StreamCancelRole::InputProducer);
     assert_eq!(intent.reason, StreamCancelReason::Cancelled);
     assert_eq!(intent.epoch, 1);
@@ -2067,16 +2069,11 @@ async fn cancelled_forwarded_result_persists_intent_without_remote_activation() 
             .unwrap();
     }
     let metadata = streams.current_control_metadata().await.unwrap();
-    let intent = metadata.cancel_intents.get(&handle.stream_id).unwrap();
+    let intent = metadata.cancellation_intent(handle.stream_id).unwrap();
     assert_eq!(intent.role, StreamCancelRole::OutputConsumer);
     assert_eq!(intent.reason, StreamCancelReason::Cancelled);
-    assert_eq!(metadata.topologies.len(), 0);
-    assert!(
-        metadata
-            .persisted_mappings
-            .iter()
-            .any(|(_, saved, role)| saved == &handle && *role == SessionStreamRole::Output)
-    );
+    assert_eq!(metadata.topology_count(), 0);
+    assert!(metadata.has_persisted_handle(&handle, SessionStreamRole::Output));
     assert_eq!(remote_oplog.current_oplog_index().await, before);
     drop(metadata);
     assert_eq!(
@@ -2146,8 +2143,8 @@ async fn slot_tombstone_persists_without_cancelling_other_slots() {
         let recovered = StreamSession::new(recovered_producer, oplog, key, []);
         let metadata = recovered.current_control_metadata().await.unwrap();
         assert_eq!(
-            metadata.tombstoned_slots,
-            HashMap::from([(
+            metadata.tombstoned_slots(),
+            &HashMap::from([(
                 slot.to_string(),
                 if pending_output {
                     SessionStreamRole::Output
@@ -2156,8 +2153,11 @@ async fn slot_tombstone_persists_without_cancelling_other_slots() {
                 }
             )])
         );
-        assert!(!metadata.cancellation_requested);
-        assert_eq!(metadata.cancel_intents.len(), usize::from(!pending_output));
+        assert!(!metadata.cancellation_requested());
+        assert_eq!(
+            metadata.cancellation_intent_count(),
+            usize::from(!pending_output)
+        );
     }
 }
 
@@ -4617,7 +4617,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         ConsumerAttachmentStatus::EpochMismatch
     );
     assert!(
-        projection.topology_error.is_none(),
+        projection.topology_is_valid(),
         "successive epochs for the same attachment slot are not conflicting topology"
     );
     assert!(
@@ -5837,7 +5837,7 @@ fn session_control_metadata_keeps_cancellation_scoped_to_its_session() {
     other.idempotency_key = golem_common::model::IdempotencyKey::new("other-session".into());
     let mut metadata = SessionControlMetadata::default();
     let owner = golem_common::model::OwnedAgentId::new(key.callee_environment_id, &key.callee);
-    metadata.finished = Some(OplogIndex::INITIAL);
+    metadata.set_finished_for_test(OplogIndex::INITIAL);
     assert!(!metadata.needs_recovery(&owner, &key));
     for (position, session_key) in [other, key.clone()].into_iter().enumerate() {
         metadata.apply(
@@ -5858,22 +5858,19 @@ fn session_control_metadata_keeps_cancellation_scoped_to_its_session() {
                 role: SessionStreamRole::Output,
             }),
         );
-        assert_eq!(metadata.cancellation_requested, position == 1);
-        assert_eq!(
-            metadata.tombstoned_slots.contains_key("$result"),
-            position == 1
-        );
+        assert_eq!(metadata.cancellation_requested(), position == 1);
+        assert_eq!(metadata.is_slot_tombstoned("$result"), position == 1);
         assert!(!metadata.needs_recovery(&owner, &key));
     }
     let encoded = golem_common::serialization::serialize(&metadata).unwrap();
     let restored: SessionControlMetadata =
         golem_common::serialization::deserialize(&encoded).unwrap();
-    assert!(restored.cancellation_requested);
+    assert!(restored.cancellation_requested());
     assert_eq!(
-        restored.tombstoned_slots,
-        HashMap::from([("$result".into(), SessionStreamRole::Output)])
+        restored.tombstoned_slots(),
+        &HashMap::from([("$result".into(), SessionStreamRole::Output)])
     );
-    assert_eq!(restored.covered_through, OplogIndex::from_u64(4));
+    assert_eq!(restored.covered_through(), OplogIndex::from_u64(4));
 }
 
 #[test]
@@ -5890,7 +5887,7 @@ fn cancellation_applied_receipt_clears_only_the_exact_intent() {
         details: None,
     };
     let mut metadata = SessionControlMetadata::default();
-    metadata.finished = Some(OplogIndex::INITIAL);
+    metadata.set_finished_for_test(OplogIndex::INITIAL);
     metadata.apply(
         OplogIndex::from_u64(1),
         &key,
@@ -5922,8 +5919,8 @@ fn cancellation_applied_receipt_clears_only_the_exact_intent() {
     let restored: SessionControlMetadata =
         golem_common::serialization::deserialize(&encoded).unwrap();
     assert!(!restored.needs_recovery(&owner, &key));
-    assert_eq!(restored.cancel_intents.len(), 1);
-    assert_eq!(restored.applied_cancel_intents.len(), 1);
+    assert_eq!(restored.cancellation_intent_count(), 1);
+    assert_eq!(restored.applied_cancellation_count(), 1);
 }
 
 #[test]

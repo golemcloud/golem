@@ -52,7 +52,7 @@ pub enum ProducerMetadataKey {
 
 impl ProducerMetadataKey {
     /// Encodes this key for the producer metadata store.
-    pub(crate) fn field(&self) -> Result<String, String> {
+    pub fn field(&self) -> Result<String, String> {
         Ok(format!("producer:{}", hex::encode(serialize(self)?)))
     }
 
@@ -696,7 +696,7 @@ impl Projection<'_> {
 }
 
 /// Rebuilds metadata rows from committed producer history without changing that history.
-pub(crate) async fn project_producer_metadata(
+pub async fn project_producer_metadata(
     storage: &(dyn KeyValueStorage + Send + Sync),
     namespace: KeyValueStorageNamespace,
     oplog: &dyn OplogService,
@@ -1430,7 +1430,7 @@ impl DurableStreamStore {
     }
 
     /// Counts committed source events beyond the consumer's last journaled offset.
-    pub(crate) async fn journal_lag_events(
+    pub async fn journal_lag_events(
         &self,
         handle: &DurableStreamHandle,
         after: Option<StreamOffset>,
@@ -2939,8 +2939,8 @@ mod tests {
             .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session)
             .await
             .unwrap();
-        assert_eq!(metadata.covered_through, horizon);
-        assert_eq!(metadata.consumer_record_counts.get(&stream), Some(&1));
+        assert_eq!(metadata.covered_through(), horizon);
+        assert_eq!(metadata.consumer_record_count(stream), 1);
         assert_eq!(
             fixture.indexed.reads(),
             reads + 1,

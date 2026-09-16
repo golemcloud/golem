@@ -16,15 +16,16 @@ use super::index::registration_coordinate_depth;
 use super::*;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ResultStreamRegistration {
-    pub(crate) handles: Vec<DurableStreamHandle>,
-    pub(crate) session_record: StreamSessionRecord,
+/// Durable handles and the session record produced while materializing result streams.
+pub struct ResultStreamRegistration {
+    pub handles: Vec<DurableStreamHandle>,
+    pub session_record: StreamSessionRecord,
 }
 
 impl DurableStreamStore {
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
     /// Durably registers a stream before its handle can be exposed to a consumer.
-    pub(crate) async fn register(
+    pub async fn register(
         &self,
         context: Option<&StreamWriteContext>,
         request: ProducerRegistrationRequest,
@@ -171,7 +172,7 @@ impl DurableStreamStore {
     }
 
     /// Registers or validates every stream discovered in an invocation result.
-    pub(crate) async fn register_result_streams(
+    pub async fn register_result_streams(
         &self,
         context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,
@@ -593,7 +594,7 @@ impl DurableStreamStore {
     }
 
     /// Rejects registration reuse whose durable identity or schema differs.
-    pub(crate) async fn validate_registration(
+    pub async fn validate_registration(
         &self,
         request: &ProducerRegistrationRequest,
     ) -> Result<DurableStreamHandle, StreamStoreError> {
@@ -616,7 +617,7 @@ impl DurableStreamStore {
     }
 
     /// Enforces the per-session limit before any additional registrations are appended.
-    pub(crate) async fn validate_new_session_stream_count(
+    pub async fn validate_new_session_stream_count(
         &self,
         session_key: &StreamSessionKey,
         new_stream_count: usize,

@@ -15,9 +15,9 @@
 pub mod agent_config;
 pub mod cut_point;
 mod durable_stream_producer;
-pub(crate) use durable_stream_producer::EphemeralResponseLease;
-mod durable_stream_slots;
-pub(crate) use durable_stream_slots::{
+pub use durable_stream_producer::EphemeralResponseLease;
+pub mod durable_stream_slots;
+pub use durable_stream_slots::{
     AppendStreamSlotPayload, AppendToStreamSlotRequest, AppendToStreamSlotResult,
     CreateStreamSessionResult, ExportStreamControlRequest, ExportStreamControlResult,
     ReadStreamSlotRequest, ReadStreamSlotResult, StreamSlotItem, StreamSlotItemContent,
@@ -183,28 +183,31 @@ struct ReadOnlyContext {
     cacheable: bool,
 }
 
-pub(crate) struct DurableStreamingInvocationRequest {
-    pub(crate) attempt: StartAttemptDescriptor,
-    pub(crate) registrations: Vec<(u64, ProducerRegistrationRequest)>,
-    pub(crate) foreign_mappings: Vec<StreamSessionMappingRecord>,
-    pub(crate) input_schema: Arc<golem_schema::schema::SchemaGraph>,
-    pub(crate) input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
-    pub(crate) invocation: AgentInvocation,
-    pub(crate) acceptance_committed: tokio::sync::oneshot::Sender<()>,
+/// Fully resolved durable streaming invocation admitted by the executor service.
+pub struct DurableStreamingInvocationRequest {
+    pub attempt: StartAttemptDescriptor,
+    pub registrations: Vec<(u64, ProducerRegistrationRequest)>,
+    pub foreign_mappings: Vec<StreamSessionMappingRecord>,
+    pub input_schema: Arc<golem_schema::schema::SchemaGraph>,
+    pub input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
+    pub invocation: AgentInvocation,
+    pub acceptance_committed: tokio::sync::oneshot::Sender<()>,
 }
 
-pub(crate) struct DurableStreamingInvocationAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecord,
-    pub(crate) streams: StreamSession,
-    pub(crate) replayed: bool,
+/// Durable state returned after accepting a streaming invocation.
+pub struct DurableStreamingInvocationAcceptance {
+    pub prepared: StreamSessionPreparedRecord,
+    pub streams: StreamSession,
+    pub replayed: bool,
 }
 
-pub(crate) struct DurableStreamingResumeAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecord,
-    pub(crate) mappings: Vec<StreamSessionMappingRecord>,
-    pub(crate) streams: StreamSession,
-    pub(crate) epoch: u64,
-    pub(crate) replayed: bool,
+/// Durable state returned after resuming or taking over a streaming invocation.
+pub struct DurableStreamingResumeAcceptance {
+    pub prepared: StreamSessionPreparedRecord,
+    pub mappings: Vec<StreamSessionMappingRecord>,
+    pub streams: StreamSession,
+    pub epoch: u64,
+    pub replayed: bool,
 }
 
 /// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
@@ -562,7 +565,7 @@ impl DurableTopologyRecoveryCache {
         if self
             .sessions
             .get(key)
-            .is_some_and(|control| control.covered_through == covered_through)
+            .is_some_and(|control| control.covered_through() == covered_through)
         {
             self.dirty.remove(key);
         }
@@ -647,7 +650,7 @@ impl DurableTopologyRecoveryCache {
                     self.sessions.insert(key.clone(), control);
                 }
                 let control = self.sessions.get_mut(key).unwrap();
-                if *index > control.covered_through {
+                if *index > control.covered_through() {
                     control.apply(*index, key, &record);
                 }
                 self.dirty.insert(key.clone());
@@ -800,7 +803,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub(crate) async fn find_durable_stream_worker<T>(
+    /// Resolves the resident or suspended worker that owns durable stream state.
+    pub async fn find_durable_stream_worker<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<Arc<Self>>, WorkerExecutorError>
@@ -818,7 +822,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map(Some)
     }
 
-    pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
+    /// Returns the consumer journal adapter backed by this worker's durable state.
+    pub fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),
             status: self.last_known_status.clone(),
@@ -4084,7 +4089,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ))
     }
 
-    pub(crate) async fn accept_durable_streaming_invocation(
+    /// Accepts a durable streaming invocation with metering and attempt reporting.
+    pub async fn accept_durable_streaming_invocation(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
@@ -4113,7 +4119,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
-    pub(crate) async fn accept_durable_stream_slot_invocation(
+    /// Accepts a stream-slot invocation that has already been metered by its transport.
+    pub async fn accept_durable_stream_slot_invocation(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
@@ -4515,7 +4522,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
-    pub(crate) async fn resume_durable_streaming_invocation(
+    /// Resumes or takes over an existing durable streaming invocation.
+    pub async fn resume_durable_streaming_invocation(
         self: &Arc<Self>,
         attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
@@ -4815,12 +4823,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
-        while metadata.covered_through < current {
+        while metadata.covered_through() < current {
             let entries = self
                 .oplog
                 .read_exact(
-                    metadata.covered_through.next(),
-                    (current.as_u64() - metadata.covered_through.as_u64()).min(1024),
+                    metadata.covered_through().next(),
+                    (current.as_u64() - metadata.covered_through().as_u64()).min(1024),
                 )
                 .await;
             for (index, entry) in entries {
@@ -4838,16 +4846,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     metadata.apply(index, session_key, &record);
                 } else {
-                    metadata.covered_through = index;
+                    metadata.advance_coverage(index);
                 }
             }
         }
         let mut records = Vec::new();
         for offset in [
-            metadata.prepared,
-            metadata.initial_attached,
+            metadata.prepared_position(),
+            metadata.attached_position(),
             resume_offset,
-            metadata.finished,
+            metadata.finished_position(),
         ]
         .into_iter()
         .flatten()
@@ -4938,7 +4946,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub(crate) async fn rehydrate_durable_streaming_invocation(
+    /// Reconstructs stream-bearing invocation input from committed session mappings.
+    pub async fn rehydrate_durable_streaming_invocation(
         &self,
         invocation: AgentInvocation,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
@@ -4988,7 +4997,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(replace_agent_method_input(invocation, input))
     }
 
-    pub(crate) async fn materialize_durable_streaming_result(
+    /// Persists stream-bearing result mappings and returns the transport value.
+    pub async fn materialize_durable_streaming_result(
         &self,
         idempotency_key: &IdempotencyKey,
         value: golem_common::schema::SchemaValue,
@@ -5024,7 +5034,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(WorkerExecutorError::runtime)
     }
 
-    pub(crate) async fn fail_durable_streaming_session(
+    /// Records a failed terminal for the invocation's durable stream session.
+    pub async fn fail_durable_streaming_session(
         &self,
         idempotency_key: &IdempotencyKey,
         details: String,
@@ -5033,7 +5044,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    pub(crate) async fn complete_durable_streaming_session(
+    /// Records a successful terminal for the invocation's durable stream session.
+    pub async fn complete_durable_streaming_session(
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
@@ -5317,7 +5329,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.durable_topology_recovery
                         .lock()
                         .await
-                        .acknowledge_recovery(&key, metadata.covered_through);
+                        .acknowledge_recovery(&key, metadata.covered_through());
                 }
                 continue;
             }
@@ -5326,14 +5338,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 && key.callee_fingerprint == self.initial_worker_metadata.fingerprint
             {
                 let prepared = self
-                    .read_stream_session_record(metadata.prepared.ok_or_else(|| {
+                    .read_stream_session_record(metadata.prepared_position().ok_or_else(|| {
                         WorkerExecutorError::runtime(
                             "local durable topology has no Prepared session authority",
                         )
                     })?)
                     .await?;
                 let attached = self
-                    .read_stream_session_record(metadata.initial_attached.ok_or_else(|| {
+                    .read_stream_session_record(metadata.attached_position().ok_or_else(|| {
                         WorkerExecutorError::runtime(
                             "local durable topology has no attachment authority",
                         )
@@ -5363,7 +5375,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             recoverable.push((
                 key,
-                metadata.covered_through,
+                metadata.covered_through(),
                 topologies,
                 cancellations_done,
             ));
@@ -8891,7 +8903,7 @@ mod tests {
         let key = crate::durable_host::durable_stream::tests::identity().invocation;
         let mut cache = DurableTopologyRecoveryCache::default();
         let mut control = SessionControlMetadata::default();
-        control.covered_through = OplogIndex::from_u64(12);
+        control.advance_coverage(OplogIndex::from_u64(12));
         cache.sessions.insert(key.clone(), control);
         cache.dirty.insert(key.clone());
         cache.acknowledge_recovery(&key, OplogIndex::from_u64(11));

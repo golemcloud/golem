@@ -297,7 +297,7 @@ impl StreamSessionIndexService {
                             .as_ref()
                             .ok_or("recovery catalogue session is missing")?,
                     )?;
-                    control.covered_through = coverage.covered_through;
+                    control.advance_coverage(coverage.covered_through);
                     sessions.push((key.clone(), control));
                 }
             }
@@ -340,7 +340,7 @@ impl StreamSessionIndexService {
         let keys: Vec<_> = controls.keys().cloned().collect();
         for key in keys {
             let control = controls.get(&key).unwrap();
-            match (control.recovery_slot, control.needs_recovery(id, &key)) {
+            match (control.recovery_slot(), control.needs_recovery(id, &key)) {
                 (None, true) => {
                     let slot = metadata.recovery_session_count;
                     let page = self
@@ -350,7 +350,10 @@ impl StreamSessionIndexService {
                         return Err("recovery catalogue page does not match its coverage".into());
                     }
                     page.push(key.clone());
-                    controls.get_mut(&key).unwrap().recovery_slot = Some(slot);
+                    controls
+                        .get_mut(&key)
+                        .unwrap()
+                        .assign_recovery_slot(Some(slot));
                     metadata.recovery_session_count =
                         slot.checked_add(1).ok_or("recovery catalogue overflow")?;
                 }
@@ -390,11 +393,14 @@ impl StreamSessionIndexService {
                                 .ok_or("recovery catalogue refers to a missing session")?;
                             controls.insert(moved.clone(), control);
                         }
-                        controls.get_mut(&moved).unwrap().recovery_slot = Some(slot);
+                        controls
+                            .get_mut(&moved)
+                            .unwrap()
+                            .assign_recovery_slot(Some(slot));
                     } else if moved != key {
                         return Err("recovery catalogue tail identifies another session".into());
                     }
-                    controls.get_mut(&key).unwrap().recovery_slot = None;
+                    controls.get_mut(&key).unwrap().assign_recovery_slot(None);
                     metadata.recovery_session_count = last;
                 }
                 _ => {}
@@ -466,12 +472,12 @@ impl StreamSessionIndexService {
                 .map(|bytes| deserialize::<SessionControlMetadata>(bytes))
                 .transpose()?
                 .unwrap_or_default();
-            snapshot.covered_through = coverage;
-            snapshot.consumer_deleting = fields
+            let consumer_deleting = fields
                 .get(2)
                 .and_then(Option::as_ref)
                 .map(|bytes| deserialize(bytes))
                 .transpose()?;
+            snapshot.restore_index_state(coverage, consumer_deleting);
             Ok(snapshot)
         })
         .await
@@ -782,11 +788,7 @@ impl StreamSessionIndexService {
                             _ => None,
                         };
                         if let Some(stream) = stream {
-                            let count = control
-                                .consumer_record_counts
-                                .get(&stream)
-                                .copied()
-                                .unwrap_or_default();
+                            let count = control.consumer_record_count(stream);
                             let field = consumer_journal_index_field(
                                 key,
                                 stream,

@@ -19,39 +19,73 @@
 
 use super::ConsumerAttachmentStatus;
 use golem_common::base_model::durable_stream::{
-    AttachmentId, AttemptId, DurableStreamHandle, SessionStreamRole, StreamAttachmentKey,
-    StreamConsumerCancelIntentRecord, StreamSessionKey, StreamSessionMappingRecord,
+    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, SessionStreamRole,
+    StreamAttachmentKey, StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
+    StreamSessionCancelRequestedRecord, StreamSessionKey, StreamSessionMappingRecord,
     StreamSessionRecord,
 };
+use golem_common::model::StreamId;
 use golem_common::model::oplog::OplogIndex;
 use std::collections::{HashMap, HashSet};
 
+/// An unresolved attachment and the exact mapping required to recover it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RecoveryTopology {
-    pub(crate) attachment_key: StreamAttachmentKey,
-    pub(crate) mapping: StreamSessionMappingRecord,
+pub struct RecoveryTopology {
+    /// Durable attachment identity to reconstruct.
+    pub attachment_key: StreamAttachmentKey,
+    /// Exact transport mapping associated with the attachment.
+    pub mapping: StreamSessionMappingRecord,
+}
+
+/// Pure cancellation work selected from the folded session journal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancellationWork {
+    /// Exact persisted mapping whose stream must be cancelled.
+    pub mapping: StreamSessionMappingRecord,
+    /// Pending durable cancellation intent.
+    pub intent: StreamConsumerCancelIntentRecord,
+}
+
+/// Mapping additions and the horizon through which they were selected.
+pub struct RecoveredMappings {
+    /// Last examined oplog position, including records that added no mappings.
+    pub covered_through: OplogIndex,
+    /// Mappings established strictly after the caller's previous horizon.
+    pub mappings: Vec<StreamSessionMappingRecord>,
+}
+
+/// Folded cancellation facts needed before registering invocation outputs.
+pub struct ResultMaterializationState {
+    /// Whether the invocation result has not yet been journaled.
+    pub first_result: bool,
+    /// Whether new output streams must inherit whole-session cancellation.
+    pub cancel_session: bool,
+    /// Output slots deleted before their result streams were materialized.
+    pub deleted_outputs: HashSet<String>,
+    /// Streams that already have a durable cancellation intent.
+    pub existing_intents: HashSet<StreamId>,
 }
 
 #[derive(Clone, Default, desert_rust::BinaryCodec)]
 /// Projection of one session's journal records through `covered_through`.
 /// Local refreshes include the append buffer; persisted projections cover committed history.
 pub struct SessionControlMetadata {
-    pub(crate) covered_through: OplogIndex,
-    pub(crate) recovery_slot: Option<u64>,
-    pub(crate) prepared: Option<OplogIndex>,
-    pub(crate) initial_attached: Option<OplogIndex>,
-    pub(crate) malformed_record: bool,
-    pub(crate) explicit_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    pub(crate) persisted_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    pub(crate) recoverable_mappings: Vec<(OplogIndex, StreamSessionMappingRecord)>,
+    covered_through: OplogIndex,
+    recovery_slot: Option<u64>,
+    prepared: Option<OplogIndex>,
+    initial_attached: Option<OplogIndex>,
+    malformed_record: bool,
+    explicit_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
+    persisted_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
+    recoverable_mappings: Vec<(OplogIndex, StreamSessionMappingRecord)>,
     acceptance_mappings: Vec<StreamSessionMappingRecord>,
-    pub(crate) caller_attempt: Option<AttemptId>,
-    pub(crate) caller_attempt_conflict: bool,
-    pub(crate) invocation_result: Option<OplogIndex>,
-    pub(crate) finished: Option<OplogIndex>,
-    pub(crate) root_outputs: Vec<u64>,
-    pub(crate) topology_epoch: Option<u64>,
-    pub(crate) topologies: HashMap<
+    caller_attempt: Option<AttemptId>,
+    caller_attempt_conflict: bool,
+    invocation_result: Option<OplogIndex>,
+    finished: Option<OplogIndex>,
+    root_outputs: Vec<u64>,
+    topology_epoch: Option<u64>,
+    topologies: HashMap<
         (
             AttachmentId,
             golem_common::model::StreamId,
@@ -60,42 +94,378 @@ pub struct SessionControlMetadata {
         ),
         SessionTopologyMetadata,
     >,
-    pub(crate) visible_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
-    pub(crate) topology_error: Option<String>,
+    visible_mappings: HashSet<(u64, DurableStreamHandle, SessionStreamRole)>,
+    topology_error: Option<String>,
     finalized_attachments:
         HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKey>,
-    pub(crate) closed_consumer_streams: HashSet<golem_common::model::StreamId>,
-    pub(crate) cancel_intents:
-        HashMap<golem_common::model::StreamId, StreamConsumerCancelIntentRecord>,
-    pub(crate) applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecord>,
-    pub(crate) tombstoned_slots: HashMap<String, SessionStreamRole>,
-    pub(crate) cancellation_requested: bool,
-    pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
-    pub(crate) consumer_deleting:
-        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
+    closed_consumer_streams: HashSet<golem_common::model::StreamId>,
+    cancel_intents: HashMap<golem_common::model::StreamId, StreamConsumerCancelIntentRecord>,
+    applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecord>,
+    tombstoned_slots: HashMap<String, SessionStreamRole>,
+    cancellation_requested: bool,
+    consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
+    consumer_deleting: Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
 }
 
 #[derive(Clone, desert_rust::BinaryCodec)]
 /// Durable attachment topology projected from one stream session journal.
-pub(crate) struct SessionTopologyMetadata {
-    pub(crate) attachment: StreamAttachmentKey,
-    pub(crate) mapping: StreamSessionMappingRecord,
+struct SessionTopologyMetadata {
+    attachment: StreamAttachmentKey,
+    mapping: StreamSessionMappingRecord,
     active: bool,
     prepared_index: Option<OplogIndex>,
     activated_index: Option<OplogIndex>,
     repeated_activation_index: Option<OplogIndex>,
 }
 
-impl SessionTopologyMetadata {
-    /// Returns whether the topology has a matching durable activation record.
-    pub(crate) fn is_active(&self) -> bool {
-        self.active
-    }
-}
-
 impl SessionControlMetadata {
+    /// Returns the last oplog index covered by this projection.
+    pub fn covered_through(&self) -> OplogIndex {
+        self.covered_through
+    }
+    /// Records the examined horizon, including spans containing no records for this session.
+    pub fn advance_coverage(&mut self, index: OplogIndex) {
+        self.covered_through = index;
+    }
+    /// Returns whether persisted index coverage has been loaded.
+    pub fn is_loaded(&self) -> bool {
+        self.covered_through.is_defined()
+    }
+    /// Rejects a projection containing an unsupported record format.
+    pub fn ensure_valid(&self) -> Result<(), String> {
+        if self.malformed_record {
+            Err("unsupported or malformed durable Stream Session record version".into())
+        } else {
+            Ok(())
+        }
+    }
+    /// Restores envelope-owned index state without changing serialized projection layout.
+    pub fn restore_index_state(
+        &mut self,
+        covered_through: OplogIndex,
+        consumer_deleting: Option<
+            golem_common::model::durable_stream::StreamConsumerDeletingRecord,
+        >,
+    ) {
+        self.covered_through = covered_through;
+        self.consumer_deleting = consumer_deleting;
+    }
+    /// Returns the recovery catalogue slot assigned to this session.
+    pub fn recovery_slot(&self) -> Option<u64> {
+        self.recovery_slot
+    }
+    /// Assigns or clears this session's recovery catalogue slot.
+    pub fn assign_recovery_slot(&mut self, slot: Option<u64>) {
+        self.recovery_slot = slot;
+    }
+    /// Returns the durable Prepared record position.
+    pub fn prepared_position(&self) -> Option<OplogIndex> {
+        self.prepared
+    }
+    /// Returns the initial Attached record position.
+    pub fn attached_position(&self) -> Option<OplogIndex> {
+        self.initial_attached
+    }
+    /// Returns the invocation result record position.
+    pub fn result_position(&self) -> Option<OplogIndex> {
+        self.invocation_result
+    }
+    /// Returns the session terminal record position.
+    pub fn finished_position(&self) -> Option<OplogIndex> {
+        self.finished
+    }
+    /// Returns the currently folded attachment epoch.
+    pub fn topology_epoch(&self) -> Option<u64> {
+        self.topology_epoch
+    }
+    /// Returns the unique folded caller attempt, rejecting conflicting records.
+    pub fn caller_attempt_id(&self) -> Result<Option<AttemptId>, String> {
+        if self.caller_attempt_conflict {
+            Err("conflicting caller attempt IDs are persisted for the Stream Session".into())
+        } else {
+            Ok(self.caller_attempt)
+        }
+    }
+    /// Returns whether this exact mapping has an explicit Mapping record.
+    pub fn has_explicit_mapping(&self, mapping: &StreamSessionMappingRecord) -> bool {
+        self.explicit_mappings.contains(&(
+            mapping.transport_stream_id,
+            mapping.handle.clone(),
+            mapping.role,
+        ))
+    }
+    /// Returns whether this exact mapping is established by any persisted session record.
+    pub fn has_persisted_mapping(&self, mapping: &StreamSessionMappingRecord) -> bool {
+        self.persisted_mappings.contains(&(
+            mapping.transport_stream_id,
+            mapping.handle.clone(),
+            mapping.role,
+        ))
+    }
+    /// Selects recoverable mappings newer than the supplied runtime horizon.
+    pub fn recoverable_mappings_after(&self, covered: OplogIndex) -> RecoveredMappings {
+        RecoveredMappings {
+            covered_through: self.covered_through,
+            mappings: self
+                .recoverable_mappings
+                .iter()
+                .filter(|(index, _)| *index > covered)
+                .map(|(_, mapping)| mapping.clone())
+                .collect(),
+        }
+    }
+    /// Checks whether the stream has a terminal and validates its exact persisted mapping.
+    pub fn has_consumer_terminal(
+        &self,
+        mapping: &StreamSessionMappingRecord,
+    ) -> Result<bool, String> {
+        if !self
+            .closed_consumer_streams
+            .contains(&mapping.handle.stream_id)
+        {
+            return Ok(false);
+        }
+        self.ensure_valid()?;
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        if !self.persisted_mappings.contains(&(
+            mapping.transport_stream_id,
+            mapping.handle.clone(),
+            mapping.role,
+        )) {
+            return Err("closed consumer stream has no matching persisted mapping".into());
+        }
+        Ok(true)
+    }
+    /// Returns the first durable cancellation intent for a stream.
+    pub fn cancellation_intent(
+        &self,
+        stream: golem_common::model::StreamId,
+    ) -> Option<&StreamConsumerCancelIntentRecord> {
+        self.cancel_intents.get(&stream)
+    }
+    /// Returns whether the exact cancellation intent has an applied receipt.
+    pub fn is_cancellation_applied(&self, intent: &StreamConsumerCancelIntentRecord) -> bool {
+        self.applied_cancel_intents.contains(intent)
+    }
+    /// Returns whether this session has durable Prepared authority.
+    pub fn is_prepared(&self) -> bool {
+        self.prepared.is_some()
+    }
+    /// Returns whether whole-session cancellation was durably requested.
+    pub fn cancellation_requested(&self) -> bool {
+        self.cancellation_requested
+    }
+    /// Returns whether the named result slot is tombstoned.
+    pub fn is_slot_tombstoned(&self, slot: &str) -> bool {
+        self.tombstoned_slots.contains_key(slot)
+    }
+    /// Checks for a persisted mapping with the exact handle identity and role.
+    pub fn has_persisted_handle(
+        &self,
+        handle: &DurableStreamHandle,
+        role: SessionStreamRole,
+    ) -> bool {
+        self.persisted_mappings
+            .iter()
+            .any(|(_, saved, saved_role)| saved == handle && *saved_role == role)
+    }
+    /// Checks whether whole-session cancellation can be requested.
+    pub fn can_request_cancellation(&self) -> Result<bool, String> {
+        if self.prepared.is_none() {
+            return Ok(false);
+        }
+        if self.malformed_record || self.topology_error.is_some() {
+            return Err("cannot cancel a malformed durable stream session".into());
+        }
+        Ok(true)
+    }
+    /// Builds the durable records needed to request cancellation of every open stream.
+    pub fn cancellation_records(
+        &self,
+        epoch: u64,
+        key: &StreamSessionKey,
+    ) -> Result<Option<Vec<StreamSessionRecord>>, String> {
+        if !self.can_request_cancellation()? {
+            return Ok(None);
+        }
+        let mut records = Vec::new();
+        if !self.cancellation_requested {
+            records.push(StreamSessionRecord::CancelRequested(
+                StreamSessionCancelRequestedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: key.clone(),
+                },
+            ));
+        }
+        let mut cancelled = self.cancel_intents.keys().copied().collect::<HashSet<_>>();
+        for (_, handle, role) in &self.persisted_mappings {
+            if cancelled.insert(handle.stream_id) {
+                records.push(StreamSessionRecord::ConsumerCancelIntent(
+                    StreamConsumerCancelIntentRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: key.clone(),
+                        stream_id: handle.stream_id,
+                        epoch,
+                        role: match role {
+                            SessionStreamRole::Input => StreamCancelRole::InputProducer,
+                            SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
+                        },
+                        reason: StreamCancelReason::Cancelled,
+                        details: None,
+                    },
+                ));
+            }
+        }
+        Ok(Some(records))
+    }
+    /// Returns the folded facts needed while materializing an invocation result.
+    pub fn materialization_state(&self) -> ResultMaterializationState {
+        ResultMaterializationState {
+            first_result: self.invocation_result.is_none(),
+            cancel_session: self.cancellation_requested,
+            deleted_outputs: self
+                .tombstoned_slots
+                .iter()
+                .filter(|(_, role)| **role == SessionStreamRole::Output)
+                .map(|(slot, _)| slot.clone())
+                .collect(),
+            existing_intents: self.cancel_intents.keys().copied().collect(),
+        }
+    }
+    /// Validates that every prepared topology is active and visible.
+    pub fn validate_topology_complete(&self) -> Result<(), String> {
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        for topology in self.topologies.values() {
+            if !topology.active {
+                return Err("durable session has prepared but inactive foreign topology".into());
+            }
+            let mapping = &topology.mapping;
+            if !self.visible_mappings.contains(&(
+                mapping.transport_stream_id,
+                mapping.handle.clone(),
+                mapping.role,
+            )) {
+                return Err(
+                    "durable session has activated foreign topology without a visible mapping"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+    /// Returns transport IDs classified as root outputs.
+    pub fn root_outputs(&self) -> &[u64] {
+        &self.root_outputs
+    }
+    /// Returns the number of indexed consumer records for a stream.
+    pub fn consumer_record_count(&self, stream: golem_common::model::StreamId) -> u64 {
+        self.consumer_record_counts
+            .get(&stream)
+            .copied()
+            .unwrap_or_default()
+    }
+    /// Returns the durable consumer deletion fence, if any.
+    pub fn consumer_deleting(
+        &self,
+    ) -> Option<&golem_common::model::durable_stream::StreamConsumerDeletingRecord> {
+        self.consumer_deleting.as_ref()
+    }
+
+    /// Counts exact persisted mappings for cross-module projection assertions.
+    #[cfg(test)]
+    pub(crate) fn persisted_mapping_count(&self) -> usize {
+        self.persisted_mappings.len()
+    }
+
+    /// Counts topology slots for cross-module projection assertions.
+    #[cfg(test)]
+    pub(crate) fn topology_count(&self) -> usize {
+        self.topologies.len()
+    }
+
+    /// Checks that folding recorded no topology conflict.
+    #[cfg(test)]
+    pub(crate) fn topology_is_valid(&self) -> bool {
+        self.topology_error.is_none()
+    }
+
+    /// Exposes the complete tombstone set for exact projection assertions.
+    #[cfg(test)]
+    pub(crate) fn tombstoned_slots(&self) -> &HashMap<String, SessionStreamRole> {
+        &self.tombstoned_slots
+    }
+
+    /// Counts retained cancellation intents, including those already applied.
+    #[cfg(test)]
+    pub(crate) fn cancellation_intent_count(&self) -> usize {
+        self.cancel_intents.len()
+    }
+
+    /// Counts exact cancellation receipts retained by the projection.
+    #[cfg(test)]
+    pub(crate) fn applied_cancellation_count(&self) -> usize {
+        self.applied_cancel_intents.len()
+    }
+
+    /// Constructs an epoch mismatch without rewriting persisted topology records.
+    #[cfg(test)]
+    pub(crate) fn set_topology_epoch_for_test(&mut self, epoch: u64) {
+        self.topology_epoch = Some(epoch);
+    }
+
+    /// Removes intent authority to exercise rejection of an incomplete projection.
+    #[cfg(test)]
+    pub(crate) fn clear_cancellation_intents_for_test(&mut self) {
+        self.cancel_intents.clear();
+    }
+
+    /// Constructs a finished projection without an invocation's journal setup.
+    #[cfg(test)]
+    pub(crate) fn set_finished_for_test(&mut self, index: OplogIndex) {
+        self.finished = Some(index);
+    }
+
+    /// Selects unresolved intents with their persisted mappings; iteration order is unspecified.
+    pub fn pending_cancellations(
+        &self,
+    ) -> impl Iterator<Item = Result<CancellationWork, String>> + '_ {
+        self.cancel_intents
+            .values()
+            .filter(|intent| !self.applied_cancel_intents.contains(*intent))
+            .map(|intent| {
+                let (transport_stream_id, handle, role) = self
+                    .persisted_mappings
+                    .iter()
+                    .find(|(_, handle, _)| handle.stream_id == intent.stream_id)
+                    .ok_or("durable cancellation intent has no persisted stream mapping")?;
+                Ok(CancellationWork {
+                    mapping: StreamSessionMappingRecord {
+                        transport_stream_id: *transport_stream_id,
+                        handle: handle.clone(),
+                        role: *role,
+                    },
+                    intent: intent.clone(),
+                })
+            })
+    }
+
+    /// Resolves consumer invocation authority from a mapping's recorded topology.
+    pub fn consumer_invocation(
+        &self,
+        mapping: &StreamSessionMappingRecord,
+    ) -> Result<&StreamSessionKey, String> {
+        self.topologies
+            .values()
+            .find(|topology| &topology.mapping == mapping)
+            .map(|topology| &topology.attachment.consumer_invocation)
+            .ok_or_else(|| "foreign cancellation has no consumer invocation authority".into())
+    }
     /// Returns mappings that were durably established before session acceptance.
-    pub(crate) fn acceptance_mappings(&self) -> Result<Vec<StreamSessionMappingRecord>, String> {
+    pub fn acceptance_mappings(&self) -> Result<Vec<StreamSessionMappingRecord>, String> {
         if self.malformed_record {
             return Err("unsupported or malformed durable Stream Session record version".into());
         }
@@ -106,7 +476,7 @@ impl SessionControlMetadata {
     }
 
     /// Checks that cancellation and its exact topology mapping are both committed.
-    pub(crate) fn has_committed_cancellation(
+    pub fn has_committed_cancellation(
         &self,
         key: &StreamAttachmentKey,
         mapping: &StreamSessionMappingRecord,
@@ -138,7 +508,7 @@ impl SessionControlMetadata {
     }
 
     /// Returns whether durable topology or cancellation work remains incomplete.
-    pub(crate) fn needs_recovery(
+    pub fn needs_recovery(
         &self,
         owner: &golem_common::model::OwnedAgentId,
         key: &StreamSessionKey,
@@ -151,14 +521,14 @@ impl SessionControlMetadata {
     }
 
     /// Returns whether any committed cancellation intent lacks its applied marker.
-    pub(crate) fn has_cancellation_intents(&self) -> bool {
+    pub fn has_cancellation_intents(&self) -> bool {
         self.cancel_intents
             .values()
             .any(|intent| !self.applied_cancel_intents.contains(intent))
     }
 
     /// Returns whether attachments must be reconstructed or finalized from the journal.
-    pub(crate) fn needs_topology_recovery(
+    pub fn needs_topology_recovery(
         &self,
         owner: &golem_common::model::OwnedAgentId,
         key: &StreamSessionKey,
@@ -185,7 +555,7 @@ impl SessionControlMetadata {
     }
 
     /// Returns unresolved attachment mappings that recovery must process.
-    pub(crate) fn recovery_topologies(
+    pub fn recovery_topologies(
         &self,
         owner: &golem_common::model::OwnedAgentId,
         key: &StreamSessionKey,
@@ -227,7 +597,7 @@ impl SessionControlMetadata {
     }
 
     /// Folds the exact attachment slot into its durable prepared or active phase.
-    pub(crate) fn topology_status(
+    pub fn topology_status(
         &self,
         attachment: &StreamAttachmentKey,
         expected_mapping: Option<&StreamSessionMappingRecord>,
@@ -279,7 +649,7 @@ impl SessionControlMetadata {
     }
 
     /// Applies one record in oplog order to reconstructed session state.
-    pub(crate) fn apply(
+    pub fn apply(
         &mut self,
         index: OplogIndex,
         key: &StreamSessionKey,
@@ -557,5 +927,165 @@ fn attachment_mismatch_status(
         ConsumerAttachmentStatus::EpochMismatch
     } else {
         ConsumerAttachmentStatus::IncarnationMismatch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durable_stream::tests::identity;
+    use golem_common::base_model::durable_stream::{
+        StreamConsumerCancelAppliedRecord, StreamSessionMappingUpdateRecord,
+    };
+    use golem_common::model::component::ComponentRevision;
+    use golem_schema::schema::SchemaFingerprintV1;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn mapping() -> StreamSessionMappingRecord {
+        let owner = identity();
+        StreamSessionMappingRecord {
+            transport_stream_id: 91,
+            role: SessionStreamRole::Output,
+            handle: DurableStreamHandle {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                stream_id: StreamId(Uuid::from_u128(17)),
+                producer_environment_id: owner.environment_id,
+                producer: owner.agent_id,
+                expected_producer_fingerprint: owner.fingerprint,
+                source_invocation: owner.invocation,
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+            },
+        }
+    }
+
+    #[test]
+    fn terminal_evidence_validates_exact_mapping_only_after_a_terminal() {
+        let mapping = mapping();
+        // An incomplete projection can lack terminal evidence without claiming validity.
+        let mut state = SessionControlMetadata {
+            malformed_record: true,
+            ..Default::default()
+        };
+        assert!(!state.has_consumer_terminal(&mapping).unwrap());
+        state
+            .closed_consumer_streams
+            .insert(mapping.handle.stream_id);
+        assert!(state.has_consumer_terminal(&mapping).is_err());
+        state.malformed_record = false;
+        assert!(state.has_consumer_terminal(&mapping).is_err());
+        state.persisted_mappings.insert((
+            mapping.transport_stream_id,
+            mapping.handle.clone(),
+            mapping.role,
+        ));
+        assert!(state.has_consumer_terminal(&mapping).unwrap());
+        let mut wrong = mapping.clone();
+        wrong.transport_stream_id = 7;
+        assert!(state.has_consumer_terminal(&wrong).is_err());
+        wrong = mapping.clone();
+        wrong.role = SessionStreamRole::Input;
+        assert!(state.has_consumer_terminal(&wrong).is_err());
+        wrong = mapping.clone();
+        wrong.handle.element_schema_fingerprint = SchemaFingerprintV1([8; 32]);
+        assert!(state.has_consumer_terminal(&wrong).is_err());
+        state.topology_error = Some("invalid topology".into());
+        assert!(state.has_consumer_terminal(&mapping).is_err());
+    }
+
+    #[test]
+    fn pending_cancellation_requires_mapping_and_exact_applied_receipt() {
+        let mapping = mapping();
+        let key = identity().invocation;
+        let intent = StreamConsumerCancelIntentRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: key.clone(),
+            stream_id: mapping.handle.stream_id,
+            epoch: 3,
+            role: StreamCancelRole::OutputConsumer,
+            reason: StreamCancelReason::GuestDrop,
+            details: Some("closed by consumer".into()),
+        };
+        let mut state = SessionControlMetadata::default();
+        state.apply(
+            OplogIndex::from_u64(1),
+            &key,
+            &StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
+        );
+        assert!(state.pending_cancellations().next().unwrap().is_err());
+        state.apply(
+            OplogIndex::from_u64(2),
+            &key,
+            &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: key.clone(),
+                mapping: mapping.clone(),
+            }),
+        );
+        let expected = vec![CancellationWork {
+            mapping,
+            intent: intent.clone(),
+        }];
+        assert_eq!(
+            state
+                .pending_cancellations()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            expected
+        );
+        let mut stale = intent.clone();
+        stale.epoch = 2;
+        state.apply(
+            OplogIndex::from_u64(3),
+            &key,
+            &StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                intent: stale,
+            }),
+        );
+        assert_eq!(
+            state
+                .pending_cancellations()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            expected
+        );
+        state.apply(
+            OplogIndex::from_u64(4),
+            &key,
+            &StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                intent,
+            }),
+        );
+        assert!(state.pending_cancellations().next().is_none());
+    }
+
+    #[test]
+    fn recovered_mappings_exclude_the_old_horizon_and_report_full_coverage() {
+        let key = identity().invocation;
+        let first = mapping();
+        let mut second = first.clone();
+        second.transport_stream_id = 7;
+        let mut state = SessionControlMetadata::default();
+        for (index, mapping) in [(4, first), (9, second.clone())] {
+            state.apply(
+                OplogIndex::from_u64(index),
+                &key,
+                &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: key.clone(),
+                    mapping,
+                }),
+            );
+        }
+        state.advance_coverage(OplogIndex::from_u64(12));
+        let recovered = state.recoverable_mappings_after(OplogIndex::from_u64(4));
+        assert_eq!(recovered.covered_through, OplogIndex::from_u64(12));
+        assert_eq!(recovered.mappings, vec![second]);
+        let recovered = state.recoverable_mappings_after(OplogIndex::from_u64(9));
+        assert_eq!(recovered.covered_through, OplogIndex::from_u64(12));
+        assert!(recovered.mappings.is_empty());
     }
 }

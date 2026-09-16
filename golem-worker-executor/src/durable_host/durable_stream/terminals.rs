@@ -78,7 +78,7 @@ impl DurableStreamStore {
     }
 
     /// Commits the stream's single end terminal before publishing it to live readers.
-    pub(crate) async fn end(
+    pub async fn end(
         &self,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
@@ -450,7 +450,7 @@ impl DurableStreamStore {
     }
 
     /// Commits and publishes cancellation for an open stream exactly once.
-    pub(crate) async fn cancel_open(
+    pub async fn cancel_open(
         self: &Arc<Self>,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
@@ -489,7 +489,7 @@ impl DurableStreamStore {
     }
 
     /// Installs a disposable signal used to stop active source work after durable cancellation.
-    pub(crate) fn register_source_cancellation(
+    pub fn register_source_cancellation(
         &self,
         stream_id: StreamId,
         cancellation: CancellationToken,
@@ -512,7 +512,7 @@ impl DurableStreamStore {
     }
 
     /// Removes the signal only if it still belongs to the registering source task.
-    pub(crate) fn unregister_source_cancellation(&self, stream_id: StreamId, registration_id: u64) {
+    pub fn unregister_source_cancellation(&self, stream_id: StreamId, registration_id: u64) {
         let mut registrations = self
             .source_cancellations
             .write()
@@ -537,7 +537,7 @@ impl DurableStreamStore {
     }
 
     /// Appends a protocol-authored end to one stream unless it already has a terminal.
-    pub(crate) async fn end_open(
+    pub async fn end_open(
         &self,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,

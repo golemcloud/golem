@@ -632,7 +632,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.invocation_result, Some(result));
+    assert_eq!(metadata.result_position(), Some(result));
     assert!(
         storage.reads() >= 4,
         "initial catchup must read multiple chunks"
@@ -648,7 +648,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.invocation_result, Some(result));
+    assert_eq!(metadata.result_position(), Some(result));
     assert_eq!(
         storage.reads(),
         1,
@@ -661,7 +661,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &other_key)
             .await
             .unwrap()
-            .invocation_result
+            .result_position()
             .is_none()
     );
 
@@ -680,7 +680,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
             .await
             .unwrap()
-            .finished
+            .finished_position()
             .is_none()
     );
     oplog.commit(CommitLevel::Always).await;
@@ -689,8 +689,8 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
         .await
         .unwrap();
-    assert_eq!(metadata.finished, Some(finished));
-    assert_eq!(metadata.covered_through, finished);
+    assert_eq!(metadata.finished_position(), Some(finished));
+    assert_eq!(metadata.covered_through(), finished);
     assert_eq!(
         storage.reads(),
         2,
@@ -744,7 +744,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &consumer_key)
         .await
         .unwrap();
-    assert_eq!(metadata.consumer_record_counts.get(&stream), Some(&600));
+    assert_eq!(metadata.consumer_record_count(stream), 600);
     assert_eq!(
         storage.reads(),
         1,

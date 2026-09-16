@@ -29,15 +29,24 @@ mod terminals;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use catch_up::DurableCatchUpReader;
-pub(crate) use mutation::{StreamWriteAdmission, StreamWriteContext};
-pub(crate) use probe::{
-    ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe, StreamAttachmentConsumerProbe,
+pub use catch_up::DurableCatchUpReader;
+pub use items::StreamHead;
+pub use metadata::{
+    ProducerMetadataKey, ProducerMetadataRow, ProducerSessionMetadata, ProducerStreamMetadata,
+    project_producer_metadata,
+};
+pub use mutation::{StreamWriteAdmission, StreamWriteContext};
+pub use probe::{
+    ConsumerAttachmentStatus, ConsumerJournalInspection, DbDirectStreamAttachmentConsumerProbe,
+    StreamAttachmentConsumerProbe,
 };
 use publication::CommittedEventRetention;
-pub(crate) use registration::ResultStreamRegistration;
-pub(crate) use routing::{RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl};
-pub(crate) use session_state::SessionControlMetadata;
+pub use registration::ResultStreamRegistration;
+pub use routing::{RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl};
+pub use session_state::{
+    CancellationWork, RecoveredMappings, RecoveryTopology, ResultMaterializationState,
+    SessionControlMetadata,
+};
 
 use crate::durable_host::stream_bus::{
     DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
@@ -82,7 +91,6 @@ use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::model::auth::AuthCtx;
-use metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -93,34 +101,34 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Stable producer-side facts required to register a stream in an invocation session.
-pub(crate) struct ProducerRegistrationRequest {
-    pub(crate) coordinate: StreamRegistrationCoordinate,
-    pub(crate) source_invocation: StreamInvocationId,
-    pub(crate) entity_parent_start_index: Option<OplogIndex>,
-    pub(crate) component_revision: ComponentRevision,
-    pub(crate) element_schema_fingerprint: SchemaFingerprintV1,
-    pub(crate) source_kind: StreamSourceKind,
-    pub(crate) session_mapping: Option<StreamSessionMapping>,
+pub struct ProducerRegistrationRequest {
+    pub coordinate: StreamRegistrationCoordinate,
+    pub source_invocation: StreamInvocationId,
+    pub entity_parent_start_index: Option<OplogIndex>,
+    pub component_revision: ComponentRevision,
+    pub element_schema_fingerprint: SchemaFingerprintV1,
+    pub source_kind: StreamSourceKind,
+    pub session_mapping: Option<StreamSessionMapping>,
 }
 
 #[derive(Clone)]
 /// Describes whether a nested stream is created here or forwards an existing durable handle.
-pub(crate) enum NestedStreamWrite {
+pub enum NestedStreamWrite {
     Register(ProducerRegistrationRequest),
     Forward(DurableStreamHandle),
 }
 
 /// Selects a newly registered or already durable source for an output mapping.
-pub(crate) enum ProducerOutputSource {
+pub enum ProducerOutputSource {
     New(ProducerRegistrationRequest),
     Existing(DurableStreamHandle),
 }
 
 /// Associates a transport output slot with its durable producer source.
-pub(crate) struct ProducerOutputRegistration {
-    pub(crate) transport_stream_id: u64,
-    pub(crate) source: ProducerOutputSource,
-    pub(crate) cancellation_epoch: Option<u64>,
+pub struct ProducerOutputRegistration {
+    pub transport_stream_id: u64,
+    pub source: ProducerOutputSource,
+    pub cancellation_epoch: Option<u64>,
 }
 
 /// A cancellation whose oplog record is durable but whose postcommit publication is pending.
@@ -136,7 +144,7 @@ pub(crate) struct PendingCommittedCancellation {
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 /// Guest-visible payload reconstructed from a committed producer stream record.
-pub(crate) enum CommittedProducerStreamEventPayload {
+pub enum CommittedProducerStreamEventPayload {
     Value(Vec<u8>),
     PackedU8(u8),
     End(StreamEndResult),
@@ -149,19 +157,19 @@ pub(crate) enum CommittedProducerStreamEventPayload {
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 /// A committed producer event, identified by stream sequence and durable oplog offset.
-pub(crate) struct CommittedProducerStreamEvent {
-    pub(crate) stream_id: StreamId,
-    pub(crate) producer_sequence: u64,
-    pub(crate) offset: StreamOffset,
-    pub(crate) packed_u8_batch_end: Option<StreamOffset>,
-    pub(crate) terminal_author: Option<StreamTerminalAuthor>,
-    pub(crate) nested_handles: Vec<DurableStreamHandle>,
-    pub(crate) payload: CommittedProducerStreamEventPayload,
+pub struct CommittedProducerStreamEvent {
+    pub stream_id: StreamId,
+    pub producer_sequence: u64,
+    pub offset: StreamOffset,
+    pub packed_u8_batch_end: Option<StreamOffset>,
+    pub terminal_author: Option<StreamTerminalAuthor>,
+    pub nested_handles: Vec<DurableStreamHandle>,
+    pub payload: CommittedProducerStreamEventPayload,
 }
 
 impl CommittedProducerStreamEvent {
     /// Returns whether this event permanently closes the stream.
-    pub(crate) fn is_terminal(&self) -> bool {
+    pub fn is_terminal(&self) -> bool {
         matches!(
             self.payload,
             CommittedProducerStreamEventPayload::End(_)
@@ -172,32 +180,32 @@ impl CommittedProducerStreamEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Reports a mutation result and whether it was recovered from existing durable state.
-pub(crate) struct ProducerWriteOutcome<T> {
-    pub(crate) value: T,
-    pub(crate) replayed: bool,
+pub struct ProducerWriteOutcome<T> {
+    pub value: T,
+    pub replayed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 /// A bounded durable read plus the cursor and terminal state needed to continue it.
-pub(crate) struct StreamHandleReadResult {
-    pub(crate) events: Vec<CommittedProducerStreamEvent>,
-    pub(crate) next_offset: Option<StreamOffset>,
-    pub(crate) head_offset: Option<StreamOffset>,
-    pub(crate) closed: bool,
-    pub(crate) cancelled: bool,
+pub struct StreamHandleReadResult {
+    pub events: Vec<CommittedProducerStreamEvent>,
+    pub next_offset: Option<StreamOffset>,
+    pub head_offset: Option<StreamOffset>,
+    pub closed: bool,
+    pub cancelled: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Identity and monotonic write position of an external producer attachment.
-pub(crate) struct ExternalProducer {
-    pub(crate) id: ExternalProducerId,
-    pub(crate) epoch: u64,
-    pub(crate) sequence: u64,
+pub struct ExternalProducer {
+    pub id: ExternalProducerId,
+    pub epoch: u64,
+    pub sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Durable admission result for an externally supplied input event.
-pub(crate) enum ExternalAppendOutcome {
+pub enum ExternalAppendOutcome {
     Accepted(StreamOffset),
     Duplicate {
         offset: StreamOffset,
@@ -214,7 +222,7 @@ pub(crate) enum ExternalAppendOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Contract and persistence failures detected by the durable stream store.
-pub(crate) enum StreamStoreError {
+pub enum StreamStoreError {
     UnsupportedVersion(u8),
     InvalidHandle,
     RegistrationDivergence,
@@ -265,7 +273,7 @@ impl From<StreamStoreError> for String {
 
 impl StreamStoreError {
     /// Formats the dependent attachment identities that currently block deletion.
-    pub(crate) fn deletion_blocked_evidence(&self) -> Option<String> {
+    pub fn deletion_blocked_evidence(&self) -> Option<String> {
         let Self::DeletionBlocked(dependents) = self else {
             return None;
         };
@@ -351,11 +359,11 @@ struct ProducerJournalSummary {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Folded count, cursor, and terminal state of a consumer journal.
-pub(crate) struct ConsumerJournalSummary {
-    event_count: u64,
-    last_offset: Option<StreamOffset>,
-    terminal: bool,
-    source_unavailable: bool,
+pub struct ConsumerJournalSummary {
+    pub event_count: u64,
+    pub last_offset: Option<StreamOffset>,
+    pub terminal: bool,
+    pub source_unavailable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -383,7 +391,7 @@ pub struct IndexedStreamAttachment {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Externally relevant phase of a durable stream attachment.
-pub(crate) enum StreamAttachmentState {
+pub enum StreamAttachmentState {
     Prepared,
     Active,
     Finalized(StreamAttachmentFinalizationReason),
@@ -391,18 +399,18 @@ pub(crate) enum StreamAttachmentState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Current attachment phase and, while resumable, its lease deadline.
-pub(crate) struct StreamAttachmentView {
-    pub(crate) key: StreamAttachmentKey,
-    pub(crate) state: StreamAttachmentState,
-    pub(crate) lease_expires_at_millis: Option<u64>,
+pub struct StreamAttachmentView {
+    pub key: StreamAttachmentKey,
+    pub state: StreamAttachmentState,
+    pub lease_expires_at_millis: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Durable evidence used to explain or perform producer deletion.
-pub(crate) struct StreamDeletionDiagnostics {
-    pub(crate) deleting: bool,
-    pub(crate) attachments: Vec<StreamAttachmentView>,
-    pub(crate) cascade_completed: Vec<(StreamAttachmentKey, StreamCascadeDependentResult)>,
+pub struct StreamDeletionDiagnostics {
+    pub deleting: bool,
+    pub attachments: Vec<StreamAttachmentView>,
+    pub cascade_completed: Vec<(StreamAttachmentKey, StreamCascadeDependentResult)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -437,7 +445,7 @@ pub(crate) type DurableStreamCommit = Arc<
 
 /// Owns one agent's persisted stream journal, indexes, and disposable live publication state.
 /// Session-specific transport and consumer behavior belongs to `StreamSession` instead.
-pub(crate) struct DurableStreamStore {
+pub struct DurableStreamStore {
     self_weak: std::sync::Weak<Self>,
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
@@ -772,17 +780,17 @@ impl DurableStreamStore {
     }
 
     /// Returns the environment containing the producer journal.
-    pub(crate) fn environment_id(&self) -> EnvironmentId {
+    pub fn environment_id(&self) -> EnvironmentId {
         self.environment_id
     }
 
     /// Returns the agent whose oplog owns these streams.
-    pub(crate) fn agent_id(&self) -> &AgentId {
+    pub fn agent_id(&self) -> &AgentId {
         &self.producer
     }
 
     /// Returns the durable producer identity that fences recreated agents.
-    pub(crate) fn fingerprint(&self) -> AgentFingerprint {
+    pub fn fingerprint(&self) -> AgentFingerprint {
         self.producer_fingerprint
     }
 }
@@ -798,7 +806,7 @@ impl Drop for DurableStreamStore {
 
 #[async_trait]
 /// Reads committed producer history without relying on a resident live subscription.
-pub(crate) trait StreamSegmentSource: Send + Sync {
+pub trait StreamSegmentSource: Send + Sync {
     /// Reads committed events after `after`, optionally stopping at `through`.
     async fn read_segment(
         &self,
@@ -810,7 +818,7 @@ pub(crate) trait StreamSegmentSource: Send + Sync {
 
 #[async_trait]
 /// Reads producer history while validating and renewing a durable attachment.
-pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
+pub trait AttachedStreamSegmentSource: Send + Sync {
     /// Counts committed producer events not yet represented in the consumer journal.
     async fn journal_lag_events(
         &self,
@@ -840,7 +848,7 @@ pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
 
 #[async_trait]
 /// Durable lifecycle operations for producer-to-consumer history dependencies.
-pub(crate) trait StreamAttachmentControl: Send + Sync {
+pub trait StreamAttachmentControl: Send + Sync {
     /// Records an attachment before the consumer begins depending on producer history.
     async fn prepare_attachment(
         &self,

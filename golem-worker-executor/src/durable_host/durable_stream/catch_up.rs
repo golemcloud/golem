@@ -25,7 +25,7 @@ impl DurableStreamStore {
         fields(stream_id = %handle.stream_id, has_cursor = after.is_some())
     )]
     /// Creates a reader that catches up from committed oplog history before joining live events.
-    pub(crate) async fn catch_up(
+    pub async fn catch_up(
         self: &Arc<Self>,
         handle: DurableStreamHandle,
         after: Option<StreamOffset>,
@@ -66,7 +66,7 @@ impl DurableStreamStore {
     }
 
     /// Verifies that a handle names this producer, fingerprint, stream, and schema.
-    pub(crate) async fn validate_handle(
+    pub async fn validate_handle(
         &self,
         handle: &DurableStreamHandle,
     ) -> Result<(), StreamStoreError> {
@@ -86,7 +86,7 @@ impl DurableStreamStore {
     }
 
     /// Returns whether the handle is bound to this exact durable producer identity.
-    pub(crate) fn owns_handle_identity(&self, handle: &DurableStreamHandle) -> bool {
+    pub fn owns_handle_identity(&self, handle: &DurableStreamHandle) -> bool {
         handle.producer_environment_id == self.environment_id
             && handle.producer == self.producer
             && handle.expected_producer_fingerprint == self.producer_fingerprint
@@ -446,7 +446,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
 }
 
 /// Resumable reader that deduplicates committed history against the subscribed live tail.
-pub(crate) struct DurableCatchUpReader {
+pub struct DurableCatchUpReader {
     pub(super) bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEvent>>,
     pub(super) subscription: Option<DurableLiveStreamSubscription<CommittedProducerStreamEvent>>,
     pub(super) history_source: Option<(Arc<DurableStreamStore>, DurableStreamHandle)>,
@@ -458,9 +458,7 @@ pub(crate) struct DurableCatchUpReader {
 
 impl DurableCatchUpReader {
     /// Returns the next ordered event, advancing by durable offset rather than connection state.
-    pub(crate) async fn next(
-        &mut self,
-    ) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
+    pub async fn next(&mut self) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
         if self.terminal_delivered {
             return Ok(None);
         }

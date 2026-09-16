@@ -21,10 +21,11 @@ use super::registration::{registration_matches, registration_record};
 use super::terminals::fenced_by_terminal;
 use super::*;
 
-pub(crate) struct StreamHead {
-    pub(crate) offset: Option<StreamOffset>,
-    pub(crate) closed: bool,
-    pub(crate) cancelled: bool,
+/// Latest committed position and terminal state of a durable stream.
+pub struct StreamHead {
+    pub offset: Option<StreamOffset>,
+    pub closed: bool,
+    pub cancelled: bool,
 }
 
 pub(super) struct AppliedWriteBatch {
@@ -47,7 +48,7 @@ impl DurableStreamStore {
     }
 
     /// Resolves a registration coordinate to its fingerprint-bound durable handle.
-    pub(crate) async fn handle_for_coordinate(
+    pub async fn handle_for_coordinate(
         &self,
         coordinate: &StreamRegistrationCoordinate,
     ) -> Result<Option<DurableStreamHandle>, StreamStoreError> {
@@ -62,7 +63,7 @@ impl DurableStreamStore {
     }
 
     /// Returns the latest committed offset and terminal state for a validated handle.
-    pub(crate) async fn stream_head(
+    pub async fn stream_head(
         &self,
         handle: &DurableStreamHandle,
     ) -> Result<StreamHead, StreamStoreError> {
@@ -89,7 +90,7 @@ impl DurableStreamStore {
     }
 
     /// Reads committed events by offset; resident publication state is not authoritative.
-    pub(crate) async fn read_by_handle(
+    pub async fn read_by_handle(
         self: &Arc<Self>,
         request: golem_common::model::durable_stream::StreamHandleReadRequest,
     ) -> Result<StreamHandleReadResult, StreamStoreError> {
@@ -177,7 +178,7 @@ impl DurableStreamStore {
     }
 
     /// Resolves nested stream handles carried by the selected committed item range.
-    pub(crate) async fn nested_handles(
+    pub async fn nested_handles(
         &self,
         stream_id: StreamId,
         first_sequence: u64,
@@ -314,7 +315,7 @@ impl DurableStreamStore {
     }
 
     /// Returns the committed producer sequence through which an input stream may resume.
-    pub(crate) async fn input_high_water(
+    pub async fn input_high_water(
         &self,
         stream_id: StreamId,
     ) -> Result<Option<InputStreamHighWater>, StreamStoreError> {
@@ -340,7 +341,7 @@ impl DurableStreamStore {
     }
 
     /// Returns the input high-water mark while validating the consumer attachment.
-    pub(crate) async fn attached_input_high_water(
+    pub async fn attached_input_high_water(
         &self,
         session_key: &StreamSessionKey,
         stream_id: StreamId,
@@ -439,7 +440,7 @@ impl DurableStreamStore {
     }
 
     /// Persists values together with newly registered or forwarded nested stream sources.
-    pub(crate) async fn write_items_with_nested_sources(
+    pub async fn write_items_with_nested_sources(
         &self,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
@@ -491,7 +492,7 @@ impl DurableStreamStore {
     }
 
     /// Writes forwarded values after checking that the source attachment is still active.
-    pub(crate) async fn write_attached_items_with_nested(
+    pub async fn write_attached_items_with_nested(
         self: &Arc<Self>,
         context: Option<&StreamWriteContext>,
         session_key: &StreamSessionKey,
@@ -633,7 +634,7 @@ impl DurableStreamStore {
     }
 
     /// Resolves an attached source offset to its committed producer sequence.
-    pub(crate) async fn attached_global_sequence(
+    pub async fn attached_global_sequence(
         &self,
         session_key: &StreamSessionKey,
         stream_id: StreamId,

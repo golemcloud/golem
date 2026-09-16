@@ -31,90 +31,90 @@ use golem_schema::schema::validation::validate_value;
 use prost::Message;
 
 /// Domain result of creating or replay-attaching a stream session.
-pub(crate) struct CreateStreamSessionResult {
-    pub(crate) session: String,
-    pub(crate) replayed: bool,
-    pub(crate) component_revision: ComponentRevision,
+pub struct CreateStreamSessionResult {
+    pub session: String,
+    pub replayed: bool,
+    pub component_revision: ComponentRevision,
 }
 
 /// Domain request for reading one invocation stream slot.
-pub(crate) struct ReadStreamSlotRequest {
-    pub(crate) session: String,
-    pub(crate) slot: String,
-    pub(crate) from_offset: Option<StreamOffset>,
-    pub(crate) max_items: u32,
-    pub(crate) max_bytes: u64,
-    pub(crate) wait_millis: u64,
-    pub(crate) expected_method: String,
+pub struct ReadStreamSlotRequest {
+    pub session: String,
+    pub slot: String,
+    pub from_offset: Option<StreamOffset>,
+    pub max_items: u32,
+    pub max_bytes: u64,
+    pub wait_millis: u64,
+    pub expected_method: String,
 }
 
 /// One domain item returned by a stream-slot read.
-pub(crate) struct StreamSlotItem {
-    pub(crate) offset: StreamOffset,
-    pub(crate) content: StreamSlotItemContent,
+pub struct StreamSlotItem {
+    pub offset: StreamOffset,
+    pub content: StreamSlotItemContent,
 }
 
 /// Encoding selected by the slot's pinned element schema.
-pub(crate) enum StreamSlotItemContent {
+pub enum StreamSlotItemContent {
     Value(Vec<u8>),
     PackedU8(Vec<u8>),
 }
 
 /// Domain result of reading one invocation stream slot.
-pub(crate) struct ReadStreamSlotResult {
-    pub(crate) items: Vec<StreamSlotItem>,
-    pub(crate) next_offset: Option<StreamOffset>,
-    pub(crate) closed: bool,
-    pub(crate) cancelled: bool,
-    pub(crate) element_schema: SchemaGraph,
-    pub(crate) content_type: &'static str,
-    pub(crate) up_to_date: bool,
-    pub(crate) head_offset: Option<StreamOffset>,
-    pub(crate) stream_identity: String,
-    pub(crate) slots: Vec<String>,
-    pub(crate) tombstoned: bool,
-    pub(crate) writable: bool,
+pub struct ReadStreamSlotResult {
+    pub items: Vec<StreamSlotItem>,
+    pub next_offset: Option<StreamOffset>,
+    pub closed: bool,
+    pub cancelled: bool,
+    pub element_schema: SchemaGraph,
+    pub content_type: &'static str,
+    pub up_to_date: bool,
+    pub head_offset: Option<StreamOffset>,
+    pub stream_identity: String,
+    pub slots: Vec<String>,
+    pub tombstoned: bool,
+    pub writable: bool,
 }
 
 /// Domain target for cancelling a session or tombstoning one export slot.
-pub(crate) struct ExportStreamControlRequest {
-    pub(crate) session: String,
-    pub(crate) slot: Option<String>,
-    pub(crate) expected_method: String,
+pub struct ExportStreamControlRequest {
+    pub session: String,
+    pub slot: Option<String>,
+    pub expected_method: String,
 }
 
 /// Stable outcome of an export stream control operation.
-pub(crate) enum ExportStreamControlResult {
+pub enum ExportStreamControlResult {
     Applied,
     NotFound,
     Gone,
 }
 
 /// Domain payload accepted by an input stream slot.
-pub(crate) enum AppendStreamSlotPayload {
+pub enum AppendStreamSlotPayload {
     Values(Vec<Vec<u8>>),
     PackedU8(Vec<u8>),
 }
 
 /// Client producer coordinates for idempotent external appends.
-pub(crate) struct StreamSlotProducer {
-    pub(crate) id: String,
-    pub(crate) epoch: u64,
-    pub(crate) sequence: u64,
+pub struct StreamSlotProducer {
+    pub id: String,
+    pub epoch: u64,
+    pub sequence: u64,
 }
 
 /// Domain request for appending to one input stream slot.
-pub(crate) struct AppendToStreamSlotRequest {
-    pub(crate) session: String,
-    pub(crate) slot: String,
-    pub(crate) payload: Option<AppendStreamSlotPayload>,
-    pub(crate) close: bool,
-    pub(crate) producer: Option<StreamSlotProducer>,
-    pub(crate) expected_method: String,
+pub struct AppendToStreamSlotRequest {
+    pub session: String,
+    pub slot: String,
+    pub payload: Option<AppendStreamSlotPayload>,
+    pub close: bool,
+    pub producer: Option<StreamSlotProducer>,
+    pub expected_method: String,
 }
 
 /// Domain outcome of an input stream-slot append.
-pub(crate) enum AppendToStreamSlotResult {
+pub enum AppendToStreamSlotResult {
     Accepted(StreamOffset),
     Duplicate {
         offset: StreamOffset,
@@ -298,7 +298,7 @@ impl SlotSchema {
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Resolves the pinned revision for a stream-slot session before transport decoding.
-    pub(crate) async fn stream_session_revision(
+    pub async fn stream_session_revision(
         &self,
         key: &IdempotencyKey,
     ) -> Result<ComponentRevision, WorkerExecutorError> {
@@ -323,7 +323,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Accepts a fully domain-built streaming invocation and returns its stable session identity.
-    pub(crate) async fn create_stream_session(
+    pub async fn create_stream_session(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<CreateStreamSessionResult, WorkerExecutorError> {
@@ -476,7 +476,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Reads data and metadata from a slot resolved against the session's pinned schema.
-    pub(crate) async fn read_stream_slot(
+    pub async fn read_stream_slot(
         &self,
         request: ReadStreamSlotRequest,
     ) -> Result<Option<ReadStreamSlotResult>, DurableStreamReadError<WorkerExecutorError>> {
@@ -619,7 +619,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Cancels all session streams or tombstones one canonical export slot.
-    pub(crate) async fn control_export_stream(
+    pub async fn control_export_stream(
         self: &Arc<Self>,
         request: ExportStreamControlRequest,
     ) -> Result<ExportStreamControlResult, WorkerExecutorError> {
@@ -710,7 +710,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Validates and durably appends a batch to one writable stream slot.
-    pub(crate) async fn append_to_stream_slot(
+    pub async fn append_to_stream_slot(
         &self,
         request: AppendToStreamSlotRequest,
     ) -> Result<AppendToStreamSlotResult, WorkerExecutorError> {

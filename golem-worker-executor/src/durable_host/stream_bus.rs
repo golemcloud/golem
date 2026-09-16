@@ -57,7 +57,8 @@ impl<T> From<DurableLiveStreamEvent<T>> for QueuedDurableEvent<T> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DurableLiveStreamBusError {
+/// Failures while subscribing to or publishing the disposable tail of committed stream events.
+pub enum DurableLiveStreamBusError {
     InvalidCapacity,
     ReaderLimit,
     ReaderIdOverflow,

@@ -49,10 +49,14 @@ journal/index store; it still owns queue admission, serialized local mutations, 
 post-commit publication, and reports `StreamStoreError`. A per-invocation `StreamSession` runtime
 owns binding-local mappings and consumes the store. Clones of one runtime share those existing
 bindings, while separate constructors remain independent even when given the same session key;
-there is no centralized session registry. Pure `SessionControlMetadata` and
-`SessionTopologyMetadata` projections live in `durable_host/durable_stream/session_state.rs` so
-the store, runtime and services can consume journal state without the store depending on the
-session runtime. `SessionValue` carries a schema value and domain mappings together, with
+there is no centralized session registry. Pure `SessionControlMetadata` lives in
+`durable_host/durable_stream/session_state.rs`; its fields and nested `SessionTopologyMetadata`
+are private. The projection owns mapping validation, topology completion checks, recovery selection,
+and cancellation planning, including matching intents with their exact applied receipts. The store,
+runtime and services query these operations rather than inspecting its maps; the runtime still
+owns locks, routing and asynchronous effects. Intended cross-module streaming APIs use documented
+`pub`, while implementation state and synchronization boundaries stay restricted.
+`SessionValue` carries a schema value and domain mappings together, with
 canonical result indices converted to binding-local transport IDs before it leaves the session.
 RPC callers encode the mappings at transmission. Consumer endpoints own their read/replay state;
 admission and local write contexts are explicit. These boundaries alter no wire or oplog format.

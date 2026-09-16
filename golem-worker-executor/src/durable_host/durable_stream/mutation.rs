@@ -86,7 +86,7 @@ struct ProducerMutationScope {
 }
 
 /// Bounds a detached operation across local writes and remote waits without readmission.
-pub(crate) struct StreamWriteAdmission {
+pub struct StreamWriteAdmission {
     producer: Arc<DurableStreamStore>,
     status_receipts: std::sync::Mutex<Vec<oneshot::Receiver<Result<(), StreamStoreError>>>>,
     publications: std::sync::Mutex<Vec<PublicationReceipt>>,
@@ -116,7 +116,7 @@ impl StreamWriteAdmission {
 }
 
 /// An admitted write's effects and completion obligations, passed explicitly to nested writes.
-pub(crate) struct StreamWriteContext {
+pub struct StreamWriteContext {
     scope: Arc<ProducerMutationScope>,
     effects: Arc<WriteEffects>,
 }

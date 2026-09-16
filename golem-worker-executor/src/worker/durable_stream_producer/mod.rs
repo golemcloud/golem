@@ -44,7 +44,7 @@ struct SlotState {
 
 /// Keeps normal ephemeral archival behind the response and all of its stream readers.
 /// Explicit owner retirement and executor shutdown do not wait for these leases.
-pub(crate) struct EphemeralResponseLease {
+pub struct EphemeralResponseLease {
     slot: Arc<DurableStreamProducerSlot>,
 }
 

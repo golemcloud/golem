@@ -16,14 +16,14 @@ use super::attachment::attachment_lease_expiry;
 use super::*;
 
 /// Attachment control that resolves the producer owner before each durable operation.
-pub(crate) struct RoutedStreamAttachmentControl {
+pub struct RoutedStreamAttachmentControl {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecord,
     auth_ctx: AuthCtx,
 }
 
 /// Segment source that routes reads to the producer while preserving attachment identity.
-pub(crate) struct RoutedAttachedStreamSegmentSource {
+pub struct RoutedAttachedStreamSegmentSource {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecord,
     auth_ctx: AuthCtx,
@@ -32,7 +32,7 @@ pub(crate) struct RoutedAttachedStreamSegmentSource {
 
 impl RoutedAttachedStreamSegmentSource {
     /// Creates a routed source for attached reads and waits.
-    pub(crate) fn new(
+    pub fn new(
         rpc: Arc<dyn Rpc>,
         mapping: StreamSessionMappingRecord,
         auth_ctx: AuthCtx,
@@ -138,11 +138,7 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
 
 impl RoutedStreamAttachmentControl {
     /// Creates routed attachment control with the caller's authorization context.
-    pub(crate) fn new(
-        rpc: Arc<dyn Rpc>,
-        mapping: StreamSessionMappingRecord,
-        auth_ctx: AuthCtx,
-    ) -> Self {
+    pub fn new(rpc: Arc<dyn Rpc>, mapping: StreamSessionMappingRecord, auth_ctx: AuthCtx) -> Self {
         Self {
             rpc,
             mapping,
@@ -168,7 +164,7 @@ impl RoutedStreamAttachmentControl {
     }
 
     /// Forwards cancellation and waits for the producer's durable receipt, not callback delivery.
-    pub(crate) async fn cancel_stream(
+    pub async fn cancel_stream(
         &self,
         key: StreamAttachmentKey,
         role: StreamCancelRole,

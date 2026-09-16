@@ -127,14 +127,16 @@ fn schema_type_at_path<'a>(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn decode_recursive_stream_value(
+/// Decodes a transport value while resolving every nested stream reference.
+pub fn decode_recursive_stream_value(
     value: ProtoSchemaValue,
     mut stream: impl FnMut(u64, &[StreamValuePathStep]) -> Result<SchemaValueStream, String>,
 ) -> Result<SchemaValue, String> {
     decode_recursive_stream_value_inner(value, None, &mut stream)
 }
 
-pub(crate) fn decode_recursive_stream_value_with_schema(
+/// Decodes nested stream references and validates their paths against a pinned schema.
+pub fn decode_recursive_stream_value_with_schema(
     value: ProtoSchemaValue,
     graph: &SchemaGraph,
     root: &SchemaType,
@@ -345,14 +347,16 @@ fn decode_recursive_stream_value_inner(
     decode(value, schema, &mut Vec::new(), stream)
 }
 
-pub(crate) fn encode_recursive_stream_value(
+/// Encodes a schema value while replacing every nested stream with a transport reference.
+pub fn encode_recursive_stream_value(
     value: &SchemaValue,
     mut stream: impl FnMut(&SchemaValueStream, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {
     encode_recursive_stream_value_inner(value, None, &mut stream)
 }
 
-pub(crate) fn encode_recursive_stream_value_with_schema(
+/// Encodes nested streams using paths validated against a pinned schema.
+pub fn encode_recursive_stream_value_with_schema(
     value: &SchemaValue,
     graph: &SchemaGraph,
     root: &SchemaType,
@@ -542,9 +546,8 @@ fn encode_recursive_stream_value_inner(
     encode(value, schema, &mut Vec::new(), stream)
 }
 
-pub(crate) fn preflight_recursive_stream_value(
-    value: &SchemaValue,
-) -> Result<ProtoSchemaValue, String> {
+/// Validates recursive stream limits before encoding a schema value.
+pub fn preflight_recursive_stream_value(value: &SchemaValue) -> Result<ProtoSchemaValue, String> {
     let mut stream_count = 0usize;
     let encoded = encode_recursive_stream_value(value, |_, _| {
         let stream_id = u64::try_from(stream_count)
@@ -569,7 +572,8 @@ pub(crate) fn preflight_recursive_stream_value(
     Ok(encoded)
 }
 
-pub(crate) fn preflight_proto_recursive_stream_value(
+/// Validates recursive stream limits in an encoded transport value.
+pub fn preflight_proto_recursive_stream_value(
     value: &ProtoSchemaValue,
 ) -> Result<Vec<u64>, String> {
     if value.encoded_len() > MAX_DURABLE_STREAM_ITEM_SIZE {
@@ -592,7 +596,8 @@ pub(crate) fn preflight_proto_recursive_stream_value(
     Ok(stream_references)
 }
 
-pub(crate) fn remap_recursive_stream_references(
+/// Rewrites every nested stream reference while preserving the surrounding value.
+pub fn remap_recursive_stream_references(
     value: ProtoSchemaValue,
     mut remap: impl FnMut(u64, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {

@@ -18,7 +18,7 @@ use super::*;
 
 impl DurableStreamStore {
     /// Commits deterministic source-unavailable state for unread consumer history.
-    pub(crate) async fn commit_source_unavailable_overlay(
+    pub async fn commit_source_unavailable_overlay(
         &self,
         context: Option<&StreamWriteContext>,
         key: StreamAttachmentKey,
@@ -168,7 +168,7 @@ impl DurableStreamStore {
     }
 
     /// Returns the committed source-unavailable boundary for a consumer stream, if any.
-    pub(crate) async fn consumer_source_unavailable(
+    pub async fn consumer_source_unavailable(
         &self,
         key: &StreamAttachmentKey,
     ) -> Result<Option<StreamOffset>, StreamStoreError> {
@@ -412,7 +412,7 @@ impl StreamAttachmentControl for DurableStreamStore {
 
 impl DurableStreamStore {
     /// Validates producer identity and checks whether this session has an active attachment to the stream.
-    pub(crate) async fn has_active_attachment(
+    pub async fn has_active_attachment(
         &self,
         session: &StreamSessionKey,
         handle: &DurableStreamHandle,
@@ -444,13 +444,13 @@ impl DurableStreamStore {
     }
 
     /// Returns whether the producer's durable deletion barrier has been recorded.
-    pub(crate) async fn deletion_started(&self) -> bool {
+    pub async fn deletion_started(&self) -> bool {
         let index = self.index.lock().await;
         index.deleting || index.consumer_deleting
     }
 
     /// Returns attachment and cascade evidence that currently governs deletion.
-    pub(crate) async fn deletion_diagnostics(
+    pub async fn deletion_diagnostics(
         &self,
     ) -> Result<StreamDeletionDiagnostics, StreamStoreError> {
         let index = self.index_for_cleanup().await?;
@@ -470,7 +470,7 @@ impl DurableStreamStore {
     }
 
     /// Records deterministic loss for dependents before allowing cascaded deletion.
-    pub(crate) async fn cascade_deletion(
+    pub async fn cascade_deletion(
         &self,
         now_millis: u64,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
@@ -789,7 +789,7 @@ impl DurableStreamStore {
     }
 
     /// Reconciles expired or abandoned attachments from durable consumer evidence.
-    pub(crate) async fn reconcile_attachments_configured(
+    pub async fn reconcile_attachments_configured(
         &self,
         now_millis: u64,
         renewal_target_millis: u64,

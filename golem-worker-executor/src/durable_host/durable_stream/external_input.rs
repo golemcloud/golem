@@ -18,7 +18,7 @@ use super::*;
 
 impl DurableStreamStore {
     /// Admits one externally sequenced input and commits it before reporting acceptance.
-    pub(crate) async fn append_external_input(
+    pub async fn append_external_input(
         self: &Arc<Self>,
         context: Option<&StreamWriteContext>,
         session_key: &StreamSessionKey,

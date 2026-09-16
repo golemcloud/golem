@@ -16,7 +16,7 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Durable consumer evidence used when reconciling a producer attachment.
-pub(crate) enum ConsumerAttachmentStatus {
+pub enum ConsumerAttachmentStatus {
     Prepared,
     Active,
     Deleting,
@@ -27,14 +27,14 @@ pub(crate) enum ConsumerAttachmentStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Consumer terminal and progress facts recovered from its journal.
-pub(crate) struct ConsumerJournalInspection {
-    pub(crate) source_offsets: Vec<StreamOffset>,
-    pub(crate) source_unavailable: Option<StreamOffset>,
+pub struct ConsumerJournalInspection {
+    pub source_offsets: Vec<StreamOffset>,
+    pub source_unavailable: Option<StreamOffset>,
 }
 
 #[async_trait]
 /// Queries consumer-side durable state without relying on its resident session runtime.
-pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
+pub trait StreamAttachmentConsumerProbe: Send + Sync {
     /// Inspects whether the consumer can still require the attachment's source history.
     async fn status(
         &self,
@@ -80,7 +80,7 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
 }
 
 /// Consumer probe that reads local metadata or routes to the owning shard.
-pub(crate) struct DbDirectStreamAttachmentConsumerProbe {
+pub struct DbDirectStreamAttachmentConsumerProbe {
     worker_service: Arc<dyn WorkerService>,
     oplog_service: Arc<dyn OplogService>,
     rpc: Option<Arc<dyn Rpc>>,
@@ -88,7 +88,7 @@ pub(crate) struct DbDirectStreamAttachmentConsumerProbe {
 
 impl DbDirectStreamAttachmentConsumerProbe {
     /// Creates a probe backed only by the supplied metadata service.
-    pub(crate) fn new(
+    pub fn new(
         worker_service: Arc<dyn WorkerService>,
         oplog_service: Arc<dyn OplogService>,
     ) -> Self {
@@ -100,7 +100,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
     }
 
     /// Creates a probe that can route inspection to remote consumer owners.
-    pub(crate) fn new_routed(
+    pub fn new_routed(
         worker_service: Arc<dyn WorkerService>,
         oplog_service: Arc<dyn OplogService>,
         rpc: Arc<dyn Rpc>,
@@ -113,7 +113,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
     }
 
     /// Returns whether a matching cancellation intent or terminal is durably recorded.
-    pub(crate) async fn committed_cancellation_status(
+    pub async fn committed_cancellation_status(
         &self,
         key: &StreamAttachmentKey,
         mapping: &StreamSessionMappingRecord,
@@ -248,7 +248,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .lookup_durable_stream_control_metadata(&consumer, agent_mode, &key.session_key)
             .await
             .map_err(StreamStoreError::Oplog)?;
-        if !metadata.covered_through.is_defined() {
+        if !metadata.is_loaded() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
         if let Some(intent) = expected_cancel {
@@ -273,7 +273,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         ) {
             return Ok(topology);
         }
-        if metadata.consumer_deleting.as_ref().is_some_and(|record| {
+        if metadata.consumer_deleting().is_some_and(|record| {
             record.consumer_environment_id == key.consumer_environment_id
                 && record.consumer == key.consumer
                 && record.consumer_fingerprint == key.expected_consumer_fingerprint
