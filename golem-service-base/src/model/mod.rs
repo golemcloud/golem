@@ -653,6 +653,7 @@ mod tests {
             oplog_writes_per_second: 0,
             usage_update_applied: false,
             monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
         };
 
         let converted: super::ResourceLimits = proto.try_into().unwrap();
@@ -679,6 +680,7 @@ mod tests {
             oplog_writes_per_second: 500,
             usage_update_applied: true,
             monthly_usage_mode_revision: 6,
+            monthly_policy_revision: 7,
         };
 
         let converted: super::ResourceLimits = proto.try_into().unwrap();
@@ -686,6 +688,7 @@ mod tests {
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
         assert_eq!(converted.oplog_writes_per_second, 500);
         assert_eq!(converted.monthly_usage_mode_revision, 6);
+        assert_eq!(converted.monthly_policy_revision, 7);
         assert_eq!(converted.monthly_policy.period.year, 2026);
         assert_eq!(converted.monthly_policy.period.month, 9);
         assert_eq!(
@@ -718,6 +721,7 @@ mod tests {
     fn resource_limits_monthly_resource_policy_converts_to_proto() {
         let limits = super::ResourceLimits {
             monthly_usage_mode_revision: 6,
+            monthly_policy_revision: 7,
             monthly_policy: super::MonthlyResourcePolicy {
                 period: golem_common::model::account_usage::AccountUsagePeriod {
                     year: 2026,
@@ -745,6 +749,7 @@ mod tests {
         };
 
         let proto: ResourceLimits = limits.clone().into();
+        assert_eq!(proto.monthly_policy_revision, 7);
         let monthly_policy = proto.monthly_policy.unwrap();
         assert_eq!(monthly_policy.period.unwrap().month, 9);
         assert_eq!(
