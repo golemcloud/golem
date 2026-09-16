@@ -52,6 +52,7 @@ pub struct RegistryServiceConfig {
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
+    pub mcp_oauth: golem_mcp_import::oauth::Limits,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -118,6 +119,7 @@ impl SafeDisplay for RegistryServiceConfig {
             "security scheme: strict_issuer_url_validation={}",
             self.security_scheme.strict_issuer_url_validation
         );
+        let _ = writeln!(&mut result, "MCP OAuth limits: {:?}", self.mcp_oauth);
 
         result
     }
@@ -228,6 +230,7 @@ impl Default for RegistryServiceConfig {
             builtin_plugins: BuiltinPluginsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
+            mcp_oauth: golem_mcp_import::oauth::Limits::default(),
         }
     }
 }
@@ -592,6 +595,48 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub async fn mcp_oauth_config_validates_before_bootstrap() {
+        use crate::bootstrap::Services;
+        use golem_common::config::{DbConfig, DbSqliteConfig};
+        use serde_json::json;
+        use std::time::Duration;
+
+        let mut config = RegistryServiceConfig::default();
+        assert_eq!(
+            serde_json::to_value(config.mcp_oauth).unwrap(),
+            json!({
+                "document_bytes": 1_048_576,
+                "request_bytes": 65_536,
+                "challenge_bytes": 16_384,
+                "timeout": "1m"
+            })
+        );
+        config.mcp_oauth = serde_json::from_value(json!({
+            "document_bytes": 1024,
+            "request_bytes": 512,
+            "challenge_bytes": 128,
+            "timeout": "250ms"
+        }))
+        .unwrap();
+        assert_eq!(
+            config.mcp_oauth.validate().unwrap().timeout,
+            Duration::from_millis(250)
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("registry.db");
+        config.db = DbConfig::Sqlite(DbSqliteConfig {
+            database: database.to_str().unwrap().into(),
+            ..Default::default()
+        });
+        config.mcp_oauth.timeout = Duration::ZERO;
+        let mut tasks = tokio::task::JoinSet::new();
+        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        assert!(error.to_string().contains("invalid OAuth limits"));
+        assert!(!database.exists());
+        assert!(tasks.is_empty());
     }
 
     /// A plan that raises the per-agent disk limit without declaring a ceiling must not

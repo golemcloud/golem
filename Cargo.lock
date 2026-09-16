@@ -4052,6 +4052,7 @@ dependencies = [
  "http-auth",
  "http-body 1.1.0",
  "http-body-util",
+ "humantime-serde",
  "hyper 1.11.0",
  "hyper-util",
  "jsonschema",

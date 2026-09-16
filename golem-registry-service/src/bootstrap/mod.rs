@@ -34,6 +34,7 @@ use crate::repo::environment_plugin_grant::{
 use crate::repo::environment_tool_grant::{DbEnvironmentToolGrantRepo, EnvironmentToolGrantRepo};
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
 use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
+use crate::repo::mcp_oauth::{DbMcpOAuthGrantRepo, McpOAuthGrantRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::permission_share::{DbPermissionShareRepo, PermissionShareRepo};
@@ -67,6 +68,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
 use crate::services::plan::PlanService;
@@ -122,6 +124,7 @@ pub struct Services {
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
+    pub mcp_oauth_service: Arc<McpOAuthService>,
     pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
@@ -151,6 +154,7 @@ struct Repos {
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
+    mcp_oauth_grant_repo: Arc<dyn McpOAuthGrantRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     permission_share_repo: Arc<dyn PermissionShareRepo>,
@@ -169,6 +173,7 @@ impl Services {
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
+        config.mcp_oauth.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
@@ -377,6 +382,14 @@ impl Services {
             config.security_scheme.strict_issuer_url_validation,
         ));
 
+        let mcp_oauth_service = Arc::new(McpOAuthService::new(
+            repos.environment_repo.clone(),
+            repos.deployment_repo.clone(),
+            repos.security_scheme_repo.clone(),
+            repos.mcp_oauth_grant_repo.clone(),
+            config.mcp_oauth,
+        ));
+
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
             repos.http_api_deployment_repo.clone(),
             environment_service.clone(),
@@ -521,6 +534,7 @@ impl Services {
             environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
+            mcp_oauth_service,
             native_tool_catalog,
             login_system,
             permission_share_service,
@@ -580,6 +594,7 @@ async fn make_repos(
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
@@ -601,6 +616,7 @@ async fn make_repos(
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
+                mcp_oauth_grant_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 permission_share_repo,
@@ -650,6 +666,7 @@ async fn make_repos(
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
@@ -671,6 +688,7 @@ async fn make_repos(
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
+                mcp_oauth_grant_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 permission_share_repo,

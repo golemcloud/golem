@@ -21,6 +21,7 @@ http = { workspace = true }
 http-auth = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
+humantime-serde = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
 oauth2 = { workspace = true }

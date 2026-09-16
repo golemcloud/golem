@@ -9,15 +9,17 @@ use http::{HeaderMap, Request, Response, StatusCode, header};
 use http_body_util::BodyExt;
 use oauth2::{AsyncHttpClient, HttpRequest, HttpResponse, RequestTokenError};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::{fmt, future::Future, pin::Pin, time::Duration};
 use tokio::sync::Mutex;
 use url::Url;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub document_bytes: usize,
     pub request_bytes: usize,
     pub challenge_bytes: usize,
+    #[serde(with = "humantime_serde")]
     pub timeout: Duration,
 }
 
@@ -33,7 +35,7 @@ impl Default for Limits {
 }
 
 impl Limits {
-    fn validate(self) -> Result<Self, TransportError> {
+    pub fn validate(self) -> Result<Self, TransportError> {
         if self.timeout.is_zero() || self.document_bytes == 0 || self.request_bytes == 0 {
             return Err(invalid("invalid OAuth limits"));
         }

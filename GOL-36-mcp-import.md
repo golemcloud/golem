@@ -1081,7 +1081,25 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   obsolete build caches; the final unchanged DB tests passed on all three variants.
   PostgreSQL migrations now execute successfully, but grant-state transition tests
   still run only against SQLite. No production endpoint is wired yet.
-- Remaining step-4 work: service configuration; policy/bootstrap/internal RPC and
+- OAuth limits now have a registry config surface with human-readable duration
+  serialization; numerical defaults remain in the shared library. Bootstrap
+  validates before opening the DB/starting tasks, constructs the grant repository
+  for both backends, and exposes the configured coordinator. The single-binary
+  launcher inherits these defaults. No sender or endpoint is wired by this alone.
+- Config/bootstrap verification: **22** registry config/OAuth tests and **83**
+  import tests passed; scoped all-target strict Clippy (`--no-deps`), formatting,
+  and diff checks passed. Registry binary build and single-binary launcher check
+  passed. Generated the owning registry TOML/env files with the freshly built
+  binary's two dump flags from `generate-configs`; a second dump matched exactly.
+  Used scoped generation instead of rebuilding missing unrelated service binaries
+  in the full task. A broad launcher all-target check exhausted disk; after
+  removing obsolete test/build artifacts, the production launcher check passed.
+  Oracle found no blockers and bug-finder returned **no bugs found**, clean
+  terminal. Zero challenge bytes remains a literal header budget (rejecting
+  nonempty challenges), not a new configuration-disable switch; the default is
+  unchanged. General transport/projection policy wiring belongs with their
+  resolver/bridge consumers.
+- Remaining step-4 work: policy/internal RPC and
   operator API/CLI wiring, including callback parsing and status; resource-401
   feedback and cache invalidation; provider fixtures and combined validation.
   The coordinator is an intermediate checkpoint, not completion of step 4 or
