@@ -374,6 +374,11 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+
         let dir = blob_path_to_string(path)?;
 
         let key = Key {

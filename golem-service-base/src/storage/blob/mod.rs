@@ -129,7 +129,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
 
-    /// Returns true if the directory was deleted; false if it did not exist
+    /// Deletes the directory at the path and all the entries below it, at any depth.
+    ///
+    /// A root path changes nothing and returns false. A directory that only holds blobs
+    /// exists. Returns true if the path had a directory. Returns false if the path had
+    /// nothing.
     async fn delete_dir(
         &self,
         target_label: &'static str,

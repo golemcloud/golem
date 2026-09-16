@@ -346,6 +346,11 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 

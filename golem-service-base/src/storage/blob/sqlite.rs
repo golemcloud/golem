@@ -304,24 +304,9 @@ impl BlobStorage for SqliteBlobStorage {
         let parent = blob_parent_to_string(path)?;
         let name = blob_file_name_to_string(path)?;
 
-        let exists_query = sqlx::query_as::<_, (i64,)>(
-            "SELECT 1 FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = TRUE LIMIT 1;",
-        )
-        .bind(Self::namespace(namespace.clone()))
-        .bind(parent.clone())
-        .bind(name.clone());
-
-        let exists = self
-            .pool
-            .with_ro(target_label, op_label)
-            .fetch_optional_as(exists_query)
-            .await?
-            .is_some();
-
-        if !exists {
-            return Ok(false);
-        }
-
+        // A directory that only holds blobs has no row of its own, because put_raw writes no
+        // row for the parent. One statement removes the row of the directory and every row
+        // below it, so the number of removed rows tells whether the directory existed.
         let dir_path = if parent.is_empty() {
             name.clone()
         } else {

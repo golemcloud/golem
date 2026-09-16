@@ -923,6 +923,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 

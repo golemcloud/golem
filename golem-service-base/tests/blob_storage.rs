@@ -1393,7 +1393,7 @@ async fn clear_then_list_objects(
 #[test]
 #[tracing::instrument]
 async fn delete_dir_root_path_is_safe_noop(
-    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -1433,6 +1433,52 @@ async fn delete_dir_root_path_is_safe_noop(
         .unwrap();
 
     assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_deletes_a_directory_that_only_holds_blobs(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let blob_path = Path::new("only/blob");
+
+    // No create_dir: the directory `only` exists because a blob is below it.
+    storage
+        .put_raw(
+            "delete_dir_deletes_a_directory_that_only_holds_blobs",
+            "put-blob",
+            namespace.clone(),
+            blob_path,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_deletes_a_directory_that_only_holds_blobs",
+            "delete-dir",
+            namespace.clone(),
+            Path::new("only"),
+        )
+        .await
+        .unwrap();
+
+    assert!(deleted);
+
+    let remaining = storage
+        .get_raw(
+            "delete_dir_deletes_a_directory_that_only_holds_blobs",
+            "get-blob",
+            namespace.clone(),
+            blob_path,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remaining, None);
 }
 
 #[test]
