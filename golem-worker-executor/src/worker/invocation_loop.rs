@@ -454,6 +454,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     );
                                     active_agent.fence_entity_bodies(owner_failure).await;
                                 }
+                                // Cleanup runs independently of this wait. Retain its final result
+                                // so deletion can still join it if the unload deadline expires.
                                 let unloading = unload_sealed_agent_ownership(
                                     SealedAgentOwnership {
                                         runtime: RunningAgentRuntime { instance, store },
@@ -571,6 +573,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     });
                 active_agent.fence_entity_bodies(owner_failure).await;
             }
+            // Tests can shorten the deadline and pause filesystem cleanup to exercise late
+            // completion; without a hook, the normal unload timing is unchanged.
             let hook = Ctx::worker_deletion_hook(&self.parent.extra_deps());
             let deadline = hook.as_ref().map_or(unload_request.deadline, |hook| {
                 hook.unload_deadline(&self.owned_agent_id, unload_request.deadline)
@@ -587,6 +591,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 &self.filesystem_activity,
                 before_delete,
             );
+            // Save final completion before awaiting the bounded result: a timeout below does
+            // not stop cleanup, and a later delete must wait for or retry that same cleanup.
             *self.parent.unload_cleanup.lock().unwrap() = Some(unloading.cleanup.clone());
             if let Some(error) = unloading.await {
                 self.stop_cleanup_failed(error).await;

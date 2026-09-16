@@ -51,7 +51,6 @@ use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1069,119 +1068,89 @@ impl PrimaryOplog {
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<OplogJob>();
         let actor = tokio::spawn(async move {
-            let result = AssertUnwindSafe(async {
-                while let Some(job) = job_rx.recv().await {
-                    match job {
-                        OplogJob::Close => break,
-                        OplogJob::Add { entry, done } => {
-                            record_oplog_call("add");
-                            let idx = state.push(entry);
-                            if state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
-                            }
-                            let _ = done.send(idx);
+            while let Some(job) = job_rx.recv().await {
+                match job {
+                    OplogJob::Close => break,
+                    OplogJob::Add { entry, done } => {
+                        record_oplog_call("add");
+                        let idx = state.push(entry);
+                        if state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
                         }
-                        OplogJob::AddDurableStreamBatch { make_batch, done } => {
-                            record_oplog_call("add_durable_stream_batch");
-                            let first_index = state.last_oplog_idx.next();
-                            let records = make_batch(first_index);
-                            let serialized = records
-                                .into_iter()
-                                .map(|record| record.serialize().map(|bytes| (record, bytes)))
-                                .collect::<Result<Vec<_>, _>>();
-                            let result = serialized.and_then(|serialized| {
-                                let mut prepared = Vec::with_capacity(serialized.len());
-                                for (record, bytes) in serialized {
-                                    let ReservedPayload {
-                                        raw,
-                                        pending: _,
-                                        guard,
-                                    } = state.reserve_raw_payload(bytes);
-                                    prepared.push((record.into_entry(raw)?, guard));
-                                }
-                                let mut result = Vec::with_capacity(prepared.len());
-                                for (entry, guard) in prepared {
-                                    let index = state.push(entry.clone());
-                                    drop(guard);
-                                    result.push((index, entry));
-                                }
-                                Ok(result)
-                            });
-                            if result.is_ok() && state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
-                            }
-                            let _ = done.send(result);
-                        }
-                        OplogJob::AddPair {
-                            start,
-                            make_second,
-                            done,
-                        } => {
-                            record_oplog_call("add_pair");
-                            let first_idx = state.push(start);
-                            let second = make_second(first_idx);
-                            let second_idx = state.push(second);
-                            if state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
-                            }
-                            let _ = done.send((first_idx, second_idx));
-                        }
-                        OplogJob::AddStart {
-                            serialized_request,
-                            build_start,
-                            done,
-                        } => {
-                            record_oplog_call("add_start_with_reserved_raw_payload");
-                            // ORDERING (Start determinism) — CRITICAL SECTION: reserving the payload,
-                            // building the `Start`, and assigning its index happen as one non-yielding
-                            // step here on the actor, so a concurrently enqueued writer cannot
-                            // interleave its own `Start` and reorder the deterministic replay
-                            // sequence. The reservation only *starts* the (possibly large) blob
-                            // upload; it is not awaited here. Durability of the blob before any
-                            // referencing entry is committed is enforced by the commit barrier in
-                            // `append`.
-                            //
-                            // The no-`.await` window is enforced at compile time by the `!Send`
-                            // `guard`: this actor future must stay `Send` for `tokio::spawn`, so a
-                            // refactor holding the guard across an `.await` is rejected rather than
-                            // silently breaking ordering. Do not move `drop(guard)` before `push`.
-                            let result = {
+                        let _ = done.send(idx);
+                    }
+                    OplogJob::AddDurableStreamBatch { make_batch, done } => {
+                        record_oplog_call("add_durable_stream_batch");
+                        let first_index = state.last_oplog_idx.next();
+                        let records = make_batch(first_index);
+                        let serialized = records
+                            .into_iter()
+                            .map(|record| record.serialize().map(|bytes| (record, bytes)))
+                            .collect::<Result<Vec<_>, _>>();
+                        let result = serialized.and_then(|serialized| {
+                            let mut prepared = Vec::with_capacity(serialized.len());
+                            for (record, bytes) in serialized {
                                 let ReservedPayload {
                                     raw,
-                                    pending,
+                                    pending: _,
                                     guard,
-                                } = state.reserve_raw_payload(serialized_request);
-                                match build_start(raw) {
-                                    Ok(entry) => {
-                                        let index = state.push(entry.clone());
-                                        drop(guard);
-                                        Ok(OrderedOplogStart {
-                                            index,
-                                            entry,
-                                            pending_upload: pending,
-                                        })
-                                    }
-                                    Err(err) => Err(err),
-                                }
-                            };
-                            if result.is_ok() && state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
+                                } = state.reserve_raw_payload(bytes);
+                                prepared.push((record.into_entry(raw)?, guard));
                             }
-                            let _ = done.send(result);
+                            let mut result = Vec::with_capacity(prepared.len());
+                            for (entry, guard) in prepared {
+                                let index = state.push(entry.clone());
+                                drop(guard);
+                                result.push((index, entry));
+                            }
+                            Ok(result)
+                        });
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
                         }
-                        OplogJob::AddIndexedStart {
-                            build_request,
-                            done,
-                        } => {
-                            record_oplog_call("add_start_with_indexed_reserved_raw_payload");
-                            let result = build_request(state.last_oplog_idx.next()).and_then(
-                                |(serialized_request, build_start)| {
-                                    let ReservedPayload {
-                                        raw,
-                                        pending,
-                                        guard,
-                                    } = state.reserve_raw_payload(serialized_request);
-                                    let entry = build_start(raw)?;
+                        let _ = done.send(result);
+                    }
+                    OplogJob::AddPair {
+                        start,
+                        make_second,
+                        done,
+                    } => {
+                        record_oplog_call("add_pair");
+                        let first_idx = state.push(start);
+                        let second = make_second(first_idx);
+                        let second_idx = state.push(second);
+                        if state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send((first_idx, second_idx));
+                    }
+                    OplogJob::AddStart {
+                        serialized_request,
+                        build_start,
+                        done,
+                    } => {
+                        record_oplog_call("add_start_with_reserved_raw_payload");
+                        // ORDERING (Start determinism) — CRITICAL SECTION: reserving the payload,
+                        // building the `Start`, and assigning its index happen as one non-yielding
+                        // step here on the actor, so a concurrently enqueued writer cannot
+                        // interleave its own `Start` and reorder the deterministic replay
+                        // sequence. The reservation only *starts* the (possibly large) blob
+                        // upload; it is not awaited here. Durability of the blob before any
+                        // referencing entry is committed is enforced by the commit barrier in
+                        // `append`.
+                        //
+                        // The no-`.await` window is enforced at compile time by the `!Send`
+                        // `guard`: this actor future must stay `Send` for `tokio::spawn`, so a
+                        // refactor holding the guard across an `.await` is rejected rather than
+                        // silently breaking ordering. Do not move `drop(guard)` before `push`.
+                        let result = {
+                            let ReservedPayload {
+                                raw,
+                                pending,
+                                guard,
+                            } = state.reserve_raw_payload(serialized_request);
+                            match build_start(raw) {
+                                Ok(entry) => {
                                     let index = state.push(entry.clone());
                                     drop(guard);
                                     Ok(OrderedOplogStart {
@@ -1189,122 +1158,142 @@ impl PrimaryOplog {
                                         entry,
                                         pending_upload: pending,
                                     })
-                                },
-                            );
-                            if result.is_ok() && state.over_commit_threshold() {
-                                state.commit(CommitLevel::Always).await;
-                            }
-                            let _ = done.send(result);
-                        }
-                        OplogJob::Commit { level, done } => {
-                            let previously_committed_through = state.last_committed_idx;
-                            let committed = state.commit(level).await;
-                            let result = state
-                                .committed_since_last_report(
-                                    previously_committed_through,
-                                    committed,
-                                )
-                                .await;
-                            let _ = done.send(result);
-                        }
-                        OplogJob::Flush { done } => {
-                            state.commit(CommitLevel::Always).await;
-                            let _ = done.send(());
-                        }
-                        OplogJob::DropPrefix {
-                            last_dropped_id,
-                            done,
-                        } => {
-                            let before = state.reader().length().await;
-                            state.drop_prefix(last_dropped_id).await;
-                            let remaining = state.reader().length().await;
-                            if remaining == 0 {
-                                state.delete().await;
-                            }
-                            let dropped = before - remaining;
-                            if dropped > 0 {
-                                let account_id = state.account_id.to_string();
-                                let environment_id =
-                                    state.owned_agent_id.environment_id().to_string();
-                                record_storage_objects_deleted(
-                                    STORAGE_TYPE_OPLOG,
-                                    &account_id,
-                                    &environment_id,
-                                    dropped,
-                                );
-                            }
-                            let _ = done.send(dropped);
-                        }
-                        OplogJob::CurrentIndex { done } => {
-                            let _ = done.send(state.last_oplog_idx);
-                        }
-                        OplogJob::RawDurableStreamSessionStatus { session_key, done } => {
-                            let cached = state
-                                .durable_stream_sessions
-                                .cached(&session_key)
-                                .transpose();
-                            let _ = done.send(RawSessionLookup {
-                                watermark: state.last_oplog_idx,
-                                committed: state.last_committed_idx,
-                                buffer: if cached.is_none() {
-                                    state.buffer.clone()
-                                } else {
-                                    VecDeque::new()
-                                },
-                                cached,
-                            });
-                        }
-                        OplogJob::CompleteRawDurableStreamSessionStatus {
-                            session_key,
-                            expected_watermark,
-                            expected_committed,
-                            status,
-                            done,
-                        } => {
-                            let result = if state.last_oplog_idx == expected_watermark
-                                && state.last_committed_idx == expected_committed
-                            {
-                                if let Ok(value) = &status {
-                                    state
-                                        .durable_stream_sessions
-                                        .insert(session_key, value.clone());
                                 }
-                                Some(super::RawDurableStreamSessionStatus {
-                                    watermark: expected_watermark,
-                                    status,
+                                Err(err) => Err(err),
+                            }
+                        };
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(result);
+                    }
+                    OplogJob::AddIndexedStart {
+                        build_request,
+                        done,
+                    } => {
+                        record_oplog_call("add_start_with_indexed_reserved_raw_payload");
+                        let result = build_request(state.last_oplog_idx.next()).and_then(
+                            |(serialized_request, build_start)| {
+                                let ReservedPayload {
+                                    raw,
+                                    pending,
+                                    guard,
+                                } = state.reserve_raw_payload(serialized_request);
+                                let entry = build_start(raw)?;
+                                let index = state.push(entry.clone());
+                                drop(guard);
+                                Ok(OrderedOplogStart {
+                                    index,
+                                    entry,
+                                    pending_upload: pending,
                                 })
+                            },
+                        );
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(result);
+                    }
+                    OplogJob::Commit { level, done } => {
+                        let previously_committed_through = state.last_committed_idx;
+                        let committed = state.commit(level).await;
+                        let result = state
+                            .committed_since_last_report(previously_committed_through, committed)
+                            .await;
+                        let _ = done.send(result);
+                    }
+                    OplogJob::Flush { done } => {
+                        state.commit(CommitLevel::Always).await;
+                        let _ = done.send(());
+                    }
+                    OplogJob::DropPrefix {
+                        last_dropped_id,
+                        done,
+                    } => {
+                        let before = state.reader().length().await;
+                        state.drop_prefix(last_dropped_id).await;
+                        let remaining = state.reader().length().await;
+                        if remaining == 0 {
+                            state.delete().await;
+                        }
+                        let dropped = before - remaining;
+                        if dropped > 0 {
+                            let account_id = state.account_id.to_string();
+                            let environment_id = state.owned_agent_id.environment_id().to_string();
+                            record_storage_objects_deleted(
+                                STORAGE_TYPE_OPLOG,
+                                &account_id,
+                                &environment_id,
+                                dropped,
+                            );
+                        }
+                        let _ = done.send(dropped);
+                    }
+                    OplogJob::CurrentIndex { done } => {
+                        let _ = done.send(state.last_oplog_idx);
+                    }
+                    OplogJob::RawDurableStreamSessionStatus { session_key, done } => {
+                        let cached = state
+                            .durable_stream_sessions
+                            .cached(&session_key)
+                            .transpose();
+                        let _ = done.send(RawSessionLookup {
+                            watermark: state.last_oplog_idx,
+                            committed: state.last_committed_idx,
+                            buffer: if cached.is_none() {
+                                state.buffer.clone()
                             } else {
-                                None
-                            };
-                            let _ = done.send(result);
-                        }
-                        OplogJob::LastAddedNonHintEntry { done } => {
-                            let _ = done.send(state.last_added_non_hint_entry);
-                        }
-                        OplogJob::Reader { done } => {
-                            let _ = done.send(state.reader());
-                        }
-                        OplogJob::BlobContext { done } => {
-                            let _ = done.send(OplogBlobContext {
-                                blob_storage: state.blob_storage.clone(),
-                                owned_agent_id: state.owned_agent_id.clone(),
-                                agent_mode: state.agent_mode,
-                                account_id: state.account_id,
-                                max_payload_size: state.max_payload_size,
-                            });
-                        }
+                                VecDeque::new()
+                            },
+                            cached,
+                        });
+                    }
+                    OplogJob::CompleteRawDurableStreamSessionStatus {
+                        session_key,
+                        expected_watermark,
+                        expected_committed,
+                        status,
+                        done,
+                    } => {
+                        let result = if state.last_oplog_idx == expected_watermark
+                            && state.last_committed_idx == expected_committed
+                        {
+                            if let Ok(value) = &status {
+                                state
+                                    .durable_stream_sessions
+                                    .insert(session_key, value.clone());
+                            }
+                            Some(super::RawDurableStreamSessionStatus {
+                                watermark: expected_watermark,
+                                status,
+                            })
+                        } else {
+                            None
+                        };
+                        let _ = done.send(result);
+                    }
+                    OplogJob::LastAddedNonHintEntry { done } => {
+                        let _ = done.send(state.last_added_non_hint_entry);
+                    }
+                    OplogJob::Reader { done } => {
+                        let _ = done.send(state.reader());
+                    }
+                    OplogJob::BlobContext { done } => {
+                        let _ = done.send(OplogBlobContext {
+                            blob_storage: state.blob_storage.clone(),
+                            owned_agent_id: state.owned_agent_id.clone(),
+                            agent_mode: state.agent_mode,
+                            account_id: state.account_id,
+                            max_payload_size: state.max_payload_size,
+                        });
                     }
                 }
-            })
-            .catch_unwind()
-            .await;
+            }
             let mut upload_result = Ok(());
             for upload in state.pending_uploads {
                 upload_result = upload_result.and(upload.wait().await);
             }
-            result
-                .map_err(|_| "Primary oplog actor panicked".to_string())
-                .and(upload_result)
+            upload_result
         });
 
         Self {
