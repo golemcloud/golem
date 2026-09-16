@@ -223,6 +223,7 @@ where
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }

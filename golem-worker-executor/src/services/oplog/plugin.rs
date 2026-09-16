@@ -346,6 +346,14 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     updates: Vec::new(),
                     created_at: Some(worker_metadata.created_at.into()),
                     last_error: None,
+                    last_error_kind: latest_status.last_error_kind.map(|kind| match kind {
+                        golem_common::model::oplog::OplogErrorKind::Invocation => {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation as i32
+                        }
+                        golem_common::model::oplog::OplogErrorKind::Recovery => {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                        }
+                    }),
                     component_size: latest_status.component_size,
                     total_linear_memory_size: latest_status.total_linear_memory_size,
                     owned_resources: Vec::new(),

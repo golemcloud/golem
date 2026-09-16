@@ -405,6 +405,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let entity_retry_error = oplog
         .add(OplogEntry::error(
             Some(tool_start),
+            golem_common::model::oplog::OplogErrorKind::Invocation,
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             false,

@@ -64,7 +64,7 @@ impl BuiltinPluginDescriptor {
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.0",
+    version: "1.5.1",
     description: "Built-in OTLP exporter oplog processor plugin",
     wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];

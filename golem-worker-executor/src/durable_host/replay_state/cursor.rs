@@ -3049,6 +3049,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::Suspend { .. }
+        | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
@@ -3139,6 +3140,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
+        | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
