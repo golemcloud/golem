@@ -38,6 +38,8 @@ phantom operations; ephemeral factories expose `getPhantom` for known IDs and `n
 fresh logical clients, but no ordinary `get`. Reflected invocation results include host metadata
 and a `value` except for unit-returning methods, which omit it.
 
+Pass optional creation-time overrides as a second argument to reflected factories. Use `{ path, value }` entries containing canonical JSON with `get`, `getPhantom`, or `newPhantom`; use the `*Value` factory variants for schema-native values. For an existing identity, use `target.bindWithJsonConfig(identity, entries)` or `target.bindWithConfig(identity, nativeEntries)`. A complete caller-owned contract exposes `bindWithConfig(identity, { overrides })`; a method-only contract exposes `bindWithEntries(identity, nativeEntries)`. These operations remain Effects and require a scope. Known declarations reject unknown paths, secret fields, and invalid values before opening RPC. An existing durable worker retains its initial configuration even if overrides are passed while binding.
+
 Use `defineAgentClient({ name, id, methods, mode?, config? })` for a complete caller-only contract.
 Its `agentId(input)` creates a parsed identity, and `identity.client(contract)` checks the exact
 name and constructor schema locally before opening RPC. A method-only

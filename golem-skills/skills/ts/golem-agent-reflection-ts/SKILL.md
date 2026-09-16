@@ -69,6 +69,17 @@ console.log(invocation.metadata.agentId);
 console.log(invocation.metadata.idempotencyKey);
 ```
 
+Pass optional creation-time overrides as a second factory argument, with one canonical JSON value per declared path:
+
+```typescript
+const configured = counterType.client.get(
+  { name: 'other' },
+  [{ path: ['threshold'], value: 10 }],
+);
+```
+
+The reflected factory rejects unknown paths, secret fields, and invalid values locally. Required local fields may already have component defaults. The host validates the effective configuration when it creates the worker and supplies secrets. An existing durable worker keeps its original configuration, even if a caller binds its ID with overrides.
+
 `invoke` and `invokeJson` return `{ value, metadata }`. `trigger` and `schedule`
 also return identity metadata. Client creation and invocation failures are
 reported as structured `RemoteCallError` values; use `isRemoteCallError` to
@@ -97,6 +108,8 @@ const result = await client.ping();
 A binding-only contract contains only `methods`; it cannot declare `name`,
 `id`, `config`, or `mode`. It performs no discovery and uses durable result
 semantics.
+
+Binding-only callers can pass raw typed configuration entries as the second argument to `existingAgentId.client(PingContract, entries)`. They must supply schema-native values and cannot validate those entries against declarations locally.
 
 ## Construct an Agent ID with Caller-Owned Schemas
 

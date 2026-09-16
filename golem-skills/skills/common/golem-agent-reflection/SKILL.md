@@ -14,8 +14,12 @@ Use the narrowest client surface that matches what the caller knows:
 
 Agent identity strings are environment-scoped. Reflection identities do not include a component ID: the runtime resolves the agent type's implementing component within the caller's environment. Component-bearing IDs belong to lower-level host-management APIs, not reflection clients.
 
+Constructor identity values contain only caller-supplied fields. The host injects principal fields separately, so a principal-scoped agent can be reconstructed from an identity returned by invocation metadata. A known ephemeral phantom can be constructed once; use the invocation metadata for its final identity. A final ephemeral identity cannot be bound for another call.
+
 Discovery lookups are optional: a name or identity lookup returns no type when the deployment is missing, the identity is malformed, or the caller cannot view it. Parsing an identity is strict and reports malformed input. Identity discovery never creates the target agent.
 
 Reflected schema graphs are immutable snapshots of the deployed contract. Validate or pack JSON through the reflected constructor or method schema, and treat a missing or malformed declared output as a remote output error.
+
+Creation-time configuration overrides are optional because component defaults may satisfy required local declarations. Reflected and complete caller-owned contracts validate known declaration paths, values, and secret restrictions locally before opening RPC. Binding-only contracts may carry raw typed entries without claiming declaration-aware validation. The host validates effective configuration when creating the worker and provisions secrets itself. An existing durable worker keeps its persisted initial configuration; supplying overrides when binding its ID does not reconfigure it.
 
 Load the language-specific reflection skill for concrete SDK APIs and examples.
