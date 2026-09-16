@@ -1330,13 +1330,37 @@ impl ComponentCommandHandler {
                     agent_bindings.insert(agent_name.clone(), binding);
                 }
             }
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(ambient.name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    &ambient.name,
+                    &ambient.definition,
+                    &ambient.owner_account_email,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    component_bindings.insert(component_name.clone(), binding);
+                }
+            }
             diffable_remote_tool_deployments.insert(
                 ambient.name.to_string(),
                 ambient
                     .to_diffable(
                         agent_components.keys().cloned(),
                         &agent_bindings,
-                        components.keys().cloned(),
+                        &component_bindings,
                     )
                     .into(),
             );
@@ -1350,7 +1374,7 @@ impl ComponentCommandHandler {
                     provision: ambient.provision.clone(),
                     environment_binding: Some(ambient.environment_binding.clone()),
                     agent_bindings,
-                    component_bindings: BTreeMap::new(),
+                    component_bindings,
                 },
             );
         }

@@ -97,7 +97,7 @@ impl DeploymentPlanAmbientToolEntry {
         &self,
         agent_types: impl IntoIterator<Item = AgentTypeName>,
         overrides: &BTreeMap<AgentTypeName, ToolBindingInput>,
-        component_names: impl IntoIterator<Item = ComponentName>,
+        component_overrides: &BTreeMap<ComponentName, ToolBindingInput>,
     ) -> diff::RemoteToolDeployment {
         let bindings = agent_types
             .into_iter()
@@ -108,13 +108,11 @@ impl DeploymentPlanAmbientToolEntry {
                     .map(|(binding, _)| (agent, binding))
             })
             .collect();
-        let component_bindings = component_names
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter_map(|component| {
-                diff::effective_tool_binding(Some(&self.environment_binding), None)
-                    .map(|(binding, _)| (component.0, binding))
+        let component_bindings = component_overrides
+            .iter()
+            .filter_map(|(component, binding)| {
+                diff::effective_tool_binding(Some(&self.environment_binding), Some(binding))
+                    .map(|(binding, _)| (component.0.clone(), binding))
             })
             .collect();
         diff::RemoteToolDeployment {
