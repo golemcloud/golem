@@ -1499,6 +1499,12 @@ mod tests {
             role: StreamMappingRole::Input as i32,
         };
 
+        let origin = StreamInvocationIdentity {
+            callee_environment_id: Some(caller_environment.into()),
+            callee: Some(caller.clone().into()),
+            callee_fingerprint: Some(caller_fingerprint.0.into()),
+            idempotency_key: Some(IdempotencyKey::new("origin-invocation".into()).into()),
+        };
         let result = rpc
             .invoke_and_await_streaming(
                 &OwnedAgentId::new(EnvironmentId::new(), &callee),
@@ -1508,6 +1514,8 @@ mod tests {
                 vec![input_mapping],
                 AgentFingerprint::new(),
                 uuid::Uuid::new_v4(),
+                origin.clone(),
+                tokio::sync::oneshot::channel().0,
                 AccountId::new(),
                 &caller,
                 &[],
@@ -1526,5 +1534,6 @@ mod tests {
         let starts = streaming_starts.lock().unwrap();
         assert_eq!(starts.len(), 2);
         assert_eq!(starts[0], starts[1]);
+        assert_eq!(starts[0].origin_invocation, Some(origin));
     }
 }

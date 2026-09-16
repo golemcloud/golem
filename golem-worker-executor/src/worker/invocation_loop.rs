@@ -259,7 +259,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.stop_unloaded(None).await;
                 break;
             }
-            self.acquire_concurrent_agent_permit().await;
+            let retiring = self.parent.owner_retirement_requested.clone();
+            tokio::select! {
+                biased;
+                () = retiring.cancelled() => {
+                    debug!(%agent_id, "Worker generation not started because its owner is retiring");
+                    self.release_concurrent_agent_permit();
+                    self.stop_unloaded(None).await;
+                    break;
+                }
+                () = self.acquire_concurrent_agent_permit() => {}
+            }
             let permit = self
                 .permit_state
                 .take_permit()

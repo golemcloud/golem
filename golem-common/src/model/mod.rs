@@ -1258,6 +1258,24 @@ impl DurableStreamSessionStatus {
     ) {
         use crate::model::durable_stream::StreamSessionRecordV1;
 
+        if let StreamSessionRecordV1::ForkCut(cut) = record {
+            let Some(mapping) = cut
+                .sessions
+                .iter()
+                .find(|mapping| self.session_key.as_ref() == Some(&mapping.source))
+            else {
+                return;
+            };
+            if self.prepared.is_none() || self.lifecycle_error.is_some() {
+                return;
+            }
+            self.session_key = Some(mapping.continuation.clone());
+            self.attachment_epoch = Some(cut.epoch_floor);
+            self.attachment_attempt_id = Some(mapping.continuation_attempt_id);
+            self.attachment_attached = Some(false);
+            return;
+        }
+
         let record_key = match record {
             StreamSessionRecordV1::Prepared(v) => Some(&v.attempt.session_key),
             StreamSessionRecordV1::Attached(v) => Some(&v.session_key),
@@ -1442,6 +1460,16 @@ impl DurableStreamSessionIndex {
         record: &crate::model::durable_stream::StreamSessionRecordV1,
     ) {
         use crate::model::durable_stream::StreamSessionRecordV1;
+
+        if let StreamSessionRecordV1::ForkCut(cut) = record {
+            for mapping in &cut.sessions {
+                if let Some(mut status) = self.get(&mapping.source.idempotency_key).cloned() {
+                    status.apply_record(index, record);
+                    self.insert(mapping.continuation.idempotency_key.clone(), status);
+                }
+            }
+            return;
+        }
 
         let key = match record {
             StreamSessionRecordV1::Prepared(v) => &v.attempt.session_key.idempotency_key,

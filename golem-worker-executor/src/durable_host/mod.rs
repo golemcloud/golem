@@ -2381,6 +2381,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.finish_switch_to_live(pending).await?.require_live()
     }
 
+    async fn replay_span_entry(&mut self) -> Result<Option<OplogEntry>, WorkerExecutorError> {
+        while !self.is_live() {
+            if let Some((_, entry)) = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|_| true)
+                .await?
+            {
+                return Ok(Some(entry));
+            }
+            if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
+                || (self.runtime != OwnerRuntime::Agent
+                    && self.state.entity_execution_mode
+                        != Some(InvocationExecutionMode::ReplayingIncomplete))
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "recorded span operation",
+                    "replay ended in a context that cannot continue live",
+                ));
+            }
+            // A cut may retain an RPC Start or End without its following span operation.
+            // Only an exhausted cursor can reach here; mismatched records remain errors.
+            let pending = match self.begin_switch_to_live().await? {
+                BeginReplayToLive::ReplayResumed => continue,
+                BeginReplayToLive::Pending(pending) => pending,
+            };
+            self.finish_switch_to_live(pending).await?.require_live()?;
+        }
+        Ok(None)
+    }
+
     fn cleanup_custom_durability_state(&mut self) {
         let resources: Vec<_> = self
             .state
@@ -5286,9 +5317,10 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
+        let recorded = self.replay_span_entry().await?;
         let current_span_id = &self.state.current_span_id;
 
-        let is_live = self.is_live();
+        let is_live = recorded.is_none();
 
         let span = if is_live {
             self.state
@@ -5296,9 +5328,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else {
-            let (_, entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
-
+            let entry = recorded.expect("replayed span entry");
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
                     timestamp, span_id, ..
@@ -5387,7 +5417,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if let Some(entry) = self.replay_span_entry().await? {
+            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "FinishSpan",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(
@@ -5395,8 +5432,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {
@@ -5424,11 +5459,19 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         key: &str,
         value: AttributeValue,
     ) -> Result<(), WorkerExecutorError> {
+        let recorded = self.replay_span_entry().await?;
         self.state
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() {
+        if let Some(entry) = recorded {
+            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "SetSpanAttribute",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
@@ -5438,8 +5481,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     value,
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
     }
@@ -11121,17 +11162,6 @@ macro_rules! get_oplog_entry {
     };
     ($replay_state:expr, $($cases:path),+) => {
         $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
-    };
-}
-
-/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
-/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
-/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
-/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
-#[macro_export]
-macro_rules! get_oplog_entry_owned {
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
     };
 }
 

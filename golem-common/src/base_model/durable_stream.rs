@@ -14,6 +14,7 @@
 
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
@@ -1100,6 +1101,72 @@ pub struct StreamCallerAttemptRecordV1 {
     pub attempt_id: AttemptId,
 }
 
+/// Durable provenance for a copied prefix. Historical identities remain evidence; only the
+/// continuation identities grant authority over the fork's live streams.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamForkCutRecordV1 {
+    pub format_version: u8,
+    /// Hash of the creation request, including the requested source generation and cut.
+    /// That source may differ from the historical prefix author below.
+    pub request_hash: Vec<u8>,
+    pub export: Option<StreamExportForkV1>,
+    pub source_environment_id: EnvironmentId,
+    pub source: AgentId,
+    pub source_fingerprint: AgentFingerprint,
+    pub target_environment_id: EnvironmentId,
+    pub target: AgentId,
+    pub target_fingerprint: AgentFingerprint,
+    pub cut_index: OplogIndex,
+    /// Present only for a self-revert marker. The marker follows the physical `Revert` entry
+    /// immediately after this deleted region.
+    pub revert: Option<OplogRegion>,
+    /// Minimum epoch for attachments issued by the continuation. A self-revert advances
+    /// beyond epochs issued in the discarded history; a new agent starts at one.
+    pub epoch_floor: u64,
+    pub selected_stream_id: Option<StreamId>,
+    pub retained_through: Option<StreamOffsetV1>,
+    pub streams: Vec<StreamForkStreamMappingV1>,
+    pub sessions: Vec<StreamForkSessionMappingV1>,
+}
+
+/// Immutable public creation configuration, distinct from the resolved physical cut.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct StreamExportForkV1 {
+    pub source: AgentId,
+    pub source_environment_id: EnvironmentId,
+    pub source_fingerprint: AgentFingerprint,
+    pub source_path: String,
+    pub session: String,
+    pub slot: String,
+    pub expected_method: String,
+    pub requested_offset: Option<StreamOffsetV1>,
+    pub anchor: Option<StreamOffsetV1>,
+    pub sub_offset: u64,
+    pub content_type: String,
+    pub initial_content_hash: Vec<u8>,
+    pub closed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamForkStreamMappingV1 {
+    pub source: DurableStreamHandleV1,
+    pub continuation: DurableStreamHandleV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamForkSessionMappingV1 {
+    pub source: StreamSessionKeyV1,
+    pub continuation: StreamSessionKeyV1,
+    pub continuation_attempt_id: AttemptId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamSessionRecordV1 {
@@ -1129,6 +1196,7 @@ pub enum StreamSessionRecordV1 {
     Finished(StreamSessionFinishedRecordV1),
     Tombstoned(StreamSlotTombstonedRecordV1),
     CancelRequested(StreamSessionCancelRequestedRecordV1),
+    ForkCut(StreamForkCutRecordV1),
 }
 
 impl StreamSessionRecordV1 {
@@ -1160,6 +1228,7 @@ impl StreamSessionRecordV1 {
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
             Self::CancelRequested(record) => record.format_version,
+            Self::ForkCut(record) => record.format_version,
         }
     }
 
@@ -1389,6 +1458,42 @@ impl StreamSessionRecordV1 {
             Self::Finished(_) => true,
             Self::Tombstoned(record) => !record.slot.is_empty(),
             Self::CancelRequested(_) => true,
+            Self::ForkCut(record) => {
+                let valid_revert = record.revert.as_ref().is_none_or(|region| {
+                    record.cut_index.as_u64().checked_add(1) == Some(region.start.as_u64())
+                        && region.start <= region.end
+                        && record.selected_stream_id.is_none()
+                        && record.retained_through.is_none()
+                });
+                !record.source_fingerprint.0.is_nil()
+                    && !record.target_fingerprint.0.is_nil()
+                    && record.request_hash.len() == 32
+                    && record.epoch_floor > 0
+                    && record.source_environment_id == record.target_environment_id
+                    && record.source.component_id == record.target.component_id
+                    && record.cut_index > OplogIndex::NONE
+                    && valid_revert
+                    && record.selected_stream_id.is_none_or(|id| {
+                        record
+                            .streams
+                            .iter()
+                            .any(|mapping| mapping.source.stream_id == id)
+                    })
+                    && record.retained_through.is_none_or(|offset| {
+                        record.selected_stream_id.is_some()
+                            && StreamOffsetV1::from_bytes(offset.0).is_ok()
+                            && offset.producer_oplog_index() > OplogIndex::NONE
+                            && offset.producer_oplog_index() <= record.cut_index
+                    })
+                    && record.streams.iter().all(|mapping| {
+                        supported_handle(&mapping.source) && supported_handle(&mapping.continuation)
+                    })
+                    && record.sessions.iter().all(|mapping| {
+                        !mapping.continuation_attempt_id.0.is_nil()
+                            && mapping.continuation_attempt_id.0.get_version()
+                                == Some(uuid::Version::Random)
+                    })
+            }
         }
     }
 }

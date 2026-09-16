@@ -1572,6 +1572,521 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
     Ok(())
 }
 
+#[test]
+#[timeout("120s")]
+async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    for (synchronous, cut_after_end) in [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let name = format!("fork-rpc-{synchronous}-{cut_after_end}");
+        let caller = agent_id!("StreamingRpcCaller", name.clone());
+        let provider = agent_id!("StreamingRpcTarget", name.clone());
+        let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+        let provider_id = executor
+            .start_agent(&component.id, provider.clone())
+            .await?;
+        let key = IdempotencyKey::fresh();
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &caller,
+                    &key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1]
+        );
+        let history = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+        let (start_index, request) = history
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+                {
+                    Some((
+                        entry.oplog_index,
+                        HostRequestGolemRpcInvoke::from_value(
+                            start.request.as_ref().unwrap().value(),
+                        )
+                        .unwrap(),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("streaming RPC Start");
+        let cut = if cut_after_end {
+            history
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) if end.start_index == start_index => {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .expect("streaming RPC End")
+        } else {
+            start_index
+        };
+        let fork =
+            golem_common::phantom_agent_id!("StreamingRpcCaller", uuid::Uuid::new_v4(), name);
+        executor
+            .fork_worker(&caller_id, &fork.to_string(), cut)
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &fork,
+                    &key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1],
+            "the fork must join the original provider invocation"
+        );
+        executor
+            .revert(
+                &caller_id,
+                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_common::model::worker::RevertToOplogIndex {
+                        last_oplog_index: cut,
+                    },
+                ),
+            )
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &caller,
+                    &key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1],
+            "the reverted caller must join the same provider invocation"
+        );
+        drop(executor);
+        executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+        for agent in [&caller, &fork] {
+            executor
+                .invoke_and_await_agent(&component, agent, "create_input_gate", data_value!())
+                .await?;
+            assert_eq!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        agent,
+                        &key,
+                        "streaming_increment",
+                        data_value!(synchronous),
+                    )
+                    .await?
+                    .into_typed::<Vec<u64>>()?,
+                vec![1]
+            );
+        }
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &provider, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            1,
+        );
+        let provider_history = executor
+            .get_oplog(&provider_id, OplogIndex::INITIAL)
+            .await?;
+        let executions = provider_history
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "increment_stream_input"
+                            || method.method_name == "increment_stream" =>
+                    {
+                        Some(method.idempotency_key.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(executions, vec![request.idempotency_key]);
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &provider, "increment_scalar", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            2,
+        );
+        let fork_id = AgentId::from_agent_id(component.id, &fork).map_err(anyhow::Error::msg)?;
+        for agent in [&caller_id, &fork_id, &provider_id] {
+            let history = executor.get_oplog(agent, OplogIndex::INITIAL).await?;
+            let errors = history
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .collect::<Vec<_>>();
+            assert!(
+                errors.is_empty(),
+                "reconstruction must succeed without trap retries: {agent}: {errors:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn fork_completed_stream_reconstructs_state_without_repeating_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let source = agent_id!("StreamingRpcTarget", "fork-completed-stream");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    let metadata = executor.get_worker_metadata(&source_id).await?;
+    let (_, input) = data_value!().into_parts();
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(source_id.clone().into()),
+            method_name: Some("increment_stream".into()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (frames, receiver) = mpsc::channel(1);
+    frames.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let mut items = Vec::new();
+    let mut ends = 0;
+    let mut finished = false;
+    while let Some(response) = responses.message().await? {
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::OutputItem(item)) => {
+                items.push(
+                    SchemaValue::try_from(item.value.expect("output value"))
+                        .map_err(anyhow::Error::msg)?,
+                );
+            }
+            Some(invocation_response::Response::OutputEnd(_)) => ends += 1,
+            Some(invocation_response::Response::Finished(completion)) => {
+                assert!(matches!(
+                    completion.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ));
+                finished = true;
+            }
+            Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Result(_)) => {}
+            other => anyhow::bail!("unexpected output response: {other:?}"),
+        }
+    }
+    assert_eq!(items, vec![SchemaValue::U64(1)]);
+    assert_eq!(ends, 1);
+    assert!(finished && state.is_complete());
+    drop(frames);
+    drop(responses);
+    let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
+    let cut = prefix.last().unwrap().oplog_index;
+    let target = golem_common::phantom_agent_id!(
+        "StreamingRpcTarget",
+        uuid::Uuid::new_v4(),
+        "fork-completed-stream"
+    );
+    let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    let scalar = executor
+        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(scalar, 2);
+    executor
+        .revert(
+            &target_id,
+            golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                golem_common::model::worker::RevertToOplogIndex {
+                    last_oplog_index: cut,
+                },
+            ),
+        )
+        .await?;
+    let scalar_after_revert = executor
+        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(scalar_after_revert, 2);
+    // The fork's copied output and guest state must no longer depend on the source oplog.
+    executor.delete_worker(&source_id).await?;
+    drop(executor);
+    let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    let scalar = executor
+        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(scalar, 3);
+    let history = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+    let output_records = history
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::StreamItems(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(output_records.len(), 1);
+    assert!(output_records[0].oplog_index <= cut);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connections(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent = agent_id!("StreamingRpcTarget", "revert-stream-acceptance");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    wait_for_agent_initialization(&executor, &worker_id).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let cut = metadata.last_oplog_index;
+    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+        value: Some(schema_value::Value::RecordValue(RecordValue {
+            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::StreamReference(
+                    SchemaValueStreamReference { stream_id: 1 },
+                )),
+            }],
+        })),
+    };
+    let request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            method_name: Some("consume".into()),
+            input: Some(input),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut old_connections = Vec::new();
+    for queued in [false, true] {
+        let mut request = request.clone();
+        if queued && let Some(invocation_request::Request::Start(start)) = &mut request.request {
+            start.idempotency_key = Some(IdempotencyKey::fresh().into());
+        }
+        let (frames, receiver) = mpsc::channel(8);
+        frames.send(request).await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let response = responses.message().await?.expect("acceptance response");
+        let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
+            anyhow::bail!("expected acceptance: {response:?}");
+        };
+        assert_eq!(accepted.epoch, 1);
+        let stream = accepted.stream_mappings[0]
+            .handle
+            .as_ref()
+            .unwrap()
+            .stream_id;
+        frames
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                    transport_stream_id: 1,
+                    sequence: 0,
+                    durable_stream_id: stream,
+                    epoch: accepted.epoch,
+                    payload: Some(input_stream_item::Payload::Value(
+                        SchemaValue::U32(13)
+                            .try_into()
+                            .map_err(anyhow::Error::msg)?,
+                    )),
+                })),
+            })
+            .await?;
+        assert!(matches!(
+            responses.message().await?.unwrap().response,
+            Some(invocation_response::Response::InputAck(_))
+        ));
+        old_connections.push((frames, responses, stream));
+    }
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: cut,
+            }),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .get_worker_metadata(&worker_id)
+            .await?
+            .pending_invocation_count,
+        0
+    );
+    for (frames, _, stream) in &old_connections {
+        let _ = frames
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                    transport_stream_id: 1,
+                    sequence: 1,
+                    durable_stream_id: *stream,
+                    epoch: 1,
+                    payload: Some(input_stream_item::Payload::Value(
+                        SchemaValue::U32(71)
+                            .try_into()
+                            .map_err(anyhow::Error::msg)?,
+                    )),
+                })),
+            })
+            .await;
+    }
+    drop(old_connections);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&request)
+        .map_err(anyhow::Error::msg)?;
+    let (frames, receiver) = mpsc::channel(8);
+    frames.send(request).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let response = responses.message().await?.expect("reacceptance response");
+    state
+        .validate_response(&response)
+        .map_err(anyhow::Error::msg)?;
+    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
+        anyhow::bail!("expected reacceptance: {response:?}");
+    };
+    assert_eq!(accepted.epoch, 2);
+    let stream = accepted.stream_mappings[0]
+        .handle
+        .as_ref()
+        .unwrap()
+        .stream_id;
+    let item = InvocationRequest {
+        request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: 1,
+            sequence: 0,
+            durable_stream_id: stream,
+            epoch: accepted.epoch,
+            payload: Some(input_stream_item::Payload::Value(
+                SchemaValue::U32(29)
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            )),
+        })),
+    };
+    state
+        .validate_trusted_request(&item)
+        .map_err(anyhow::Error::msg)?;
+    frames.send(item).await?;
+    let end = InvocationRequest {
+        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            transport_stream_id: 1,
+            sequence: 1,
+            durable_stream_id: stream,
+            epoch: accepted.epoch,
+        })),
+    };
+    state
+        .validate_trusted_request(&end)
+        .map_err(anyhow::Error::msg)?;
+    frames.send(end).await?;
+    let mut result = None;
+    while !state.is_complete() {
+        let response = responses.message().await?.expect("session completion");
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::InputAck(_)) => {}
+            Some(invocation_response::Response::Result(value)) => {
+                let Some(invocation_session_result::Result::MethodResult(value)) = value.result
+                else {
+                    anyhow::bail!("missing method result")
+                };
+                result = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+            }
+            Some(invocation_response::Response::Finished(completion)) => assert!(matches!(
+                completion.outcome,
+                Some(invocation_session_completion::Outcome::Success(_))
+            )),
+            other => anyhow::bail!("unexpected response: {other:?}"),
+        }
+    }
+    assert_eq!(
+        result,
+        Some(SchemaValue::List {
+            elements: vec![SchemaValue::U32(29)]
+        })
+    );
+    Ok(())
+}
+
 async fn invoke_agent_session(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
@@ -1641,6 +2156,7 @@ async fn open_invocation_session(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
         })),
     };
     let mut state = InvocationSessionState::default();

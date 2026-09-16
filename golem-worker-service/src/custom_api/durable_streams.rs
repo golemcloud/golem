@@ -17,7 +17,8 @@ use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     DurableStreamAttachmentControlRequest, ExportStreamControl, ExportStreamControlResult,
-    ReadStreamSlotRequest, ReadStreamSlotSuccess, stream_slot_item,
+    ForkStreamSlotRequest, ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    fork_stream_slot_rejection, fork_stream_slot_response, stream_slot_item,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
@@ -46,6 +47,7 @@ pub struct DurableStreamsHandler {
     limiter: DurableStreamLoadLimiter,
     long_poll_timeout: Duration,
     max_append_body_bytes: usize,
+    forks: crate::config::DurableStreamsForksConfig,
 }
 
 impl DurableStreamsHandler {
@@ -60,6 +62,7 @@ impl DurableStreamsHandler {
             limiter: DurableStreamLoadLimiter::new(config.load.clone()),
             long_poll_timeout: config.long_poll_timeout,
             max_append_body_bytes: config.max_append_body_bytes,
+            forks: config.forks.clone(),
         }
     }
 
@@ -69,9 +72,10 @@ impl DurableStreamsHandler {
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let mut suffix = classify(
+        let mut suffix = classify_route(
             behaviour.base_path_variables,
             &route.captured_path_parameters,
+            &route.route.path,
         );
         if suffix.reserved {
             return Ok(response(StatusCode::NOT_FOUND));
@@ -79,8 +83,16 @@ impl DurableStreamsHandler {
         if has_header(request, "stream-ttl") || has_header(request, "stream-expires-at") {
             return Ok(response(StatusCode::BAD_REQUEST));
         }
-        if has_header(request, "stream-forked-from") {
-            return Ok(response(StatusCode::NOT_IMPLEMENTED));
+        if suffix.fork.is_none()
+            && [
+                "stream-forked-from",
+                "stream-fork-offset",
+                "stream-fork-sub-offset",
+            ]
+            .iter()
+            .any(|name| has_header(request, name))
+        {
+            return Ok(response(StatusCode::BAD_REQUEST));
         }
 
         let generated_session =
@@ -95,7 +107,14 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let phantom = behaviour.phantom.then(|| {
+        if suffix
+            .fork
+            .as_deref()
+            .is_some_and(|fork| validate_durable_stream_session_id(fork).is_err())
+        {
+            return Ok(response(StatusCode::NOT_FOUND));
+        }
+        let root_phantom = behaviour.phantom.then(|| {
             let session = suffix.session.as_deref().unwrap_or_default();
             if behaviour.agent_mode == golem_common::model::agent::AgentMode::Ephemeral {
                 golem_common::model::agent::ephemeral_invocation_phantom_id(&IdempotencyKey::new(
@@ -105,11 +124,42 @@ impl DurableStreamsHandler {
                 stable_phantom(session)
             }
         });
-        let agent_id = self.call_agent.build_agent_id(route, behaviour, phantom)?;
+        let root_agent_id = self
+            .call_agent
+            .build_agent_id(route, behaviour, root_phantom)?;
+        let agent_id = match suffix.fork.as_deref() {
+            Some(fork) => self.call_agent.build_agent_id(
+                route,
+                behaviour,
+                Some(fork_phantom_id(&root_agent_id, fork)),
+            )?,
+            None => root_agent_id.clone(),
+        };
         match (request.underlying.method(), suffix.session, suffix.slot) {
+            (&Method::PUT, Some(session), Some(slot)) if suffix.fork.is_some() => {
+                self.fork(
+                    request,
+                    route,
+                    behaviour,
+                    &root_agent_id,
+                    &agent_id,
+                    suffix.fork.as_deref().unwrap(),
+                    &session,
+                    &slot,
+                )
+                .await
+            }
             (&Method::POST, Some(session), Some(slot)) => {
-                self.append(request, route, behaviour, &agent_id, &session, &slot)
-                    .await
+                self.append(
+                    request,
+                    route,
+                    behaviour,
+                    &agent_id,
+                    &session,
+                    &slot,
+                    suffix.fork.is_none(),
+                )
+                .await
             }
             (&Method::POST, _, _) => Ok(append::read_only_response()),
             (&Method::DELETE, Some(session), slot) => {
@@ -160,6 +210,9 @@ impl DurableStreamsHandler {
                 Ok(result)
             }
             (&Method::PUT, Some(session), slot) => {
+                if suffix.fork.is_some() {
+                    return Ok(response(StatusCode::METHOD_NOT_ALLOWED));
+                }
                 if validate_durable_stream_session_id(&session).is_err() {
                     return Ok(response(StatusCode::NOT_FOUND));
                 }
@@ -259,8 +312,19 @@ impl DurableStreamsHandler {
                     closed &= metadata.closed || metadata.tombstoned;
                     streams.push(serde_json::json!({"name":slot,"contentType":metadata.content_type,"nextOffset":offset_text(&metadata.head_offset)?,"closed":metadata.closed,"cancelled":metadata.cancelled,"deleted":metadata.tombstoned}));
                 }
+                let fork = read
+                    .fork
+                    .as_ref()
+                    .map(|fork| {
+                        Ok::<_, RequestHandlerError>(serde_json::json!({
+                            "sourcePath": fork.source_path,
+                            "forkOffset": offset_text(&fork.fork_offset)?,
+                            "subOffset": fork.sub_offset,
+                        }))
+                    })
+                    .transpose()?;
                 let body = serde_json::to_vec(
-                    &serde_json::json!({"session":session,"streams":streams,"closed":closed}),
+                    &serde_json::json!({"session":session,"streams":streams,"closed":closed,"fork":fork}),
                 )
                 .map_err(anyhow::Error::from)?;
                 let mut result = body_response(StatusCode::OK, body, "application/json");
@@ -359,6 +423,7 @@ impl DurableStreamsHandler {
             expected_callee_fingerprint: None,
             durable_input_mappings: vec![],
             scope_card: None,
+            origin_invocation: None,
         };
         self.worker_service
             .create_stream_session(agent_id, start)
@@ -618,6 +683,166 @@ impl DurableStreamsHandler {
             other => other.map_err(Into::into),
         }
     }
+
+    async fn fork(
+        &self,
+        request: &mut RichRequest,
+        route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
+        root_agent_id: &golem_common::model::AgentId,
+        target_agent_id: &golem_common::model::AgentId,
+        target_fork: &str,
+        session: &str,
+        slot: &str,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        if self.forks.max_forks_per_second == 0 {
+            return Ok(response(StatusCode::CONFLICT));
+        }
+        macro_rules! header {
+            ($name:literal) => {
+                match single_header(request, $name) {
+                    Ok(value) => value,
+                    Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+                }
+            };
+        }
+        let Some(source) = header!("stream-forked-from") else {
+            return Ok(response(StatusCode::BAD_REQUEST));
+        };
+        let parsed = match parse_source_path(
+            request.underlying.uri().path(),
+            &source,
+            target_fork,
+            session,
+            slot,
+        ) {
+            Ok(parsed) => parsed,
+            Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+        };
+        let source_agent_id = match parsed.source_fork.as_deref() {
+            Some(fork) => self.call_agent.build_agent_id(
+                route,
+                behaviour,
+                Some(fork_phantom_id(root_agent_id, fork)),
+            )?,
+            None => root_agent_id.clone(),
+        };
+        let fork_offset = match header!("stream-fork-offset") {
+            None => None,
+            Some(value) => {
+                match golem_common::model::durable_stream::StreamOffsetV1::from_str(&value) {
+                    Ok(offset) => Some(offset.as_bytes().to_vec()),
+                    Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+                }
+            }
+        };
+        let sub_offset = match header!("stream-fork-sub-offset")
+            .map(|v| {
+                v.parse::<u64>()
+                    .map_err(|_| anyhow::anyhow!("invalid Stream-Fork-Sub-Offset"))
+            })
+            .transpose()
+        {
+            Ok(value) => value.unwrap_or(0),
+            Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+        };
+        let content_type = header!("content-type")
+            .map(|v| v.split(';').next().unwrap_or_default().trim().to_owned());
+        let closed =
+            header!("stream-closed").is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        use tokio::io::AsyncReadExt;
+        let mut body = request
+            .underlying
+            .take_body()
+            .into_async_read()
+            .take((self.max_append_body_bytes + 1) as u64);
+        let mut initial_content = Vec::new();
+        body.read_to_end(&mut initial_content)
+            .await
+            .map_err(anyhow::Error::from)?;
+        if initial_content.len() > self.max_append_body_bytes {
+            return Ok(response(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+        let result = self
+            .worker_service
+            .fork_stream_slot(
+                &source_agent_id,
+                ForkStreamSlotRequest {
+                    source_agent_id: Some(source_agent_id.clone().into()),
+                    target_agent_id: Some(target_agent_id.clone().into()),
+                    environment_id: Some(route.route.environment_id.into()),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    session: session.to_owned(),
+                    slot: slot.to_owned(),
+                    expected_method: route_method(route).to_owned(),
+                    source_path: parsed.canonical,
+                    fork_offset,
+                    sub_offset,
+                    content_type,
+                    max_forks_per_session: self.forks.max_forks_per_session,
+                    max_forks_per_second: self.forks.max_forks_per_second,
+                    max_copied_bytes: self.forks.max_copied_bytes,
+                    initial_content,
+                    closed,
+                },
+            )
+            .await?;
+        match result {
+            fork_stream_slot_response::Result::Success(success) => {
+                let metadata = self
+                    .read_slot(route, target_agent_id, session, slot, Vec::new(), 0, 0)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fork succeeded without stream metadata"))?;
+                if metadata.tombstoned {
+                    return Ok(response(StatusCode::CONFLICT));
+                }
+                let mut out = metadata_response(&metadata, true)?;
+                out.status = if success.replayed {
+                    StatusCode::OK
+                } else {
+                    StatusCode::CREATED
+                };
+                out.headers.insert(
+                    http::header::LOCATION,
+                    request.underlying.uri().path().to_owned(),
+                );
+                Ok(out)
+            }
+            fork_stream_slot_response::Result::Rejected(rejected) => {
+                let status = match fork_stream_slot_rejection::Reason::try_from(rejected.reason) {
+                    Ok(fork_stream_slot_rejection::Reason::NotFound) => StatusCode::NOT_FOUND,
+                    Ok(fork_stream_slot_rejection::Reason::Conflict) => StatusCode::CONFLICT,
+                    Ok(fork_stream_slot_rejection::Reason::InvalidOffset) => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    Ok(fork_stream_slot_rejection::Reason::TooLarge) => {
+                        StatusCode::PAYLOAD_TOO_LARGE
+                    }
+                    Ok(fork_stream_slot_rejection::Reason::RateLimited) => {
+                        StatusCode::TOO_MANY_REQUESTS
+                    }
+                    Ok(fork_stream_slot_rejection::Reason::ReadOnly) => StatusCode::FORBIDDEN,
+                    _ => return Err(anyhow::anyhow!("unspecified fork rejection").into()),
+                };
+                let mut out = response(status);
+                if status == StatusCode::TOO_MANY_REQUESTS && rejected.retry_after_seconds > 0 {
+                    out.headers.insert(
+                        http::header::RETRY_AFTER,
+                        rejected.retry_after_seconds.to_string(),
+                    );
+                }
+                Ok(out)
+            }
+            fork_stream_slot_response::Result::Failure(error) => {
+                let error =
+                    golem_service_base::error::worker_executor::WorkerExecutorError::try_from(
+                        error,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                Err(crate::service::worker::WorkerServiceError::from(error).into())
+            }
+        }
+    }
 }
 
 fn content_type_mismatch(
@@ -746,19 +971,145 @@ fn route_method(route: &ResolvedRouteEntry) -> &str {
 }
 
 struct Suffix {
+    fork: Option<String>,
     session: Option<String>,
     slot: Option<String>,
     reserved: bool,
 }
-fn classify(base_vars: u32, variables: &[String]) -> Suffix {
+fn classify_route(
+    base_vars: u32,
+    variables: &[String],
+    path: &[golem_service_base::custom_api::PathSegment],
+) -> Suffix {
     let base_vars = base_vars as usize;
-    let session = variables.get(base_vars).cloned();
-    let slot = variables.get(base_vars + 1).cloned();
+    let suffix = if path.ends_with(&[
+        golem_service_base::custom_api::PathSegment::Literal {
+            value: "streams".into(),
+        },
+        golem_service_base::custom_api::PathSegment::Variable {
+            display_name: "slot".into(),
+        },
+    ]) {
+        &path[..path.len() - 2]
+    } else {
+        path
+    };
+    let is_fork = suffix.ends_with(&[
+        golem_service_base::custom_api::PathSegment::Literal {
+            value: "forks".into(),
+        },
+        golem_service_base::custom_api::PathSegment::Variable {
+            display_name: "fork".into(),
+        },
+        golem_service_base::custom_api::PathSegment::Literal {
+            value: "invocations".into(),
+        },
+        golem_service_base::custom_api::PathSegment::Variable {
+            display_name: "session".into(),
+        },
+    ]);
+    let fork = is_fork.then(|| variables.get(base_vars).cloned()).flatten();
+    let extra = usize::from(is_fork);
+    let session = variables.get(base_vars + extra).cloned();
+    let slot = variables.get(base_vars + extra + 1).cloned();
     Suffix {
+        fork,
         reserved: slot.as_deref().is_some_and(|s| s.starts_with("__ds")),
         session,
         slot,
     }
+}
+
+#[cfg(test)]
+fn classify(base_vars: u32, variables: &[String]) -> Suffix {
+    classify_route(base_vars, variables, &[])
+}
+
+fn single_header(r: &RichRequest, name: &str) -> Result<Option<String>, RequestHandlerError> {
+    let values = r.headers().get_all(name);
+    if values.iter().count() > 1 {
+        return Err(anyhow::anyhow!("multiple {name} headers").into());
+    }
+    values
+        .iter()
+        .next()
+        .map(|v| {
+            v.to_str()
+                .map(str::to_owned)
+                .map_err(|_| RequestHandlerError::HeaderIsNotAscii {
+                    header_name: name.to_owned(),
+                })
+        })
+        .transpose()
+}
+
+struct ForkSource {
+    source_fork: Option<String>,
+    canonical: String,
+}
+
+fn parse_source_path(
+    current: &str,
+    source: &str,
+    target_fork: &str,
+    session: &str,
+    slot: &str,
+) -> Result<ForkSource, RequestHandlerError> {
+    if !source.starts_with('/') || source.contains(['?', '#']) || source.contains("//") {
+        return Err(anyhow::anyhow!("invalid fork source path").into());
+    }
+    let current = urlencoding::decode(current)
+        .map_err(|_| anyhow::anyhow!("invalid percent encoding in fork target path"))?;
+    let source = urlencoding::decode(source)
+        .map_err(|_| anyhow::anyhow!("invalid percent encoding in fork source path"))?;
+    if source.contains(['?', '#'])
+        || source.contains("//")
+        || source
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(anyhow::anyhow!("invalid fork source path").into());
+    }
+    let marker = format!("/forks/{target_fork}/invocations/{session}/streams/{slot}");
+    let base = current
+        .strip_suffix(&marker)
+        .ok_or_else(|| anyhow::anyhow!("invalid fork target path"))?;
+    let normal = format!("{base}/invocations/{session}/streams/{slot}");
+    if source == normal {
+        return Ok(ForkSource {
+            source_fork: None,
+            canonical: canonical_path(&source),
+        });
+    }
+    let prefix = format!("{base}/forks/");
+    let suffix = format!("/invocations/{session}/streams/{slot}");
+    let fork = source
+        .strip_prefix(&prefix)
+        .and_then(|s| s.strip_suffix(&suffix))
+        .filter(|s| !s.contains('/') && validate_durable_stream_session_id(s).is_ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!("fork source must identify the same route, session, and slot")
+        })?;
+    Ok(ForkSource {
+        source_fork: Some(fork.to_owned()),
+        canonical: canonical_path(&source),
+    })
+}
+
+fn canonical_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| urlencoding::encode(segment).into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn fork_phantom_id(root: &golem_common::model::AgentId, fork: &str) -> Uuid {
+    let hash = blake3::hash(format!("{}\0{fork}", root.agent_id).as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash.as_bytes()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 fn has_header(r: &RichRequest, n: &str) -> bool {
     r.headers().contains_key(n)
@@ -1211,5 +1562,124 @@ mod tests {
             offset_text(&batch.head_offset).unwrap()
         );
         assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
+    }
+
+    #[test]
+    fn fork_source_is_confined_to_the_same_family_session_and_slot() {
+        let current = "/notes/forks/copy/invocations/session/streams/events";
+        let normal = parse_source_path(
+            current,
+            "/notes/invocations/session/streams/events",
+            "copy",
+            "session",
+            "events",
+        )
+        .unwrap();
+        assert!(normal.source_fork.is_none());
+        let fork = parse_source_path(
+            current,
+            "/notes/forks/first/invocations/session/streams/events",
+            "copy",
+            "session",
+            "events",
+        )
+        .unwrap();
+        assert_eq!(fork.source_fork.as_deref(), Some("first"));
+        assert_eq!(
+            fork.canonical,
+            "/notes/forks/first/invocations/session/streams/events"
+        );
+        let encoded = parse_source_path(
+            "/tenant%20one/notes/forks/copy/invocations/session/streams/%24result",
+            "/tenant%20one/notes/invocations/session/streams/%24result",
+            "copy",
+            "session",
+            "$result",
+        )
+        .unwrap();
+        assert_eq!(
+            encoded.canonical,
+            "/tenant%20one/notes/invocations/session/streams/%24result"
+        );
+        for invalid in [
+            "https://other/notes/invocations/session/streams/events",
+            "/other/invocations/session/streams/events",
+            "/notes/invocations/other/streams/events",
+            "/notes/invocations/session/streams/other",
+            "/notes/../notes/invocations/session/streams/events",
+            "/notes/%ZZ/invocations/session/streams/events",
+        ] {
+            assert!(parse_source_path(current, invalid, "copy", "session", "events").is_err());
+        }
+    }
+
+    #[test]
+    fn fork_classification_only_uses_the_generated_route_suffix() {
+        use golem_service_base::custom_api::PathSegment::{Literal, Variable};
+        let path = |fork_suffix| {
+            let mut path = vec![
+                Literal {
+                    value: "forks".into(),
+                },
+                Variable {
+                    display_name: "tenant".into(),
+                },
+            ];
+            if fork_suffix {
+                path.extend([
+                    Literal {
+                        value: "forks".into(),
+                    },
+                    Variable {
+                        display_name: "fork".into(),
+                    },
+                ]);
+            }
+            path.extend([
+                Literal {
+                    value: "invocations".into(),
+                },
+                Variable {
+                    display_name: "session".into(),
+                },
+                Literal {
+                    value: "streams".into(),
+                },
+                Variable {
+                    display_name: "slot".into(),
+                },
+            ]);
+            path
+        };
+        let normal = classify_route(
+            1,
+            &["acme".into(), "session".into(), "events".into()],
+            &path(false),
+        );
+        assert!(normal.fork.is_none());
+        assert_eq!(normal.session.as_deref(), Some("session"));
+        let fork = classify_route(
+            1,
+            &[
+                "acme".into(),
+                "branch".into(),
+                "session".into(),
+                "events".into(),
+            ],
+            &path(true),
+        );
+        assert_eq!(fork.fork.as_deref(), Some("branch"));
+        assert_eq!(fork.session.as_deref(), Some("session"));
+        assert_eq!(fork.slot.as_deref(), Some("events"));
+    }
+
+    #[test]
+    fn duplicate_fork_headers_are_rejected() {
+        let request = poem::Request::builder()
+            .header("stream-fork-offset", "first")
+            .header("stream-fork-offset", "second")
+            .finish();
+        let request = RichRequest::new(request);
+        assert!(single_header(&request, "stream-fork-offset").is_err());
     }
 }

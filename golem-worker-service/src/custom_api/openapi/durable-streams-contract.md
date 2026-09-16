@@ -107,9 +107,19 @@ through the existing schema graph and preserve ordinary REST operations.
 
 Use x-golem-route-mode: durable-streams and x-golem-stream-slot metadata.
 Operation IDs must be stable and unique across families, slots and methods.
-Do not emit fork operations, TTL/expiry support, subscriptions, SDK opt-outs or
-annotation overrides that do not exist. TTL/expiry headers are rejected with
-400 and fork creation is not implemented.
+Do not emit TTL/expiry support, subscriptions, SDK opt-outs or annotation
+overrides that do not exist. TTL/expiry headers are rejected with 400.
+
+Fork sessions use `<base>/forks/{fork}/invocations/{session}` and expose GET/HEAD.
+Their concrete slot paths expose PUT with Stream-Forked-From, optional
+Stream-Fork-Offset/Stream-Fork-Sub-Offset, an optional typed initial body and
+Stream-Closed. Creation returns 201, matching retries 200, with Location;
+conflicts return 409, copy/body limits 413 and admission limits 429 with
+Retry-After when available. Initial content or closure on a read-only slot
+returns 403. GET/HEAD/DELETE and writable-slot POST use the ordinary stream
+contract, but fork POST never lazily creates a session. The manifest includes
+nullable fork provenance (sourcePath, forkOffset and subOffset); fork provenance
+is not emitted as response headers.
 
 Browser preflight must allow the supported producer and closure request headers;
 responses must expose producer outcome headers alongside the read metadata.

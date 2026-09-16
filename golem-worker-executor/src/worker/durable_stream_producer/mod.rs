@@ -237,6 +237,12 @@ impl DurableStreamProducerSlot {
             if let Some(failure) = &state.failure {
                 return Err(failure.clone());
             }
+            if let Some(producer) = &state.producer
+                && producer.owns_current_activity()
+            {
+                // A reload drains this producer; a nested lookup must not wait on itself.
+                return producer.ensure_healthy().map(|()| producer.clone());
+            }
             if let Some(loading) = &state.loading {
                 loading.clone()
             } else if let Some(producer) = &state.producer

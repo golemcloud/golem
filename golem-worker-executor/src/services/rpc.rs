@@ -17,6 +17,7 @@ use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
+use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::events::Events;
@@ -45,8 +46,9 @@ use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationFailure, InvocationFailureKind, InvocationRejected,
-    InvocationRejectionReason, InvocationRequest, InvocationStart, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
+    InvocationRejectionReason, InvocationRequest, InvocationStart, StreamInvocationIdentity,
+    invocation_request, invocation_response, invocation_session_completion,
+    invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
     DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
@@ -141,6 +143,8 @@ pub trait Rpc: Send + Sync {
         _input_mappings: Vec<DurableStreamMapping>,
         _expected_callee_fingerprint: AgentFingerprint,
         _attempt_id: uuid::Uuid,
+        _origin_invocation: StreamInvocationIdentity,
+        _accepted_inputs: tokio::sync::oneshot::Sender<Vec<DurableStreamMapping>>,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
@@ -544,6 +548,8 @@ impl Rpc for RemoteInvocationRpc {
         input_mappings: Vec<DurableStreamMapping>,
         expected_callee_fingerprint: AgentFingerprint,
         attempt_id: uuid::Uuid,
+        origin_invocation: StreamInvocationIdentity,
+        accepted_inputs: tokio::sync::oneshot::Sender<Vec<DurableStreamMapping>>,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -576,6 +582,7 @@ impl Rpc for RemoteInvocationRpc {
                 attempt_id: Some(attempt_id.into()),
                 expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
                 durable_input_mappings: input_mappings,
+                origin_invocation: Some(origin_invocation),
                 scope_card: scope_card
                     .as_ref()
                     .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
@@ -583,6 +590,7 @@ impl Rpc for RemoteInvocationRpc {
                     .map_err(|details| RpcError::ProtocolError { details })?,
             })),
         };
+        let mut accepted_inputs = Some(accepted_inputs);
         let mut retry_delay = std::time::Duration::from_millis(25);
         loop {
             let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
@@ -628,7 +636,11 @@ impl Rpc for RemoteInvocationRpc {
                     .validate_response(&response)
                     .map_err(|details| RpcError::ProtocolError { details })?;
                 match response.response {
-                    Some(invocation_response::Response::Accepted(_)) => {}
+                    Some(invocation_response::Response::Accepted(accepted)) => {
+                        if let Some(sender) = accepted_inputs.take() {
+                            let _ = sender.send(accepted.stream_mappings);
+                        }
+                    }
                     Some(invocation_response::Response::Rejected(rejected)) => {
                         confirm_terminal_response_is_last(&mut inbound, &state).await?;
                         return Err(rpc_error_from_rejection(rejected));
@@ -1463,6 +1475,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         input_mappings: Vec<DurableStreamMapping>,
         expected_callee_fingerprint: AgentFingerprint,
         attempt_id: uuid::Uuid,
+        origin_invocation: StreamInvocationIdentity,
+        accepted_inputs: tokio::sync::oneshot::Sender<Vec<DurableStreamMapping>>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -1487,6 +1501,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     input_mappings,
                     expected_callee_fingerprint,
                     attempt_id,
+                    origin_invocation,
+                    accepted_inputs,
                     self_created_by,
                     self_agent_id,
                     self_env,
@@ -1583,6 +1599,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             attempt_id: Some(attempt_id.into()),
             expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
             durable_input_mappings: input_mappings,
+            origin_invocation: Some(origin_invocation),
             scope_card: scope_card
                 .as_ref()
                 .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
@@ -1618,6 +1635,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         accepted.await.map_err(|_| RpcError::RemoteInternalError {
             details: "durable streaming acceptance was not committed".to_string(),
         })?;
+        let _ = accepted_inputs.send(
+            acceptance
+                .prepared
+                .stream_mappings
+                .iter()
+                .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+                .collect(),
+        );
         acceptance
             .streams
             .recover_nested_input_mappings()

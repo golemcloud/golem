@@ -1460,6 +1460,219 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
 }
 
 #[test]
+async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blob_aliases(
+    _tracing: &Tracing,
+) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            16,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![archive], 1, 1);
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "staged".into(),
+    };
+    let owned = OwnedAgentId::new(EnvironmentId::new(), &agent);
+    let metadata = make_agent_metadata(agent.clone(), AccountId::new(), owned.environment_id);
+    let create = OplogEntry::create(
+        agent.clone(),
+        AgentMode::Durable,
+        ComponentRevision::INITIAL,
+        vec![],
+        owned.environment_id,
+        metadata.created_by,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        vec![],
+        None,
+        metadata.fingerprint.0,
+    )
+    .rounded();
+    let stage_id = Uuid::new_v4();
+    assert!(
+        service
+            .create_staged(&owned, AgentMode::Ephemeral, stage_id, metadata.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .publish_staged(&owned, AgentMode::Ephemeral, stage_id, OplogIndex::INITIAL)
+            .await
+            .is_err()
+    );
+    let stage = service
+        .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
+        .await
+        .unwrap();
+    // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
+    // enumerate it as an agent nor reuse its contents when publishing the same target.
+    let orphan_id = Uuid::new_v4();
+    let orphan = service
+        .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
+        .await
+        .unwrap();
+    orphan.add(create.clone()).await;
+    orphan.add(OplogEntry::no_op(None).rounded()).await;
+    orphan.commit(CommitLevel::Always).await;
+    drop(orphan);
+    let entries = [
+        create.clone(),
+        OplogEntry::suspend().rounded(),
+        OplogEntry::no_op(None).rounded(),
+    ];
+    for entry in &entries {
+        stage.add(entry.clone()).await;
+        stage.commit(CommitLevel::Always).await;
+        assert!(!service.exists(&owned, AgentMode::Durable).await);
+        assert_eq!(
+            service.get_last_index(&owned, AgentMode::Durable).await,
+            OplogIndex::NONE
+        );
+        assert!(
+            service
+                .scan_for_component(
+                    &owned.environment_id,
+                    &agent.component_id,
+                    Some(AgentMode::Durable),
+                    ScanCursor::default(),
+                    100,
+                )
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        stage
+            .read_exact(OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
+    let payload = stage.upload_raw_payload(vec![7; 4096]).await.unwrap();
+    let RawOplogPayload::External {
+        payload_id,
+        md5_hash,
+    } = payload
+    else {
+        panic!("expected external payload")
+    };
+    drop(stage);
+    assert!(
+        service
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                stage_id,
+                OplogIndex::from_u64(3)
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
+    service
+        .discard_staged(&owned, AgentMode::Durable, orphan_id)
+        .await
+        .unwrap();
+    let reopened = service
+        .open(
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert_eq!(
+        reopened.current_oplog_index().await,
+        OplogIndex::from_u64(3)
+    );
+    assert_eq!(
+        reopened
+            .download_raw_payload(payload_id.clone(), md5_hash.clone())
+            .await
+            .unwrap(),
+        vec![7; 4096]
+    );
+
+    let losing_id = Uuid::new_v4();
+    let losing = service
+        .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
+        .await
+        .unwrap();
+    losing.add(create).await;
+    losing.commit(CommitLevel::Always).await;
+    assert_eq!(losing.current_oplog_index().await, OplogIndex::INITIAL);
+    assert_eq!(
+        reopened.current_oplog_index().await,
+        OplogIndex::from_u64(3)
+    );
+    drop(losing);
+    assert!(
+        !service
+            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+    );
+    MultiLayerOplog::try_archive_blocking(&reopened).await;
+    assert_eq!(
+        primary.get_last_index(&owned, AgentMode::Durable).await,
+        OplogIndex::NONE
+    );
+    assert!(
+        !service
+            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+    );
+    service
+        .discard_staged(&owned, AgentMode::Durable, losing_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .download_raw_payload(payload_id, md5_hash)
+            .await
+            .unwrap(),
+        vec![7; 4096]
+    );
+    assert_eq!(
+        service
+            .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
+}
+
+#[test]
 async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let service = PrimaryOplogService::new(
@@ -5556,7 +5769,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
 
-    assert!(!primary_exists);
+    // The primary key fences new creation even after all entries have been archived.
+    assert!(primary_exists);
     assert!(!secondary_exists);
     assert!(tertiary_exists);
 }

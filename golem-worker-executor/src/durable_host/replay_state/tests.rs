@@ -3645,6 +3645,83 @@ async fn marker_in_deleted_region_delivers_end_normally() {
 }
 
 #[test]
+async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
+    for old_marker in [delivered_for(2), discarded_for(2)] {
+        for delivered in [true, false] {
+            for grow_target in [false, true] {
+                let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+                for entry in [noop(), start_now(), end_for(2, 42)] {
+                    oplog.add(entry).await;
+                }
+                let dropped_region = OplogRegion {
+                    start: OplogIndex::from_u64(4),
+                    end: OplogIndex::from_u64(4),
+                };
+                let suffix = [
+                    old_marker.clone(),
+                    OplogEntry::revert(dropped_region.clone()),
+                    if delivered {
+                        delivered_for(2)
+                    } else {
+                        discarded_for(2)
+                    },
+                ];
+                if !grow_target {
+                    for entry in &suffix {
+                        oplog.add(entry.clone()).await;
+                    }
+                }
+                let rs = test_replay_state(
+                    test_agent_id(),
+                    oplog.clone(),
+                    DeletedRegions::from_regions([dropped_region]),
+                    None,
+                )
+                .await
+                .expect("a deleted marker must not conflict with its replacement");
+                if grow_target {
+                    for entry in suffix {
+                        oplog.add(entry).await;
+                    }
+                    rs.set_replay_target(OplogIndex::from_u64(6))
+                        .await
+                        .expect("target growth must ignore deleted completion markers");
+                }
+                let handle = rs
+                    .claim_concurrent_start(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .await
+                    .unwrap();
+                match rs.await_resolution(handle).await.unwrap() {
+                    Resolution::Completed {
+                        end_idx,
+                        delivery_marker,
+                        response,
+                        ..
+                    } if delivered => {
+                        assert_eq!(end_idx, OplogIndex::from_u64(3));
+                        assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+                        assert!(response.is_some());
+                    }
+                    Resolution::CompletedButDiscarded {
+                        end_idx,
+                        marker_idx,
+                        response,
+                    } if !delivered => {
+                        assert_eq!(end_idx, OplogIndex::from_u64(3));
+                        assert_eq!(marker_idx, OplogIndex::from_u64(6));
+                        assert!(response.is_some());
+                    }
+                    other => panic!("expected the replacement completion, got {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+#[test]
 async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
     // The deleted Start/End belong to an abandoned timeline. Their surviving delivery marker is
     // therefore an orphan hint and must not strand positional replay before the next kept entry.

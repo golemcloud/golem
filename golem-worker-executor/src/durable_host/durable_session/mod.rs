@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod fork;
+
 use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
@@ -109,7 +111,7 @@ pub(crate) struct DurableSessionStreams {
     response_lease: Option<Arc<crate::worker::EphemeralResponseLease>>,
 }
 
-#[derive(Clone, Default, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, Default, PartialEq, desert_rust::BinaryCodec)]
 pub struct SessionControlMetadata {
     pub(crate) covered_through: OplogIndex,
     pub(crate) recovery_slot: Option<u64>,
@@ -149,7 +151,7 @@ pub struct SessionControlMetadata {
         Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
 }
 
-#[derive(Clone, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
 struct SessionTopologyMetadata {
     attachment: StreamAttachmentKeyV1,
     mapping: StreamSessionMappingRecordV1,
@@ -798,6 +800,7 @@ impl DurableSessionStreams {
             .max()
             .map(|id| id.saturating_add(1))
             .unwrap_or_default();
+        let attachment_epoch = producer.attachment_epoch_floor();
         Self {
             producer,
             oplog,
@@ -811,7 +814,7 @@ impl DurableSessionStreams {
             require_root_attachment_before_production: false,
             next_transport_stream_id: Arc::new(AtomicU64::new(next_transport_stream_id)),
             session_lock,
-            attachment_epoch: 1,
+            attachment_epoch,
             attachment_attempt_id: None,
             entity_parent_start_index: None,
             recovered_mappings_through: Arc::new(Mutex::new(OplogIndex::NONE)),
@@ -1059,7 +1062,7 @@ impl DurableSessionStreams {
         {
             return Ok(false);
         }
-        self.append_record(StreamSessionRecordV1::Detached(
+        self.try_append_record(StreamSessionRecordV1::Detached(
             StreamSessionDetachedRecordV1 {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: self.session_key.clone(),
@@ -1073,7 +1076,7 @@ impl DurableSessionStreams {
                 epoch,
             },
         ))
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(true)
     }
@@ -1175,6 +1178,7 @@ impl DurableSessionStreams {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn append_record(&self, record: StreamSessionRecordV1) {
         self.producer
             .append_session_record_attributed(self.entity_parent_start_index, record)
@@ -1211,14 +1215,14 @@ impl DurableSessionStreams {
         }
         drop(metadata);
         let attempt_id = AttemptId::fresh();
-        self.append_record(StreamSessionRecordV1::CallerAttempt(
+        self.try_append_record(StreamSessionRecordV1::CallerAttempt(
             StreamCallerAttemptRecordV1 {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: self.session_key.clone(),
                 attempt_id,
             },
         ))
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(attempt_id)
     }
@@ -1277,6 +1281,10 @@ impl DurableSessionStreams {
         // This is deliberately the raw horizon, not the last published AgentStatusRecord:
         // local control records remain visible before and after the append buffer is committed.
         let horizon = self.oplog.current_oplog_index().await;
+        let mut key = self
+            .producer
+            .fork_lineage
+            .session_at(&self.session_key, metadata.covered_through);
         while metadata.covered_through < horizon {
             let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
             for (index, entry) in self
@@ -1284,9 +1292,44 @@ impl DurableSessionStreams {
                 .read_exact(metadata.covered_through.next(), count)
                 .await
             {
+                if self
+                    .producer
+                    .fork_lineage
+                    .deleted_regions()
+                    .is_in_deleted_region(index)
+                {
+                    metadata.covered_through = index;
+                    continue;
+                }
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self.download_record(record).await?;
-                    metadata.apply(index, &self.session_key, &record);
+                    if let StreamSessionRecordV1::ForkCut(cut) = &record {
+                        let (expected, retained) = self
+                            .producer
+                            .applied_fork_cut(index)
+                            .ok_or("fork marker requires worker reconstruction")?;
+                        if cut != expected {
+                            return Err("fork marker differs from the reconstructed lineage".into());
+                        }
+                        let next = self
+                            .producer
+                            .fork_lineage
+                            .session_at(&self.session_key, index);
+                        *metadata =
+                            if cut.sessions.iter().any(|mapping| {
+                                mapping.source == key && mapping.continuation != next
+                            }) {
+                                SessionControlMetadata {
+                                    covered_through: index,
+                                    ..Default::default()
+                                }
+                            } else {
+                                metadata.for_fork(&key, cut, retained)?
+                            };
+                        key = next;
+                    } else {
+                        metadata.apply(index, &key, &record);
+                    }
                 } else {
                     metadata.covered_through = index;
                 }
@@ -1296,10 +1339,10 @@ impl DurableSessionStreams {
     }
 
     async fn session_record_at(&self, index: OplogIndex) -> Result<StreamSessionRecordV1, String> {
-        let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await else {
-            return Err("durable session metadata points at a non-session record".into());
-        };
-        self.download_record(record).await
+        self.producer
+            .read_session_record(index)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn append_mapping_once(
@@ -1322,14 +1365,14 @@ impl DurableSessionStreams {
             .ensure_session_accepts_new_events(&self.session_key)
             .await
             .map_err(|error| error.to_string())?;
-        self.append_record(StreamSessionRecordV1::Mapping(
+        self.try_append_record(StreamSessionRecordV1::Mapping(
             StreamSessionMappingUpdateRecordV1 {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: self.session_key.clone(),
                 mapping,
             },
         ))
-        .await;
+        .await?;
         Ok(())
     }
 
@@ -1449,20 +1492,21 @@ impl DurableSessionStreams {
         let prepared_attempt = status
             .prepared_attempt_id
             .ok_or_else(|| "durable topology has no Prepared session authority".to_string())?;
-        let (attached_epoch, attached_attempt_id, attached) = match (
+        let (attached_epoch, attached_attempt_id) = match (
             status.attachment_epoch,
             status.attachment_attempt_id,
             status.attachment_attached,
         ) {
-            (Some(epoch), Some(attempt), Some(attached)) => (epoch, attempt, attached),
+            (Some(epoch), Some(attempt), Some(_)) => (epoch, attempt),
             _ => {
                 return Err(
                     "durable topology cannot activate before session attachment".to_string()
                 );
             }
         };
-        if !attached
-            || (attached_epoch == 1 && attached_attempt_id != prepared_attempt)
+        let initial_attachment = status.initial_attachment_epoch == Some(attached_epoch)
+            && status.initial_attachment_attempt_id == Some(attached_attempt_id);
+        if (initial_attachment && attached_attempt_id != prepared_attempt)
             || attached_epoch != attachment.epoch
             || AttachmentId::primary(
                 self.session_key.callee_environment_id,
@@ -1471,7 +1515,7 @@ impl DurableSessionStreams {
             )
             .map_err(|error| error.to_string())?
                 != attachment.attachment_id
-            || (attached_epoch == 1
+            || (initial_attachment
                 && !matches!(
                     self.oplog
                         .read(
@@ -1632,7 +1676,7 @@ impl DurableSessionStreams {
                 }
             }
         }
-        let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+        let attachment = self.attachment_key(&mapping.handle, self.reader_epoch().await?)?;
         if self.topology_state(&attachment, Some(mapping)).await?
             == ConsumerAttachmentStatus::Active
         {
@@ -1642,7 +1686,17 @@ impl DurableSessionStreams {
         }
     }
 
-    fn attachment_key(
+    async fn reader_epoch(&self) -> Result<u64, String> {
+        if self.has_local_session_authority() && self.attachment_attempt_id.is_none() {
+            // Guest readers follow the durable invocation, including while its external
+            // transport is detached. A transport-owned reader stays pinned to its attempt.
+            Ok(self.authoritative_attachment_state().await?.0)
+        } else {
+            Ok(self.attachment_epoch)
+        }
+    }
+
+    pub(crate) fn attachment_key(
         &self,
         handle: &DurableStreamHandleV1,
         epoch: u64,
@@ -1714,7 +1768,7 @@ impl DurableSessionStreams {
                 );
                 source
                     .read_attached_segment(
-                        &self.attachment_key(&mapping.handle, self.attachment_epoch)?,
+                        &self.attachment_key(&mapping.handle, self.reader_epoch().await?)?,
                         &mapping.handle,
                         Timestamp::now_utc().to_millis(),
                         Some(after),
@@ -1891,7 +1945,7 @@ impl DurableSessionStreams {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream consumer authorization is unavailable".to_string()
             })?;
-            let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+            let attachment = self.attachment_key(&mapping.handle, self.reader_epoch().await?)?;
             let control = RoutedStreamAttachmentControl::new(rpc, mapping.clone(), auth_ctx);
             self.activate_forwarded_mapping_under_lock(
                 attachment,
@@ -2388,6 +2442,32 @@ impl DurableSessionStreams {
         Ok(true)
     }
 
+    pub(crate) async fn cancel_unbound_rpc_inputs(
+        &self,
+        accepted: &[StreamSessionMappingRecordV1],
+    ) -> Result<(), String> {
+        let unbound = self
+            .mappings
+            .read()
+            .expect("durable stream mapping lock poisoned")
+            .values()
+            .filter(|(handle, role)| {
+                *role == SessionStreamRoleV1::Input
+                    && !accepted
+                        .iter()
+                        .any(|mapping| mapping.role == *role && mapping.handle == *handle)
+            })
+            .map(|(handle, _)| handle.clone())
+            .collect::<Vec<_>>();
+        for handle in unbound {
+            self.producer
+                .cancel_unbound_rpc_input(&self.session_key, &handle)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn cancel_stream(
         &self,
         transport_stream_id: u64,
@@ -2485,8 +2565,8 @@ impl DurableSessionStreams {
         let intent = match persisted_intent {
             Some(existing) => existing,
             None => {
-                self.append_record(StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()))
-                    .await;
+                self.try_append_record(StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()))
+                    .await?;
                 self.commit_consumer_journal().await?;
                 intent
             }
@@ -3446,8 +3526,8 @@ impl DurableSessionStreams {
                 return Err("durable RPC result conflicts with its caller journal".to_string());
             }
         } else {
-            self.append_record(StreamSessionRecordV1::InvocationResult(record))
-                .await;
+            self.try_append_record(StreamSessionRecordV1::InvocationResult(record))
+                .await?;
             self.commit_consumer_journal().await?;
         }
         self.decode_initial(
@@ -3516,6 +3596,21 @@ impl DurableSessionStreams {
             registration_id,
             lifecycle: lifecycle.clone(),
         };
+        if self
+            .producer
+            .stream_head(&handle)
+            .await
+            .map_err(|error| error.to_string())?
+            .2
+            && self
+                .producer
+                .input_high_water(handle.stream_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some_and(|water| water.highest_contiguous_sequence == 0)
+        {
+            return Ok(());
+        }
         let mut next_sequence = 0;
         let mut pending_event = None;
         loop {
@@ -4444,13 +4539,17 @@ impl DurableSessionStreams {
                 let mapping = self
                     .mapping_for_handle(handle, SessionStreamRoleV1::Output)
                     .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
-                let attachment = self.attachment_key(handle, self.attachment_epoch)?;
+                let attachment = self.attachment_key(handle, self.reader_epoch().await?)?;
                 if self.topology_state(&attachment, Some(&mapping)).await?
                     != ConsumerAttachmentStatus::Active
                 {
                     return Err(
                         "foreign durable stream mapping is not topology-activated".to_string()
                     );
+                }
+                if !self.producer.fork_lineage.cuts().is_empty() {
+                    self.activate_foreign_mapping(mapping.clone(), attachment.epoch)
+                        .await?;
                 }
                 let rpc = self.rpc.clone().ok_or_else(|| {
                     "foreign durable stream source routing is unavailable".to_string()
@@ -4621,11 +4720,17 @@ impl DurableSessionStreams {
             let mapping = self
                 .mapping_for_handle(&handle, role)
                 .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
-            let attachment = self.attachment_key(&handle, self.attachment_epoch)?;
+            let attachment = self.attachment_key(&handle, self.reader_epoch().await?)?;
             if self.topology_state(&attachment, Some(&mapping)).await?
                 != ConsumerAttachmentStatus::Active
             {
                 return Err("foreign durable stream mapping is not topology-activated".to_string());
+            }
+            // Projected topology is durable consumer intent, not evidence that the remote
+            // producer has already installed this incarnation's attachment.
+            if !self.producer.fork_lineage.cuts().is_empty() {
+                self.activate_foreign_mapping(mapping.clone(), attachment.epoch)
+                    .await?;
             }
             let rpc = self.rpc.clone().ok_or_else(|| {
                 "foreign durable stream source routing is unavailable".to_string()
@@ -4669,8 +4774,20 @@ impl DurableSessionStreams {
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
             for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+                if self
+                    .producer
+                    .fork_lineage
+                    .deleted_regions()
+                    .is_in_deleted_region(index)
+                {
+                    covered = index;
+                    continue;
+                }
                 if let OplogEntry::StreamSession { record, .. } = entry {
-                    let record = self.download_record(record).await?;
+                    let mut record = self.download_record(record).await?;
+                    self.producer
+                        .fork_lineage
+                        .project_session_payload(index, &mut record)?;
                     let matches = match record {
                         StreamSessionRecordV1::ConsumerItemValue(record) => {
                             record.session_key == self.session_key && record.stream_id == stream_id
@@ -5474,7 +5591,7 @@ impl DurableInputProducer {
                     }),
                 };
                 if !journaled {
-                    streams.append_record(record).await;
+                    streams.try_append_record(record).await?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
                         .back()

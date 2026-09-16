@@ -341,8 +341,8 @@ impl DebugServiceDefault {
     /// is, a target that splits a call's completion from its recorded delivery status or timing.
     /// Returns `(start_index, end_index, marker_index)` for the offending call.
     ///
-    /// Without the marker replay would use the legacy behavior and deliver at the `End`, either
-    /// delivering a discarded completion or delivering a successful completion too early. A
+    /// Without the marker replay would deliver at the replay tail, either delivering a discarded
+    /// completion or delivering a successful completion before its recorded boundary. A
     /// debug session parked at such a target would therefore diverge from the recording, so the
     /// target is rejected up front.
     ///

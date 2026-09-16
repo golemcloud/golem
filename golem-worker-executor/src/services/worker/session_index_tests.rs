@@ -302,7 +302,8 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
         details: Some("committed external cancellation".into()),
     };
     oplog.commit(CommitLevel::Always).await;
-    let probe = DbDirectStreamAttachmentConsumerProbe::new(Arc::new(service), oplog_service);
+    let probe =
+        DbDirectStreamAttachmentConsumerProbe::new(Arc::new(service), oplog_service.clone());
     assert_eq!(
         probe
             .committed_cancellation_status(&attachment, &mapping, &intent)
@@ -342,6 +343,74 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             .await
             .unwrap(),
         ConsumerAttachmentStatus::EpochMismatch
+    );
+    let foreign = owned_agent("independent-consumer", ComponentId::new());
+    let consumer_invocation = session_key(&foreign, &IdempotencyKey::new("consumer".into()));
+    let mut foreign_metadata = agent_metadata(&foreign);
+    foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
+    let foreign_oplog = oplog_service
+        .create_fresh(
+            &foreign,
+            AgentMode::Durable,
+            OplogEntry::create(
+                foreign.agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::INITIAL,
+                vec![],
+                foreign.environment_id,
+                foreign_metadata.created_by,
+                None,
+                100,
+                100,
+                Default::default(),
+                vec![],
+                None,
+                consumer_invocation.callee_fingerprint.0,
+            ),
+            foreign_metadata,
+            stale_status(),
+            suspended_status(),
+        )
+        .await;
+    let foreign_attachment = StreamAttachmentKeyV1 {
+        consumer_environment_id: foreign.environment_id,
+        consumer: foreign.agent_id.clone(),
+        expected_consumer_fingerprint: consumer_invocation.callee_fingerprint,
+        consumer_invocation,
+        ..attachment.clone()
+    };
+    for record in [
+        StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: foreign_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+        StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: foreign_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    ] {
+        append_session(foreign_oplog.as_ref(), record).await;
+    }
+    foreign_oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        probe
+            .status_exact(&foreign_attachment, Some(&mapping))
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Active
+    );
+    let mut wrong_foreign_epoch = foreign_attachment;
+    wrong_foreign_epoch.epoch = 2;
+    assert_eq!(
+        probe
+            .status_exact(&wrong_foreign_epoch, Some(&mapping))
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Missing
     );
     assert_eq!(
         probe
@@ -528,6 +597,542 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
             entity_parent_start_index: None,
         })
         .await
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chunks() {
+    use golem_common::model::durable_stream::StreamForkCutRecordV1;
+    use golem_common::model::regions::OplogRegion;
+
+    for warm in [false, true] {
+        let (service, _, oplog_service) = service_with_oplog().await;
+        let id = owned_agent("reverted-session", ComponentId::new());
+        let key = IdempotencyKey::new("discarded".into());
+        let fingerprint = session_key(&id, &key).callee_fingerprint;
+        let mut metadata = agent_metadata(&id);
+        metadata.fingerprint = fingerprint;
+        let oplog = oplog_service
+            .create_fresh(
+                &id,
+                AgentMode::Durable,
+                OplogEntry::create(
+                    id.agent_id.clone(),
+                    AgentMode::Durable,
+                    ComponentRevision::INITIAL,
+                    vec![],
+                    id.environment_id,
+                    metadata.created_by,
+                    None,
+                    100,
+                    100,
+                    Default::default(),
+                    vec![],
+                    None,
+                    fingerprint.0,
+                ),
+                metadata,
+                stale_status(),
+                suspended_status(),
+            )
+            .await;
+        append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+        for _ in 0..2050 {
+            append_noop(oplog.as_ref()).await;
+        }
+        oplog.commit(CommitLevel::Always).await;
+        let end = oplog.current_oplog_index().await;
+        if warm {
+            assert!(
+                service
+                    .stream_session_index
+                    .lookup_persisted(&id, AgentMode::Durable, end, &key,)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        let region = OplogRegion {
+            start: OplogIndex::INITIAL.next(),
+            end,
+        };
+        let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            export: None,
+            source_environment_id: id.environment_id,
+            source: id.agent_id.clone(),
+            source_fingerprint: fingerprint,
+            target_environment_id: id.environment_id,
+            target: id.agent_id.clone(),
+            target_fingerprint: fingerprint,
+            cut_index: OplogIndex::INITIAL,
+            revert: Some(region.clone()),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+            streams: vec![],
+            sessions: vec![],
+        });
+        let marker_entry =
+            DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
+        oplog
+            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker_entry))
+            .await;
+        oplog.commit(CommitLevel::Always).await;
+        let marker = oplog.current_oplog_index().await;
+        assert!(
+            service
+                .stream_session_index
+                .lookup_persisted(&id, AgentMode::Durable, marker, &key,)
+                .await
+                .unwrap()
+                .is_none(),
+            "deleted session survived (warm={warm})"
+        );
+        assert!(
+            service
+                .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+
+        // The same invocation key can be accepted again after its old preparation is deleted.
+        let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+        oplog.commit(CommitLevel::Always).await;
+        let state = service
+            .stream_session_index
+            .lookup_persisted(&id, AgentMode::Durable, prepared, &key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.first_prepared, Some(prepared));
+        assert_eq!(
+            service
+                .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+                .await
+                .unwrap()
+                .sessions
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_replaces_tail() {
+    use golem_common::model::durable_stream::{
+        StreamConsumerItemValueRecordV1, StreamForkCutRecordV1, StreamForkSessionMappingV1,
+        StreamId, StreamOffsetV1,
+    };
+    use golem_common::model::regions::OplogRegion;
+
+    let (service, kv, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("consumer-journal-owner", ComponentId::new());
+    let mut foreign = owner.clone();
+    foreign.agent_id.agent_id = "source-journal-owner".into();
+    let local_key = IdempotencyKey::new("original-rpc".into());
+    let local_session = session_key(&owner, &local_key);
+    let foreign_session = session_key(&foreign, &local_key);
+    let fingerprint = local_session.callee_fingerprint;
+    let mut metadata = agent_metadata(&owner);
+    metadata.fingerprint = fingerprint;
+    let oplog = oplog_service
+        .create_fresh(
+            &owner,
+            AgentMode::Durable,
+            OplogEntry::create(
+                owner.agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::INITIAL,
+                vec![],
+                owner.environment_id,
+                metadata.created_by,
+                None,
+                100,
+                100,
+                Default::default(),
+                vec![],
+                None,
+                fingerprint.0,
+            ),
+            metadata,
+            stale_status(),
+            suspended_status(),
+        )
+        .await;
+    let stream = StreamId(uuid::Uuid::new_v4());
+    append_session(
+        oplog.as_ref(),
+        prepared_record(&foreign, &foreign_session.idempotency_key),
+    )
+    .await;
+    let mut retained = Vec::new();
+    for ordinal in 0..259 {
+        retained.push(
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                    format_version: 1,
+                    session_key: foreign_session.clone(),
+                    stream_id: stream,
+                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    consumer_read_ordinal: ordinal,
+                    value: vec![ordinal as u8],
+                    packed_u8: true,
+                    recursive_handles: vec![],
+                    recursive_mappings: vec![],
+                }),
+            )
+            .await,
+        );
+    }
+    let fork = append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            export: None,
+            source_environment_id: foreign.environment_id,
+            source: foreign.agent_id.clone(),
+            source_fingerprint: foreign_session.callee_fingerprint,
+            target_environment_id: owner.environment_id,
+            target: owner.agent_id.clone(),
+            target_fingerprint: fingerprint,
+            cut_index: oplog.current_oplog_index().await,
+            revert: None,
+            epoch_floor: 1,
+            selected_stream_id: None,
+            retained_through: None,
+            streams: vec![],
+            sessions: vec![StreamForkSessionMappingV1 {
+                source: foreign_session.clone(),
+                continuation: local_session.clone(),
+                continuation_attempt_id: AttemptId::fresh(),
+            }],
+        }),
+    )
+    .await;
+    let mut removed = Vec::new();
+    for ordinal in 259..262 {
+        removed.push(
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                    format_version: 1,
+                    session_key: local_session.clone(),
+                    stream_id: stream,
+                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    consumer_read_ordinal: ordinal,
+                    value: vec![ordinal as u8],
+                    packed_u8: true,
+                    recursive_handles: vec![],
+                    recursive_mappings: vec![],
+                }),
+            )
+            .await,
+        );
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    let region = OplogRegion {
+        start: removed[0],
+        end: *removed.last().unwrap(),
+    };
+    service
+        .stream_session_index
+        .catch_up(&owner, AgentMode::Durable, region.end)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .read_durable_stream_consumer_page(&owner, &local_session, stream, 1)
+            .await
+            .unwrap(),
+        retained[256..]
+            .iter()
+            .chain(&removed)
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        format_version: 1,
+        request_hash: vec![1; 32],
+        export: None,
+        source_environment_id: owner.environment_id,
+        source: owner.agent_id.clone(),
+        source_fingerprint: fingerprint,
+        target_environment_id: owner.environment_id,
+        target: owner.agent_id.clone(),
+        target_fingerprint: fingerprint,
+        cut_index: fork,
+        revert: Some(region.clone()),
+        epoch_floor: 2,
+        selected_stream_id: None,
+        retained_through: None,
+        streams: vec![],
+        sessions: vec![StreamForkSessionMappingV1 {
+            source: local_session.clone(),
+            continuation: local_session.clone(),
+            continuation_attempt_id: AttemptId::fresh(),
+        }],
+    });
+    let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+
+    let expected_second_page = retained[256..].to_vec();
+    service
+        .stream_session_index
+        .catch_up(
+            &owner,
+            AgentMode::Durable,
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .read_durable_stream_consumer_page(&owner, &local_session, stream, 1)
+            .await
+            .unwrap(),
+        expected_second_page
+    );
+    let cold = DefaultWorkerService::new(
+        kv,
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service,
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    assert_eq!(
+        cold.read_durable_stream_consumer_page(&owner, &local_session, stream, 1)
+            .await
+            .unwrap(),
+        expected_second_page
+    );
+    let replacement = append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+            format_version: 1,
+            session_key: local_session.clone(),
+            stream_id: stream,
+            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(260), 0),
+            consumer_read_ordinal: 259,
+            value: vec![99],
+            packed_u8: true,
+            recursive_handles: vec![],
+            recursive_mappings: vec![],
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    cold.stream_session_index
+        .catch_up(
+            &owner,
+            AgentMode::Durable,
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cold.read_durable_stream_consumer_page(&owner, &local_session, stream, 1)
+            .await
+            .unwrap(),
+        retained[256..]
+            .iter()
+            .copied()
+            .chain(std::iter::once(replacement))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows() {
+    use golem_common::model::durable_stream::{
+        StreamConsumerItemValueRecordV1, StreamForkCutRecordV1, StreamForkSessionMappingV1,
+        StreamId, StreamOffsetV1,
+    };
+    use golem_common::model::regions::OplogRegion;
+
+    let (first, kv, oplog_service) = service_with_oplog().await;
+    let second = DefaultWorkerService::new(
+        kv.clone(),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let owner = owned_agent("concurrent-refold", ComponentId::new());
+    let key = IdempotencyKey::new("session".into());
+    let session = session_key(&owner, &key);
+    let fingerprint = session.callee_fingerprint;
+    let mut metadata = agent_metadata(&owner);
+    metadata.fingerprint = fingerprint;
+    let oplog = oplog_service
+        .create_fresh(
+            &owner,
+            AgentMode::Durable,
+            OplogEntry::create(
+                owner.agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::INITIAL,
+                vec![],
+                owner.environment_id,
+                metadata.created_by,
+                None,
+                100,
+                100,
+                Default::default(),
+                vec![],
+                None,
+                fingerprint.0,
+            ),
+            metadata,
+            stale_status(),
+            suspended_status(),
+        )
+        .await;
+    append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+    let stream = StreamId(uuid::Uuid::new_v4());
+    let mut retained = Vec::new();
+    for ordinal in 0..259 {
+        retained.push(
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                    format_version: 1,
+                    session_key: session.clone(),
+                    stream_id: stream,
+                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    consumer_read_ordinal: ordinal,
+                    value: vec![ordinal as u8],
+                    packed_u8: true,
+                    recursive_handles: vec![],
+                    recursive_mappings: vec![],
+                }),
+            )
+            .await,
+        );
+    }
+    oplog.commit(CommitLevel::Always).await;
+    let horizon = oplog.current_oplog_index().await;
+    let (warm_first, warm_second) = tokio::join!(
+        first
+            .stream_session_index
+            .lookup_persisted(&owner, AgentMode::Durable, horizon, &key),
+        second
+            .stream_session_index
+            .lookup_persisted(&owner, AgentMode::Durable, horizon, &key),
+    );
+    assert!(warm_first.unwrap().is_some());
+    assert!(warm_second.unwrap().is_some());
+    let mut removed = Vec::new();
+    for ordinal in 259..262 {
+        removed.push(
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+                    format_version: 1,
+                    session_key: session.clone(),
+                    stream_id: stream,
+                    source_offset: StreamOffsetV1::new(OplogIndex::from_u64(ordinal + 1), 0),
+                    consumer_read_ordinal: ordinal,
+                    value: vec![ordinal as u8],
+                    packed_u8: true,
+                    recursive_handles: vec![],
+                    recursive_mappings: vec![],
+                }),
+            )
+            .await,
+        );
+    }
+    let region = OplogRegion {
+        start: removed[0],
+        end: *removed.last().unwrap(),
+    };
+    oplog.commit(CommitLevel::Always).await;
+    first
+        .stream_session_index
+        .catch_up(&owner, AgentMode::Durable, region.end)
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .read_durable_stream_consumer_page(&owner, &session, stream, 1)
+            .await
+            .unwrap(),
+        retained[256..]
+            .iter()
+            .chain(&removed)
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        format_version: 1,
+        request_hash: vec![2; 32],
+        export: None,
+        source_environment_id: owner.environment_id,
+        source: owner.agent_id.clone(),
+        source_fingerprint: fingerprint,
+        target_environment_id: owner.environment_id,
+        target: owner.agent_id.clone(),
+        target_fingerprint: fingerprint,
+        cut_index: horizon,
+        revert: Some(region.clone()),
+        epoch_floor: 2,
+        selected_stream_id: None,
+        retained_through: None,
+        streams: vec![],
+        sessions: vec![StreamForkSessionMappingV1 {
+            source: session.clone(),
+            continuation: session.clone(),
+            continuation_attempt_id: AttemptId::fresh(),
+        }],
+    });
+    let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+    let expected = retained[256..].to_vec();
+    let (left_control, right_control) = tokio::join!(
+        first.lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session),
+        second.lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session),
+    );
+    assert_eq!(
+        left_control.unwrap().consumer_record_counts.get(&stream),
+        Some(&259)
+    );
+    assert_eq!(
+        right_control.unwrap().consumer_record_counts.get(&stream),
+        Some(&259)
+    );
+    let (left, right) = tokio::join!(
+        first.read_durable_stream_consumer_page(&owner, &session, stream, 1),
+        second.read_durable_stream_consumer_page(&owner, &session, stream, 1),
+    );
+    assert_eq!(left.unwrap(), expected);
+    assert_eq!(right.unwrap(), expected);
+    let cold = DefaultWorkerService::new(
+        kv,
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service,
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    assert_eq!(
+        cold.read_durable_stream_consumer_page(&owner, &session, stream, 1)
+            .await
+            .unwrap(),
+        expected
+    );
 }
 
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {

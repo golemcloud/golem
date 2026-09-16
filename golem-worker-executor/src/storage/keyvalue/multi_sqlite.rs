@@ -119,6 +119,9 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
+            KeyValueStorageNamespace::ExportForkAdmissions { agent_id, .. } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
             KeyValueStorageNamespace::Promise { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
@@ -190,6 +193,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
@@ -201,6 +205,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
             )
             .await

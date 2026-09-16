@@ -46,6 +46,15 @@ struct Slot {
     source: SlotSource,
 }
 
+pub(crate) struct ExportForkSlot {
+    pub(crate) handle: Option<DurableStreamHandleV1>,
+    pub(crate) writable: bool,
+    pub(crate) bytes: bool,
+    pub(crate) tombstoned: bool,
+    pub(crate) graph: SchemaGraph,
+    pub(crate) snapshot: Option<crate::durable_host::durable_stream::ExportForkStreamSnapshot>,
+}
+
 enum SlotSource {
     Stream(DurableStreamHandleV1),
     Value(Vec<u8>, StreamOffsetV1),
@@ -164,6 +173,48 @@ fn slot_handle(
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn resolve_export_fork_slot(
+        &self,
+        session: &str,
+        name: &str,
+        expected_method: &str,
+    ) -> Result<Option<ExportForkSlot>, WorkerExecutorError> {
+        let producer = self.durable_stream_producer().await?;
+        let Some(slot) = producer
+            .with_metadata_activity(self.resolve_stream_slot(session, name, Some(expected_method)))
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
+        else {
+            return Ok(None);
+        };
+        let tombstoned = matches!(slot.source, SlotSource::Tombstoned);
+        let handle = match slot.source {
+            SlotSource::Stream(handle) => handle,
+            SlotSource::Tombstoned | SlotSource::Value(..) | SlotSource::Pending { .. } => {
+                return Ok(Some(ExportForkSlot {
+                    handle: None,
+                    writable: slot.writable,
+                    bytes: slot.bytes,
+                    tombstoned,
+                    graph: slot.graph,
+                    snapshot: None,
+                }));
+            }
+        };
+        let snapshot = producer
+            .export_fork_snapshot(&handle)
+            .await
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+        Ok(Some(ExportForkSlot {
+            handle: Some(handle),
+            writable: slot.writable,
+            bytes: slot.bytes,
+            tombstoned,
+            graph: slot.graph,
+            snapshot: Some(snapshot),
+        }))
+    }
+
     async fn resolve_stream_slot(
         &self,
         session: &str,
@@ -374,6 +425,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             slots: slot.slots,
             tombstoned: matches!(slot.source, SlotSource::Tombstoned),
             writable: slot.writable,
+            fork: self
+                .export_fork_receipt
+                .get_or_try_init(|| async {
+                    use crate::services::worker_fork::export;
+                    let receipt = if self.agent_mode() == AgentMode::Durable {
+                        export::creation_record(self.oplog_service().as_ref(), &self.owned_agent_id)
+                            .await?
+                    } else {
+                        None
+                    };
+                    Ok::<_, WorkerExecutorError>(receipt.and_then(|receipt| {
+                        receipt
+                            .export
+                            .map(|export| export::response(&export, receipt.cut_index, true))
+                    }))
+                })
+                .await?
+                .clone(),
         };
         match slot.source {
             SlotSource::Stream(handle) => {

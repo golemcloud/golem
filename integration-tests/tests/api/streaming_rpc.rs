@@ -350,6 +350,7 @@ async fn invoke_agent_session(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -479,6 +480,7 @@ impl TrustedInvocationSession {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
             })),
         };
         let mut state = InvocationSessionState::default();

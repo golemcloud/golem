@@ -118,6 +118,7 @@ pub trait GolemHostApi {
         agent_name: String,
     ) -> Result<bool, String>;
     fn self_fork_result(&self) -> Result<String, String>;
+    fn self_fork_atomic_result(&self) -> Result<String, String>;
     fn get_self_uri(&self) -> AgentMetadata;
     fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
     fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
@@ -681,12 +682,17 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn self_fork_result(&self) -> Result<String, String> {
+        println!("fork checkpoint");
         host_api::fork()
             .map(|result| match result {
                 host_api::ForkResult::Original(_) => "original".to_string(),
                 host_api::ForkResult::Forked(_) => "forked".to_string(),
             })
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn self_fork_atomic_result(&self) -> Result<String, String> {
+        atomically(|| self.self_fork_result())
     }
 
     fn get_self_uri(&self) -> AgentMetadata {

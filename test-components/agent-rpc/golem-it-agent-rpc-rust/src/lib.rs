@@ -607,6 +607,7 @@ pub trait StreamingRpcCaller {
     ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn atomic_streaming_increment(
         &self,
         gate: PromiseId,
@@ -733,6 +734,33 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     fn create_input_gate(&self) -> PromiseId {
         golem_rust::create_promise()
+    }
+
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64> {
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "StreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+            let result = rpc
+                .invoke_and_await("increment_stream", input, None)
+                .unwrap();
+            AgentStream::<u64>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            StreamingRpcTargetClient::get(self.name.clone())
+                .increment_stream_input(agent_stream(vec![13, 29]))
+                .await
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to drain increment stream")
     }
 
     async fn atomic_streaming_increment(

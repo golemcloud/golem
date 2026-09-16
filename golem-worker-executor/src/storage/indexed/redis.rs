@@ -47,6 +47,13 @@ impl RedisIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog:{key}")
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:staged-oplog:{key}")
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id: _,
                 agent_mode,
@@ -247,7 +254,10 @@ impl IndexedStorage for RedisIndexedStorage {
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let options = primary_oplog_insert.then_some(Options {
             max_attempts: Some(1),
             ..Default::default()
@@ -279,7 +289,10 @@ impl IndexedStorage for RedisIndexedStorage {
         pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
-            let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+            let primary_oplog_insert = matches!(
+                namespace,
+                IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            );
             let options = primary_oplog_insert.then_some(Options {
                 max_attempts: Some(1),
                 ..Default::default()
@@ -306,6 +319,45 @@ impl IndexedStorage for RedisIndexedStorage {
                 .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
         }
         Ok(())
+    }
+
+    async fn publish_staged(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        agent_id: &golem_common::model::AgentId,
+        agent_mode: golem_common::model::agent::AgentMode,
+        stage_key: &str,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let stage = Self::composite_key(
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            },
+            stage_key,
+        );
+        let target = Self::composite_key(
+            IndexedStorageNamespace::OpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            },
+            target_key,
+        );
+        match self
+            .redis
+            .with(svc_name, api_name)
+            .publish_staged_stream(stage, target, expected_last_id)
+            .await
+            .map_err(|error| Self::classify_append_error(error, true))?
+        {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(IndexedStorageError::Other(
+                "staged oplog is missing, empty, gapped, or has an unexpected tip".to_string(),
+            )),
+        }
     }
 
     async fn length(

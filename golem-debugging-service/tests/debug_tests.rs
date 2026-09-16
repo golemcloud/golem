@@ -428,7 +428,9 @@ async fn test_playback_and_fork(
     let target_agent_id = AgentId::from_agent_id(agent_id.component_id, &forked_repo_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let fork_result = debug_executor.fork(&target_agent_id, first_boundary).await;
+    debug_executor
+        .fork(&target_agent_id, first_boundary)
+        .await?;
 
     // Verify forked worker has oplog entries up to first boundary (first add only)
     let forked_oplogs = regular_worker_executor
@@ -459,11 +461,26 @@ async fn test_playback_and_fork(
 
     assert_eq!(connect_result.agent_id, agent_id);
     assert_eq!(playback_result.agent_id, agent_id);
-    assert!(fork_result.is_ok());
 
-    // The forked oplog should contain the entries up to first_boundary, plus
-    // any CancelPendingInvocation/FailedUpdate entries appended by the fork to
-    // cancel pending work inherited from the source worker's oplog.
+    // The copied prefix is followed by lineage metadata and pending-work cleanup.
+    use golem_common::model::durable_stream::StreamSessionRecordV1;
+    use golem_common::schema::FromSchema;
+    let fork_cuts: Vec<_> = forked_oplogs
+        .iter()
+        .filter_map(|entry| {
+            let PublicOplogEntry::StreamSession(record) = &entry.entry else {
+                return None;
+            };
+            let StreamSessionRecordV1::ForkCut(cut) =
+                StreamSessionRecordV1::from_value(record.record.value()).ok()?
+            else {
+                return None;
+            };
+            Some(cut)
+        })
+        .collect();
+    assert_eq!(fork_cuts.len(), 1);
+    assert_eq!(fork_cuts[0].cut_index, first_boundary);
     let cancel_count = forked_oplogs
         .iter()
         .filter(|e| {
@@ -475,7 +492,7 @@ async fn test_playback_and_fork(
         .count();
     assert_eq!(
         forked_oplog_len_before,
-        u64::from(first_boundary) as usize + cancel_count
+        u64::from(first_boundary) as usize + cancel_count + fork_cuts.len()
     );
 
     assert!(forked_oplogs_after.len() > forked_oplog_len_before);
@@ -557,7 +574,7 @@ async fn test_playback_with_overrides(
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
-    let entry = oplogs_in_forked_worker.last();
+    let entry = oplogs_in_forked_worker.get(u64::from(workflow_result.list_boundary) as usize - 1);
 
     if let Some(PublicOplogEntryWithIndex {
         entry: PublicOplogEntry::AgentInvocationFinished(completed),
@@ -571,7 +588,7 @@ async fn test_playback_with_overrides(
 
     assert_eq!(
         oplogs_in_forked_worker.len(),
-        u64::from(workflow_result.list_boundary) as usize
+        u64::from(workflow_result.list_boundary) as usize + 1
     );
 
     Ok(())

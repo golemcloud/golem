@@ -82,7 +82,22 @@ pub(super) fn emit(
             } else {
                 "application/json"
             };
-            op["description"] = json!(format!("{}\n\nBody must be empty. Content-Type is optional; when supplied it must be {media}.", behaviour.method_description.as_deref().unwrap_or_default()).trim());
+            let contract = if body.is_some() {
+                format!(
+                    "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be {media}."
+                )
+            } else {
+                format!(
+                    "Body must be empty. Content-Type is optional; when supplied it must be {media}."
+                )
+            };
+            op["description"] = json!(
+                format!(
+                    "{}\n\n{contract}",
+                    behaviour.method_description.as_deref().unwrap_or_default()
+                )
+                .trim()
+            );
         }
         if let Some(security) = build_security(route) {
             op["security"] = security;
@@ -187,6 +202,33 @@ pub(super) fn emit(
         None,
     )?;
 
+    let mut fork_name = "fork".to_string();
+    while call.path_params.iter().any(|p| p.name == fork_name) {
+        fork_name.insert_str(0, "ds_");
+    }
+    let fork_session_path = format!(
+        "{}/forks/{{{fork_name}}}/invocations/{{{session_name}}}",
+        base.trim_end_matches('/')
+    );
+    let mut fork_parameters = session_parameters.clone();
+    fork_parameters.push(path_parameter(&fork_name, reference(SESSION)));
+    for method in ["get", "head"] {
+        let mut r = responses(&[("200", "Fork manifest and immutable fork point")], false);
+        r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        if method == "get" {
+            r["200"]["content"] = json!({"application/json":{"schema":reference(MANIFEST)}});
+        }
+        operation(
+            &fork_session_path,
+            method,
+            &format!("{method}-fork"),
+            fork_parameters.clone(),
+            None,
+            r,
+            None,
+        )?;
+    }
+
     for slot in slots {
         let element = render_output_schema(graph, &slot.element, components)?;
         insert_component(
@@ -195,6 +237,10 @@ pub(super) fn emit(
             element.clone(),
         )?;
         let path = format!("{session_path}/streams/{}", slot.name.replace('$', "%24"));
+        let fork_path = format!(
+            "{fork_session_path}/streams/{}",
+            slot.name.replace('$', "%24")
+        );
         let media = if slot.binary {
             "application/octet-stream"
         } else {
@@ -243,15 +289,17 @@ pub(super) fn emit(
             false,
         );
         r["200"]["headers"] = metadata_headers(false);
-        operation(
-            &path,
-            "head",
-            &format!("head-{}", slot.name),
-            session_parameters.clone(),
-            None,
-            r,
-            Some(slot),
-        )?;
+        for (path, parameters) in [(&path, &session_parameters), (&fork_path, &fork_parameters)] {
+            operation(
+                path,
+                "head",
+                &format!("head-{}", slot.name),
+                parameters.clone(),
+                None,
+                r.clone(),
+                Some(slot),
+            )?;
+        }
         let mut parameters = session_parameters.clone();
         parameters.push(query_parameter("offset", false, reference(READ_OFFSET)));
         parameters.push(query_parameter(
@@ -283,30 +331,38 @@ pub(super) fn emit(
         for code in ["200", "204", "304"] {
             r[code]["headers"] = metadata_headers(true);
         }
-        operation(
-            &path,
-            "get",
-            &format!("read-{}", slot.name),
-            parameters,
-            None,
-            r,
-            Some(slot),
-        )?;
-        operation(
-            &path,
-            "delete",
-            &format!("delete-{}", slot.name),
-            session_parameters.clone(),
-            None,
-            responses(
-                &[
-                    ("204", "Slot cancelled and tombstoned"),
-                    ("410", "Slot already deleted"),
-                ],
-                false,
-            ),
-            Some(slot),
-        )?;
+        for path in [&path, &fork_path] {
+            let mut parameters = parameters.clone();
+            if path == &fork_path {
+                parameters.push(path_parameter(&fork_name, reference(SESSION)));
+            }
+            operation(
+                path,
+                "get",
+                &format!("read-{}", slot.name),
+                parameters,
+                None,
+                r.clone(),
+                Some(slot),
+            )?;
+        }
+        for (path, parameters) in [(&path, &session_parameters), (&fork_path, &fork_parameters)] {
+            operation(
+                path,
+                "delete",
+                &format!("delete-{}", slot.name),
+                parameters.clone(),
+                None,
+                responses(
+                    &[
+                        ("204", "Slot cancelled and tombstoned"),
+                        ("410", "Slot already deleted"),
+                    ],
+                    false,
+                ),
+                Some(slot),
+            )?;
+        }
         if slot.writable {
             let mut parameters = session_parameters.clone();
             if url_bound {
@@ -386,16 +442,67 @@ pub(super) fn emit(
                 }
                 r[code]["headers"] = headers;
             }
-            operation(
-                &path,
-                "post",
-                &format!("append-{}", slot.name),
-                parameters,
-                Some(body),
-                r,
-                Some(slot),
-            )?;
+            for path in [&path, &fork_path] {
+                let mut parameters = parameters.clone();
+                if path == &fork_path {
+                    parameters.retain(|p| p["in"] == "path" || p["in"] == "header");
+                    parameters.push(path_parameter(&fork_name, reference(SESSION)));
+                }
+                operation(
+                    path,
+                    "post",
+                    &format!("append-{}", slot.name),
+                    parameters,
+                    Some(body.clone()),
+                    r.clone(),
+                    Some(slot),
+                )?;
+            }
         }
+        let mut create_fork_parameters = fork_parameters.clone();
+        create_fork_parameters.extend([
+            header_parameter("Stream-Forked-From", true, string_schema()),
+            header_parameter("Stream-Fork-Offset", false, reference(OFFSET)),
+            header_parameter(
+                "Stream-Fork-Sub-Offset",
+                false,
+                json!({"type":"integer","minimum":0}),
+            ),
+            header_parameter("Stream-Closed", false, json!({"type":"boolean"})),
+        ]);
+        let fork_body = json!({"required":false,"content":{media:{"schema":if slot.binary { arbitrary_binary_schema() } else { json!({"type":"array","items":element}) }}}});
+        let mut fork_responses = responses(
+            &[
+                ("201", "Fork created"),
+                ("200", "Matching fork already exists"),
+                (
+                    "403",
+                    "Initial body or Stream-Closed supplied for a read-only slot",
+                ),
+                (
+                    "409",
+                    "Fork configuration conflicts, target is tombstoned, or source is soft-deleted",
+                ),
+                ("413", "Fork copy or initial body exceeds its limit"),
+                ("429", "Fork rate limited"),
+            ],
+            false,
+        );
+        for code in ["201", "200"] {
+            fork_responses[code]["headers"] = metadata_headers(false);
+            fork_responses[code]["headers"]["Location"] = header("Fork slot URL", string_schema());
+        }
+        fork_responses["429"]["headers"]["Retry-After"] =
+            header("Retry delay in seconds, when available", string_schema());
+        operation(
+            &fork_path,
+            "put",
+            &format!("fork-{}", slot.name),
+            create_fork_parameters,
+            Some(fork_body),
+            fork_responses,
+            Some(slot),
+        )?;
     }
     Ok(())
 }
@@ -492,13 +599,15 @@ fn add_components(components: &mut Map<String, Value>) -> Result<(), String> {
         ),
         (
             MANIFEST,
-            json!({"type":"object","required":["session","streams","closed"],"properties":{
+            json!({"type":"object","required":["session","streams","closed","fork"],"properties":{
                 "session":reference(SESSION),"closed":{"type":"boolean"},"streams":{"type":"array","items":{
                     "type":"object","required":["name","contentType","nextOffset","closed","cancelled","deleted"],"properties":{
                         "name":{"type":"string"},"contentType":{"type":"string"},"nextOffset":reference(OFFSET),
                         "closed":{"type":"boolean"},"cancelled":{"type":"boolean"},"deleted":{"type":"boolean"}
                     }
-                }}
+                }},"fork":{"anyOf":[{"type":"object","required":["sourcePath","forkOffset","subOffset"],"properties":{
+                    "sourcePath":{"type":"string"},"forkOffset":reference(OFFSET),"subOffset":{"type":"integer","minimum":0}
+                }},{"type":"null"}]}
             }}),
         ),
     ] {

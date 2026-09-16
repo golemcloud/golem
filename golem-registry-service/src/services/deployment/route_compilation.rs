@@ -303,6 +303,55 @@ fn add_durable_stream_route_family(
             });
         }
     }
+    let mut fork_path = base.path.clone();
+    fork_path.extend([
+        PathSegment::Literal {
+            value: "forks".into(),
+        },
+        PathSegment::Variable {
+            display_name: "fork".into(),
+        },
+        PathSegment::Literal {
+            value: "invocations".into(),
+        },
+        PathSegment::Variable {
+            display_name: "session".into(),
+        },
+    ]);
+    for stream in [false, true] {
+        if stream {
+            fork_path.extend([
+                PathSegment::Literal {
+                    value: "streams".into(),
+                },
+                PathSegment::Variable {
+                    display_name: "slot".into(),
+                },
+            ]);
+        }
+        let mut methods = vec![HttpMethod::Head(Empty {}), HttpMethod::Get(Empty {})];
+        if stream {
+            methods.extend([
+                HttpMethod::Put(Empty {}),
+                HttpMethod::Post(Empty {}),
+                HttpMethod::Delete(Empty {}),
+            ]);
+        }
+        for method in methods {
+            let route_id = *current_route_id;
+            *current_route_id = current_route_id.checked_add(1).unwrap();
+            routes.push(UnboundCompiledRoute {
+                domain: base.domain.clone(),
+                route_id,
+                method,
+                path: fork_path.clone(),
+                body: base.body.clone(),
+                behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
+                security: base.security.clone(),
+                cors: base.cors.clone(),
+            });
+        }
+    }
     routes.push(base);
 }
 
@@ -463,6 +512,8 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
                     "stream-ttl",
                     "stream-expires-at",
                     "stream-forked-from",
+                    "stream-fork-offset",
+                    "stream-fork-sub-offset",
                     "stream-closed",
                     "producer-id",
                     "producer-epoch",
@@ -1043,7 +1094,7 @@ mod tests {
         ]);
         let (routes, errors) = compile_test_routes(&agent);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(routes.len(), 10);
+        assert_eq!(routes.len(), 17);
         let mut identities = BTreeSet::new();
         for route in routes {
             assert!(identities.insert((
@@ -1082,6 +1133,10 @@ mod tests {
             "POST".into(),
             "notes/invocations/{session}/streams/{slot}".into()
         )));
+        assert!(identities.contains(&(
+            "PUT".into(),
+            "notes/forks/{fork}/invocations/{session}/streams/{slot}".into()
+        )));
         assert!(!identities.contains(&("GET".into(), "notes".into())));
         let rest = compiled_call_agent_behaviour(AgentMode::Durable, false);
         assert_eq!(rest.route_mode, AgentRouteMode::Rest);
@@ -1106,7 +1161,7 @@ mod tests {
         ];
         let (routes, errors) = compile_test_routes(&agent);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(routes.len(), 10);
+        assert_eq!(routes.len(), 17);
         for route in routes {
             assert_eq!(
                 collect_allowed_request_headers(&route),
@@ -1116,6 +1171,8 @@ mod tests {
                     "stream-ttl".into(),
                     "stream-expires-at".into(),
                     "stream-forked-from".into(),
+                    "stream-fork-offset".into(),
+                    "stream-fork-sub-offset".into(),
                     "stream-closed".into(),
                     "producer-id".into(),
                     "producer-epoch".into(),

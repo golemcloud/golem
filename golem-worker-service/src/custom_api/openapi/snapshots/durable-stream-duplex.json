@@ -6,6 +6,33 @@
           "closed": {
             "type": "boolean"
           },
+          "fork": {
+            "anyOf": [
+              {
+                "properties": {
+                  "forkOffset": {
+                    "$ref": "#/components/schemas/GolemDSOffset"
+                  },
+                  "sourcePath": {
+                    "type": "string"
+                  },
+                  "subOffset": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "sourcePath",
+                  "forkOffset",
+                  "subOffset"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "session": {
             "$ref": "#/components/schemas/GolemDSSessionId"
           },
@@ -47,7 +74,8 @@
         "required": [
           "session",
           "streams",
-          "closed"
+          "closed",
+          "fork"
         ],
         "type": "object"
       },
@@ -144,6 +172,1737 @@
         "summary": "create-session"
       },
       "x-golem-route-mode": "durable-streams"
+    },
+    "/stream/forks/{fork}/invocations/{session}": {
+      "get": {
+        "operationId": "TestAgent-test_method-get-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSManifest"
+                }
+              }
+            },
+            "description": "Fork manifest and immutable fork point",
+            "headers": {
+              "Cache-Control": {
+                "description": "Session metadata is not cached",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Closed": {
+                "description": "All slots closed or deleted",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "get-fork"
+      },
+      "head": {
+        "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fork manifest and immutable fork point",
+            "headers": {
+              "Cache-Control": {
+                "description": "Session metadata is not cached",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Closed": {
+                "description": "All slots closed or deleted",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "head-fork"
+      },
+      "x-golem-route-mode": "durable-streams"
+    },
+    "/stream/forks/{fork}/invocations/{session}/streams/%24result": {
+      "delete": {
+        "operationId": "TestAgent-test_method-delete-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Slot cancelled and tombstoned"
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot already deleted"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "delete-$result"
+      },
+      "get": {
+        "operationId": "TestAgent-test_method-get-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: offset",
+            "explode": false,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSReadOffset"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: live",
+            "explode": false,
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "enum": [
+                "long-poll",
+                "sse"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: cursor",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maximum": 18446744073709551435,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Header parameter: If-None-Match",
+            "explode": false,
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Catch-up or live data; SSE emits data arrays or base64 byte batches, followed by control events with streamNextOffset and upToDate. Control has streamClosed: true at EOF, otherwise string streamCursor.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Long-poll reached EOF or timed out without items",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Closed stream matches If-None-Match",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid offset, live mode or cursor"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot deleted"
+          },
+          "429": {
+            "description": "Catch-up rate limit exceeded"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "read-$result"
+      },
+      "head": {
+        "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream metadata",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot deleted"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "head-$result"
+      },
+      "put": {
+        "description": "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be application/json.",
+        "operationId": "TestAgent-test_method-put-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Forked-From",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Forked-From",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Fork-Offset",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Fork-Offset",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSOffset"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Fork-Sub-Offset",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Fork-Sub-Offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Closed",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Closed",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Matching fork already exists",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Fork slot URL",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Fork created",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Fork slot URL",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "403": {
+            "description": "Initial body or Stream-Closed supplied for a read-only slot"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "409": {
+            "description": "Fork configuration conflicts, target is tombstoned, or source is soft-deleted"
+          },
+          "413": {
+            "description": "Fork copy or initial body exceeds its limit"
+          },
+          "429": {
+            "description": "Fork rate limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds, when available",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "fork-$result"
+      },
+      "x-golem-route-mode": "durable-streams",
+      "x-golem-stream-slot": {
+        "direction": "output",
+        "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_24726573756c74",
+        "name": "$result"
+      }
+    },
+    "/stream/forks/{fork}/invocations/{session}/streams/input": {
+      "delete": {
+        "operationId": "TestAgent-test_method-delete-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Slot cancelled and tombstoned"
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot already deleted"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "delete-input"
+      },
+      "get": {
+        "operationId": "TestAgent-test_method-get-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: offset",
+            "explode": false,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSReadOffset"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: live",
+            "explode": false,
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "enum": [
+                "long-poll",
+                "sse"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: cursor",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maximum": 18446744073709551435,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Header parameter: If-None-Match",
+            "explode": false,
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Catch-up or live data; SSE emits data arrays or base64 byte batches, followed by control events with streamNextOffset and upToDate. Control has streamClosed: true at EOF, otherwise string streamCursor.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Long-poll reached EOF or timed out without items",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Closed stream matches If-None-Match",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Cursor": {
+                "description": "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-SSE-Data-Encoding": {
+                "description": "Present for byte-stream SSE data events",
+                "schema": {
+                  "enum": [
+                    "base64"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid offset, live mode or cursor"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot deleted"
+          },
+          "429": {
+            "description": "Catch-up rate limit exceeded"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "read-input"
+      },
+      "head": {
+        "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream metadata",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "410": {
+            "description": "Slot deleted"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "head-input"
+      },
+      "post": {
+        "operationId": "TestAgent-test_method-post-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Supply all three Producer-* headers together or omit all. Retry with the same tuple after a lost response.",
+            "explode": false,
+            "in": "header",
+            "name": "Producer-Id",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Supply all three Producer-* headers together or omit all. Retry with the same tuple after a lost response.",
+            "explode": false,
+            "in": "header",
+            "name": "Producer-Epoch",
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Supply all three Producer-* headers together or omit all. Retry with the same tuple after a lost response.",
+            "explode": false,
+            "in": "header",
+            "name": "Producer-Seq",
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Supply all three Producer-* headers together or omit all. Retry with the same tuple after a lost response.",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Closed",
+            "required": false,
+            "schema": {
+              "description": "Case-insensitive true closes atomically; other values are ignored.",
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "allOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "not": {
+                          "type": "array"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 4096,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nonempty typed body requires its content type. JSON arrays flatten one level; array-valued messages require an outer batch. Empty body is valid only with Stream-Closed: true and ignores Content-Type. Create the session first if method arguments cannot all be supplied in the URL.",
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Producer append accepted",
+            "headers": {
+              "Producer-Epoch": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Producer-Seq": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Closure on success or closed-stream conflict",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next offset on success or closed-stream conflict",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Ordinary append, duplicate producer append, or close accepted",
+            "headers": {
+              "Producer-Epoch": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Producer-Seq": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Closure on success or closed-stream conflict",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next offset on success or closed-stream conflict",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSProblem"
+                }
+              }
+            },
+            "description": "Invalid body or producer headers. Error responses may be bodyless."
+          },
+          "403": {
+            "description": "Producer epoch fenced",
+            "headers": {
+              "Producer-Epoch": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSProblem"
+                }
+              }
+            },
+            "description": "Session or slot not found. Error responses may be bodyless."
+          },
+          "409": {
+            "description": "Closed stream, content type mismatch or producer sequence gap",
+            "headers": {
+              "Producer-Expected-Seq": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Producer-Received-Seq": {
+                "description": "Producer outcome; present when applicable",
+                "schema": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Closure on success or closed-stream conflict",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next offset on success or closed-stream conflict",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Slot deleted"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSProblem"
+                }
+              }
+            },
+            "description": "Append body or message count exceeds limit. Error responses may be bodyless."
+          },
+          "429": {
+            "description": "Append rate limit exceeded"
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "append-input"
+      },
+      "put": {
+        "description": "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be application/json.",
+        "operationId": "TestAgent-test_method-put-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
+        "parameters": [
+          {
+            "description": "Path parameter: session",
+            "explode": false,
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: fork",
+            "explode": false,
+            "in": "path",
+            "name": "fork",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Forked-From",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Forked-From",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Fork-Offset",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Fork-Offset",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GolemDSOffset"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Fork-Sub-Offset",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Fork-Sub-Offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Closed",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Closed",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Matching fork already exists",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Fork slot URL",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Fork created",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Stream entity tag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Fork slot URL",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Stream-Cancelled": {
+                "description": "Cancellation terminal",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Closed": {
+                "description": "Terminal state; on reads true only at EOF",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "Stream-Next-Offset": {
+                "description": "Next read cursor",
+                "schema": {
+                  "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-Up-To-Date": {
+                "description": "Read reached current head",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported TTL/expiry header"
+          },
+          "403": {
+            "description": "Initial body or Stream-Closed supplied for a read-only slot"
+          },
+          "404": {
+            "description": "Session or slot not found"
+          },
+          "409": {
+            "description": "Fork configuration conflicts, target is tombstoned, or source is soft-deleted"
+          },
+          "413": {
+            "description": "Fork copy or initial body exceeds its limit"
+          },
+          "429": {
+            "description": "Fork rate limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds, when available",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Executor unavailable or live-reader limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "fork-input"
+      },
+      "x-golem-route-mode": "durable-streams",
+      "x-golem-stream-slot": {
+        "direction": "input",
+        "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_696e707574",
+        "name": "input"
+      }
     },
     "/stream/invocations/{session}": {
       "delete": {

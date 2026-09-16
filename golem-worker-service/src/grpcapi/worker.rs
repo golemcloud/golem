@@ -515,6 +515,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (tail, initial_requests_checked) = validated_request_tail(inbound, state.clone());
         let result = match initial {
             invocation_request::Request::Start(mut start) => {
+                if !trusted_internal_caller {
+                    start.origin_invocation = None;
+                }
                 start.freshness_disposition = match sanitize_invocation_freshness_disposition(
                     start.freshness_disposition,
                     trusted_internal_caller,

@@ -381,6 +381,7 @@ impl RedisLabelledApi<'_> {
         key: K,
         field: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> RedisResult<bool>
     where
@@ -392,7 +393,11 @@ local expected_present = ARGV[2] == '1'
 if (current == false and expected_present) or (current ~= false and (not expected_present or current ~= ARGV[3])) then
   return 0
 end
-for i = 4, #ARGV, 2 do
+local delete_count = tonumber(ARGV[4])
+for i = 5, 4 + delete_count do
+  redis.call('HDEL', KEYS[1], ARGV[i])
+end
+for i = 5 + delete_count, #ARGV, 2 do
   redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
 end
 return 1
@@ -406,7 +411,11 @@ return 1
             field.into(),
             (if expected.is_some() { "1" } else { "0" }).into(),
             expected.unwrap_or_default().into(),
+            (deletes.len() as i64).into(),
         ];
+        for field in deletes {
+            args.push((*field).into());
+        }
         for (field, value) in pairs {
             args.push((*field).into());
             args.push((*value).into());
@@ -599,6 +608,50 @@ return 1
         let start = Instant::now();
         let _: () = self.record_many(start, "XADD", pipeline.all().await, count)?;
         Ok(())
+    }
+
+    /// Validates a staged stream and atomically renames it to a previously absent target.
+    /// Returns 1 when published, 0 when the target exists, and -1 for an invalid stage.
+    pub async fn publish_staged_stream<K>(
+        &self,
+        stage_key: K,
+        target_key: K,
+        expected_last_id: u64,
+    ) -> RedisResult<i64>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+if tonumber(ARGV[1]) == 0 or redis.call('XLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return -1 end
+local first = redis.call('XRANGE', KEYS[1], '-', '+', 'COUNT', 1)
+local last = redis.call('XREVRANGE', KEYS[1], '+', '-', 'COUNT', 1)
+if first[1][1] ~= '1-0' or last[1][1] ~= ARGV[1] .. '-0' then return -1 end
+redis.call('RENAME', KEYS[1], KEYS[2])
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            2.into(),
+            self.prefixed_key(stage_key).into(),
+            self.prefixed_key(target_key).into(),
+            expected_last_id.to_string().into(),
+        ];
+        let options = Options {
+            max_attempts: Some(1),
+            ..Default::default()
+        };
+        let result = self
+            .pool
+            .next()
+            .with_options(&options)
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>());
+        self.record(start, "EVAL", result)
     }
 
     pub async fn xlen<R, K>(&self, key: K) -> RedisResult<R>

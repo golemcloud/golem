@@ -50,6 +50,72 @@ fn durable_stream_test_session_key(key: &str) -> StreamInvocationIdV1 {
 }
 
 #[test]
+fn durable_stream_fork_status_preserves_history_without_attachment_authority() {
+    use crate::model::durable_stream::{StreamForkCutRecordV1, StreamForkSessionMappingV1};
+    let source = durable_stream_test_session_key("fork");
+    let mut target = source.clone();
+    target.callee.agent_id = "forked-agent".into();
+    target.callee_fingerprint = AgentFingerprint(Uuid::new_v4());
+    let attempt = AttemptId::fresh();
+    let cut = StreamSessionRecordV1::ForkCut(StreamForkCutRecordV1 {
+        format_version: 1,
+        request_hash: vec![0; 32],
+        export: None,
+        source_environment_id: source.callee_environment_id,
+        source: source.callee.clone(),
+        source_fingerprint: source.callee_fingerprint,
+        target_environment_id: target.callee_environment_id,
+        target: target.callee.clone(),
+        target_fingerprint: target.callee_fingerprint,
+        cut_index: OplogIndex::from_u64(20),
+        revert: None,
+        epoch_floor: 1,
+        selected_stream_id: None,
+        retained_through: None,
+        streams: vec![],
+        sessions: vec![StreamForkSessionMappingV1 {
+            source: source.clone(),
+            continuation: target.clone(),
+            continuation_attempt_id: attempt,
+        }],
+    });
+    let prepared_attempt = AttemptId::fresh();
+    let original = DurableStreamSessionStatus {
+        session_key: Some(source.clone()),
+        first_prepared: Some(OplogIndex::from_u64(2)),
+        prepared: Some(OplogIndex::from_u64(2)),
+        prepared_attempt_id: Some(prepared_attempt),
+        initial_attachment_attempt_id: Some(prepared_attempt),
+        initial_attachment_epoch: Some(1),
+        validated_initial_pending_invocation: Some(OplogIndex::from_u64(3)),
+        initial_pending_invocation_oplog_index: Some(OplogIndex::from_u64(3)),
+        attachment_epoch: Some(7),
+        attachment_attempt_id: Some(AttemptId::fresh()),
+        attachment_attached: Some(true),
+        invocation_result: Some(OplogIndex::from_u64(10)),
+        finished: Some(OplogIndex::from_u64(12)),
+        tombstoned_slots: ["input".to_string()].into_iter().collect(),
+        cancellation_requested: true,
+        ..Default::default()
+    };
+    let mut index = DurableStreamSessionIndex::default();
+    index.insert(source.idempotency_key.clone(), original.clone());
+    index.apply_record(OplogIndex::from_u64(21), &cut);
+    let actual = index.get(&target.idempotency_key).unwrap();
+    let expected = DurableStreamSessionStatus {
+        session_key: Some(target),
+        attachment_epoch: Some(1),
+        attachment_attempt_id: Some(attempt),
+        attachment_attached: Some(false),
+        ..original
+    };
+    assert_eq!(actual, &expected);
+    let mut missing = DurableStreamSessionStatus::default();
+    missing.apply_record(OplogIndex::from_u64(21), &cut);
+    assert_eq!(missing, DurableStreamSessionStatus::default());
+}
+
+#[test]
 fn durable_stream_control_records_binary_roundtrip_and_validate() {
     let session_key = durable_stream_test_session_key("control-roundtrip");
     let records = [

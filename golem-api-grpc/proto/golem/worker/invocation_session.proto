@@ -36,6 +36,9 @@ message InvocationStart {
   golem.common.UUID expected_callee_fingerprint = 15;
   repeated DurableStreamMapping durable_input_mappings = 16;
   optional golem.worker.EncodedScopeCard scope_card = 17;
+  // Executor-authored RPC provenance. Public invocation adapters must clear this field.
+  // Forks retain the authoring invocation even when their local stream producers diverge.
+  StreamInvocationIdentity origin_invocation = 18;
 }
 
 message ResumeAttach {

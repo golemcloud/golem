@@ -635,6 +635,8 @@ fn durable_stream_operations_have_concrete_typed_slots() {
     for suffix in [
         vec!["invocations", "session"],
         vec!["invocations", "session", "streams", "slot"],
+        vec!["forks", "fork", "invocations", "session"],
+        vec!["forks", "fork", "invocations", "session", "streams", "slot"],
     ] {
         for method in [
             Method::PUT,
@@ -646,7 +648,7 @@ fn durable_stream_operations_have_concrete_typed_slots() {
             let mut generated = make_route();
             generated.method = method;
             generated.path.extend(suffix.iter().map(|part| {
-                if *part == "session" || *part == "slot" {
+                if ["session", "slot", "fork"].contains(part) {
                     PathSegment::Variable {
                         display_name: (*part).into(),
                     }
@@ -661,7 +663,7 @@ fn durable_stream_operations_have_concrete_typed_slots() {
     }
     let spec = spec_for(routes);
     let paths = spec["paths"].as_object().unwrap();
-    assert_eq!(paths.len(), 5);
+    assert_eq!(paths.len(), 9);
     let session = "/duplex/invocations/{session}";
     let input = &paths[&format!("{session}/streams/messages")];
     let bytes = &paths[&format!("{session}/streams/bytes")];
@@ -686,6 +688,31 @@ fn durable_stream_operations_have_concrete_typed_slots() {
     assert!(input["get"]["responses"]["200"]["content"]["text/event-stream"].is_object());
     assert!(input["head"]["responses"]["200"]["content"].is_null());
     assert!(paths[session]["get"]["responses"]["200"]["content"]["application/json"].is_object());
+    let fork_session = "/duplex/forks/{fork}/invocations/{session}";
+    for slot in ["messages", "bytes", "%24result"] {
+        let original = &paths[&format!("{session}/streams/{slot}")];
+        let fork = &paths[&format!("{fork_session}/streams/{slot}")];
+        for method in ["get", "head", "post", "delete"] {
+            assert_eq!(fork[method]["requestBody"], original[method]["requestBody"]);
+            assert_eq!(fork[method]["responses"], original[method]["responses"]);
+            if let Some(parameters) = fork[method]["parameters"].as_array() {
+                let inherited: Vec<_> = parameters
+                    .iter()
+                    .filter(|p| p["name"] != "fork")
+                    .cloned()
+                    .collect();
+                assert_eq!(json!(inherited), original[method]["parameters"]);
+            }
+        }
+        assert!(fork["put"]["responses"]["201"].is_object());
+        assert!(
+            fork["put"]["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| { p["name"] == "Stream-Forked-From" && p["required"] == true })
+        );
+    }
     let mut ids = std::collections::HashSet::new();
     for item in paths.values() {
         assert_eq!(item["x-golem-route-mode"], "durable-streams");
@@ -717,6 +744,47 @@ fn durable_stream_operations_have_concrete_typed_slots() {
         }
     }
     check_refs(&spec, &spec);
+}
+
+#[test]
+fn durable_stream_fork_creation_documents_runtime_response_headers() {
+    use golem_common::schema::NamedField;
+
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "fork-response-headers".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "input",
+        SchemaType::stream(Some(str())),
+    )]);
+
+    let spec = spec_for(vec![route]);
+    let put = &spec["paths"]["/fork-response-headers/forks/{fork}/invocations/{session}/streams/input"]
+        ["put"];
+    let mut missing = Vec::new();
+    for status in ["200", "201"] {
+        if !put["responses"][status]["headers"]["Location"].is_object() {
+            missing.push(format!("{status} Location"));
+        }
+    }
+    if !put["responses"]["429"]["headers"]["Retry-After"].is_object() {
+        missing.push("429 Retry-After".into());
+    }
+    assert!(
+        missing.is_empty(),
+        "missing runtime response headers: {missing:?}"
+    );
 }
 
 #[test]
@@ -907,6 +975,16 @@ fn durable_stream_method_bindings_are_operation_specific() {
                     .iter()
                     .any(|p| p["name"] == "x-value" || p["name"] == "Content-Language")
             );
+        }
+        let fork = &paths["/bound/{session}/forks/{fork}/invocations/{ds_session}/streams/input"];
+        for (method, expected) in [
+            ("post", "Producer-Id"),
+            ("put", "Stream-Forked-From"),
+            ("get", "offset"),
+        ] {
+            let parameters = fork[method]["parameters"].as_array().unwrap();
+            assert!(!parameters.iter().any(|p| p["name"] == "count"));
+            assert!(parameters.iter().any(|p| p["name"] == expected));
         }
     }
 }

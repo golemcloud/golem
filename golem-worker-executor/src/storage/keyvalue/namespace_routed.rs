@@ -41,6 +41,7 @@ impl NamespaceRoutedKeyValueStorage {
             KeyValueStorageNamespace::AgentInvocationResultIndex { .. } => &self.cache,
             KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. } => &self.cache,
+            KeyValueStorageNamespace::ExportForkAdmissions { .. } => &self.persistent,
             _ => &self.persistent,
         }
     }
@@ -93,6 +94,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         let backend = self.backend_for_namespace(&namespace);
@@ -109,6 +111,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
             )
             .await

@@ -4903,22 +4903,49 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (
-            ctx.state.is_live(),
-            ctx.public_state.worker(),
-            ctx.state.replay_state.clone(),
-            ctx.entity_parent_start_index(),
-        )
-    });
+    let (is_live, worker, replay_state, parent_start_index, can_continue) =
+        store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.is_live(),
+                ctx.public_state.worker(),
+                ctx.state.replay_state.clone(),
+                ctx.entity_parent_start_index(),
+                Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
+                    && (ctx.runtime == OwnerRuntime::Agent
+                        || ctx.state.entity_execution_mode
+                            == Some(InvocationExecutionMode::ReplayingIncomplete)),
+            )
+        });
 
-    if is_live {
+    let recorded = if is_live {
+        None
+    } else {
+        let entry = replay_state.try_get_oplog_entry_owned().await?;
+        if entry.is_none() {
+            if !can_continue {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "FinishSpan",
+                    "replay ended in a context that cannot continue live",
+                ));
+            }
+            publish_incomplete_replay_tail_access(store, get_ctx)
+                .await?
+                .require_live()?;
+        }
+        entry
+    };
+    if let Some((_, entry)) = recorded {
+        if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "FinishSpan",
+                format!("{entry:?}"),
+            ));
+        }
+    } else {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
-    } else {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }
 
     store.with(|mut access| {

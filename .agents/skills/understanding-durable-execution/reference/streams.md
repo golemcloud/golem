@@ -21,6 +21,70 @@ encoded in key order. Retry tracing does not change invocation identity; the tar
 first accepted invocation's tracing context. Stream registration coordinates use the stable child
 invocation identity, and complete durable stream handles remain part of descriptor matching.
 
+Initial acceptance commits `Prepared`, `PendingAgentInvocation`, `Attached`, and foreign-input
+`TopologyPrepared` intents in one atomic oplog batch (`DurableStreamProducer::prepare_session`).
+Foreign descriptors and referenced handles are validated before appending. Remote attachment
+prepare/activate runs after that commit; a crash in between leaves the original queued invocation,
+principal, input bindings, and enough topology evidence for `recover_durable_stream_topologies`
+to finish attaching before guest reconstruction. An arriving retry cannot substitute its own
+invocation in that crash window.
+
+An exact-prefix fork retains the remote invocation key and its executor-authored origin. The
+original caller and fork join one target invocation, keeping the first accepted input bindings.
+The join compares execution configuration and authority after normalizing self-scoped permission
+owners to the common origin; card IDs, grants, scope, account, and non-self permissions still
+participate in the comparison. Transport slot IDs and element schemas must match. Both local and
+remote RPC report the accepted input handles before waiting for the result. The other caller
+durably cancels its unselected, locally owned agent-hosted inputs, never forwarded or public
+input slots. An empty cancelled drain exits immediately; a nonempty one replays its committed
+items before encountering the terminal. Rehydration repairs only the invocation's own topology,
+and debug replay never performs this live repair.
+
+Staged oplogs use a hidden indexed-storage namespace and a standalone primary actor, without
+visible oplog caches, archives or session indexes. Publication atomically moves a complete
+committed stage into an absent primary key. The primary key survives archival even when empty;
+only agent deletion removes it, so archival cannot let another fork overwrite an existing agent.
+SQL stores this key-existence fence separately from oplog entries, under a hidden namespace.
+Initial primary creation and staged publication atomically claim that fence. Staged payloads
+belong to the final target; discarding a losing stage never deletes the target's payload namespace.
+
+Fork publication commits the exact prefix, `ForkCut`, and any synthetic guest result before
+exposing the target. The immutable marker binds the source generation, cut and request kind;
+retries reconcile it even if the target has advanced. Guest `fork()` derives its phantom ID from
+the source generation and durable call's logical idempotency key, reserving the logical counter
+on live and replay paths. The recorded `Start` anchors both the key and the pre-call cut, so
+skipped log hints cannot change either. A crash after child publication but before the caller's
+result resumes the same child; independent phantom siblings cannot collide. Guest `fork()`
+inside an active atomic region returns an error before creating a child: rollback would discard
+the synthetic fork result. Tests: `guest_fork_retries_same_child_after_crash_before_caller_result`,
+`guest_fork_same_key_on_phantom_siblings_creates_distinct_children`.
+
+Export forks use the same publication path (`services/worker_fork/export.rs`). The gateway maps
+`{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a deterministic phantom agent and
+routes creation to the source executor. The executor pins one committed source horizon, resolves
+the opaque cursor plus message/byte sub-offset, and validates atomic/transaction cuts against
+that horizon's skipped regions. JSON sub-offsets count flattened messages; binary sub-offsets
+cannot cross the next append boundary. A terminal cursor retains its physical position, while
+the selected stream's continuation starts open unless the create request closes it.
+If the cut precedes execution, the export fork retains its selected queued invocation and any
+pending constructor. Unrelated queued invocations and updates are cancelled as in ordinary forks.
+
+`ForkCut` carries the source/target fingerprints, handle aliases, retained prefix and continuation
+epochs. Copied data retain their offsets; boundary payloads alone may be shortened. New external
+producer sequence state and attachment authority are not inherited. Each fork input receives only
+writes to its own URL, never future source writes. Other streams retain the state visible at the
+cut. Revert appends an adjacent `Revert` and self-targeted `ForkCut`, drains/fences old producers,
+then refolds and reconstructs through the ordinary worker lifecycle.
+
+The export creation receipt also records the original request, resolved anchor and initial-body
+hash. Retries use that receipt before consulting the source, so a later append or tombstone cannot
+move a default-tail cut. Initial content is schema-validated and committed in the hidden stage.
+Byte-limit failures precede quota reservation; persistent CAS admission enforces per-source rate
+and per-session counts. An inexpensive read-only precheck rejects exhausted budgets before copying.
+HTTP stream responses expose no fork headers; Golem's session manifest exposes provenance.
+Tests: `exported_fork_initial_content_and_receipt_survive_lost_resume_response`, the custom-API
+fork tests, and the CLI `reference_client_export_protocol_compatibility` scenarios.
+
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.

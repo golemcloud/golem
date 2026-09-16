@@ -1354,6 +1354,7 @@ impl WorkerService for DefaultWorkerService {
                     namespace.clone(),
                     &field,
                     current.as_deref(),
+                    &[],
                     &[(field.as_str(), encoded.as_slice())],
                 )
                 .await

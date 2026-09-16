@@ -131,6 +131,48 @@ use std::sync::Arc;
 use test_r::test;
 use uuid::Uuid;
 
+#[test]
+async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
+    let test_case = TestCase::builder(0)
+        .add(OplogEntry::no_op(None), |status| status)
+        .add(
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+            ),
+            |status| status,
+        )
+        .add(
+            OplogEntry::revert(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(3),
+            }),
+            |status| status,
+        )
+        .build();
+    let before = super::skipped_regions_at(
+        &test_case,
+        &test_case.owned_agent_id,
+        OplogIndex::from_u64(3),
+    )
+    .await
+    .unwrap();
+    let after = super::skipped_regions_at(
+        &test_case,
+        &test_case.owned_agent_id,
+        OplogIndex::from_u64(4),
+    )
+    .await
+    .unwrap();
+    assert!(before.is_in_deleted_region(OplogIndex::from_u64(2)));
+    assert!(!before.is_in_deleted_region(OplogIndex::from_u64(3)));
+    assert!(!after.is_in_deleted_region(OplogIndex::from_u64(2)));
+    assert!(after.is_in_deleted_region(OplogIndex::from_u64(3)));
+}
+
 fn update_status_with_new_entries(
     agent_mode: AgentMode,
     last_known: AgentStatusRecord,
@@ -214,6 +256,91 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     );
     assert!(applied.pending_durable_stream_cancellations.is_empty());
     assert!(applied.durable_stream_sessions.iter().next().is_none());
+}
+
+#[test]
+fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_jumps() {
+    use crate::services::worker_fork::lineage::tests::prepared;
+    use golem_common::model::durable_stream::{
+        StreamCancelReasonV1, StreamCancelRoleV1, StreamConsumerCancelAppliedRecordV1,
+        StreamConsumerCancelIntentRecordV1,
+    };
+    let first = crate::durable_host::durable_stream::tests::identity().invocation;
+    let mut second = first.clone();
+    second.idempotency_key = IdempotencyKey::fresh();
+    let intent = StreamConsumerCancelIntentRecordV1 {
+        format_version: 1,
+        session_key: first.clone(),
+        stream_id: golem_common::model::StreamId(Uuid::new_v4()),
+        epoch: 7,
+        role: StreamCancelRoleV1::OutputConsumer,
+        reason: StreamCancelReasonV1::Cancelled,
+        details: None,
+    };
+    let mut removed_intent = intent.clone();
+    removed_intent.session_key = second.clone();
+    removed_intent.stream_id = golem_common::model::StreamId(Uuid::new_v4());
+    let entry = |record| OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::Inline(Box::new(record)),
+    };
+    for revert in [false, true] {
+        let mut entries: BTreeMap<_, _> = [
+            StreamSessionRecordV1::Prepared(prepared(&first)),
+            StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+            StreamSessionRecordV1::Prepared(prepared(&second)),
+            StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+                intent: intent.clone(),
+                format_version: 1,
+            }),
+            StreamSessionRecordV1::ConsumerCancelIntent(removed_intent.clone()),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, record)| (OplogIndex::from_u64(i as u64 + 2), entry(record)))
+        .collect();
+        let region = OplogRegion {
+            start: OplogIndex::from_u64(4),
+            end: OplogIndex::from_u64(6),
+        };
+        entries.insert(
+            OplogIndex::from_u64(7),
+            if revert {
+                OplogEntry::revert(region)
+            } else {
+                OplogEntry::jump(None, region)
+            },
+        );
+        let status = update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            status
+                .durable_stream_sessions
+                .get(&first.idempotency_key)
+                .is_some()
+        );
+        assert_eq!(
+            status
+                .durable_stream_sessions
+                .get(&second.idempotency_key)
+                .is_none(),
+            revert
+        );
+        assert_eq!(
+            status.pending_durable_stream_cancellations,
+            HashSet::from([if revert {
+                intent.clone()
+            } else {
+                removed_intent.clone()
+            }]),
+        );
+    }
 }
 
 #[test]
@@ -1993,6 +2120,59 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
             .unwrap()
             .prepared,
         Some(OplogIndex::from_u64(test_case.entries.len() as u64))
+    );
+}
+
+#[test]
+async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
+    let mut test_case = TestCase::builder(1).build();
+    let baseline = test_case.entries[0].expected_status.clone();
+    let missing_payload = || OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: None,
+        },
+    };
+    test_case.entries.push(TestEntry {
+        oplog_entry: missing_payload(),
+        expected_status: baseline.clone(),
+    });
+    test_case.entries.push(TestEntry {
+        oplog_entry: missing_payload(),
+        expected_status: baseline.clone(),
+    });
+    test_case.entries.push(TestEntry {
+        oplog_entry: OplogEntry::revert(OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(3),
+        }),
+        expected_status: baseline.clone(),
+    });
+
+    let status = calculate_last_known_status_for_existing_worker(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        Some(baseline.clone()),
+    )
+    .await
+    .expect("reverted external payloads must not be downloaded");
+
+    assert!(status.durable_stream_sessions.iter().next().is_none());
+    test_case.entries.pop();
+    assert!(
+        calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(baseline),
+        )
+        .await
+        .is_err(),
+        "a missing retained payload must still fail reconstruction"
     );
 }
 

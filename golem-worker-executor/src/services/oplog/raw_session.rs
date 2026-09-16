@@ -56,8 +56,7 @@ impl RawSessionCache {
         let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
         let mut status = service
             .lookup_persisted(id, mode, committed, &key.idempotency_key)
-            .await?
-            .filter(|status| status.session_key.as_ref() == Some(key));
+            .await?;
         for (offset, entry) in buffer.iter().enumerate() {
             let index = OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1);
             if let OplogEntry::PendingAgentInvocation {
@@ -77,12 +76,14 @@ impl RawSessionCache {
                 continue;
             }
             if let Some(record) = record(entry)?
-                && record_key(&record) == Some(key)
+                && (matches!(record.as_ref(), StreamSessionRecordV1::ForkCut(_))
+                    || record_key(&record)
+                        .is_some_and(|session| session.idempotency_key == key.idempotency_key))
             {
                 apply(&mut status, index, &record);
             }
         }
-        Ok(status)
+        Ok(status.filter(|status| status.session_key.as_ref() == Some(key)))
     }
 
     pub fn insert(&mut self, key: StreamSessionKeyV1, status: Option<DurableStreamSessionStatus>) {
@@ -128,6 +129,10 @@ impl RawSessionCache {
                 return;
             }
         };
+        if matches!(record.as_ref(), StreamSessionRecordV1::ForkCut(_)) {
+            self.entries.clear();
+            return;
+        }
         let Some(key) = record_key(&record) else {
             return;
         };

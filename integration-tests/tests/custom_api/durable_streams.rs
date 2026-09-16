@@ -144,6 +144,22 @@ fn echo_stream_path(session: &str, slot: &str) -> String {
     format!("/durable-stream-agents/ds3-{session}/echo/invocations/{session}/streams/{slot}")
 }
 
+fn echo_fork_stream_path(session: &str, fork: &str, slot: &str) -> String {
+    format!(
+        "/durable-stream-agents/ds3-{session}/echo/forks/{fork}/invocations/{session}/streams/{slot}"
+    )
+}
+
+fn assert_transparent_fork(response: &reqwest::Response) {
+    for name in [
+        "stream-forked-from",
+        "stream-fork-offset",
+        "stream-fork-sub-offset",
+    ] {
+        assert!(!response.headers().contains_key(name));
+    }
+}
+
 async fn append_json(
     agent: &HttpTestContext,
     path: &str,
@@ -159,6 +175,477 @@ async fn append_json(
         request = request.header("stream-closed", "true");
     }
     Ok(request.send().await?)
+}
+
+#[test]
+#[timeout("120s")]
+async fn empty_prefix_forks_retain_acceptance_and_execute_independently(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    for populated in [false, true] {
+        let session = Uuid::new_v4().to_string();
+        let source = echo_stream_path(&session, "input");
+        let fork = echo_fork_stream_path(&session, "empty-prefix", "input");
+        assert_eq!(create(agent, &source).await?.status(), StatusCode::CREATED);
+        let empty = agent
+            .client
+            .head(agent.base_url.join(&source)?)
+            .send()
+            .await?;
+        let origin = header(&empty, "stream-next-offset");
+        if populated {
+            assert_eq!(
+                append_json(agent, &source, serde_json::json!("source-only"), true)
+                    .await?
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+        }
+        let mut request = agent
+            .client
+            .put(agent.base_url.join(&fork)?)
+            .header("stream-forked-from", &source);
+        if populated {
+            request = request.header("stream-fork-offset", origin);
+        }
+        let created = request.send().await?;
+        assert_eq!(
+            created.status(),
+            StatusCode::CREATED,
+            "{}",
+            created.text().await?
+        );
+        let prefix = agent.client.get(agent.base_url.join(&fork)?).send().await?;
+        assert_eq!(prefix.json::<Value>().await?, serde_json::json!([]));
+        assert_eq!(
+            append_json(agent, &fork, serde_json::json!(["fork-only"]), true)
+                .await?
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let output = echo_fork_stream_path(&session, "empty-prefix", "output");
+        wait_for_closed(agent, &output).await?;
+        let output = agent
+            .client
+            .get(agent.base_url.join(&output)?)
+            .send()
+            .await?;
+        assert_eq!(
+            output.json::<Value>().await?,
+            serde_json::json!(["fork-only"])
+        );
+        let source_read = agent
+            .client
+            .get(agent.base_url.join(&source)?)
+            .send()
+            .await?;
+        assert_eq!(
+            source_read.json::<Value>().await?,
+            if populated {
+                serde_json::json!(["source-only"])
+            } else {
+                serde_json::json!([])
+            }
+        );
+        if !populated {
+            let closed = agent
+                .client
+                .post(agent.base_url.join(&source)?)
+                .header("stream-closed", "true")
+                .send()
+                .await?;
+            assert_eq!(closed.status(), StatusCode::NO_CONTENT);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn json_forks_share_a_prefix_and_then_diverge_independently(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let source = echo_stream_path(&session, "input");
+    let source_output = echo_stream_path(&session, "output");
+    let fork = echo_fork_stream_path(&session, "branch", "input");
+    let fork_output = echo_fork_stream_path(&session, "branch", "output");
+
+    assert_eq!(
+        append_json(agent, &fork, serde_json::json!("must-not-create"), false)
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        append_json(
+            agent,
+            &source,
+            serde_json::json!(["shared-1", "shared-2"]),
+            false
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let prefix = agent
+        .client
+        .get(agent.base_url.join(&source)?)
+        .send()
+        .await?;
+    assert_eq!(prefix.status(), StatusCode::OK);
+    let fork_offset = header(&prefix, "stream-next-offset");
+    assert_eq!(
+        prefix.json::<Value>().await?,
+        serde_json::json!(["shared-1", "shared-2"])
+    );
+
+    let created = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &source)
+        .header("stream-fork-offset", &fork_offset)
+        .json(&serde_json::json!(["fork-1", "fork-2"]))
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(header(&created, "location"), fork);
+    assert_transparent_fork(&created);
+
+    let repeated = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &source)
+        .header("stream-fork-offset", &fork_offset)
+        .json(&serde_json::json!(["fork-1", "fork-2"]))
+        .send()
+        .await?;
+    assert_eq!(repeated.status(), StatusCode::OK);
+    assert_transparent_fork(&repeated);
+    let fork_head = agent
+        .client
+        .head(agent.base_url.join(&fork)?)
+        .send()
+        .await?;
+    assert_eq!(fork_head.status(), StatusCode::OK);
+    assert_transparent_fork(&fork_head);
+    assert!(fork_head.bytes().await?.is_empty());
+
+    let source_only = append_json(agent, &source, serde_json::json!("source-only"), false).await?;
+    assert_eq!(source_only.status(), StatusCode::NO_CONTENT);
+    let different_offset = header(&source_only, "stream-next-offset");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&fork)?)
+            .header("stream-forked-from", &source)
+            .header("stream-fork-offset", different_offset)
+            .json(&serde_json::json!(["fork-1", "fork-2"]))
+            .send()
+            .await?
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        append_json(agent, &fork, serde_json::json!("fork-only"), false)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let fork_read = agent.client.get(agent.base_url.join(&fork)?).send().await?;
+    assert_eq!(fork_read.status(), StatusCode::OK);
+    assert_transparent_fork(&fork_read);
+    let nested_offset = header(&fork_read, "stream-next-offset");
+    assert_eq!(
+        fork_read.json::<Value>().await?,
+        serde_json::json!(["shared-1", "shared-2", "fork-1", "fork-2", "fork-only"])
+    );
+
+    let nested = echo_fork_stream_path(&session, "nested", "input");
+    let nested_created = agent
+        .client
+        .put(agent.base_url.join(&nested)?)
+        .header("stream-forked-from", &fork)
+        .header("stream-fork-offset", &nested_offset)
+        .header("stream-closed", "true")
+        .json(&serde_json::json!(["nested-only"]))
+        .send()
+        .await?;
+    assert_eq!(nested_created.status(), StatusCode::CREATED);
+    assert_transparent_fork(&nested_created);
+
+    assert_eq!(
+        append_json(agent, &fork, serde_json::json!("fork-after-nested"), true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        append_json(agent, &source, serde_json::json!("source-last"), true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let nested_read = agent
+        .client
+        .get(agent.base_url.join(&nested)?)
+        .send()
+        .await?;
+    assert_eq!(nested_read.status(), StatusCode::OK);
+    assert_transparent_fork(&nested_read);
+    assert_eq!(header(&nested_read, "stream-closed"), "true");
+    assert_eq!(
+        nested_read.json::<Value>().await?,
+        serde_json::json!([
+            "shared-1",
+            "shared-2",
+            "fork-1",
+            "fork-2",
+            "fork-only",
+            "nested-only"
+        ])
+    );
+
+    for (path, expected) in [
+        (
+            &source,
+            serde_json::json!(["shared-1", "shared-2", "source-only", "source-last"]),
+        ),
+        (
+            &fork,
+            serde_json::json!([
+                "shared-1",
+                "shared-2",
+                "fork-1",
+                "fork-2",
+                "fork-only",
+                "fork-after-nested"
+            ]),
+        ),
+    ] {
+        let response = agent.client.get(agent.base_url.join(path)?).send().await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await?, expected);
+    }
+    wait_for_closed(agent, &source_output).await?;
+    wait_for_closed(agent, &fork_output).await?;
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&fork_output)?)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?,
+        serde_json::json!([
+            "shared-1",
+            "shared-2",
+            "fork-1",
+            "fork-2",
+            "fork-only",
+            "fork-after-nested"
+        ])
+    );
+
+    let fork_manifest =
+        format!("/durable-stream-agents/ds3-{session}/echo/forks/branch/invocations/{session}");
+    let manifest = agent
+        .client
+        .get(agent.base_url.join(&fork_manifest)?)
+        .send()
+        .await?;
+    assert_eq!(manifest.status(), StatusCode::OK);
+    let manifest = manifest.json::<Value>().await?;
+    assert_eq!(manifest["fork"]["sourcePath"], source);
+    assert_eq!(manifest["fork"]["forkOffset"], fork_offset);
+    assert_eq!(manifest["fork"]["subOffset"], 0);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn closed_output_can_be_forked_but_remains_externally_read_only(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let input = echo_stream_path(&session, "input");
+    let source = echo_stream_path(&session, "output");
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!(["one", "two"]), true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    wait_for_closed(agent, &source).await?;
+    let source_read = agent
+        .client
+        .get(agent.base_url.join(&source)?)
+        .send()
+        .await?;
+    assert_eq!(source_read.status(), StatusCode::OK);
+    let fork_offset = header(&source_read, "stream-next-offset");
+    assert_eq!(
+        source_read.json::<Value>().await?,
+        serde_json::json!(["one", "two"])
+    );
+
+    let fork = echo_fork_stream_path(&session, "output-copy", "output");
+    let created = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &source)
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_transparent_fork(&created);
+    let read = agent.client.get(agent.base_url.join(&fork)?).send().await?;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_transparent_fork(&read);
+    assert_eq!(
+        read.json::<Value>().await?,
+        serde_json::json!(["one", "two"])
+    );
+
+    let explicit = echo_fork_stream_path(&session, "explicit-terminal", "output");
+    let created = agent
+        .client
+        .put(agent.base_url.join(&explicit)?)
+        .header("stream-forked-from", &source)
+        .header("stream-fork-offset", &fork_offset)
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let manifest_path = format!(
+        "/durable-stream-agents/ds3-{session}/echo/forks/output-copy/invocations/{session}"
+    );
+    let manifest = agent
+        .client
+        .get(agent.base_url.join(&manifest_path)?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(manifest["fork"]["forkOffset"], fork_offset);
+
+    let post = append_json(agent, &fork, serde_json::json!("forbidden"), false).await?;
+    assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(header(&post, ALLOW.as_str()), "PUT, HEAD, GET, DELETE");
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn fork_rejects_a_tombstoned_source_and_supports_byte_suboffsets(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let tombstone_session = Uuid::new_v4().to_string();
+    let tombstoned = echo_stream_path(&tombstone_session, "input");
+    assert_eq!(
+        append_json(agent, &tombstoned, serde_json::json!("retained"), false)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let read = agent
+        .client
+        .get(agent.base_url.join(&tombstoned)?)
+        .send()
+        .await?;
+    let tombstone_offset = header(&read, "stream-next-offset");
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&tombstoned)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let rejected = echo_fork_stream_path(&tombstone_session, "too-late", "input");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&rejected)?)
+            .header("stream-forked-from", &tombstoned)
+            .header("stream-fork-offset", tombstone_offset)
+            .send()
+            .await?
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    let session = Uuid::new_v4().to_string();
+    let base =
+        format!("/durable-stream-agents/ds3-{session}/echo-bytes/invocations/{session}/streams");
+    let source = format!("{base}/input");
+    let append = agent
+        .client
+        .post(agent.base_url.join(&source)?)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .body(&b"abc"[..])
+        .send()
+        .await?;
+    assert_eq!(append.status(), StatusCode::NO_CONTENT);
+    let source_read = agent
+        .client
+        .get(agent.base_url.join(&source)?)
+        .send()
+        .await?;
+    assert_eq!(source_read.status(), StatusCode::OK);
+    let fork_offset = header(&source_read, "stream-next-offset");
+    assert_eq!(source_read.bytes().await?.as_ref(), b"abc");
+    let append = agent
+        .client
+        .post(agent.base_url.join(&source)?)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .body(&b"def"[..])
+        .send()
+        .await?;
+    assert_eq!(append.status(), StatusCode::NO_CONTENT);
+
+    let fork = format!(
+        "/durable-stream-agents/ds3-{session}/echo-bytes/forks/partial/invocations/{session}/streams/input"
+    );
+    let created = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &source)
+        .header("stream-fork-offset", &fork_offset)
+        .header("stream-fork-sub-offset", "2")
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_transparent_fork(&created);
+    let fork_read = agent.client.get(agent.base_url.join(&fork)?).send().await?;
+    assert_eq!(fork_read.status(), StatusCode::OK);
+    assert_transparent_fork(&fork_read);
+    assert_eq!(header(&fork_read, "stream-closed"), "true");
+    assert_eq!(fork_read.bytes().await?.as_ref(), b"abcde");
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&fork)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let recreated = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &source)
+        .header("stream-fork-offset", &fork_offset)
+        .header("stream-fork-sub-offset", "2")
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(recreated.status(), StatusCode::CONFLICT);
+    Ok(())
 }
 
 #[test]

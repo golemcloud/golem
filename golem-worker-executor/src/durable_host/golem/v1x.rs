@@ -1531,6 +1531,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+        // Reserve the logical counter on replay too so subsequent calls keep their keys.
+        // The recorded Start, unlike the pre-call cursor, is unaffected by skipped hints.
+        let fork_key = self.derive_idempotency_key(handle.start_index());
+        let source_fingerprint = self
+            .public_state
+            .worker()
+            .get_initial_worker_metadata()
+            .fingerprint;
+        let forked_phantom_id = Uuid::new_v5(
+            &source_fingerprint.0,
+            format!("golem:agent-fork:{}", fork_key.value).as_bytes(),
+        );
         let result = 'result: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -1550,9 +1562,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await?;
             }
+            if !self.state.active_atomic_regions.is_empty() {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiFork {
+                            forked_phantom_id: Uuid::nil(),
+                            result: Err("Cannot fork inside an atomic region".to_string()),
+                        },
+                    )
+                    .await?;
+            }
 
             let retry_properties = RetryContext::golem_api("fork");
-            let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
                 match ParsedAgentId::try_new(
@@ -1579,11 +1601,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // child call carrying `ForkResult::Forked`. The source call completes later with
             // `ForkResult::Original`. We still force a commit so the eager `Start` is durable for
             // this (source) worker's own crash recovery.
-            let oplog_index_cut_off = handle.begin_index();
             let copied_scope_start = self
                 .state
                 .opens_durable_scope(&DurableFunctionType::WriteRemote)
-                .then_some(oplog_index_cut_off);
+                .then_some(handle.begin_index());
+            let oplog_index_cut_off =
+                copied_scope_start.unwrap_or_else(|| handle.start_index().previous());
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
