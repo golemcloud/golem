@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -44,6 +45,12 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
+
+    async fn archive_oplog(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError>;
 
     /// Gets or creates a worker in suspended state
     async fn get_or_create_suspended(
@@ -94,6 +101,29 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
+    async fn archive_oplog(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        let activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade);
+        match activator {
+            Some(activator) => {
+                activator
+                    .archive_oplog(owned_agent_id, last_oplog_index)
+                    .await
+            }
+            None => Err(WorkerExecutorError::runtime(
+                "WorkerActivator is disabled, not archiving oplog",
+            )),
+        }
+    }
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -224,6 +254,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
+    async fn archive_oplog(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        match self
+            .all
+            .active_agents()
+            .get_existing(&self.all, owned_agent_id, Principal::anonymous())
+            .await
+        {
+            Ok(worker) => worker.archive_oplog(last_oplog_index).await,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,

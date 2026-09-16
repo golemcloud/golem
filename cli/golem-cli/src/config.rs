@@ -537,6 +537,7 @@ pub struct ClientConfig {
     pub registry_url: Url,
     pub worker_url: Url,
     pub service_http_client_config: HttpClientConfig,
+    pub component_upload_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
@@ -556,6 +557,9 @@ impl From<&Profile> for ClientConfig {
             registry_url,
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            component_upload_http_client_config: HttpClientConfig::new_for_component_upload(
+                allow_insecure,
+            ),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
@@ -614,6 +618,9 @@ impl ClientConfig {
             registry_url,
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            component_upload_http_client_config: HttpClientConfig::new_for_component_upload(
+                allow_insecure,
+            ),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
@@ -899,6 +906,16 @@ impl HttpClientConfig {
             read_timeout: None,
         }
         .with_env_overrides("GOLEM_HTTP_INVOKE")
+    }
+
+    pub fn new_for_component_upload(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
+            timeout: Some(Duration::from_secs(15 * 60)),
+            connect_timeout: Some(Duration::from_secs(10)),
+            read_timeout: None,
+        }
+        .with_env_overrides("GOLEM_HTTP_COMPONENT_UPLOAD")
     }
 
     pub fn new_for_file_download(allow_insecure: bool) -> Self {

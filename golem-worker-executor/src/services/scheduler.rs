@@ -14,8 +14,7 @@
 
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::HasOplog;
-use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, Oplog, OplogService};
+use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
@@ -30,6 +29,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
@@ -74,10 +74,11 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
-    async fn open_oplog(
+    async fn archive_oplog(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError>;
 
     // enqueue an invocation to the worker
     async fn enqueue_invocation(
@@ -108,22 +109,14 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         self.deref().activate_worker(owned_agent_id).await
     }
 
-    async fn open_oplog(
+    async fn archive_oplog(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        let worker = self
-            .get_or_create_suspended(
-                owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                Principal::anonymous(),
-            )
-            .await?;
-        Ok(worker.oplog())
+        last_oplog_index: OplogIndex,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        self.deref()
+            .archive_oplog(owned_agent_id, last_oplog_index)
+            .await
     }
 
     async fn enqueue_invocation(
@@ -524,79 +517,43 @@ impl SchedulerServiceDefault {
                 debug!("Running scheduled archive oplog for {account_id}/{owned_agent_id}");
 
                 if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
-                    let current_last_index = self
-                        .oplog_service
-                        .get_last_index(&owned_agent_id, agent_mode)
+                    let start = Instant::now();
+                    let archive_result = self
+                        .with_lease_renewal(
+                            schedule_id,
+                            lease_owner,
+                            self.worker_access
+                                .archive_oplog(&owned_agent_id, last_oplog_index),
+                        )
                         .await;
-                    if current_last_index == last_oplog_index {
-                        // Need to create the `Worker` instance to avoid race conditions
-                        match self.worker_access.open_oplog(&owned_agent_id).await {
-                            Ok(oplog) => {
-                                let start = Instant::now();
-                                let archive_result = self
-                                    .with_lease_renewal(schedule_id, lease_owner, async {
-                                        match MultiLayerOplog::try_archive(&oplog).await {
-                                            Some(r) => Some(r),
-                                            None => EphemeralOplog::try_archive(&oplog).await,
-                                        }
-                                    })
-                                    .await;
-                                let archive_result = match archive_result {
-                                    Ok(result) => result,
-                                    Err(error) => {
-                                        warn!(
-                                            schedule_id = %schedule_id,
-                                            agent_id = owned_agent_id.to_string(),
-                                            "Stopped scheduled oplog archival because lease renewal failed: {error}"
-                                        );
-                                        return false;
-                                    }
-                                };
-                                if let Some(more) = archive_result {
-                                    record_scheduled_archive(start.elapsed(), more);
-                                    if more {
-                                        self.schedule(
-                                            now.add(next_after),
-                                            ScheduledAction::ArchiveOplog {
-                                                account_id,
-                                                owned_agent_id,
-                                                agent_mode,
-                                                last_oplog_index,
-                                                next_after,
-                                            },
-                                        )
-                                        .await;
-                                    } else {
-                                        info!(
-                                            agent_id = owned_agent_id.to_string(),
-                                            "Deleting cached status of fully archived worker"
-                                        );
-                                        // The oplog is fully archived, so we can also delete the cached worker status
-                                        if let Err(error) = self
-                                            .worker_service
-                                            .remove_cached_status(&owned_agent_id)
-                                            .await
-                                        {
-                                            error!(
-                                                agent_id = owned_agent_id.to_string(),
-                                                "Failed to delete the cached status of a fully archived worker: {error}"
-                                            );
-                                            return false;
-                                        }
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                error!(
-                                    agent_id = owned_agent_id.to_string(),
-                                    "Failed to activate worker for archiving: {error}"
-                                );
-                                return false;
+                    match archive_result {
+                        Ok(Ok(Some(more))) => {
+                            record_scheduled_archive(start.elapsed(), more);
+                            if more {
+                                self.schedule(
+                                    now.add(next_after),
+                                    ScheduledAction::ArchiveOplog {
+                                        account_id,
+                                        owned_agent_id,
+                                        agent_mode,
+                                        last_oplog_index,
+                                        next_after,
+                                    },
+                                )
+                                .await;
                             }
                         }
+                        Ok(Ok(None)) => {}
+                        Ok(Err(error)) => {
+                            error!(agent_id = %owned_agent_id, error = %error, "Failed to archive worker oplog");
+                            return false;
+                        }
+                        Err(error) => {
+                            warn!(schedule_id = %schedule_id, agent_id = %owned_agent_id, error = %error,
+                                "Stopped scheduled oplog archival because lease renewal failed");
+                            return false;
+                        }
                     }
-
-                    // TODO: metrics
                 }
                 true
             }
@@ -780,7 +737,7 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
+    use crate::services::oplog::{OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
@@ -846,10 +803,11 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -893,10 +851,11 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -953,10 +912,11 @@ mod tests {
             unreachable!()
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -1009,10 +969,11 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1052,10 +1013,11 @@ mod tests {
             Err(WorkerExecutorError::runtime("injected activation failure"))
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1095,10 +1057,11 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1147,7 +1110,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 

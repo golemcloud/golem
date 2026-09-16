@@ -33,6 +33,7 @@ use crate::services::resource_usage_metering::{
     install_filesystem_usage, open_window, stop_metering,
 };
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
@@ -281,9 +282,43 @@ impl<Adapter: SandboxFilesystemAdapter> Debug for LimitFailure<Adapter> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub(crate) struct DeleteFailure {
-    pub(crate) source: FilesystemStorageError,
+    pub(crate) source: Arc<FilesystemStorageError>,
+    retry: Option<RetryDeletion>,
+}
+
+type RetryDeletion = Arc<dyn Fn() -> BoxFuture<'static, Result<(), DeleteFailure>> + Send + Sync>;
+
+impl Debug for DeleteFailure {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeleteFailure")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DeleteFailure {
+    fn unverified(operation: &'static str) -> Self {
+        Self {
+            source: Arc::new(FilesystemStorageError::verification(
+                operation,
+                std::path::Path::new("<agent-filesystem>"),
+            )),
+            retry: None,
+        }
+    }
+
+    pub(crate) fn retry(&self) -> BoxFuture<'static, Result<(), DeleteFailure>> {
+        match &self.retry {
+            Some(retry) => retry(),
+            None => {
+                let failure = self.clone();
+                Box::pin(async move { Err(failure) })
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1332,12 +1367,9 @@ pub(crate) fn delete<Adapter: SandboxFilesystemAdapter>(
     spawn_cleanup(generation, Some(sender));
     async move {
         receiver.await.unwrap_or_else(|_| {
-            Err(DeleteFailure {
-                source: FilesystemStorageError::verification(
-                    "observe agent filesystem deletion",
-                    std::path::Path::new("<agent-filesystem>"),
-                ),
-            })
+            Err(DeleteFailure::unverified(
+                "observe agent filesystem deletion",
+            ))
         })
     }
 }
@@ -1356,12 +1388,9 @@ pub(crate) fn delete_created<Adapter: SandboxFilesystemAdapter>(
     spawn_cleanup(generation, Some(sender));
     async move {
         receiver.await.unwrap_or_else(|_| {
-            Err(DeleteFailure {
-                source: FilesystemStorageError::verification(
-                    "observe created agent filesystem deletion",
-                    std::path::Path::new("<agent-filesystem>"),
-                ),
-            })
+            Err(DeleteFailure::unverified(
+                "observe created agent filesystem deletion",
+            ))
         })
     }
 }
@@ -1400,22 +1429,35 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
 ) {
     spawn_module_task(async move {
         generation.registry.wait_for_drain().await;
-        let sandbox = generation.sandbox.write().await.take();
-        let result = match sandbox {
-            Some(sandbox) => match Arc::try_unwrap(sandbox) {
-                Ok(sandbox) => Adapter::delete_and_verify(sandbox)
-                    .await
-                    .map_err(|source| DeleteFailure { source }),
-                Err(_) => Err(DeleteFailure {
-                    source: FilesystemStorageError::verification(
-                        "take exclusive ownership for agent filesystem deletion",
-                        std::path::Path::new("<agent-filesystem>"),
-                    ),
-                }),
-            },
+        let mut sandbox = generation.sandbox.write().await;
+        let result = match sandbox.as_ref() {
+            Some(adapter) if Arc::strong_count(adapter) == 1 => {
+                Adapter::delete_and_verify(adapter.as_ref()).await
+            }
+            Some(_) => Err(FilesystemStorageError::verification(
+                "take exclusive ownership for agent filesystem deletion",
+                std::path::Path::new("<agent-filesystem>"),
+            )),
             None => Ok(()),
         };
-        drop(generation);
+        if result.is_ok() {
+            sandbox.take();
+        }
+        drop(sandbox);
+        let result = result.map_err(|source| DeleteFailure {
+            source: Arc::new(source),
+            retry: Some(Arc::new(move || {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                spawn_cleanup(Arc::clone(&generation), Some(sender));
+                Box::pin(async move {
+                    receiver.await.unwrap_or_else(|_| {
+                        Err(DeleteFailure::unverified(
+                            "observe retried agent filesystem deletion",
+                        ))
+                    })
+                })
+            })),
+        });
         if let Some(observer) = observer {
             let _ = observer.send(result);
         }
