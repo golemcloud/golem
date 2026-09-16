@@ -5526,6 +5526,11 @@ struct FakeOwnershipState {
     /// arrived yet fails, with the `Unknown` that `sharding_not_ready_error`
     /// produces. That must never be read as "the agent moved".
     assignment_missing: AtomicBool,
+    /// Report every check the way an executor whose shard has moved away reports
+    /// it, without a revoke ever arriving. A revoke gives the agent up here and
+    /// answers its callers directly, so it is the wrong instrument for a test
+    /// aimed at the periodic ownership re-check.
+    agent_moved: AtomicBool,
     /// Make the next check announce itself, wait, and only then report that the
     /// agent is not ours.
     hold_next_check: AtomicBool,
@@ -5556,6 +5561,16 @@ impl ShardService for FakeOwnership {
             return Err(WorkerExecutorError::Unknown {
                 details: "Sharding is not ready".to_string(),
             });
+        }
+
+        if self.state.agent_moved.load(Ordering::SeqCst) {
+            self.state
+                .agent_moved_reports
+                .fetch_add(1, Ordering::SeqCst);
+            return Err(WorkerExecutorError::invalid_shard_id(
+                ShardId::new(0),
+                HashSet::new(),
+            ));
         }
 
         // Taken, not read, so concurrent checks from other calls fall straight
@@ -5686,8 +5701,15 @@ impl OwnershipControls {
         self.state.assignment_missing.store(true, Ordering::SeqCst);
     }
 
+    /// Report every ownership check the way an executor whose shard has moved
+    /// away reports it. Lasts until [`Self::stop_pretending`].
+    pub fn pretend_the_agent_moved(&self) {
+        self.state.agent_moved.store(true, Ordering::SeqCst);
+    }
+
     pub fn stop_pretending(&self) {
         self.state.assignment_missing.store(false, Ordering::SeqCst);
+        self.state.agent_moved.store(false, Ordering::SeqCst);
     }
 
     /// Hold the next ownership check open, and return once one has arrived.
@@ -5730,6 +5752,7 @@ pub fn fake_ownership() -> (TestExecutorOverrides, OwnershipControls) {
 
     let state = Arc::new(FakeOwnershipState {
         assignment_missing: AtomicBool::new(false),
+        agent_moved: AtomicBool::new(false),
         hold_next_check: AtomicBool::new(false),
         assignment_missing_reports: AtomicUsize::new(0),
         agent_moved_reports: AtomicUsize::new(0),

@@ -5821,10 +5821,15 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
 /// Control for [`a_caller_is_answered_when_its_agents_shard_is_taken_away`].
 ///
 /// An agent's shard leaves this executor and comes straight back, and the
-/// promise it is parked on is then completed here. What this pins, and the test
-/// below cannot, is that revoking a shard interrupts the agents on it with
-/// `InterruptKind::Restart`, and that interrupt on its own does not strand the
-/// caller. So the test below is measuring the handoff and not the interrupt.
+/// promise it is parked on is then completed here. A revoke gives the agent up
+/// rather than restarting it in place - a restart would reopen its oplog at an
+/// epoch this executor no longer holds - so the caller is answered at once with
+/// an error it can retry, and the shard returning a moment later does not
+/// un-answer it. What has to survive the round trip is the work: the agent is
+/// this executor's again, the invocation it was running finishes here, and the
+/// retry worker-service makes under the same idempotency key is handed that
+/// result instead of running it a second time. So the test below is measuring
+/// the handoff and not the giving-up.
 ///
 /// It does *not* prove the `select!` is cancel-safe, though it did have to stop
 /// claiming that twice. Only the `wait_for` future is dropped on a tick;
@@ -5844,7 +5849,7 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let parked = park_a_caller_on_a_promise(
+    let mut parked = park_a_caller_on_a_promise(
         &executor,
         &context,
         host_api_tests,
@@ -5857,17 +5862,37 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
     revoke_shard_zero(&executor).await?;
     assign_shard_zero(&executor).await?;
 
-    // Sit here long enough for the caller's ownership re-check to run several
-    // times before the result exists, so the answer has to survive the re-check
-    // firing repeatedly and finding nothing wrong.
+    // Answered by the giving-up, not left to the ownership re-check: the revoke reached this
+    // executor, so nothing here waits to find out that the agent moved.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although the revoke had \
+             already given its agent up here",
+        )
+        .await?;
+    let error = answer.expect_err(
+        "the agent was given up when its shard was revoked, so the parked call cannot have \
+         been handed a value",
+    );
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be told to retry rather than handed a failure it would surface to \
+         the user; instead it got: {rendered}"
+    );
+
+    // Sit here long enough for the re-check to have run several times, so the retry below is
+    // answered by an agent that survived the window rather than one that happened to be quick.
     sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 3).await;
 
     parked.complete_the_promise(&executor, vec![42]).await?;
 
     let value = parked
-        .value_within(
-            Duration::from_secs(30),
-            "caller was not answered even though the shard came back and the promise \
+        .retry_within(
+            &executor,
+            Duration::from_secs(60),
+            "the retry was never answered even though the shard came back and the promise \
              was completed on this executor",
         )
         .await?;
@@ -5893,9 +5918,13 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
 /// never disturbed, so nothing below the application layer had anything to
 /// notice.
 ///
-/// What it should get is an error of the `InvalidShardId` family, which is
-/// already what worker-service needs to invalidate its routing table and retry
-/// against the new owner. That path exists and works; nothing used to reach it.
+/// What it should get is an error worker-service answers by invalidating its
+/// routing table and retrying against the new owner. Two errors carry that
+/// meaning, and which one arrives depends on how the agent was lost: a revoke
+/// that reaches this executor gives the agent up and answers its callers with
+/// `ShardingNotReady` at once, while a shard that moves without a revoke
+/// arriving is caught by the periodic ownership re-check, which reports
+/// `InvalidShardId`. Either is a retry; silence is not.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -5907,7 +5936,7 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let parked =
+    let mut parked =
         park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-shard-taken")
             .await?;
 
@@ -5934,7 +5963,9 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
         answer.expect_err("nobody completed the promise, so the only honest answer is an error");
     let rendered = format!("{error:#}");
     assert!(
-        rendered.contains("InvalidShardId"),
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("InvalidShardId"),
         "the caller has to be told the shard moved, because that is what makes \
          worker-service invalidate its routing table and retry against the new \
          owner; instead it got: {rendered}"
@@ -6076,6 +6107,11 @@ async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
 /// The buffer is shrunk to 16 so a burst of 64 every 50ms is enough to keep
 /// the receiver behind; with the default 100000 the flood would have to be
 /// that much larger to say the same thing.
+///
+/// The agent is moved by [`fake_ownership`] rather than by a real revoke. A
+/// revoke that reaches this executor gives the agent up and answers its callers
+/// itself, so the re-check this test exists for would never run and the flood
+/// would prove nothing.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -6086,14 +6122,12 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.limits.invocation_result_broadcast_capacity = 16;
-        })),
-        ..Default::default()
-    };
+    let (mut overrides, controls) = fake_ownership();
+    overrides.configure = Some(Arc::new(|config| {
+        config.limits.invocation_result_broadcast_capacity = 16;
+    }));
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let parked = park_a_caller_on_a_promise(
+    let mut parked = park_a_caller_on_a_promise(
         &executor,
         &context,
         host_api_tests,
@@ -6101,12 +6135,11 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
     )
     .await?;
 
-    // Taken while the agent is still resident; revoking its shard drops it.
     let events = executor.event_bus(&parked.agent_id).await?;
 
-    info!("Revoking the shard for good, then flooding the event bus with somebody else's news");
+    info!("Reporting the agent as moved, then flooding the event bus with somebody else's news");
 
-    revoke_shard_zero(&executor).await?;
+    controls.pretend_the_agent_moved();
 
     let somebody_else = AgentId {
         component_id: parked.agent_id.component_id,
@@ -6129,6 +6162,10 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
         }
     });
 
+    // Left unread while the flood runs, so the buffer overflows under it however
+    // the runtime schedules the two. Reading it straight away races the flood:
+    // a reader on another worker thread can keep pace with it and never lag.
+    sleep(Duration::from_millis(200)).await;
     let overflowed =
         tokio::time::timeout(Duration::from_secs(2), probe.wait_for(|_| None::<()>)).await;
     if !matches!(overflowed, Ok(Err(RecvError::Lagged(_)))) {
@@ -6158,6 +6195,13 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
     assert!(
         rendered.contains("InvalidShardId"),
         "the caller has to be told the shard moved; instead it got: {rendered}"
+    );
+    // Without this the test also passes when the answer came from somewhere other than the
+    // re-check, which is the one path the flood is here to starve.
+    assert!(
+        controls.agent_moved_reports() >= 1,
+        "the ownership re-check never ran while the bus was lagging, so nothing here says the \
+         deadline arm survives a starved subscription"
     );
     Ok(())
 }
@@ -6520,17 +6564,25 @@ async fn park_a_caller_on_a_promise(
 
     let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
 
+    // Parked under an explicit key so a test can reissue the call the way worker-service reissues
+    // one it was told to reroute: the retry lands on this same invocation instead of starting a
+    // second run of it.
+    let idempotency_key = IdempotencyKey::fresh();
+
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
+    let key_clone = idempotency_key.clone();
+    let params = promise_data.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &key_clone,
                     "await_promise",
-                    promise_data,
+                    params,
                 )
                 .await
         }
@@ -6545,6 +6597,10 @@ async fn park_a_caller_on_a_promise(
         agent_id: worker_id,
         promise_id: promise_id_value,
         caller: fiber,
+        component,
+        parsed_agent_id: agent_id,
+        idempotency_key,
+        promise_data,
     })
 }
 
@@ -6554,13 +6610,18 @@ struct ParkedCaller {
     agent_id: AgentId,
     promise_id: SchemaValue,
     caller: JoinHandle<anyhow::Result<AgentResult>>,
+    /// What it takes to reissue the parked call under its own idempotency key.
+    component: ComponentDto,
+    parsed_agent_id: golem_common::model::agent::ParsedAgentId,
+    idempotency_key: IdempotencyKey,
+    promise_data: golem_common::schema::TypedSchemaValue,
 }
 
 impl ParkedCaller {
     /// Waits for the parked call to come back. The outer result says whether it
     /// was answered at all; the inner one is what it was told.
     async fn answer_within(
-        mut self,
+        &mut self,
         patience: Duration,
         gave_up: &str,
     ) -> anyhow::Result<anyhow::Result<AgentResult>> {
@@ -6593,9 +6654,42 @@ impl ParkedCaller {
         Ok(())
     }
 
+    /// Reissues the parked call under its original idempotency key, the way
+    /// worker-service reissues one an executor told it to reroute, and returns
+    /// the value that retry is given.
+    ///
+    /// The key is what makes this a retry rather than a second run: an
+    /// invocation already recorded under it is not executed again, so the answer
+    /// here is the answer to the call that was parked.
+    async fn retry_within(
+        &self,
+        executor: &TestWorkerExecutor,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
+        tokio::time::timeout(
+            patience,
+            executor.invoke_and_await_agent_with_key(
+                &self.component,
+                &self.parsed_agent_id,
+                &self.idempotency_key,
+                "await_promise",
+                self.promise_data.clone(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow!("{gave_up}"))??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))
+    }
+
     /// Waits for the parked call and returns the value it was given, failing if
     /// it was not answered in time or was answered with an error.
-    async fn value_within(self, patience: Duration, gave_up: &str) -> anyhow::Result<SchemaValue> {
+    async fn value_within(
+        mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
         self.answer_within(patience, gave_up)
             .await??
             .into_return_value()
