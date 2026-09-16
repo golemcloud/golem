@@ -277,6 +277,34 @@ pub fn AgentType::ephemeral_json(
 }
 
 ///|
+/// Address a known ephemeral phantom for one invocation. The final identity
+/// is supplied by invocation metadata and cannot be reused as a stable ID.
+pub fn AgentType::ephemeral_phantom_value(
+  self : AgentType,
+  constructor_value : @model.SchemaValue,
+  phantom_id : @types.Uuid,
+) -> ReflectedAgentClient raise ReflectError {
+  guard self.mode == Ephemeral else {
+    raise Identity(
+      "ephemeral phantom invocation is unavailable for durable agents",
+    )
+  }
+  self.client_value(constructor_value, Some(phantom_id), None)
+}
+
+///|
+pub fn AgentType::ephemeral_phantom_json(
+  self : AgentType,
+  constructor_json : Json,
+  phantom_id : @types.Uuid,
+) -> ReflectedAgentClient raise ReflectError {
+  self.ephemeral_phantom_value(
+    self.constructor_input.pack_json(constructor_json),
+    phantom_id,
+  )
+}
+
+///|
 fn ReflectedAgentClient::require_method(
   self : ReflectedAgentClient,
   name : String,

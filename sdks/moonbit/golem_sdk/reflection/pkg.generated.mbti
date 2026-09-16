@@ -53,6 +53,8 @@ pub(all) struct AgentType {
 pub fn AgentType::agent_id_json(Self, Json, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn AgentType::agent_id_value(Self, @schema_model.SchemaValue, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn AgentType::ephemeral_json(Self, Json) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::find_method(Self, String) -> AgentMethod?
 pub fn AgentType::get_json(Self, Json) -> ReflectedAgentClient raise ReflectError
