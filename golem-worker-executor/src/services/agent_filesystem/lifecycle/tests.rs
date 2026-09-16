@@ -586,16 +586,6 @@ fn call_count(control: &ScriptedSandboxFilesystemControl, operation: &str) -> us
         .count()
 }
 
-async fn wait_for_call(control: &ScriptedSandboxFilesystemControl, operation: &str) {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !has_call(control, operation) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-}
-
 async fn assert_insert_coordination(
     generation_handle: &FilesystemGenerationHandle<ScriptedSandboxFilesystem>,
     control: &ScriptedSandboxFilesystemControl,
@@ -1217,6 +1207,7 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     control.push_observe_allocation(Err(unsupported_allocation()));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("observe_allocation");
+    let deletion = control.block("delete_and_verify");
 
     let transition = finish_reconstruction(filesystem);
     assert!(matches!(
@@ -1228,8 +1219,17 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(weak.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(weak.upgrade().is_some());
+    deletion.release();
+    // Starting deletion does not mean its owning task has released the generation yet.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the reconstruction generation");
 }
 
 #[test]
@@ -1691,6 +1691,7 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     }));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("install_limits");
+    let deletion = control.block("delete_and_verify");
 
     let transition = set_limits(filesystem, ResolvedStorageLimits::Finite(finite));
     assert!(matches!(
@@ -1709,8 +1710,16 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(generation_handle.generation.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(generation_handle.generation.upgrade().is_some());
+    deletion.release();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while generation_handle.generation.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the limit-update generation");
 }
 
 #[test]
