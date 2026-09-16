@@ -470,9 +470,10 @@ fn SchemaRef::unpack(
         "unit": Json::string(value.unit),
       })
     }
-    (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(_))
-    | (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(_)) =>
-      raise Json("this rich schema type is not yet supported by the JSON codec")
+    (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(value)) =>
+      Json::string(datetime_to_json(value))
+    (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(value)) =>
+      Json::string(duration_to_json(value))
     (@model.SchemaTypeBody::Secret(_), @model.SchemaValue::Secret(_))
     | (@model.SchemaTypeBody::QuotaToken(_), @model.SchemaValue::QuotaToken(_))
     | (
@@ -730,8 +731,8 @@ fn SchemaRef::pack(
         unit: json_string(required_field(fields, "unit")),
       })
     }
-    Datetime | Duration =>
-      raise Json("this rich schema type is not yet supported by the JSON codec")
+    Datetime => Datetime(datetime_from_json(json_string(json)))
+    Duration => Duration(duration_from_json(json))
     Secret(_) | QuotaToken(_) | PermissionCard(_) =>
       raise Json("capability values cannot be constructed from JSON")
     Future(_) | Stream(_) =>

@@ -96,6 +96,60 @@ test "quantity JSON round-trips within the safe integer range" {
 }
 
 ///|
+test "datetime JSON round-trips UTC instants and rejects invalid dates" {
+  let schema = test_schema(Datetime)
+  let instant = Json::string("1970-01-01T00:00:00.123456789Z")
+  assert_eq(
+    schema.pack_json(instant),
+    @model.SchemaValue::Datetime({ seconds: 0L, nanoseconds: 123456789U, }),
+  )
+  assert_eq(schema.unpack_json(schema.pack_json(instant)), instant)
+  assert_eq(
+    schema.unpack_json(
+      @model.SchemaValue::Datetime({ seconds: -1L, nanoseconds: 0U, }),
+    ),
+    Json::string("1969-12-31T23:59:59Z"),
+  )
+  assert_eq(
+    schema.unpack_json(
+      @model.SchemaValue::Datetime({ seconds: -62167219200L, nanoseconds: 0U, }),
+    ),
+    Json::string("0000-01-01T00:00:00Z"),
+  )
+  try schema.pack_json(Json::string("2025-02-29T00:00:00Z")) catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected invalid civil date to be rejected")
+  }
+}
+
+///|
+test "duration JSON round-trips ISO strings and accepts shorthand" {
+  let schema = test_schema(Duration)
+  let value = @model.SchemaValue::Duration(-90061000000001L)
+  let json = Json::string("-P1DT1H1M1.000000001S")
+  assert_eq(schema.unpack_json(value), json)
+  assert_eq(schema.pack_json(json), value)
+  assert_eq(
+    schema.pack_json(Json::string("1500ms")),
+    @model.SchemaValue::Duration(1500000000L),
+  )
+  assert_eq(
+    schema.pack_json(Json::string("-9223372036854775808ns")),
+    @model.SchemaValue::Duration(-9223372036854775807L - 1L),
+  )
+  assert_eq(
+    schema.pack_json(Json::object({ "nanoseconds": Json::number(42.0) })),
+    @model.SchemaValue::Duration(42L),
+  )
+  try schema.pack_json(Json::string("PT9223372037S")) catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected duration overflow to be rejected")
+  }
+}
+
+///|
 test "flags JSON uses names while SchemaValue uses positions" {
   let schema = test_schema(Flags(["read", "write", "admin"]))
   let input = Json::array([Json::string("write"), Json::string("admin")])
