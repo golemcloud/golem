@@ -3,7 +3,45 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findGolemAppDir } from "../src/workspace.js";
+import { findGolemAppDir, golemServerArgs, resolveRunRouterPort } from "../src/workspace.js";
+
+describe("resolveRunRouterPort", () => {
+  it("prefers a run override and otherwise uses the scenario port", () => {
+    assert.equal(resolveRunRouterPort("9893", [9890]), 9893);
+    assert.equal(resolveRunRouterPort(undefined, [9890]), 9890);
+    assert.equal(resolveRunRouterPort(undefined, []), 9881);
+  });
+
+  it("rejects invalid and conflicting ports", () => {
+    assert.throws(() => resolveRunRouterPort("nope", []), /Invalid GOLEM_ROUTER_PORT/);
+    assert.throws(() => resolveRunRouterPort(undefined, [9881, 9893]), /conflicting router ports/);
+  });
+});
+
+describe("golemServerArgs", () => {
+  it("propagates the selected router port", () => {
+    assert.deepEqual(golemServerArgs(9893, "/tmp/data"), [
+      "server",
+      "run",
+      "--yes",
+      "--router-port",
+      "9893",
+      "--data-dir",
+      "/tmp/data",
+      "--clean",
+    ]);
+  });
+
+  it("passes HTTP and MCP overrides to the server, not only its environment", () => {
+    assert.deepEqual(
+      golemServerArgs(9893, "/tmp/data", {
+        GOLEM_CUSTOM_REQUEST_PORT: "9028",
+        GOLEM_MCP_PORT: "9029",
+      }).slice(-4),
+      ["--custom-request-port", "9028", "--mcp-port", "9029"],
+    );
+  });
+});
 
 describe("findGolemAppDir", () => {
   let tmpDir: string;

@@ -51,6 +51,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
+use crate::context::GlobalEnvironmentSelector;
 use crate::model::agent::{
     AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
     AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId, RedeployAgentError,
@@ -627,7 +628,10 @@ impl AgentCommandHandler {
             .agent
             .invoke_agent(Some(&idempotency_key.value), &request)
             .await
-            .map_service_error()?;
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
 
         if let Some(handle) = connect_handle.take() {
             let _ = timeout(Duration::from_secs(3), handle).await;
@@ -681,7 +685,10 @@ impl AgentCommandHandler {
         )
         .await?;
 
-        connection.run_forever().await;
+        connection
+            .run_forever()
+            .await
+            .map_err(|error| self.with_previous_invocation_failed_hint(error, &agent_id_match))?;
 
         Ok(())
     }
@@ -740,7 +747,7 @@ impl AgentCommandHandler {
         )
         .await?;
 
-        connection.run_forever().await;
+        connection.run_forever().await?;
 
         Ok(())
     }
@@ -848,6 +855,14 @@ impl AgentCommandHandler {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        if !self.ctx.interactive_handler().confirm_revert_agent(
+            &agent_id,
+            last_oplog_index,
+            number_of_invocations,
+        )? {
+            bail!(NonSuccessfulExit);
+        }
 
         log_action(
             "Reverting",
@@ -1313,7 +1328,16 @@ impl AgentCommandHandler {
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.resume_agent(&component, &agent_id).await?;
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .resume_worker(&component.id.0, &agent_id.0)
+            .await
+            .map(|_| ())
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
 
         log_action(
             "Resumed",
@@ -2540,21 +2564,33 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
 }
 
 impl AgentCommandHandler {
-    async fn resume_agent(
+    fn with_previous_invocation_failed_hint(
         &self,
-        component: &ComponentDto,
-        agent_id: &RawAgentId,
-    ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
+        error: anyhow::Error,
+        agent_id_match: &AgentIdMatch,
+    ) -> anyhow::Error {
+        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
+            return error;
+        };
+        if !service_error.is_previous_invocation_failed() {
+            return error;
+        }
 
-        clients
-            .worker
-            .resume_worker(&component.id.0, &agent_id.0)
-            .await
-            .map(|_| ())
-            .map_service_error()?;
+        let command = render_revert_command(
+            &crate::command_name(),
+            self.ctx
+                .explicit_profile_name()
+                .map(|profile_name| profile_name.0.as_str()),
+            self.ctx.global_environment_selector(),
+            agent_id_match.environment_reference(),
+            &agent_id_match.agent_id,
+        );
 
-        Ok(())
+        anyhow!(
+            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
+            service_error.render(),
+            command,
+        )
     }
 
     async fn interrupt_agent(
@@ -3152,6 +3188,49 @@ fn all_modes_filter() -> AgentFilter {
     ])
 }
 
+fn render_revert_command(
+    executable: &str,
+    explicit_profile_name: Option<&str>,
+    global_environment_selector: Option<&GlobalEnvironmentSelector>,
+    matched_environment_reference: Option<&EnvironmentReference>,
+    agent_id: &RawAgentId,
+) -> String {
+    fn quote(value: &str) -> String {
+        shlex::try_quote(value)
+            .expect("CLI arguments cannot contain NUL bytes")
+            .into_owned()
+    }
+
+    let mut args = vec![quote(executable)];
+    if let Some(profile_name) = explicit_profile_name {
+        args.extend(["--profile".to_string(), quote(profile_name)]);
+    }
+    match global_environment_selector {
+        Some(GlobalEnvironmentSelector::Environment(environment)) => {
+            args.extend(["--environment".to_string(), quote(&environment.to_string())]);
+        }
+        Some(GlobalEnvironmentSelector::Local) => args.push("--local".to_string()),
+        Some(GlobalEnvironmentSelector::Cloud) => args.push("--cloud".to_string()),
+        None => {}
+    }
+    args.extend(["agent".to_string(), "revert".to_string()]);
+
+    let agent_id = match global_environment_selector {
+        Some(_) => agent_id.to_string(),
+        None => match matched_environment_reference {
+            Some(environment) => format!("{environment}/{agent_id}"),
+            None => agent_id.to_string(),
+        },
+    };
+    args.extend([
+        quote(&agent_id),
+        "--number-of-invocations".to_string(),
+        "1".to_string(),
+    ]);
+
+    args.join(" ")
+}
+
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
     let error: anyhow::Result<
         Option<golem_client::Error<golem_client::api::WorkerError>>,
@@ -3267,10 +3346,16 @@ fn validate_public_invocation_agent_id(
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, split_agent_id, validate_public_invocation_agent_id,
+        parse_method_argument_schema_value, render_revert_command, split_agent_id,
+        validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
+    use crate::context::GlobalEnvironmentSelector;
+    use crate::model::agent::RawAgentId;
+    use crate::model::environment::EnvironmentReference;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{Empty, IdempotencyKey};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
@@ -3281,6 +3366,71 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn revert_command_preserves_scope_and_shell_sensitive_arguments() {
+        let environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("my app".to_string()),
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let command = render_revert_command(
+            "/opt/Golem CLI/golem",
+            Some("team profile"),
+            None,
+            Some(&environment),
+            &RawAgentId("MyAgent(\"a b's\")".to_string()),
+        );
+
+        assert_eq!(
+            shlex::split(&command).unwrap(),
+            vec![
+                "/opt/Golem CLI/golem",
+                "--profile",
+                "team profile",
+                "agent",
+                "revert",
+                "my app/staging env/MyAgent(\"a b's\")",
+                "--number-of-invocations",
+                "1",
+            ]
+        );
+        assert!(!command.contains("--yes"));
+    }
+
+    #[test]
+    fn revert_command_preserves_global_environment_selector() {
+        let short_environment = EnvironmentReference::Environment {
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let full_environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("another app".to_string()),
+            environment_name: EnvironmentName("production".to_string()),
+        };
+        let agent_id = RawAgentId("MyAgent(\"id\")".to_string());
+
+        for selector in [
+            GlobalEnvironmentSelector::Environment(short_environment),
+            GlobalEnvironmentSelector::Environment(full_environment),
+            GlobalEnvironmentSelector::Local,
+            GlobalEnvironmentSelector::Cloud,
+        ] {
+            let command = render_revert_command("golem", None, Some(&selector), None, &agent_id);
+            let args = shlex::split(&command).unwrap();
+
+            assert!(!args.contains(&"--profile".to_string()));
+
+            match selector {
+                GlobalEnvironmentSelector::Environment(environment) => {
+                    assert!(args.windows(2).any(|args| {
+                        args == ["--environment".to_string(), environment.to_string()]
+                    }));
+                }
+                GlobalEnvironmentSelector::Local => assert!(args.contains(&"--local".to_string())),
+                GlobalEnvironmentSelector::Cloud => assert!(args.contains(&"--cloud".to_string())),
+            }
+            assert!(args.contains(&agent_id.0));
+        }
+    }
 
     #[test]
     fn apply_list_mode_filter_default_durable_with_no_filters_injects_durable() {

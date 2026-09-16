@@ -270,6 +270,35 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_revert_agent(
+        &self,
+        agent_id: &RawAgentId,
+        last_oplog_index: Option<u64>,
+        number_of_invocations: Option<u64>,
+    ) -> anyhow::Result<bool> {
+        let target = match (last_oplog_index, number_of_invocations) {
+            (Some(last_oplog_index), None) => {
+                format!("keep oplog entries through index {last_oplog_index}")
+            }
+            (None, Some(number_of_invocations)) => {
+                format!("remove the last {number_of_invocations} invocation(s)")
+            }
+            _ => unreachable!("clap requires exactly one revert target"),
+        };
+
+        self.confirm(
+            false,
+            formatdoc! { "
+                Revert agent {} and {target}?
+
+                This permanently discards recorded agent state after the revert target.
+                External side effects already performed by reverted invocations may not be undone.",
+                agent_id.0.log_color_highlight(),
+            },
+            None,
+        )
+    }
+
     pub fn confirm_reset_allow_incompatible_component_update(
         &self,
         component_name: &ComponentName,

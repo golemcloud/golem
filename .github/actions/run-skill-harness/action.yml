@@ -1,49 +1,49 @@
-name: 'Run Skill Harness Test'
-description: 'Runs a single skill harness scenario for a given agent/language/model combination'
+name: "Run Skill Harness Test"
+description: "Runs a single skill harness scenario for a given agent/language/model combination"
 inputs:
   agent:
-    description: 'Agent driver to use (claude-code, codex, gemini, opencode)'
+    description: "Agent driver to use (claude-code, codex, gemini, opencode)"
     required: true
   language:
-    description: 'Language for skill templates (ts, rust, scala, moonbit)'
+    description: "Language for skill templates (ts, effect, rust, scala, moonbit)"
     required: true
   model:
-    description: 'Model identifier (optional)'
+    description: "Model identifier (optional)"
     required: false
-    default: ''
+    default: ""
   wasi-sdk-version:
-    description: 'WASI SDK version'
+    description: "WASI SDK version"
     required: true
   wasi-sdk-path:
-    description: 'WASI SDK install path'
+    description: "WASI SDK install path"
     required: true
   wasm-rquickjs-version:
-    description: 'wasm-rquickjs version'
+    description: "wasm-rquickjs version"
     required: true
   anthropic-api-key:
-    description: 'Anthropic API key'
+    description: "Anthropic API key"
     required: false
-    default: ''
+    default: ""
   gemini-api-key:
-    description: 'Gemini API key'
+    description: "Gemini API key"
     required: false
-    default: ''
+    default: ""
   openai-api-key:
-    description: 'OpenAI API key'
+    description: "OpenAI API key"
     required: false
-    default: ''
+    default: ""
   github-token:
-    description: 'GitHub token for publishing reports'
+    description: "GitHub token for publishing reports"
     required: true
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - uses: ./.github/actions/setup-rust
       with:
-        use-cache: 'false'
-        rust-targets: 'wasm32-wasip1 wasm32-wasip2'
-        install-cargo-binstall: 'true'
+        use-cache: "false"
+        rust-targets: "wasm32-wasip1 wasm32-wasip2"
+        install-cargo-binstall: "true"
 
     - uses: ./.github/actions/setup-js-wasm-tools
       with:
@@ -111,6 +111,17 @@ runs:
       shell: bash
       working-directory: sdks/ts
       run: pnpm install --frozen-lockfile
+
+    - name: Restore built Effect SDK
+      if: inputs.language == 'effect'
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          sdks/effect/dist
+          sdks/effect/wasm
+          sdks/effect/golem-types
+        key: golem-effect-sdk-skill-harness-${{ github.run_id }}
+        fail-on-cache-miss: true
 
     - name: Setup Java
       if: inputs.language == 'scala'

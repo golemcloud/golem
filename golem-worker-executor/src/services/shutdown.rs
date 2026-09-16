@@ -12,8 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::shard_lease;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+
+const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
+const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
+
+/// How long a termination signal waits for the tasks spawned through [`Shutdown::spawn`] to
+/// finish - in practice, for the shard lease deregistration to land. It is a bound, not a wait:
+/// a healthy shutdown drains in milliseconds, and this only binds when the shard manager is slow.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(SHUTDOWN_GRACE_MILLIS);
+
+/// How long the deregister RPC itself may take. Lives here, beside the grace that contains it,
+/// because the two are only meaningful against each other.
+pub const DEREGISTER_DEADLINE: Duration = Duration::from_millis(DEREGISTER_DEADLINE_MILLIS);
+
+// The grace has to outlast the RPC it exists to wait for. Were it the other way round the RPC
+// would always be cut off first, and the arm that reports the lease being left to lapse could
+// never run.
+const _: () = assert!(DEREGISTER_DEADLINE_MILLIS < SHUTDOWN_GRACE_MILLIS);
+// A deregister is one shard manager write, so a deadline under that budget would abandon every
+// deregistration that had to wait for a busy manager - the shards would then sit out a whole
+// lease instead of being handed back.
+const _: () =
+    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS);
+// Stopping never waits longer than renewing would.
+const _: () =
+    assert!(DEREGISTER_DEADLINE_MILLIS <= shard_lease::SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS);
 
 /// A graph-wide shutdown signal for background tasks spawned by services.
 ///
@@ -22,10 +52,16 @@ use tokio_util::sync::CancellationToken;
 /// rather than relying solely on `Weak::upgrade()` which can race with
 /// other services being torn down.
 ///
-/// The token is cancelled explicitly via `cancel()` (typically from
-/// `RunDetails::drop()`). As a safety net, if all `Shutdown` handles are
-/// dropped without an explicit cancel, the `Drop` impl on the inner
-/// `Arc` will cancel the token.
+/// A loop that still has work to do *after* it observes the token - the shard
+/// lease renewal loop deregisters on it - spawns through [`Self::spawn`] rather
+/// than `tokio::spawn`, so that [`Self::wait_for_tracked`] can hold the process
+/// open until that work lands. A detached task would be cut off at its next
+/// await point when the runtime is dropped.
+///
+/// The token is cancelled explicitly via `cancel()` (from `RunDetails::drop()`,
+/// or from the termination-signal path in the executor's `main`). As a safety
+/// net, if all `Shutdown` handles are dropped without an explicit cancel, the
+/// `Drop` impl on the inner `Arc` will cancel the token.
 #[derive(Clone)]
 pub struct Shutdown {
     inner: Arc<Inner>,
@@ -33,6 +69,7 @@ pub struct Shutdown {
 
 struct Inner {
     token: CancellationToken,
+    tracker: TaskTracker,
 }
 
 impl Shutdown {
@@ -40,6 +77,7 @@ impl Shutdown {
         Self {
             inner: Arc::new(Inner {
                 token: CancellationToken::new(),
+                tracker: TaskTracker::new(),
             }),
         }
     }
@@ -50,6 +88,24 @@ impl Shutdown {
 
     pub fn cancel(&self) {
         self.inner.token.cancel();
+    }
+
+    /// Spawns a task whose completion [`Self::wait_for_tracked`] waits for.
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.inner.tracker.spawn(future)
+    }
+
+    /// Waits up to `grace` for every task spawned through [`Self::spawn`] to
+    /// finish. Meant to follow [`Self::cancel`]. `true` if they all did.
+    pub async fn wait_for_tracked(&self, grace: Duration) -> bool {
+        self.inner.tracker.close();
+        tokio::time::timeout(grace, self.inner.tracker.wait())
+            .await
+            .is_ok()
     }
 }
 
@@ -62,5 +118,59 @@ impl Default for Shutdown {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.token.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use test_r::test;
+
+    /// The reason the tracker exists: a task with work to do *after* the token
+    /// trips has to be waited for, not cut off by the runtime being dropped.
+    /// Spawning it through `tokio::spawn` instead would make `wait_for_tracked`
+    /// return at once, before the work landed.
+    #[test]
+    async fn wait_for_tracked_holds_for_work_that_follows_the_token() {
+        let shutdown = Shutdown::new();
+        let landed = Arc::new(AtomicBool::new(false));
+        let token = shutdown.token();
+        let flag = landed.clone();
+        shutdown.spawn(async move {
+            token.cancelled().await;
+            // stands in for the deregister RPC
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            flag.store(true, Ordering::Release);
+        });
+
+        shutdown.cancel();
+        assert!(
+            shutdown.wait_for_tracked(Duration::from_secs(2)).await,
+            "tracked work should finish inside the grace"
+        );
+        assert!(
+            landed.load(Ordering::Acquire),
+            "the work that follows the token must have landed before the wait returned"
+        );
+    }
+
+    /// The grace is a bound, not a promise: a task that never finishes must not
+    /// hold the process open.
+    #[test]
+    async fn wait_for_tracked_gives_up_after_the_grace() {
+        let shutdown = Shutdown::new();
+        shutdown.spawn(std::future::pending::<()>());
+
+        shutdown.cancel();
+        assert!(!shutdown.wait_for_tracked(Duration::from_millis(50)).await);
+    }
+
+    /// With nothing tracked there is nothing to wait for.
+    #[test]
+    async fn wait_for_tracked_returns_at_once_with_nothing_spawned() {
+        let shutdown = Shutdown::new();
+        shutdown.cancel();
+        assert!(shutdown.wait_for_tracked(Duration::from_millis(50)).await);
     }
 }

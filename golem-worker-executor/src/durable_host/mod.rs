@@ -107,8 +107,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
+    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
+    lower_invocation, run_guest_call_settled,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -125,7 +126,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, drain_queued_dropped_call_events,
 };
 pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
@@ -148,7 +149,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -372,6 +374,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     runtime: OwnerRuntime,
+    executable: crate::workerctx::WorkerCtxExecutable,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
@@ -786,7 +789,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let crate::workerctx::WorkerFilesystemContext {
@@ -814,17 +817,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-        if executable_component.revision != worker_config.component_revision_for_replay {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Executable component revision {} does not match context revision {}",
-                executable_component.revision, worker_config.component_revision_for_replay
-            )));
-        }
-        if runtime == OwnerRuntime::Agent
-            && executable_component.id != owned_agent_id.component_id()
-        {
+        if let crate::workerctx::WorkerCtxExecutable::Component(component) = &executable {
+            if component.revision != worker_config.component_revision_for_replay {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Executable component revision {} does not match context revision {}",
+                    component.revision, worker_config.component_revision_for_replay
+                )));
+            }
+            if runtime == OwnerRuntime::Agent && component.id != owned_agent_id.component_id() {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store executable must be the owner component",
+                ));
+            }
+        } else if runtime == OwnerRuntime::Agent {
             return Err(WorkerExecutorError::runtime(
-                "Primary Store executable must be the owner component",
+                "Primary Store requires a component executable",
             ));
         }
         match (&runtime, &entity_activation) {
@@ -847,6 +854,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
+        match (&executable, entity_activation.as_deref()) {
+            (crate::workerctx::WorkerCtxExecutable::Component(component), Some(activation))
+                if activation.executable_opt().is_some_and(|target| {
+                    target.component_id == component.id
+                        && target.component_revision == component.revision
+                }) => {}
+            (
+                crate::workerctx::WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                Some(activation),
+            ) if matches!(
+                activation.source(),
+                golem_common::model::entity::EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                } if expected_id == host_tool_id && expected_version == implementation_version
+            ) => {}
+            (crate::workerctx::WorkerCtxExecutable::Component(_), None)
+                if runtime == OwnerRuntime::Agent => {}
+            _ => {
+                return Err(WorkerExecutorError::runtime(
+                    "Context executable does not match its validated activation source",
+                ));
+            }
+        }
         match (&runtime, &worker_config.owner_component_metadata) {
             (OwnerRuntime::Agent, None) | (OwnerRuntime::Entity(_), Some(_)) => {}
             (OwnerRuntime::Agent, Some(_)) => {
@@ -860,16 +894,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
-        let component_metadata = executable_component;
+        let component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => {
+                component.as_ref().clone()
+            }
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => worker_config
+                .owner_component_metadata
+                .as_deref()
+                .expect("native entity Store has owner component metadata")
+                .clone(),
+        };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        let executable_component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        };
+        if executable_component_metadata
+            .is_some_and(|component| component.metadata.has_shared_linear_memory())
+        {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
 
-        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = executable_component_metadata
+            .map(|component| component.metadata.initial_linear_memory_bytes())
+            .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -1016,6 +1067,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
+            executable,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
             entity_tool_operation: None,
@@ -1332,7 +1384,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub fn agent_auth_ctx(&self) -> AuthCtx {
         let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
             let context = agent_monomorphization_context(
-                &self.state.component_metadata,
+                self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
             );
@@ -2204,6 +2256,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.component_metadata
     }
 
+    pub fn executable_component_metadata(&self) -> Option<&Component> {
+        match &self.executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        }
+    }
+
     pub fn owner_component_metadata(&self) -> &Component {
         match &self.runtime {
             OwnerRuntime::Agent => &self.state.component_metadata,
@@ -2337,26 +2396,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
     }
 
-    async fn begin_local_live_continuation(
-        &self,
-    ) -> Result<PendingReplayToLive, WorkerExecutorError> {
-        begin_local_live_continuation(
-            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
-            self.entity_tool_operation(),
-            &self.public_state,
-            &self.linear_memory,
-            if self.runtime == OwnerRuntime::Agent {
-                ReplayToLiveRole::PrimaryAgent
-            } else {
-                ReplayToLiveRole::NonPrimary
-            },
-            self.state.local_live_tail(),
-            self.state.replay_state.replay_target(),
-        )
-        .await
-    }
-
     async fn finish_switch_to_live(
         &mut self,
         pending: PendingReplayToLive,
@@ -2367,6 +2406,113 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)
+    }
+
+    pub(crate) fn prepare_live_continuation_at_replay_tail(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static + use<Ctx>
+    {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        let replaying_incomplete_entity =
+            mode == Some(InvocationExecutionMode::ReplayingIncomplete);
+        let primary_replay_tail = self.runtime == OwnerRuntime::Agent && replay_ended;
+        let rejected = mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (!replaying_incomplete_entity && !primary_replay_tail);
+        let replay_state = self.state.replay_state.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let tool_entity = matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_)));
+        let tool_operation = self.entity_tool_operation();
+        let local_live_tail = self.state.local_live_tail();
+        let role = if self.runtime == OwnerRuntime::Agent {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        async move {
+            if rejected {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    expected,
+                    format!(
+                        "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                        replay_state.last_replayed_index()
+                    ),
+                ));
+            }
+            if replay_ended {
+                begin_replay_to_live(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    &replay_state,
+                    role,
+                    local_live_tail,
+                )
+                .await
+            } else {
+                begin_local_live_continuation(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    role,
+                    local_live_tail,
+                    replay_state.replay_target(),
+                )
+                .await
+                .map(BeginReplayToLive::Pending)
+            }
+        }
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+    ) -> Result<bool, WorkerExecutorError> {
+        let pending = match self
+            .prepare_live_continuation_at_replay_tail(replay_ended, expected)
+            .await?
+        {
+            BeginReplayToLive::ReplayResumed => return Ok(false),
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live(pending).await?.require_live()?;
+        Ok(true)
+    }
+
+    pub(crate) async fn get_oplog_entry_or_continue_live(
+        &mut self,
+        expected: &str,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        loop {
+            if self.is_live() {
+                return Ok(None);
+            }
+            match self
+                .state
+                .replay_state
+                .get_oplog_entry_or_replay_end()
+                .await?
+            {
+                PositionalRead::Entry(index, entry) => {
+                    return Ok(Some((index, entry)));
+                }
+                PositionalRead::ReplayEnded => {
+                    if self
+                        .continue_live_at_replay_tail(true, expected.to_string())
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
     }
 
     async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
@@ -2732,7 +2878,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
-            self.state.component_metadata.metadata.has_oplog_processor(),
+            self.owner_component_metadata()
+                .metadata
+                .has_oplog_processor(),
             &self.owned_agent_id,
             &self.public_state,
             &self.state.replay_state,
@@ -4490,7 +4638,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = &self.state.component_metadata;
+        let current_metadata = self.component_metadata();
 
         if new_revision <= current_metadata.revision {
             debug!("Update {new_revision} was already applied, skipping");
@@ -4552,7 +4700,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
-        self.state.component_metadata = new_metadata;
+        self.state.component_metadata = new_metadata.clone();
+        self.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(new_metadata));
 
         if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
@@ -4870,6 +5019,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -4908,6 +5058,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5279,18 +5430,18 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = &self.state.current_span_id;
+        let current_span_id = self.state.current_span_id.clone();
 
-        let is_live = self.is_live();
+        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
+        let continued_live = replay_entry.is_none();
 
-        let span = if is_live {
+        let span = if continued_live {
             self.state
                 .invocation_context
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else {
-            let (_, entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
+            let (_, entry) = replay_entry.expect("replay entry was checked above");
 
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
@@ -5318,11 +5469,11 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span
         };
 
-        if current_span_id != parent
+        if &current_span_id != parent
             && !self
                 .state
                 .invocation_context
-                .has_in_stack(current_span_id, parent)
+                .has_in_stack(&current_span_id, parent)
         {
             // The parent span is not in the current invocation stack. This can happen if it was created in a previous
             // invocation and stored in some global state.
@@ -5339,7 +5490,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        if is_live {
+        if continued_live {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::StartSpan {
@@ -5380,7 +5531,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
+            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "FinishSpan",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(
@@ -5388,8 +5546,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {
@@ -5421,7 +5577,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() {
+        if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("SetSpanAttribute")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "SetSpanAttribute",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
@@ -5431,8 +5597,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     value,
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
     }
@@ -5686,8 +5850,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     let worker = worker.clone();
                                     let result_value = output.clone();
                                     let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store
-                                        .run_concurrent(async move |_accessor| {
+                                    *output = store.run_concurrent(async move |_accessor| {
                                             worker
                                                 .materialize_durable_streaming_result(
                                                     &replay_idempotency_key,
@@ -5699,9 +5862,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 .await
                                         })
                                         .await
-                                        .map_err(|error| {
-                                            WorkerExecutorError::runtime(error.to_string())
-                                        })??;
+                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
+                                        .await
+                                        .map_err(|error| match error {
+                                            GuestCallSettlementError::Infrastructure(error) => error,
+                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
+                                        })?;
                                 }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
@@ -5733,12 +5900,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 // otherwise resumed session clients never observe completion.
                                 if uses_streams
                                     && store.as_context().data().durable_ctx().is_live()
-                                    && let Err(error) = worker
-                                        .complete_durable_streaming_session(&idempotency_key)
-                                        .await
                                 {
-                                    error!(%error, "Failed to complete durable streaming session");
-                                    break Err(error);
+                                    let worker = worker.clone();
+                                    let idempotency_key = idempotency_key.clone();
+                                    let result = store.run_concurrent(async move |_accessor| {
+                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                    }).await;
+                                    if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
+                                        error!(%error, "Failed to complete durable streaming session");
+                                        break Err(error);
+                                    }
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
@@ -5832,9 +6003,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -5844,7 +6015,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -6052,10 +6223,29 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 store, &error,
                             )))
                         } else {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        }
+                    }
+                    SnapshotRecoveryResult::Unavailable(error) => {
+                        if store
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::ManualUpdate)
+                        {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        } else {
                             Err(error)
                         }
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
                     SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
@@ -6084,6 +6274,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
@@ -6577,6 +6771,14 @@ fn store_is_live(
 pub(crate) enum BeginReplayToLive {
     ReplayResumed,
     Pending(PendingReplayToLive),
+}
+
+// Callers immediately destructure this transient result; avoid allocating each oplog entry.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum PositionalRead {
+    Entry(OplogIndex, OplogEntry),
+    ReplayEnded,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9062,6 +9264,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {
@@ -11114,17 +11319,6 @@ macro_rules! get_oplog_entry {
     };
     ($replay_state:expr, $($cases:path),+) => {
         $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
-    };
-}
-
-/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
-/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
-/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
-/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
-#[macro_export]
-macro_rules! get_oplog_entry_owned {
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
     };
 }
 

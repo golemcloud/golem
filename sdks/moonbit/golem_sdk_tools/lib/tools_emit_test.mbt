@@ -254,6 +254,38 @@ test "generated missing attachment failures release decoded invocation inputs" {
 }
 
 ///|
+test "generated invokers reject unexpected stdout attachments" {
+  let source =
+    #|#derive.tool
+    #|struct NoStreams {}
+    #|pub fn NoStreams::run() -> Unit {}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("no-streams.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("command does not accept a stdout stream"))
+  let compact = generated
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    compact.contains(
+      "if__golem_stdoutisSome(_){return@tool.reject_decoded_invocation(__golem_decoded,__golem_stdin,",
+    ),
+  )
+  let accepts_stdout =
+    #|#derive.tool
+    #|struct Output {}
+    #|pub fn Output::run(stdout : @tool.ProviderStdout) -> Unit {}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("output.mbt", accepts_stdout)]),
+    ),
+  )
+  assert_false(generated.contains("command does not accept a stdout stream"))
+}
+
+///|
 test "reexported tool Principal is injected as invocation context" {
   let source =
     #|#derive.tool

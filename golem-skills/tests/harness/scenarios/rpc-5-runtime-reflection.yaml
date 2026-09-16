@@ -8,6 +8,14 @@ steps:
     verify:
       build: true
 
+  - id: "create-effect-project"
+    only_if:
+      language: "effect"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
   - id: "add-reflected-rpc"
     only_if:
       language: "ts"
@@ -70,3 +78,43 @@ steps:
           equals: "schema library"
         - path: "$.schemaValue"
           equals: "schema value"
+
+  - id: "add-effect-reflected-rpc"
+    only_if:
+      language: "effect"
+    prompt: >
+      In the Effect-based test-app, add a durable `ReflectionTarget` agent identified by a string
+      `name`, with an Effect handler `echo` that accepts `{ message: string }` and returns the
+      message. Add a durable `ReflectionCaller` whose Effect-based `run` handler uses the current
+      `Reflection` API from `@golemcloud/effect-golem`: list visible types, find
+      `ReflectionTarget`, inspect `echo`, bind its reflected durable client to `{ name: "target" }`,
+      invoke `echo` with `{ message: "hello" }`, resolve the type again from the returned metadata
+      agent ID, and return `{ listed, typeName, methodName, value, resolvedName }`. Keep all
+      reflection and RPC operations Effect-native and scoped. Guard the reflected type's
+      discriminated `mode` before using its durable-only `client.get` factory. Build and deploy
+      successfully.
+    expectedSkills:
+      - "golem-agent-reflection"
+      - "golem-agent-reflection-effect"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-effect-reflected-rpc"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.typeName"
+          equals: "ReflectionTarget"
+        - path: "$.methodName"
+          equals: "echo"
+        - path: "$.value"
+          equals: "hello"
+        - path: "$.resolvedName"
+          equals: "ReflectionTarget"

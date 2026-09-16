@@ -1,7 +1,7 @@
 ///|
 pub(all) struct MonomorphicToolMiddlewareScope {
   presented : @toolCommon.Tool
-  expected : @toolCommon.Tool
+  expected : @toolCommon.Tool?
 }
 
 ///|
@@ -13,6 +13,7 @@ pub(all) enum ToolMiddlewareScope {
 ///|
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : @toolCommon.Doc
   scope : ToolMiddlewareScope
@@ -43,13 +44,14 @@ let tool_middleware_state : ToolMiddlewareState = {
 fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
   {
     name: self.name,
+    version: self.version,
     aliases: self.aliases.copy(),
     doc: self.doc,
     scope: match self.scope {
       Monomorphic(scope) =>
         @toolCommon.ToolMiddlewareScope::Monomorphic({
           presented: scope.presented,
-          expected: Some(scope.expected),
+          expected: scope.expected,
         })
       Universal => @toolCommon.ToolMiddlewareScope::Universal
     },

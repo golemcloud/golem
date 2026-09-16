@@ -26,7 +26,6 @@ use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::SchedulerStoragePostgresConfig;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::postgres::PostgresSchedulerStorage;
-use std::collections::HashSet;
 use std::time::Duration;
 use test_r::test;
 use url::Url;
@@ -100,10 +99,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         .await
         .unwrap();
 
-    let assignment = ShardAssignment {
-        number_of_shards: 2,
-        shard_ids: HashSet::from([shard_id]),
-    };
+    let assignment = ShardAssignment::unexpiring(2, [shard_id]);
     let claimed = storage
         .claim_due(Utc::now(), &assignment, 10, Duration::from_secs(30))
         .await

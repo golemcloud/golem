@@ -385,6 +385,7 @@ impl EnvironmentCommandHandler {
                         &EnvironmentCreation {
                             name: environment_name.clone(),
                             compatibility_check: deployment_options.compatibility_check(),
+                            tool_compatibility_mode: deployment_options.tool_compatibility_mode(),
                             version_check: deployment_options.version_check(),
                             security_overrides: deployment_options.security_overrides(),
                         },
@@ -444,6 +445,7 @@ impl EnvironmentCommandHandler {
                         name: None,
                         current_revision: environment.server_environment.revision,
                         compatibility_check: Some(manifest_options.compatibility_check()),
+                        tool_compatibility_mode: Some(manifest_options.tool_compatibility_mode()),
                         version_check: Some(manifest_options.version_check()),
                         security_overrides: Some(manifest_options.security_overrides()),
                     },

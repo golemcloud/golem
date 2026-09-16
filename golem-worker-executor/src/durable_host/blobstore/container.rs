@@ -34,7 +34,7 @@ use crate::durable_host::blobstore::{
     authorize_targets, classify_blob_store_error, container_target, object_target,
 };
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -271,68 +271,70 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
         let result = 'resp: {
             let (mut handle, environment_id, container_name, authorization, data, length) =
-                if begun.is_live() {
-                    let environment_id = self.state.owned_agent_id.environment_id();
-                    let container_name = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<ContainerEntry>(&container)
-                        .map(|container_entry| container_entry.name.clone())?;
-                    let target = object_target(self, BlobVerb::Write, &container_name, &name);
-                    let authorization = match target {
-                        Ok(target) => authorize_targets(self, &[target]).await?,
-                        Err(err) => Err(err),
-                    };
-                    let data = if authorization.is_ok() {
-                        self.as_wasi_view()
+                match begun.resolve(self).await? {
+                    ResolvedCall::Live(begun) => {
+                        let environment_id = self.state.owned_agent_id.environment_id();
+                        let container_name = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<ContainerEntry>(&container)
+                            .map(|container_entry| container_entry.name.clone())?;
+                        let target = object_target(self, BlobVerb::Write, &container_name, &name);
+                        let authorization = match target {
+                            Ok(target) => authorize_targets(self, &[target]).await?,
+                            Err(err) => Err(err),
+                        };
+                        let data = if authorization.is_ok() {
+                            self.as_wasi_view()
+                                .table()
+                                .get::<OutgoingValueEntry>(&data)
+                                .map(|entry| entry.body.read().unwrap().clone())?
+                        } else {
+                            Vec::new()
+                        };
+                        let length = data.len() as u64;
+                        let request = HostRequestBlobStoreWriteData {
+                            container: container_name.clone(),
+                            object: name.clone(),
+                            length,
+                        };
+                        (
+                            begun.start_live(self, request).await?,
+                            environment_id,
+                            container_name,
+                            authorization,
+                            data,
+                            length,
+                        )
+                    }
+                    ResolvedCall::Replay(mut handle) => {
+                        match handle.replay(self).await? {
+                            CallReplayOutcome::Replayed(response) => break 'resp response,
+                            CallReplayOutcome::Incomplete(live) => handle = live,
+                        }
+                        let environment_id = self.state.owned_agent_id.environment_id();
+                        let container_name = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<ContainerEntry>(&container)
+                            .map(|container_entry| container_entry.name.clone())?;
+                        let authorization =
+                            Ok(crate::durable_host::LiveAuthorizationPermit { _private: () });
+                        let data = self
+                            .as_wasi_view()
                             .table()
                             .get::<OutgoingValueEntry>(&data)
-                            .map(|entry| entry.body.read().unwrap().clone())?
-                    } else {
-                        Vec::new()
-                    };
-                    let length = data.len() as u64;
-                    let request = HostRequestBlobStoreWriteData {
-                        container: container_name.clone(),
-                        object: name.clone(),
-                        length,
-                    };
-                    (
-                        begun.start_live(self, request).await?,
-                        environment_id,
-                        container_name,
-                        authorization,
-                        data,
-                        length,
-                    )
-                } else {
-                    let mut handle = begun.start_replay(self).await?;
-                    match handle.replay(self).await? {
-                        CallReplayOutcome::Replayed(response) => break 'resp response,
-                        CallReplayOutcome::Incomplete(live) => handle = live,
+                            .map(|entry| entry.body.read().unwrap().clone())?;
+                        let length = data.len() as u64;
+                        (
+                            handle,
+                            environment_id,
+                            container_name,
+                            authorization,
+                            data,
+                            length,
+                        )
                     }
-                    let environment_id = self.state.owned_agent_id.environment_id();
-                    let container_name = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<ContainerEntry>(&container)
-                        .map(|container_entry| container_entry.name.clone())?;
-                    let authorization =
-                        Ok(crate::durable_host::LiveAuthorizationPermit { _private: () });
-                    let data = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<OutgoingValueEntry>(&data)
-                        .map(|entry| entry.body.read().unwrap().clone())?;
-                    let length = data.len() as u64;
-                    (
-                        handle,
-                        environment_id,
-                        container_name,
-                        authorization,
-                        data,
-                        length,
-                    )
                 };
 
             if let Err(err) = authorization {
