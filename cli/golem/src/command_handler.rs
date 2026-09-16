@@ -59,8 +59,11 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     .await
                     .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
-                if let Some(local_server) = ctx.manifest_local_server() {
-                    warn_on_subdomain_port_mismatches(local_server, &startup_ports);
+                // Subdomains are expanded from the manifest's `localServer` ports or their
+                // defaults, so the check applies to any application manifest, with or without
+                // a `localServer` section.
+                if ctx.manifest_environment().is_some() {
+                    warn_on_subdomain_port_mismatches(ctx.manifest_local_server(), &startup_ports);
                 }
 
                 while let Some(res) = join_set.join_next().await {
@@ -222,9 +225,10 @@ struct SubdomainPortMismatch {
 /// Deployment subdomains expand to `<label>.localhost:<port>` using the manifest's
 /// `localServer.customRequestPort` / `localServer.mcpPort` (or their defaults), and a request is
 /// only routed when its `Host` header matches that expansion exactly. A server bound to a
-/// different port cannot serve those deployments, so the ports have to match.
+/// different port cannot serve those deployments, so the ports have to match. `local_server` is
+/// `None` when the manifest has no `localServer` section, in which case the defaults apply.
 fn subdomain_port_mismatches(
-    local_server: &ResolvedLocalServer,
+    local_server: Option<&ResolvedLocalServer>,
     startup_ports: &StartupPorts,
 ) -> Vec<SubdomainPortMismatch> {
     let checks = [
@@ -233,7 +237,7 @@ fn subdomain_port_mismatches(
             "localServer.customRequestPort",
             "--custom-request-port",
             local_server
-                .custom_request_port
+                .and_then(|local_server| local_server.custom_request_port)
                 .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT),
             startup_ports.custom_request_port,
         ),
@@ -241,7 +245,9 @@ fn subdomain_port_mismatches(
             "MCP",
             "localServer.mcpPort",
             "--mcp-port",
-            local_server.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT),
+            local_server
+                .and_then(|local_server| local_server.mcp_port)
+                .unwrap_or(DEFAULT_LOCAL_MCP_PORT),
             startup_ports.mcp_port,
         ),
     ];
@@ -264,7 +270,7 @@ fn subdomain_port_mismatches(
 }
 
 fn warn_on_subdomain_port_mismatches(
-    local_server: &ResolvedLocalServer,
+    local_server: Option<&ResolvedLocalServer>,
     startup_ports: &StartupPorts,
 ) {
     for mismatch in subdomain_port_mismatches(local_server, startup_ports) {
@@ -391,7 +397,28 @@ mod tests {
             mcp_port: DEFAULT_LOCAL_MCP_PORT,
         };
 
-        assert_eq!(subdomain_port_mismatches(&manifest, &ports), vec![]);
+        assert_eq!(subdomain_port_mismatches(Some(&manifest), &ports), vec![]);
+    }
+
+    #[test]
+    fn subdomain_ports_use_defaults_without_local_server_section() {
+        // e.g. `--custom-request-port 0` in an app whose manifest has no `localServer`
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 41235,
+            mcp_port: DEFAULT_LOCAL_MCP_PORT,
+        };
+
+        assert_eq!(
+            subdomain_port_mismatches(None, &ports),
+            vec![SubdomainPortMismatch {
+                deployment_kind: "HTTP API",
+                manifest_field: "localServer.customRequestPort",
+                flag: "--custom-request-port",
+                expanded_port: DEFAULT_LOCAL_CUSTOM_REQUEST_PORT,
+                bound_port: 41235,
+            }]
+        );
     }
 
     #[test]
@@ -408,7 +435,7 @@ mod tests {
         };
 
         assert_eq!(
-            subdomain_port_mismatches(&manifest, &ports),
+            subdomain_port_mismatches(Some(&manifest), &ports),
             vec![
                 SubdomainPortMismatch {
                     deployment_kind: "HTTP API",
