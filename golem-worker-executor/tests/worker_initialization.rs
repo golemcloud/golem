@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::Tracing;
-use async_trait::async_trait;
-use golem_common::model::agent::{AgentPrincipal, Principal};
+use futures::poll;
+use golem_common::model::agent::{AgentMode, AgentPrincipal, Principal};
 use golem_common::model::durable_stream::*;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -25,25 +25,24 @@ use golem_common::{agent_id, data_value};
 use golem_schema::schema::SchemaFingerprintV1;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{
-    HasActiveAgents, HasOplog, HasOplogService, HasRpc, UsesAllDeps,
+    HasActiveAgents, HasOplog, HasOplogService, HasRpc, HasWorkerService, UsesAllDeps,
 };
 use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
 use golem_worker_executor::storage::keyvalue::fault_injecting::{
-    FaultInjectingKeyValueStorage, Gate, KeyValueStorageFaults,
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
-use golem_worker_executor::worker::{Worker, WorkerInitializationHook};
+use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::sync::Semaphore;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(LastUniqueId);
@@ -53,104 +52,7 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-struct InitializationGate {
-    target: OwnedAgentId,
-    attempts: AtomicUsize,
-    claims: Semaphore,
-    pause_build: AtomicBool,
-    build_entered: Semaphore,
-    build_release: Semaphore,
-    pause_publication: AtomicBool,
-    fail_publication: AtomicBool,
-    prepared: Semaphore,
-    release: Semaphore,
-    pause_cleanup: AtomicBool,
-    cleanup_entered: Semaphore,
-    cleanup_release: Semaphore,
-    fail_cleanup: AtomicBool,
-}
-
-impl InitializationGate {
-    fn new(target: OwnedAgentId) -> Self {
-        Self {
-            target,
-            attempts: AtomicUsize::new(0),
-            claims: Semaphore::new(0),
-            pause_build: AtomicBool::new(false),
-            build_entered: Semaphore::new(0),
-            build_release: Semaphore::new(0),
-            pause_publication: AtomicBool::new(true),
-            fail_publication: AtomicBool::new(false),
-            prepared: Semaphore::new(0),
-            release: Semaphore::new(0),
-            pause_cleanup: AtomicBool::new(false),
-            cleanup_entered: Semaphore::new(0),
-            cleanup_release: Semaphore::new(0),
-            fail_cleanup: AtomicBool::new(false),
-        }
-    }
-
-    async fn claims(&self, count: u32) {
-        self.claims.acquire_many(count).await.unwrap().forget();
-    }
-}
-
-#[async_trait]
-impl WorkerInitializationHook for InitializationGate {
-    fn claimed(&self, owner: &OwnedAgentId, started: bool) {
-        if owner == &self.target {
-            if started {
-                self.attempts.fetch_add(1, Ordering::SeqCst);
-            }
-            self.claims.add_permits(1);
-        }
-    }
-
-    async fn before_build(&self, owner: &OwnedAgentId) {
-        if owner == &self.target && self.pause_build.swap(false, Ordering::SeqCst) {
-            self.build_entered.add_permits(1);
-            self.build_release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_publish(&self, owner: &OwnedAgentId) {
-        if owner == &self.target && self.fail_publication.swap(false, Ordering::SeqCst) {
-            panic!("injected private construction panic");
-        }
-        if owner == &self.target && self.pause_publication.load(Ordering::SeqCst) {
-            self.prepared.add_permits(1);
-            self.release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_status_actor_exit(&self, owner: &OwnedAgentId) {
-        if owner == &self.target && self.pause_cleanup.swap(false, Ordering::SeqCst) {
-            self.cleanup_entered.add_permits(1);
-            self.cleanup_release.acquire().await.unwrap().forget();
-        }
-        if owner == &self.target && self.fail_cleanup.swap(false, Ordering::SeqCst) {
-            panic!("injected construction cleanup failure");
-        }
-    }
-}
-
-struct RecoveryFault {
-    target: OwnedAgentId,
-    faults: KeyValueStorageFaults,
-    gate: std::sync::Mutex<Option<Gate>>,
-}
-
-#[async_trait]
-impl WorkerInitializationHook for RecoveryFault {
-    async fn before_publish(&self, owner: &OwnedAgentId) {
-        if owner == &self.target {
-            *self.gate.lock().unwrap() = Some(self.faults.gate_next(
-                "read_recovery",
-                KeyValueStorageError::Other("recovery storage outage".into()),
-            ));
-        }
-    }
-}
+const CACHE_TTL: Duration = Duration::from_millis(50);
 
 async fn setup(
     last_unique_id: &LastUniqueId,
@@ -168,6 +70,8 @@ async fn setup(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(|config| {
+                config.active_agents.ttl = CACHE_TTL;
+                config.oplog.max_payload_size = 1;
                 config.durable_stream.renewal_interval = Duration::from_millis(50);
                 config.durable_stream.reconciliation_interval = Duration::from_millis(50);
                 config.agent_status_flush.enabled = false;
@@ -190,9 +94,10 @@ async fn setup(
         .invoke_and_await_agent(&component, &name, "increment", data_value!())
         .await?;
     let seed = executor
-        .cached_worker(&OwnedAgentId::new(context.default_environment_id, &id))
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
         .await
-        .unwrap();
+        .unwrap()
+        .primary();
     tokio::time::timeout(Duration::from_secs(20), async {
         while executor
             .worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id))
@@ -293,80 +198,65 @@ async fn late_initialization_storage_failure_is_shared_then_retried(
     let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "late-storage-failure");
     let original = acquire(&seed, &id).await?;
-    original.stop_durable_stream_attachment_reconciler().await;
+    seed.active_agents().remove(&id).await;
     register_stream(&original).await?;
     let before = original.get_initial_worker_metadata();
-    seed.active_agents().remove(&id).await;
+    let status = faults.gate_next(
+        "update_status",
+        KeyValueStorageError::Other("old status write outage".into()),
+    );
+    let write = tokio::spawn({
+        let original = original.clone();
+        async move {
+            original
+                .add_and_commit_oplog(OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                })
+                .await
+        }
+    });
+    status.entered().await;
+    write.abort();
+    assert!(write.await.unwrap_err().is_cancelled());
     drop(original);
-    let hook = Arc::new(InitializationGate::new(id.clone()));
-    hook.pause_cleanup.store(true, Ordering::SeqCst);
-    hook.fail_cleanup.store(true, Ordering::SeqCst);
-    executor.set_worker_initialization_hook(hook.clone());
     let failure = faults.gate_next(
         "lookup_producer",
         KeyValueStorageError::Other("late construction outage".into()),
     );
-    let first = tokio::spawn({
-        let seed = seed.clone();
-        let id = id.clone();
-        async move { acquire(&seed, &id).await }
-    });
+    let mut first = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut first).is_pending());
     failure.entered().await;
     assert!(!executor.worker_is_cached(&id).await);
     let mut waiters = vec![first];
     for _ in 0..3 {
-        waiters.push(tokio::spawn({
-            let seed = seed.clone();
-            let id = id.clone();
-            async move { acquire(&seed, &id).await }
-        }));
+        let mut waiter = Box::pin(acquire(&seed, &id));
+        assert!(poll!(&mut waiter).is_pending());
+        waiters.push(waiter);
     }
-    hook.claims(4).await;
-    assert_eq!(hook.attempts.load(Ordering::SeqCst), 1);
     failure.release();
-    // This gate runs on the actual status actor, after its last job but before task exit.
-    // A new demand must still join the failed attempt until that actor has been joined.
-    hook.cleanup_entered.acquire().await?.forget();
-    waiters.push(tokio::spawn({
-        let seed = seed.clone();
-        let id = id.clone();
-        async move { acquire(&seed, &id).await }
-    }));
-    hook.claims(1).await;
-    assert_eq!(hook.attempts.load(Ordering::SeqCst), 1);
-    assert!(waiters.iter().all(|waiter| !waiter.is_finished()));
-    hook.cleanup_release.add_permits(1);
+    // Cancellation of the writer's caller must not let construction finish cleanup before
+    // the old generation's actual status job completes.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut waiters[0])
+            .await
+            .is_err()
+    );
+    let mut waiter = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut waiter).is_pending());
+    waiters.push(waiter);
+    status.release();
     let mut errors = Vec::new();
     for waiter in waiters {
-        errors.push(waiter.await?.err().expect("all original waiters must fail"));
+        errors.push(waiter.await.err().expect("all original waiters must fail"));
     }
     assert!(errors[0].to_string().contains("late construction outage"));
-    assert!(
-        errors[0]
-            .to_string()
-            .contains("injected construction cleanup failure")
-    );
     assert!(errors.iter().all(|error| error == &errors[0]));
     assert!(!executor.worker_is_cached(&id).await);
 
-    let retry = tokio::spawn({
-        let seed = seed.clone();
-        let id = id.clone();
-        async move { acquire(&seed, &id).await }
-    });
-    hook.prepared.acquire().await?.forget();
-    let overlapping = tokio::spawn({
-        let seed = seed.clone();
-        let id = id.clone();
-        async move { acquire(&seed, &id).await }
-    });
-    hook.claims(2).await;
-    assert_eq!(hook.attempts.load(Ordering::SeqCst), 2);
-    assert!(!executor.worker_is_cached(&id).await);
-    hook.pause_publication.store(false, Ordering::SeqCst);
-    hook.release.add_permits(1);
-    let retry = retry.await??;
-    assert!(Arc::ptr_eq(&retry, &overlapping.await??));
+    let (retry, overlapping) = tokio::join!(acquire(&seed, &id), acquire(&seed, &id));
+    let retry = retry?;
+    assert!(Arc::ptr_eq(&retry, &overlapping?));
     let after = retry.get_initial_worker_metadata();
     assert_eq!(before.fingerprint, after.fingerprint);
     assert_eq!(before.env, after.env);
@@ -425,6 +315,12 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         let principal = Principal::Agent(AgentPrincipal {
             agent_id: seed.agent_id(),
         });
+        let payload_directory = deps
+            .blob_storage_root()
+            .join("oplog_payload")
+            .join("ephemeral")
+            .join(id.environment_id.to_string())
+            .join(FileSystemBlobStorage::filesystem_safe_oplog_payload_agent_key(&id.agent_id));
         let expected_error = if agent_type == "Counter" {
             faults.fail(
                 "update_status",
@@ -433,11 +329,9 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             );
             "initial status outage"
         } else {
-            let hook = Arc::new(InitializationGate::new(id.clone()));
-            hook.pause_publication.store(false, Ordering::SeqCst);
-            hook.fail_publication.store(true, Ordering::SeqCst);
-            executor.set_worker_initialization_hook(hook);
-            "Worker construction panicked"
+            tokio::fs::create_dir_all(payload_directory.parent().unwrap()).await?;
+            tokio::fs::write(&payload_directory, b"block payload directory creation").await?;
+            "Failed to upload invocation payload"
         };
         let failure = Worker::get_or_create_suspended(
             &all,
@@ -455,15 +349,20 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         assert!(failure.to_string().contains(expected_error));
         assert!(!executor.worker_is_cached(&id).await);
         let before = Worker::get_latest_metadata(&all, &id).await?.unwrap();
-        assert_eq!(
-            before.last_known_status.oplog_idx,
-            if agent_type == "Counter" {
-                OplogIndex::INITIAL
-            } else {
-                OplogIndex::INITIAL.next()
+        assert_eq!(before.last_known_status.oplog_idx, OplogIndex::INITIAL);
+        let sentinel_id = target(&seed, &format!("expiry-sentinel-{agent_type}"));
+        let sentinel = acquire(&seed, &sentinel_id).await?;
+        let sentinel_weak = Arc::downgrade(&sentinel);
+        drop(sentinel);
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while sentinel_weak.upgrade().is_some() {
+                tokio::time::sleep(CACHE_TTL).await;
             }
-        );
-        seed.active_agents().evict_unloaded_workers_for_test().await;
+        })
+        .await?;
+        if agent_type == "EphemeralCounter" {
+            tokio::fs::remove_file(&payload_directory).await?;
+        }
 
         // A different caller retries. Create and initialization provenance belong to the first one.
         let worker = acquire(&seed, &id).await?;
@@ -531,22 +430,12 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    let hook = Arc::new(InitializationGate::new(id.clone()));
-    hook.pause_build.store(true, Ordering::SeqCst);
-    executor.set_worker_initialization_hook(hook.clone());
-    let absent = tokio::spawn({
-        let all = all.clone();
-        let id = id.clone();
-        async move { Worker::interrupt(&all, &id, false, Principal::anonymous()).await }
-    });
-    hook.build_entered.acquire().await?.forget();
+    Worker::interrupt(&all, &id, false, Principal::anonymous()).await?;
     assert!(!executor.worker_is_cached(&id).await);
-    assert!(
-        !seed
-            .oplog_service()
-            .exists(&id, golem_common::model::agent::AgentMode::Durable)
-            .await
-    );
+    assert!(!seed.oplog_service().exists(&id, AgentMode::Durable).await);
+    let mut enqueue = executor
+        .gate_next_agent_initialization_enqueue(&id.agent_id)
+        .await;
     let context = InvocationContextStack::fresh();
     let original_principal = Principal::Agent(AgentPrincipal {
         agent_id: seed.agent_id(),
@@ -570,30 +459,24 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
             .await
         }
     });
-    hook.claims(2).await;
-    assert_eq!(hook.attempts.load(Ordering::SeqCst), 1);
-    hook.build_release.add_permits(1);
-    absent.await??;
-    hook.prepared.acquire().await?.forget();
+    tokio::time::timeout(Duration::from_secs(20), enqueue.entered())
+        .await
+        .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let existing = tokio::spawn({
-        let all = all.clone();
-        let id = id.clone();
-        async move { Worker::interrupt(&all, &id, false, Principal::anonymous()).await }
-    });
-    let competing = tokio::spawn({
-        let seed = seed.clone();
-        let id = id.clone();
-        async move { acquire(&seed, &id).await }
-    });
-    hook.claims(3).await;
-    assert_eq!(hook.attempts.load(Ordering::SeqCst), 2);
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, Principal::anonymous()));
+    let mut competing = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut existing).is_pending());
+    assert!(poll!(&mut competing).is_pending());
     assert!(!executor.worker_is_cached(&id).await);
-    hook.pause_publication.store(false, Ordering::SeqCst);
-    hook.release.add_permits(1);
-    existing.await??;
-    let worker = competing.await??;
+    drop(enqueue);
+    let (existing, worker) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(existing, competing)
+    })
+    .await
+    .expect("acquisitions must finish after initialization enqueue resumes");
+    existing?;
+    let worker = worker?;
     assert_eq!(
         worker.get_initial_worker_metadata().env,
         vec![("OWNER".into(), "creator".into())]
@@ -829,8 +712,8 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let b_id = target(&seed, "reciprocal-b");
     let a = acquire(&seed, &a_id).await?;
     let b = acquire(&seed, &b_id).await?;
-    a.stop_durable_stream_attachment_reconciler().await;
-    b.stop_durable_stream_attachment_reconciler().await;
+    seed.active_agents().remove(&a_id).await;
+    seed.active_agents().remove(&b_id).await;
     let a_stream = register_stream(&a).await?;
     let b_stream = register_stream(&b).await?;
     let (a_attachment, a_mapping) =
@@ -839,23 +722,22 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
         prepare_foreign_topology(&b, &a_stream, b_stream.source_invocation.clone(), 29).await?;
     let completed_session = prepare_session(&a, true).await?;
     prepare_session(&b, false).await?;
-    seed.active_agents().remove(&a_id).await;
-    seed.active_agents().remove(&b_id).await;
     drop(a);
     drop(b);
     assert!(!executor.worker_is_cached(&a_id).await);
     assert!(!executor.worker_is_cached(&b_id).await);
 
+    seed.worker_service()
+        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable)
+        .await
+        .map_err(anyhow::Error::msg)?;
     // Hold A's recovery after publication. B may acquire A while recovering its own attachment,
     // but a stream read may not treat A's merely prepared topology as an active attachment.
-    let hook = Arc::new(RecoveryFault {
-        target: a_id.clone(),
-        faults,
-        gate: std::sync::Mutex::new(None),
-    });
-    executor.set_worker_initialization_hook(hook.clone());
+    let recovery = faults.gate_next(
+        "read_recovery",
+        KeyValueStorageError::Other("recovery storage outage".into()),
+    );
     let a = tokio::time::timeout(Duration::from_secs(20), acquire(&seed, &a_id)).await??;
-    let recovery = hook.gate.lock().unwrap().take().unwrap();
     recovery.entered().await;
     assert!(executor.worker_is_cached(&a_id).await);
     let b = tokio::time::timeout(Duration::from_secs(20), acquire(&seed, &b_id)).await??;

@@ -56,7 +56,7 @@ use super::{
 };
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog};
-use crate::services::{All, HasConfig, HasExtraDeps, HasSchedulerService};
+use crate::services::{All, HasConfig, HasSchedulerService};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
 use chrono::Utc;
@@ -281,7 +281,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         lifecycle: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let task_owner = oplog.task_owner().cloned();
-        let initialization_hook = Ctx::worker_initialization_hook(&deps.extra_deps());
         let state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
@@ -299,12 +298,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
-                    StatusJob::Stop => {
-                        if let Some(hook) = &initialization_hook {
-                            hook.before_status_actor_exit(&state.owned_agent_id).await;
-                        }
-                        break;
-                    }
+                    StatusJob::Stop => break,
                     StatusJob::CommitAndUpdateState {
                         level,
                         committed,

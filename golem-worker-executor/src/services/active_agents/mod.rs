@@ -1026,12 +1026,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .collect()
     }
 
-    #[cfg(feature = "test-utils")]
-    pub async fn evict_unloaded_workers_for_test(&self) {
-        evict_expired_unloaded_agents(&self.agents, &self.card_interest_index, Duration::ZERO)
-            .await;
-    }
-
     /// Interrupts and unloads all in-memory workers whose environment matches
     /// `environment_id`.  Called when the environment is deleted so that
     /// running workers stop promptly.
