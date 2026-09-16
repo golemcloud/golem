@@ -136,6 +136,18 @@
       "$ref": "#/definitions/api.domain.register"
     },
     {
+      "$ref": "#/definitions/api.mcp-import.authorize"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.complete"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.disconnect"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.status"
+    },
+    {
       "$ref": "#/definitions/api.security-scheme.create"
     },
     {
@@ -2092,6 +2104,60 @@
         "expiresAt": {
           "type": "string"
         }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.authorize": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import authorize",
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.authorize" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "authorizationUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.complete": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.complete" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import complete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import complete"
+    },
+    "api.mcp-import.disconnect": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.disconnect" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import disconnect`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import disconnect"
+    },
+    "api.mcp-import.status": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.status" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import status`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import status"
+    },
+    "McpImportOAuthStatusOutput": {
+      "type": "object",
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "properties": {
+        "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "securityScheme": { "type": "string" },
+        "status": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -8312,6 +8378,22 @@
     {
       "type": "api.domain.register",
       "rustType": "DomainRegistrationNewView"
+    },
+    {
+      "type": "api.mcp-import.authorize",
+      "rustType": "McpImportAuthorizeView"
+    },
+    {
+      "type": "api.mcp-import.complete",
+      "rustType": "McpImportCompleteView"
+    },
+    {
+      "type": "api.mcp-import.disconnect",
+      "rustType": "McpImportDisconnectView"
+    },
+    {
+      "type": "api.mcp-import.status",
+      "rustType": "McpImportStatusView"
     },
     {
       "type": "api.security-scheme.create",

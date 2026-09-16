@@ -380,6 +380,26 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_resource_update_result
     ),
     registry_entry!(
+        "McpImportAuthorizeView",
+        "api.mcp-import.authorize",
+        arb_mcp_import_authorize_result
+    ),
+    registry_entry!(
+        "McpImportCompleteView",
+        "api.mcp-import.complete",
+        arb_mcp_import_complete_result
+    ),
+    registry_entry!(
+        "McpImportDisconnectView",
+        "api.mcp-import.disconnect",
+        arb_mcp_import_disconnect_result
+    ),
+    registry_entry!(
+        "McpImportStatusView",
+        "api.mcp-import.status",
+        arb_mcp_import_status_result
+    ),
+    registry_entry!(
         "RetryPolicyCreateView",
         "retry-policy.create",
         arb_retry_policy_create_result
@@ -6068,6 +6088,60 @@ fn arb_api_retry_policy_with_depth(
         }),
     ]
     .boxed()
+}
+
+fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
+    serialized_output((any::<u64>(), any::<u64>(), any::<u32>()).prop_map(
+        |(authorization_id, deployment_revision, import_index)| {
+            crate::model::mcp::McpImportAuthorizeView(golem_client::model::McpImportAuthorization {
+                authorization_url: format!(
+                    "https://provider.example/authorize?id={authorization_id}"
+                ),
+                deployment_revision,
+                import_index,
+            })
+        },
+    ))
+}
+
+fn arb_mcp_import_oauth_status() -> impl Strategy<Value = golem_client::model::McpImportOAuthStatus>
+{
+    (
+        any::<u128>(),
+        any::<u64>(),
+        any::<u32>(),
+        any::<String>(),
+        any::<String>(),
+    )
+        .prop_map(
+            |(environment_id, deployment_revision, import_index, security_scheme, status)| {
+                golem_client::model::McpImportOAuthStatus {
+                    environment_id: uuid::Uuid::from_u128(environment_id),
+                    deployment_revision,
+                    import_index,
+                    security_scheme,
+                    status,
+                }
+            },
+        )
+}
+
+fn arb_mcp_import_complete_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportCompleteView),
+    )
+}
+
+fn arb_mcp_import_disconnect_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportDisconnectView),
+    )
+}
+
+fn arb_mcp_import_status_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportStatusView),
+    )
 }
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {

@@ -2750,6 +2750,86 @@ Path|Method|Protected
   "metadataDigest": "string"
 }
 ```
+
+## undefined
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/authorize`|POST|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "authorizationUrl": "string",
+  "deploymentRevision": 0,
+  "importIndex": 0
+}
+```
+
+## undefined
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/complete`|POST|Yes
+
+**Example Request JSON**
+```json copy
+{
+  "state": "string",
+  "issuer": "string",
+  "code": "string",
+  "error": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "deploymentRevision": 0,
+  "importIndex": 0,
+  "securityScheme": "string",
+  "status": "string"
+}
+```
+
+## undefined
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "deploymentRevision": 0,
+  "importIndex": 0,
+  "securityScheme": "string",
+  "status": "string"
+}
+```
+
+## undefined
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth`|DELETE|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "deploymentRevision": 0,
+  "importIndex": 0,
+  "securityScheme": "string",
+  "status": "string"
+}
+```
 ## Environment API Errors
 Status Code|Description|Body
 ---|---|---

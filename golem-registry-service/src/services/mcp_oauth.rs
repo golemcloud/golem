@@ -15,6 +15,7 @@ use crate::repo::model::mcp_oauth::{
 };
 use crate::repo::model::security_scheme::SecuritySchemeRepoError;
 use crate::repo::security_scheme::SecuritySchemeRepo;
+use crate::services::account_usage::AccountUsageService;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::security_scheme::authorize_security_scheme_permission;
 use chrono::{DateTime, Utc};
@@ -24,6 +25,7 @@ use golem_common::model::mcp_import::{McpImport, McpImportCredential, McpImportS
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_mcp_import::oauth::{self, AuthorizationServer, OAuthClient};
+use golem_mcp_import::transport::sender::HttpSender;
 use golem_mcp_import::transport::{HttpSend, TransportError};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
@@ -106,6 +108,7 @@ pub struct McpOAuthService {
     schemes: Arc<dyn SecuritySchemeRepo>,
     grants: Arc<dyn McpOAuthGrantRepo>,
     limits: oauth::Limits,
+    usage: Arc<AccountUsageService>,
 }
 
 struct ResolvedImport {
@@ -148,6 +151,7 @@ impl McpOAuthService {
         schemes: Arc<dyn SecuritySchemeRepo>,
         grants: Arc<dyn McpOAuthGrantRepo>,
         limits: oauth::Limits,
+        usage: Arc<AccountUsageService>,
     ) -> Self {
         Self {
             environments,
@@ -155,7 +159,60 @@ impl McpOAuthService {
             schemes,
             grants,
             limits,
+            usage,
         }
+    }
+
+    async fn operator_sender(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+    ) -> Result<HttpSender<http_policy::McpHttpPolicy>, McpOAuthError> {
+        let resolved = self.resolve(source).await?;
+        let (scheme, _) = resolved.oauth()?;
+        let policy = http_policy::McpHttpPolicy::operator(
+            auth,
+            &resolved.environment,
+            &scheme.name,
+            self.usage.clone(),
+        )?;
+        Ok(HttpSender::new(policy)?)
+    }
+
+    pub async fn authorize(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+    ) -> Result<Url, McpOAuthError> {
+        let mut sender = self.operator_sender(source, auth).await?;
+        self.begin(source, auth, &mut sender).await
+    }
+
+    pub async fn complete_operator(
+        &self,
+        source: &McpImportSource,
+        callback: McpOAuthCallback,
+        auth: &AuthCtx,
+    ) -> Result<SecuritySchemeName, McpOAuthError> {
+        let mut sender = self.operator_sender(source, auth).await?;
+        self.complete(source, callback, auth, &mut sender).await
+    }
+
+    pub async fn status(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+    ) -> Result<(SecuritySchemeName, McpOAuthGrantStatus), McpOAuthError> {
+        let resolved = self.resolve(source).await?;
+        resolved.authorize_operator(auth)?;
+        let (scheme, key) = resolved.oauth()?;
+        let status = self
+            .grants
+            .load(&key)
+            .await?
+            .map(|grant| grant.status)
+            .unwrap_or(McpOAuthGrantStatus::ReauthorizationRequired);
+        Ok((scheme.name.clone(), status))
     }
 
     async fn resolve(&self, source: &McpImportSource) -> Result<ResolvedImport, McpOAuthError> {
@@ -272,13 +329,18 @@ impl McpOAuthService {
     /// Shared-store claiming precedes every token POST; crashes never release it.
     pub async fn complete<S: HttpSend<Error = McpOAuthError> + Send>(
         &self,
+        expected_source: &McpImportSource,
         callback: McpOAuthCallback,
         auth: &AuthCtx,
         sender: &mut S,
-    ) -> Result<(), McpOAuthError> {
+    ) -> Result<SecuritySchemeName, McpOAuthError> {
         let claim = self
             .grants
-            .claim_callback(&state_hash(&callback.state), Utc::now().into())
+            .claim_callback(
+                expected_source.environment_id.0,
+                &state_hash(&callback.state),
+                Utc::now().into(),
+            )
             .await?
             .ok_or(McpOAuthError::InvalidCallback)?;
         let result = async {
@@ -287,6 +349,12 @@ impl McpOAuthService {
                 return Err(McpOAuthError::InvalidCallback);
             }
             let source = session_source(&claim.key, session)?;
+            if source.environment_id != expected_source.environment_id
+                || source.deployment_revision != expected_source.deployment_revision
+                || source.import_index != expected_source.import_index
+            {
+                return Err(McpOAuthError::InvalidCallback);
+            }
             let resolved = self.resolve(&source).await?;
             resolved.authorize_operator(auth)?;
             let (scheme, key) = resolved.oauth()?;
@@ -328,7 +396,7 @@ impl McpOAuthService {
             {
                 return Err(McpOAuthError::ContextChanged);
             }
-            Ok(())
+            Ok(scheme.name.clone())
         }
         .await;
         if result.is_err() {
@@ -344,11 +412,12 @@ impl McpOAuthService {
         &self,
         source: &McpImportSource,
         auth: &AuthCtx,
-    ) -> Result<(), McpOAuthError> {
+    ) -> Result<SecuritySchemeName, McpOAuthError> {
         let resolved = self.resolve(source).await?;
         resolved.authorize_operator(auth)?;
-        self.grants.revoke(&resolved.oauth()?.1).await?;
-        Ok(())
+        let (scheme, key) = resolved.oauth()?;
+        self.grants.revoke(&key).await?;
+        Ok(scheme.name.clone())
     }
 
     /// Trusted runtime path after tool admission, never an administrative token

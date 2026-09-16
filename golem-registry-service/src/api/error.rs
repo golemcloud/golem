@@ -30,6 +30,7 @@ use crate::services::environment_tool_grant::{
 };
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
+use crate::services::mcp_oauth::McpOAuthError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::permission_share::PermissionShareError;
 use crate::services::plan::PlanError;
@@ -1159,6 +1160,51 @@ impl From<SecuritySchemeError> for ApiError {
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             })),
+        }
+    }
+}
+
+impl From<McpOAuthError> for ApiError {
+    fn from(value: McpOAuthError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            McpOAuthError::ImportNotFound => {
+                Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
+            }
+            McpOAuthError::SchemeNotFound => {
+                Self::not_found(api::error_code::SECURITY_SCHEME_NOT_FOUND, error)
+            }
+            McpOAuthError::NotOAuth
+            | McpOAuthError::InvalidCallback
+            | McpOAuthError::ConsentDenied => {
+                Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error)
+            }
+            McpOAuthError::ContextChanged | McpOAuthError::RefreshUnresolved(_) => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            McpOAuthError::AuthorizationRequired(_) => {
+                Self::conflict(api::error_code::INVALID_OAUTH_SESSION, error)
+            }
+            McpOAuthError::OwnerMismatch => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
+            McpOAuthError::Unauthorized(inner) => inner.into(),
+            McpOAuthError::AccountUsage(inner) => inner.into(),
+            McpOAuthError::Transport(golem_mcp_import::transport::TransportError::Denied) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            McpOAuthError::Transport(
+                golem_mcp_import::transport::TransportError::Configuration(_)
+                | golem_mcp_import::transport::TransportError::InvalidInput(_)
+                | golem_mcp_import::transport::TransportError::OAuthGrantRejected
+                | golem_mcp_import::transport::TransportError::AuthorizationRequired(_),
+            ) => Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error),
+            McpOAuthError::Transport(_) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error, None)
+            }
+            McpOAuthError::InternalError(_) => Self::internal(
+                api::error_code::INTERNAL_UNKNOWN,
+                error,
+                Some(value.into_anyhow()),
+            ),
         }
     }
 }

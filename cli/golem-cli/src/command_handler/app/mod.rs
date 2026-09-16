@@ -1422,7 +1422,7 @@ impl AppCommandHandler {
             .enumerate()
             .map(|(index, import)| {
                 import
-                    .into_parts(environment.environment_id.clone())
+                    .into_parts(environment.environment_id)
                     .map(|(descriptor, _)| (index.to_string(), descriptor.into()))
                     .map_err(|err| anyhow::anyhow!("Invalid MCP import at index {index}: {err}"))
             })

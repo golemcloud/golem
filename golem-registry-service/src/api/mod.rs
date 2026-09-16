@@ -28,6 +28,7 @@ pub mod error;
 pub mod http_api_deployments;
 pub mod login;
 pub mod mcp_deployments;
+pub mod mcp_import_oauth;
 pub mod me;
 pub mod permission_shares;
 pub mod plugin_registrations;
@@ -53,6 +54,7 @@ use self::error::ApiError;
 use self::http_api_deployments::HttpApiDeploymentsApi;
 use self::login::LoginApi;
 use self::mcp_deployments::McpDeploymentsApi;
+use self::mcp_import_oauth::McpImportOAuthApi;
 use self::me::MeApi;
 use self::permission_shares::PermissionSharesApi;
 use self::plugin_registrations::PluginRegistrationsApi;
@@ -84,7 +86,7 @@ pub type Apis = (
     HttpApiDeploymentsApi,
     (LoginApi, MeApi),
     (
-        McpDeploymentsApi,
+        (McpDeploymentsApi, McpImportOAuthApi),
         PermissionSharesApi,
         PluginRegistrationsApi,
     ),
@@ -160,9 +162,15 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 ),
             ),
             (
-                McpDeploymentsApi::new(
-                    services.mcp_deployment_service.clone(),
-                    services.auth_service.clone(),
+                (
+                    McpDeploymentsApi::new(
+                        services.mcp_deployment_service.clone(),
+                        services.auth_service.clone(),
+                    ),
+                    McpImportOAuthApi::new(
+                        services.mcp_oauth_service.clone(),
+                        services.auth_service.clone(),
+                    ),
                 ),
                 PermissionSharesApi::new(
                     services.permission_share_service.clone(),

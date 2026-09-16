@@ -31,6 +31,7 @@ pub trait McpOAuthGrantRepo: Send + Sync {
 
     async fn claim_callback(
         &self,
+        environment_id: Uuid,
         state_hash: &[u8],
         now: SqlDateTime,
     ) -> RepoResult<Option<McpOAuthExchangeClaim>>;
@@ -172,6 +173,7 @@ impl McpOAuthGrantRepo for DbMcpOAuthGrantRepo<PostgresPool> {
 
     async fn claim_callback(
         &self,
+        environment_id: Uuid,
         state_hash: &[u8],
         now: SqlDateTime,
     ) -> RepoResult<Option<McpOAuthExchangeClaim>> {
@@ -179,13 +181,19 @@ impl McpOAuthGrantRepo for DbMcpOAuthGrantRepo<PostgresPool> {
             indoc! {r#"
             UPDATE mcp_oauth_grants SET status = 'exchanging'
             WHERE state_hash = $1 AND status = 'pending-consent' AND consent_expires_at > $2
+              AND environment_id = $3
             RETURNING {}
         "#},
             RETURNING
         );
         let row: Option<GrantRow> = self
             .rw("claim_callback")
-            .fetch_optional_as(sqlx::query_as(&sql).bind(state_hash).bind(now))
+            .fetch_optional_as(
+                sqlx::query_as(&sql)
+                    .bind(state_hash)
+                    .bind(now)
+                    .bind(environment_id),
+            )
             .await?;
         row.map(|row| {
             let flow = row
@@ -447,7 +455,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            repo.claim_callback(b"expired", Utc::now().into())
+            repo.claim_callback(key.environment_id, b"expired", Utc::now().into())
                 .await
                 .unwrap()
                 .is_none()
@@ -462,14 +470,20 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(expired.generation, auth.generation);
+        assert!(
+            repo.claim_callback(Uuid::new_v4(), b"state", Utc::now().into())
+                .await
+                .unwrap()
+                .is_none()
+        );
         let claim = repo
-            .claim_callback(b"state", Utc::now().into())
+            .claim_callback(key.environment_id, b"state", Utc::now().into())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(claim.flow.pkce_verifier, "pkce-one");
         assert!(
-            repo.claim_callback(b"state", Utc::now().into())
+            repo.claim_callback(key.environment_id, b"state", Utc::now().into())
                 .await
                 .unwrap()
                 .is_none()
@@ -588,7 +602,7 @@ mod tests {
             )
             .await
             .unwrap();
-        repo.claim_callback(b"state", Utc::now().into())
+        repo.claim_callback(key.environment_id, b"state", Utc::now().into())
             .await
             .unwrap()
             .unwrap();

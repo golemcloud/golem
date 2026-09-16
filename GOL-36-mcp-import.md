@@ -414,6 +414,19 @@ configured provider and applicable MCP OAuth requirements, including state bindi
 PKCE where required, callback validation, and resource/audience scoping. Reuse
 existing authorization and secret-storage facilities, not the inbound token itself.
 
+Operator commands are `golem api mcp-import authorize|complete|status|disconnect`
+with a zero-based import index and optional `--revision`. Authorization returns
+the selected revision and a browser consent URL, and prints an exact-revision
+completion command. After consent, the operator forwards the complete callback
+URL to `complete`; this workflow does not start a local callback listener.
+Consent expires after ten minutes. Starting authorization replaces any existing
+grant immediately. All four operations require scheme `Update`, and status
+exposes only scheme/context and grant state, never tokens. Completion/disconnect
+return the status committed by their mutation, without a fallible status reload.
+Public status labels are `pending-consent`, `exchanging`, `granted`, `refreshing`,
+`authorization-required`, and `revoked`. A concurrent deployment must not change
+the source used to complete consent: use the revision printed by `authorize`.
+
 Store grants/tokens securely under that scheme and credential owner, with explicit
 environment/account isolation. A calling agent resolves the configured credential
 through its existing context and narrowing rules. Do not introduce application-user
@@ -1099,8 +1112,25 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   nonempty challenges), not a new configuration-disable switch; the default is
   unchanged. General transport/projection policy wiring belongs with their
   resolver/bridge consumers.
-- Remaining step-4 work: policy/internal RPC and
-  operator API/CLI wiring, including callback parsing and status; resource-401
+- Operator REST and CLI operations are wired to the production accounting sender.
+  Accounting is a required service dependency. Callback claiming is scoped to
+  the path environment; wrong-environment attempts cannot consume another flow.
+  Actor/deployment/import binding remains checked before token exchange. Public
+  responses use camelCase and CLI outputs have registered typed discriminators.
+- Oracle's two operator reviews found no blockers. Its suggested environment
+  claim fence, post-mutation response simplification and exact-revision completion
+  hint are implemented. Generated clients no longer log request bodies, preventing
+  verbose CLI logging from exposing callback code/state. This intentionally removes
+  body logging for other generated API calls too; request serialization is unchanged.
+- Operator verification: **20** registry OAuth/API tests, **21** CLI callback/schema
+  tests, and **1** generated-client logging regression passed. The real Poem route
+  test exercises authentication, exact source lookup, callback rejection, and
+  disconnect/status against SQLite; it completes in under one second and spawns
+  no external processes. `generate-openapi` and `cargo build -p golem-client`
+  passed; OpenAPI and REST MDX are regenerated. Formatting and diff checks passed.
+  The dedicated operator bug-finder run returned **no bugs found**, clean terminal.
+  This is not yet an end-to-end provider/agent test or completion of step 4.
+- Remaining step-4 work: runtime policy/internal RPC; resource-401
   feedback and cache invalidation; provider fixtures and combined validation.
   The coordinator is an intermediate checkpoint, not completion of step 4 or
   evidence of end-to-end OAuth operation.

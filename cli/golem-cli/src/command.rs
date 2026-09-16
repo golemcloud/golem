@@ -1729,6 +1729,31 @@ pub mod api {
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
+    use std::fmt::{Debug, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    pub struct OAuthCallbackUrl(url::Url);
+
+    impl OAuthCallbackUrl {
+        pub fn into_inner(self) -> url::Url {
+            self.0
+        }
+    }
+
+    impl Debug for OAuthCallbackUrl {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("OAuthCallbackUrl([REDACTED])")
+        }
+    }
+
+    impl FromStr for OAuthCallbackUrl {
+        type Err = url::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse().map(Self)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
@@ -1742,10 +1767,44 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
+        /// Authorize MCP imports that use an OAuth security scheme
+        McpImport {
+            #[clap(subcommand)]
+            subcommand: McpImportOAuthSubcommand,
+        },
         /// Manage API Domains
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpImportOAuthSubcommand {
+        /// Start authorization and print the provider consent URL
+        Authorize {
+            import_index: u32,
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Complete authorization from the exact provider callback URL
+        Complete {
+            import_index: u32,
+            callback_url: OAuthCallbackUrl,
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Show non-secret authorization state
+        Status {
+            import_index: u32,
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Revoke the stored grant
+        Disconnect {
+            import_index: u32,
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
         },
     }
 

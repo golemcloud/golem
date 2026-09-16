@@ -388,6 +388,7 @@ impl Services {
             repos.security_scheme_repo.clone(),
             repos.mcp_oauth_grant_repo.clone(),
             config.mcp_oauth,
+            account_usage_service.clone(),
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(

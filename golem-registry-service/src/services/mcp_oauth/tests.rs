@@ -1,8 +1,15 @@
 use super::*;
+use crate::repo::account::DbAccountRepo;
+use crate::repo::account_usage::DbAccountUsageRepo;
 use crate::repo::deployment::DbDeploymentRepo;
 use crate::repo::environment::DbEnvironmentRepo;
 use crate::repo::mcp_oauth::DbMcpOAuthGrantRepo;
+use crate::repo::plan::DbPlanRepo;
+use crate::repo::registry_change::DbRegistryChangeRepo;
 use crate::repo::security_scheme::DbSecuritySchemeRepo;
+use crate::services::account::AccountService;
+use crate::services::plan::PlanService;
+use crate::services::registry_change_notifier::SqliteRegistryChangeNotifier;
 use bytes::Bytes;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::account::AccountEmail;
@@ -97,6 +104,18 @@ impl Fixture {
                     timeout: Duration::from_secs(2),
                     ..Default::default()
                 },
+                Arc::new(AccountUsageService::new(
+                    Arc::new(DbAccountUsageRepo::new(pool.clone())),
+                    Arc::new(AccountService::new(
+                        Arc::new(DbAccountRepo::new(pool.clone())),
+                        Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool.clone())))),
+                        golem_common::model::plan::PlanId(Uuid::new_v4()),
+                        Arc::new(SqliteRegistryChangeNotifier::new(
+                            16,
+                            Arc::new(DbRegistryChangeRepo::new(pool.clone())),
+                        )),
+                    )),
+                )),
             ),
             pool,
             source: McpImportSource {
@@ -158,7 +177,7 @@ impl Fixture {
         let url = self.begin().await;
         let mut sender = Queue::token();
         self.service
-            .complete(callback(&url), &self.operator, &mut sender)
+            .complete(&self.source, callback(&url), &self.operator, &mut sender)
             .await
             .unwrap();
         assert_eq!(sender.requests.len(), 1);
@@ -269,6 +288,30 @@ fn callback(url: &Url) -> McpOAuthCallback {
 }
 
 #[test]
+async fn callback_is_bound_to_deployment_and_import_path() {
+    let fixture = Fixture::new().await;
+    fixture.insert_import(2, 0, Some("oauth"), None).await;
+    let url = fixture.begin().await;
+    let mut wrong_source = fixture.source.clone();
+    wrong_source.deployment_revision = 2_i64.try_into().unwrap();
+    let mut sender = Queue::token();
+
+    assert!(matches!(
+        fixture
+            .service
+            .complete(
+                &wrong_source,
+                callback(&url),
+                &fixture.operator,
+                &mut sender
+            )
+            .await,
+        Err(McpOAuthError::InvalidCallback)
+    ));
+    assert!(sender.requests.is_empty());
+}
+
+#[test]
 async fn consent_binds_owner_actor_pkce_and_saved_metadata() {
     let fixture = Fixture::new().await;
     let url = fixture.begin().await;
@@ -288,7 +331,12 @@ async fn consent_binds_owner_actor_pkce_and_saved_metadata() {
     let mut sender = Queue::token();
     fixture
         .service
-        .complete(callback(&url), &fixture.operator, &mut sender)
+        .complete(
+            &fixture.source,
+            callback(&url),
+            &fixture.operator,
+            &mut sender,
+        )
         .await
         .unwrap();
     assert_eq!(sender.requests.len(), 1, "callback must not rediscover");
@@ -332,7 +380,12 @@ async fn consent_binds_owner_actor_pkce_and_saved_metadata() {
     assert!(matches!(
         fixture
             .service
-            .complete(callback(&url), &fixture.operator, &mut sender)
+            .complete(
+                &fixture.source,
+                callback(&url),
+                &fixture.operator,
+                &mut sender
+            )
             .await,
         Err(McpOAuthError::InvalidCallback)
     ));
@@ -368,7 +421,7 @@ async fn callback_errors_validate_issuer_and_never_exchange_or_leak() {
         let mut sender = Queue::empty();
         let error = fixture
             .service
-            .complete(data, &fixture.operator, &mut sender)
+            .complete(&fixture.source, data, &fixture.operator, &mut sender)
             .await
             .unwrap_err();
         if issuer.as_deref() == Some("https://issuer.example") {
@@ -445,14 +498,24 @@ async fn ambiguous_exchange_and_refresh_are_not_repeated() {
     assert!(matches!(
         fixture
             .service
-            .complete(callback(&url), &fixture.operator, &mut lost_response)
+            .complete(
+                &fixture.source,
+                callback(&url),
+                &fixture.operator,
+                &mut lost_response
+            )
             .await,
         Err(McpOAuthError::Transport(TransportError::Network))
     ));
     assert!(matches!(
         fixture
             .service
-            .complete(callback(&url), &fixture.operator, &mut lost_response)
+            .complete(
+                &fixture.source,
+                callback(&url),
+                &fixture.operator,
+                &mut lost_response
+            )
             .await,
         Err(McpOAuthError::InvalidCallback)
     ));
@@ -763,7 +826,7 @@ async fn consent_rechecks_operator_and_scheme_before_exchange() {
         let mut sender = Queue::empty();
         let error = fixture
             .service
-            .complete(callback(&url), &auth, &mut sender)
+            .complete(&fixture.source, callback(&url), &auth, &mut sender)
             .await
             .unwrap_err();
         assert!(matches!(
