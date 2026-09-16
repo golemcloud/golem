@@ -47,7 +47,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .agent_type_provision_config()
                 .map(|c| c.env.clone())
                 .unwrap_or_default(),
-            golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline => self
+            golem_common::model::agent::ResolvedOwnerContext::ComponentWorker
+            | golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline => self
                 .owner_component_metadata()
                 .metadata
                 .component_provision_config()

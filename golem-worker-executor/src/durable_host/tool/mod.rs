@@ -1294,9 +1294,11 @@ where
                 ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                     agent_type_name: agent.agent_type.clone(),
                 },
-                ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
-                    component_id: component.id,
-                },
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    }
+                }
             };
             (component.id, component.revision, owner)
         });
@@ -4402,7 +4404,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                 agent_type_name: agent.agent_type.clone(),
             },
-            ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
                 ToolBindingOwner::ComponentBaseline { component_id }
             }
         };
@@ -4472,7 +4474,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                 agent_type_name: agent.agent_type.clone(),
             },
-            ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
                 ToolBindingOwner::ComponentBaseline { component_id }
             }
         };

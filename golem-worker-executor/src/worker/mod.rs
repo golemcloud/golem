@@ -1060,7 +1060,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             current_status,
             persisted_status,
             execution_status,
-            agent_id,
+            owner_context,
             snapshot_policy,
             oplog,
             initial_component,
@@ -1186,13 +1186,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let worker = Worker {
             owned_agent_id,
-            owner_context: ResolvedOwnerContext::from_authoritative_kind(
-                initial_worker_metadata.owner_kind,
-                &initial_worker_metadata.agent_id.agent_id,
-                &initial_component.metadata,
-            )
-            .map_err(WorkerExecutorError::invalid_request)?,
-            parsed_agent_id: agent_id.clone(),
+            parsed_agent_id: owner_context.agent().cloned(),
+            owner_context,
             oplog,
             worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
@@ -1258,7 +1253,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.
-        if let Some(agent_id) = &agent_id
+        if let Some(agent_id) = worker.owner_context.agent()
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
         {
@@ -1330,7 +1325,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id,
                 )?
             }
-            ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
                 crate::durable_host::owner_effective_surface_from_component_metadata(
                     &owner_component_metadata,
                     &self.owned_agent_id,
@@ -1378,17 +1373,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map(|(path, value)| TypedAgentConfigEntry { path, value })
                     .collect()
             }
-            ResolvedOwnerContext::ComponentBaseline => effective_agent_config(
-                worker_metadata.config,
-                owner_component_metadata
-                    .metadata
-                    .component_provision_config()
-                    .config
-                    .clone(),
-            )?
-            .into_iter()
-            .map(|(path, value)| TypedAgentConfigEntry { path, value })
-            .collect(),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                effective_agent_config(
+                    worker_metadata.config,
+                    owner_component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone(),
+                )?
+                .into_iter()
+                .map(|(path, value)| TypedAgentConfigEntry { path, value })
+                .collect()
+            }
         };
         let filesystem_generation = self
             .owner_runtime_resources
@@ -2471,9 +2468,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                     agent_type_name: agent.agent_type.clone(),
                 },
-                ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
-                    component_id: component.id,
-                },
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    }
+                }
             };
             match self
                 .environment_state_service()
@@ -6927,7 +6926,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     current_status,
                     persisted_status,
                     execution_status,
-                    agent_id,
+                    owner_context,
                     snapshot_policy,
                     oplog,
                     initial_component: Arc::new(initial_component),
@@ -6952,27 +6951,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } else {
                     OwnerKind::ComponentAgent
                 };
-                owner_kind
-                    .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-                    .map_err(WorkerExecutorError::invalid_request)?;
+                let owner_context = ResolvedOwnerContext::from_authoritative_kind(
+                    owner_kind,
+                    &owned_agent_id.agent_id.agent_id,
+                    &component.metadata,
+                )
+                .map_err(WorkerExecutorError::invalid_request)?;
                 if virtual_owner && component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
                     ));
                 }
 
-                let agent_id = if !virtual_owner && component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &component.metadata,
-                    )
-                    .map_err(|err| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
-                    })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
+                let agent_id = owner_context.agent().cloned();
 
                 let ResolvedAgentProperties {
                     agent_mode,
@@ -7141,7 +7132,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     current_status: initial_status,
                     persisted_status: Some(initial_status_value),
                     execution_status,
-                    agent_id,
+                    owner_context,
                     snapshot_policy,
                     oplog,
                     initial_component: Arc::new(component),
@@ -10161,7 +10152,7 @@ struct GetOrCreateWorkerResult {
     /// The status value currently persisted in the live cache, used as the first delta baseline.
     persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
     /// Loaded during `get_or_create_worker_metadata` and stored on the

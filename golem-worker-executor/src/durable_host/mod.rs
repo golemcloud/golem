@@ -338,7 +338,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
             let card = StoredCard::Polymorphic(
                 component
                     .metadata
@@ -396,7 +396,7 @@ pub(crate) fn owner_monomorphization_context(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_monomorphization_context(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
             component_baseline_monomorphization_context(component, owned_agent_id)
         }
     }
@@ -1022,11 +1022,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-                ResolvedOwnerContext::ComponentBaseline => component_metadata
-                    .metadata
-                    .component_provision_config()
-                    .config
-                    .clone(),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone()
+                }
             };
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -1475,10 +1477,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentBaseline => component_baseline_monomorphization_context(
-                self.owner_component_metadata(),
-                &self.owned_agent_id,
-            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
         let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
             &context,
@@ -1873,10 +1877,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentBaseline => component_baseline_monomorphization_context(
-                self.owner_component_metadata(),
-                &self.owned_agent_id,
-            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
         self.state.agent_effective_surface =
             golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
@@ -10489,7 +10495,8 @@ impl PrivateDurableWorkerState {
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
                             }
-                            ResolvedOwnerContext::ComponentBaseline => {
+                            ResolvedOwnerContext::ComponentWorker
+                            | ResolvedOwnerContext::ComponentBaseline => {
                                 let card = StoredCard::Polymorphic(
                                     component_metadata
                                         .metadata
@@ -10535,13 +10542,14 @@ impl PrivateDurableWorkerState {
                     agent_wallet_cards.values(),
                 )
             }
-            (OwnerRuntime::Agent, ResolvedOwnerContext::ComponentBaseline) => {
-                component_baseline_effective_surface_from_wallet(
-                    &component_metadata,
-                    &owned_agent_id,
-                    agent_wallet_cards.values(),
-                )
-            }
+            (
+                OwnerRuntime::Agent,
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                &component_metadata,
+                &owned_agent_id,
+                agent_wallet_cards.values(),
+            ),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));

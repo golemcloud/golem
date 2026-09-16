@@ -772,7 +772,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         entry.path == path && entry.source == AgentConfigSource::Secret
                     })
                 }),
-            ResolvedOwnerContext::ComponentBaseline => self
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => self
                 .owner_component_metadata()
                 .metadata
                 .config_schema()
@@ -849,7 +849,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             );
                         (agent_type.config, agent_type.schema)
                     }
-                    ResolvedOwnerContext::ComponentBaseline => {
+                    ResolvedOwnerContext::ComponentWorker
+                    | ResolvedOwnerContext::ComponentBaseline => {
                         let config_schema = ctx.owner_component_metadata().metadata.config_schema();
                         (
                             config_schema.declarations.clone(),

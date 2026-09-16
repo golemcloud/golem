@@ -46,21 +46,27 @@ pub use crate::schema::agent::ParsedAgentId;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
     Agent(Box<ParsedAgentId>),
+    /// A non-agent component's guest worker, using component-level provision policy.
+    ComponentWorker,
+    /// A host-only ephemeral owner that never instantiates the component's guest.
     ComponentBaseline,
 }
 
 impl ResolvedOwnerContext {
-    pub fn from_authoritative_kind<R: AgentTypeSchemaResolver>(
+    pub fn from_authoritative_kind(
         kind: OwnerKind,
         raw_agent_id: &str,
-        resolver: R,
+        metadata: &ComponentMetadata,
     ) -> Result<Self, String> {
         kind.validate_instance_name(raw_agent_id)?;
         match kind {
-            OwnerKind::ComponentAgent => ParsedAgentId::parse(raw_agent_id, resolver)
-                .map(Box::new)
-                .map(Self::Agent)
-                .map_err(|error| error.to_string()),
+            OwnerKind::ComponentAgent if metadata.is_agent() => {
+                ParsedAgentId::parse(raw_agent_id, metadata)
+                    .map(Box::new)
+                    .map(Self::Agent)
+                    .map_err(|error| error.to_string())
+            }
+            OwnerKind::ComponentAgent => Ok(Self::ComponentWorker),
             OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
         }
     }
@@ -68,7 +74,7 @@ impl ResolvedOwnerContext {
     pub fn agent(&self) -> Option<&ParsedAgentId> {
         match self {
             Self::Agent(agent) => Some(agent),
-            Self::ComponentBaseline => None,
+            Self::ComponentWorker | Self::ComponentBaseline => None,
         }
     }
 }
