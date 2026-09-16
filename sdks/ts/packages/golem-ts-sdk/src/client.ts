@@ -51,6 +51,7 @@ import {
   RemoteOutputError,
   type AgentConfigEntry,
 } from './bridge/agent';
+export type { AgentConfigEntry } from './bridge/agent';
 
 export {
   isRemoteCallError,
@@ -151,7 +152,7 @@ type ConfigOverrideField<S> =
         : never
       : ConfigOverrides<Extract<ConfigObjectShapeOf<S>, ConfigSpec>>;
 
-/** Typed, partial non-secret configuration values supplied by an RPC caller. */
+/** Typed, partial non-secret values used when an RPC caller creates a worker. Existing workers retain their initial configuration. */
 export type ConfigOverrides<Config extends ConfigSpec> = {
   readonly [K in keyof Config]?: ConfigOverrideField<Config[K]>;
 };
@@ -486,11 +487,24 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
 function buildAgentIdBinding<Methods extends MethodsRecord>(
   def: { readonly methods: Methods },
   fallible: boolean,
-): { [bindAgentClient](agentId: ParsedAgentId): RemoteClient<Methods> } {
+): {
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config?: readonly AgentConfigEntry[],
+  ): RemoteClient<Methods>;
+} {
   const methodCodecs = compileRemoteMethods(def.methods);
   return {
-    [bindAgentClient](agentId) {
-      return bindExistingAgent(undefined, undefined, methodCodecs, fallible, agentId, 'durable');
+    [bindAgentClient](agentId, config) {
+      return bindExistingAgent(
+        undefined,
+        undefined,
+        methodCodecs,
+        fallible,
+        agentId,
+        'durable',
+        config ?? [],
+      );
     },
   };
 }
@@ -502,6 +516,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   fallible: boolean,
   agentId: ParsedAgentId,
   mode: Mode,
+  config: readonly AgentConfigEntry[],
 ): RemoteClient<Methods, Mode> {
   const parts = agentId.parts();
   if (exactName !== undefined && exactName !== parts.typeName) {
@@ -539,7 +554,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
     parts.typeName,
     parts.constructorValue,
     parts.phantomId,
-    [],
+    config,
     mode,
   );
   return createRemoteClient<Methods, Mode>(methodCodecs, mode, remote);
@@ -561,7 +576,10 @@ export function buildAgentClientSurface<
   agentId: Mode extends 'ephemeral'
     ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
     : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
-  [bindAgentClient](agentId: ParsedAgentId): RemoteClient<Methods, Mode>;
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config?: ConfigOverrides<Config>,
+  ): RemoteClient<Methods, Mode>;
 } {
   // Compile the def's id + method codecs once (cached in this closure).
   const idCodecs: NamedCodec[] = Object.keys(def.id)
@@ -634,8 +652,19 @@ export function buildAgentClientSurface<
     agentId: createAgentId as Mode extends 'ephemeral'
       ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
       : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId,
-    [bindAgentClient](agentId) {
-      return bindExistingAgent(def.name, idCodecs, methodCodecs, fallible, agentId, def.mode);
+    [bindAgentClient](agentId, config) {
+      const entries = config
+        ? encodeConfigOverrides(configDecls, config as Record<string, unknown>)
+        : [];
+      return bindExistingAgent(
+        def.name,
+        idCodecs,
+        methodCodecs,
+        fallible,
+        agentId,
+        def.mode,
+        entries,
+      );
     },
   };
 }

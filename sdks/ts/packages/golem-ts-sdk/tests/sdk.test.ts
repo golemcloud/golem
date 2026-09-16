@@ -132,6 +132,19 @@ function remoteClientTypeChecks(): void {
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
   configuredContract.client.get({}, { greeting: 'hello' });
+  agentId.client(configuredContract, { greeting: 'hello' });
+  // @ts-expect-error binding retains the declared value types
+  agentId.client(configuredContract, { greeting: 42 });
+  // @ts-expect-error binding cannot override a declared secret
+  agentId.client(configuredContract, { apiKey: 'secret' });
+  agentId.client(sharedContract, [
+    {
+      path: ['greeting'],
+      value: { graph: compileSchema(z.string()).graph, value: v.string('hello') },
+    },
+  ]);
+  // @ts-expect-error binding-only contracts accept raw typed entries, not declaration-shaped objects
+  agentId.client(sharedContract, { greeting: 'hello' });
   // @ts-expect-error config overrides retain their declared value types
   configuredContract.client.get({}, { greeting: 42 });
   // @ts-expect-error secret configuration cannot be overridden by an RPC caller
@@ -636,6 +649,59 @@ describe('RPC client', () => {
         .map((call) => call[0]),
     ).toEqual(['FirstAgent', 'SecondAgent']);
     expect(contract).not.toHaveProperty('mode');
+  });
+
+  it('forwards raw typed config entries when binding a method-only contract', () => {
+    const contract = defineAgentClient({
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ExistingAgent(one)');
+    const constructorValue = v.record([v.string('one')]);
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExistingAgent',
+      { graph: { typeNodes: [], defs: [], root: 0 }, value: schemaValueToWit(constructorValue) },
+      undefined,
+    ]);
+    const entry = {
+      path: ['greeting'],
+      value: { graph: compileSchema(z.string()).graph, value: v.string('hello') },
+    };
+
+    expect(target.client(contract, [entry]).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toEqual([
+      { path: ['greeting'], value: typedSchemaValueToWit(entry.value) },
+    ]);
+  });
+
+  it('validates declared config before binding a complete contract', () => {
+    const contract = defineAgentClient({
+      name: 'ConfiguredExistingAgent',
+      id: { name: z.string() },
+      config: { greeting: z.string(), apiKey: s.secret(z.string()) },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ConfiguredExistingAgent(one)');
+    const parsed = [
+      'ConfiguredExistingAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ] as const;
+    vi.mocked(parseAgentId).mockReturnValue(parsed);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+    expect(() => target.client(contract, { greeting: 42 } as never)).toThrow();
+    expect(() => target.client(contract, { unknown: 'x' } as never)).toThrow(
+      "Unknown config path 'unknown'",
+    );
+    expect(() => target.client(contract, { apiKey: 'x' } as never)).toThrow(
+      "Cannot override secret config field 'apiKey'",
+    );
+    expect(vi.mocked(WasmRpc.create)).toHaveBeenCalledTimes(creates);
+
+    expect(target.client(contract, { greeting: 'hello' }).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toHaveLength(1);
   });
 
   it('binds a method-only contract to a durable phantom identity without discovery', () => {

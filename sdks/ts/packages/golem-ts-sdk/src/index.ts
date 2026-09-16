@@ -176,6 +176,7 @@ export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputErro
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
   AgentClientFactory,
+  AgentConfigEntry,
   AgentClientSpec,
   ConfigOverrides,
   EphemeralInvocationResult,
