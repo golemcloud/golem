@@ -61,6 +61,8 @@ Direct clients never discover or validate schemas. Constructor and method
 record fields must be packed in declaration order; the runtime authoritatively
 accepts or rejects the attempt.
 
+Reflected factories accept optional creation-time overrides: `get(json, config)` and `getValue(value, overrides)` use canonical JSON entries or schema-native `ConfigOverride` entries, respectively. The JSON entries are `ReflectedConfigJson(path, value)`. The reflected type checks declared paths, secret fields, and values before constructing RPC. `AgentType.bind(id, overrides)` accepts validated native entries for an existing identity.
+
 All reflected and direct methods support awaited, trigger, and scheduled calls
 through `invokeValue`, `triggerValue`, and `scheduleValue`. Reflected live
 streams are supported by awaited value calls. Trigger and scheduled reflected
@@ -110,6 +112,10 @@ val fresh = counter.client.newPhantom("main")
 val id = counter.agentId("main", Some(phantomId))
 val exact = counter.bind(existingId)
 ```
+
+Complete factories also accept a typed config value as a second argument when the definition declares an `AgentConfigCodec`. Complete contracts use `bindWithConfig(existingId, config)` for typed overrides; binding-only contracts use `bindWithOverrides(existingId, entries)` with raw `ConfigOverride` entries because they have no local declarations to validate against.
+
+Overrides are optional: component defaults can satisfy required local declarations. The host checks the effective config when it creates the worker and supplies secrets. An existing durable worker retains its persisted initial config, so passing overrides while binding its ID does not reconfigure it.
 
 Complete durable binding checks both the exact name and the constructor value
 against the declared constructor codec before creating transport. Complete
