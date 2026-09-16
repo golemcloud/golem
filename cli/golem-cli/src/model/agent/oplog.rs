@@ -30,11 +30,15 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
-use crate::model::agent::{AgentMetadataView, AgentsMetadataResponseView, RawAgentId};
+use crate::model::agent::{
+    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
+};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
 use golem_common::model::component::ComponentName;
+#[cfg(test)]
+use golem_common::model::oplog::OplogErrorKind;
 #[cfg(test)]
 use std::collections::HashMap;
 
@@ -293,10 +297,18 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}kind:              {:?}", params.kind));
                 logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)
+                ));
+            }
+            PublicOplogEntry::RecoverySucceeded(params) => {
+                logln(format_message_highlight("RECOVERY SUCCEEDED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
                 ));
             }
             PublicOplogEntry::NoOp(params) => {
@@ -1236,6 +1248,7 @@ mod tests {
             updates: Vec::new(),
             created_at: timestamp(),
             last_error: None,
+            last_error_kind: None,
             component_size: 0,
             total_linear_memory_size: 0,
             exported_resource_instances: HashMap::new(),
@@ -1265,6 +1278,28 @@ mod tests {
             "long id was not broken at its structure:\n{table}"
         );
         assert_rows_aligned(&table);
+    }
+
+    #[test]
+    fn recovery_failure_is_visible_in_agent_get_and_list() {
+        let mut agent = agent_metadata(r#"Counter("unavailable")"#);
+        agent.status = AgentStatus::Failed;
+        agent.last_error_kind = Some(OplogErrorKind::Recovery);
+        agent.last_error = Some("snapshot payload is unavailable".to_string());
+
+        let table = AgentsMetadataResponseView::format_table_wide(
+            std::slice::from_ref(&agent),
+            120,
+            false,
+            false,
+        );
+        assert!(table.contains("Unavailable"), "{table}");
+
+        let fields = AgentGetView::from_metadata(agent, true).fields();
+        assert!(fields.contains(&("Failure category".to_string(), "Recovery".to_string())));
+        assert!(fields.iter().any(|(name, value)| {
+            name == "Last error" && value.contains("snapshot payload is unavailable")
+        }));
     }
 
     /// Agent id cells carry their own coloring, which only lines up if

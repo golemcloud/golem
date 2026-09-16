@@ -17,7 +17,7 @@ use golem_common::model::oplog::{
     AgentError, DurableFunctionType, HostRequest, HostRequestGolemToolInvocationRejected,
     HostRequestNoInput, HostRequestPollCount, HostResponseMonotonicClockTimestamp,
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostStreamKind, OplogPayload, PayloadId, RawOplogPayload,
+    HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
@@ -1029,6 +1029,7 @@ fn anchored_noop(parent_start_index: u64) -> OplogEntry {
 fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry {
     OplogEntry::error(
         Some(OplogIndex::from_u64(entity_parent_start_index)),
+        OplogErrorKind::Invocation,
         AgentError::TransientError("retry".to_string()),
         OplogIndex::from_u64(retry_from),
         false,
@@ -2155,6 +2156,7 @@ async fn error_hint_between_start_and_end_resolves() {
         start_now(),
         OplogEntry::error(
             None,
+            OplogErrorKind::Invocation,
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             false,

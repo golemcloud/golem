@@ -165,6 +165,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                 account_id: AccountId::new(),
                 account_email: AccountEmail::new("owner@example.com"),
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,
@@ -411,6 +412,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let entity_retry_error = oplog
         .add(OplogEntry::error(
             Some(tool_start),
+            golem_common::model::oplog::OplogErrorKind::Invocation,
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             false,

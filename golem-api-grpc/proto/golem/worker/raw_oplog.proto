@@ -80,6 +80,7 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_cancel = 62;
     RawDurableStreamRecordParameters stream_session = 63;
     RawTimestampOnly resumed = 64;
+    RawTimestampOnly recovery_succeeded = 65;
   }
 }
 
@@ -221,6 +222,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
+  OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {

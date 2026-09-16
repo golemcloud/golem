@@ -93,12 +93,16 @@ says how strict that commit is: `Always` waits for durable storage; `DurableOnly
 for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
 level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
 
-A primary oplog can also commit automatically when its append buffer reaches the configured
-threshold. Those entries are durable, but the status reducer still has to see them: the primary
-oplog retains every committed-but-unreported entry and returns it with the next explicit commit,
-whose caller delivers the complete range to the reducer. Archiving may transfer and remove only
-entries already reported this way; otherwise a durable entry could disappear from the primary
-before status ever folded it.
+`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+commit and ignores receipt entries already folded into the published status. Primary/ephemeral
+threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
+may hide a committed suffix. Unless the remaining receipt is exactly the contiguous suffix after
+the last published index, the status actor catches up with `status::try_fold_status_from`: committed
+storage is read in bounded chunks, external `StreamSession` payloads are hydrated, and the result
+is published once. This avoids retaining an unbounded auto-flushed tail and adds neither oplog
+entries nor a protocol change. Gap recovery conservatively invalidates authority snapshots after
+the fold. Ephemeral `DurableOnly` intentionally remains non-flushing and keeps its no-I/O fast
+path. This is status reconstruction, not replay tolerance.
 
 ## Component map
 
@@ -144,6 +148,32 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+A failure while creating or preparing the instance is durable health state, not only a resident-worker
+error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
+underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:
+they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
+activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
+Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
+An authoritative manual-update snapshot that cannot be loaded is terminal even when the immediate
+cause is a payload download failure, because recovery has no compatible replay fallback. The
+ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
+kind with the failed/retrying status, so metadata and invocation admission agree after unload or
+reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
+`prepare_instance` and an unresolved recovery error exists. Routine suspend/recovery writes no
+success marker. Structured metadata reports the underlying `Failed`/`Retrying` status and
+`last_error_kind: Recovery`; the human CLI table labels terminal recovery failures `Unavailable`.
+A queued update still starts a terminally failed worker but does not cosmetically change that
+durable health status until recovery succeeds.
+
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
 Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
 `Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
 after reading the worker's memory requirement succeeds and before changing the resident state to
@@ -176,7 +206,8 @@ order and skips hints. Key kinds:
   recordings need no closing entry.
 - `BeginAtomicRegion` / `EndAtomicRegion`, `Jump`, `Revert`, `NoOp`.
 - `PendingUpdate`, `SuccessfulUpdate`, `FailedUpdate`, `Snapshot` (hint).
-- Lifecycle hints: `Suspend`, `Error`, `Interrupted`, `Resumed`, `Exited`, `Restart`.
+- Lifecycle hints: `Suspend`, `Error`, `RecoverySucceeded`, `Interrupted`, `Resumed`, `Exited`,
+  `Restart`.
 
 Hints are skipped by `skip_forward` (the physical cursor moves past them, but
 `last_replayed_non_hint_index` does not), take part in no `Start`/terminal pairing, and never
@@ -184,6 +215,14 @@ satisfy a claim. `Jump`/`Revert` do not relocate entries: they mark a region as 
 and the atomic-region logical counter is rebuilt from them (see RPC section).
 
 ## Durable host call lifecycle
+
+Two-step callers use `DurableCallSession::begin` (returning `BegunCall`) → `BegunCall::resolve` →
+`ResolvedCall::{Live, Replay}` (`concurrent/call.rs`). Only the `Live` branch performs
+live-only authorization and request preparation before `start_live`; `BegunCall::is_live`
+is private so callers cannot choose a branch before resolution. `Replay` consumes the recorded
+result or repairs an admitted incomplete call without re-authorizing. Resolution may finish a
+guarded replay-tail transition and refresh authority capture. Snapshot calls remain unpersisted;
+resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Every nondeterministic host function goes through `begin_durable_function` /
 `end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls run inside a
@@ -244,6 +283,15 @@ unmatched entries") hides the first real bug and must not be added.
 
 ## Replay-to-live
 
+Positional operations (`NoOp`, `BeginAtomicRegion`, spans and retry-policy entries) use
+`get_oplog_entry_or_continue_live` and `prepare_live_continuation_at_replay_tail` in
+`durable_host/mod.rs`. The positional read waits out reserved completion-delivery gates and
+distinguishes an entry from `ReplayEnded`. Continuation is allowed only for the primary agent
+at `ReplayEnded` or an incomplete entity (including its deleted-region local continuation);
+a `ReplayingCompleted` entity is rejected. The helper returns `None` when already live or after
+the guarded transition finishes, and retries replay on `ReplayResumed`. A wrong recorded entry
+is still a mismatch. `EndAtomicRegion` and transaction-protocol reads remain strict.
+
 Three different facts are involved, each with its own owner:
 
 1. **Cursor exhaustion** — the recorded history has been consumed. An observation only.
@@ -290,6 +338,13 @@ Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_rest
 executor restart, an old key returns the recorded result without re-running the guest.
 
 ## Durable RPC exactly-once
+
+`RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
+Deferred durable activation records or replays its own decision (`Recorded`). Non-deferred
+targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check runs only in
+`ResolvedCall::Live`, after resolution, preserving operator authorization and decision telemetry.
+Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
+one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
 
 1. The caller opens a durable call; its `Start` index `begin_index` is the call identity.
 2. `derive_idempotency_key(begin_index)` (`durable_host/mod.rs`) yields
@@ -368,6 +423,19 @@ revision-scoped and ignored once the revision changes.
 
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
+
+A revert may cross a completed snapshot-based update only when its cut is before that update's
+`PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted together. The
+status fold then removes that migration's skipped-history contribution and derives the surviving
+component revision and snapshot baseline normally. A cut that keeps `PendingUpdate` but deletes
+its outcome is rejected. A pending update without an outcome may be either retained or removed
+entirely; when retained, its component and snapshot payload are included in preflight. Revert
+validation reconstructs skip provenance: removing a migration
+baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the resulting mask is
+also used to detect durable constructs spanning the cut. Before committing, the executor verifies
+that the restored component, retained manual snapshot payload, replay metadata and initial files
+are available. This is input preflight, not speculative replay; a later replay failure does not
+undo the committed `Revert`.
 
 ## Concurrency and guest completion delivery
 

@@ -74,8 +74,8 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
 use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{
@@ -233,10 +233,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ctx::get_last_error_and_retry_count(self, owned_agent_id, agent_mode, status)
                         .await;
                 if let Some(last_error) = error_and_retry_count {
-                    Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    })
+                    if status.last_error_kind == Some(OplogErrorKind::Recovery) {
+                        Err(WorkerExecutorError::failed_to_resume_worker(
+                            owned_agent_id.agent_id.clone(),
+                            WorkerExecutorError::runtime(
+                                last_error.error.to_string(&last_error.stderr),
+                            ),
+                        ))
+                    } else {
+                        Err(WorkerExecutorError::PreviousInvocationFailed {
+                            error: last_error.error,
+                            stderr: last_error.stderr,
+                        })
+                    }
                 } else {
                     // TODO: In what cases can we reach here?
                     Err(WorkerExecutorError::runtime(
@@ -983,7 +992,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
-            Some((worker.agent_mode(), worker.get_last_known_status().await))
+            if worker.pending_startup_attempt().is_some() {
+                None
+            } else {
+                Some((worker.agent_mode(), worker.get_last_known_status().await))
+            }
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
                 .await?
@@ -2015,6 +2028,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             created_at: Some(metadata.created_at.into()),
             last_error: last_error_and_retry_count
                 .map(|last_error| last_error.error.to_string(&last_error.stderr)),
+            last_error_kind: latest_status.last_error_kind.map(|kind| match kind {
+                OplogErrorKind::Invocation => golem::worker::OplogErrorKind::Invocation as i32,
+                OplogErrorKind::Recovery => golem::worker::OplogErrorKind::Recovery as i32,
+            }),
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
