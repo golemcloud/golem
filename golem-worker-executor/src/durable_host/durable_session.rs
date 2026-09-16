@@ -6210,7 +6210,7 @@ mod tests {
         );
         for response in [
             Ok(SerializableToolInvocationResult {
-                result: Some(value.clone()),
+                result: Some(Box::new(value.clone())),
             }),
             Ok(SerializableToolInvocationResult { result: None }),
             Err(SerializableToolRpcError::Denied("denied tool".to_string())),

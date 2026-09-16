@@ -2510,7 +2510,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             idempotency_key,
             tool_name,
             command_path,
-            input,
+            input: Box::new(input),
             stdin,
             stdout,
             activation,
@@ -10142,7 +10142,7 @@ fn replace_invocation_input(
     match &mut invocation {
         AgentInvocation::AgentMethod { input, .. } => *input = replacement,
         AgentInvocation::ExternalTool { input, .. } => {
-            *input = TypedSchemaValue::new(input.graph().clone(), replacement);
+            **input = TypedSchemaValue::new(input.graph().clone(), replacement);
         }
         _ => {}
     }

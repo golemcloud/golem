@@ -1113,7 +1113,7 @@ where
                             target,
                             tool_name,
                             command_path,
-                            input,
+                            input: *input,
                             stdin,
                             stdout,
                             idempotency_key,
@@ -2276,7 +2276,7 @@ fn translate_result(
     Ok(vec![frame(text_message(
         &PublicServerMessage::InvocationResult {
             mappings,
-            result,
+            result: Box::new(result),
             version: 1,
         },
     )?)])
@@ -4042,12 +4042,13 @@ mod tests {
         )
         .unwrap();
         let PublicServerMessage::InvocationResult {
-            mappings,
-            result: PublicInvocationResult::Value { value },
-            ..
+            mappings, result, ..
         } = result
         else {
             panic!("stream result translated to the wrong public message")
+        };
+        let PublicInvocationResult::Value { value } = *result else {
+            panic!("stream result translated to the wrong public value")
         };
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].direction, PublicStreamDirection::Output);

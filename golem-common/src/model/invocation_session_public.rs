@@ -343,7 +343,7 @@ pub enum PublicClientMessage {
         #[serde(rename = "commandPath")]
         command_path: Vec<String>,
         target: PublicNativeToolTarget,
-        input: PublicTypedValue,
+        input: Box<PublicTypedValue>,
         stdin: bool,
         stdout: bool,
         version: u8,
@@ -446,7 +446,7 @@ pub enum PublicServerMessage {
     #[serde(rename = "invocationResult")]
     InvocationResult {
         mappings: Vec<PublicStreamMapping>,
-        result: PublicInvocationResult,
+        result: Box<PublicInvocationResult>,
         version: u8,
     },
     #[serde(rename = "outputStreamItem")]
@@ -1443,10 +1443,10 @@ mod tests {
             target: PublicNativeToolTarget::Component {
                 component_id: uuid::Uuid::new_v4(),
             },
-            input: PublicTypedValue {
+            input: Box::new(PublicTypedValue {
                 schema: SchemaGraph::anonymous(SchemaType::u8()),
                 value: serde_json::json!(7),
-            },
+            }),
             stdin: true,
             stdout: true,
             version: 1,

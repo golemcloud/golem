@@ -955,7 +955,7 @@ impl TryFrom<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     PublicExternalToolResult::Success(result) => Ok(oplog::ToolInvocationResult {
                         result: result
                             .result
-                            .map(encode_public_typed_schema_value)
+                            .map(|value| encode_public_typed_schema_value(*value))
                             .transpose()?,
                     }),
                     PublicExternalToolResult::Failure(error) => Err(encode_tool_rpc_error(error)?),

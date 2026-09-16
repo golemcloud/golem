@@ -2498,7 +2498,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicExternalToolResult>
         use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
         match value.result.ok_or("Missing external tool result")? {
             Result::Success(success) => Ok(Self::Success(SerializableToolInvocationResult {
-                result: success.result.map(TryInto::try_into).transpose()?,
+                result: success
+                    .result
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .map(Box::new),
             })),
             Result::Error(error) => Ok(Self::Failure(tool_rpc_error_from_proto(error)?)),
         }
@@ -2515,7 +2519,7 @@ impl TryFrom<PublicExternalToolResult>
         let result = match value {
             PublicExternalToolResult::Success(result) => Result::Success(
                 golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
-                    result: result.result.map(TryInto::try_into).transpose()?,
+                    result: result.result.map(|value| (*value).try_into()).transpose()?,
                 },
             ),
             PublicExternalToolResult::Failure(error) => {
@@ -5417,7 +5421,7 @@ mod public_tool_result_proto_tests {
     fn public_external_tool_result_protobuf_preserves_success_and_every_error_variant() {
         assert_roundtrip(PublicExternalToolResult::Success(
             SerializableToolInvocationResult {
-                result: Some(typed("output")),
+                result: Some(Box::new(typed("output"))),
             },
         ));
         for error in [

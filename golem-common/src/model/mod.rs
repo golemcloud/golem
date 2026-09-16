@@ -1805,7 +1805,7 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         tool_name: ToolName,
         command_path: Vec<String>,
-        input: TypedSchemaValue,
+        input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
         activation: Box<ToolActivationSnapshot>,
@@ -1850,7 +1850,7 @@ pub enum AgentInvocationPayload {
     ExternalTool {
         tool_name: ToolName,
         command_path: Vec<String>,
-        input: TypedSchemaValue,
+        input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
         activation: Box<ToolActivationSnapshot>,
@@ -2057,7 +2057,7 @@ impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
                             "result",
                             &format_args!(
                                 "Ok({:?})",
-                                crate::schema::redact_host_managed_typed_value(value.clone())
+                                crate::schema::redact_host_managed_typed_value((**value).clone())
                             ),
                         ),
                         None => debug.field("result", &"Ok(None)"),

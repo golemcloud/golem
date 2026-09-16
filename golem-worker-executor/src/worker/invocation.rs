@@ -1462,7 +1462,7 @@ pub fn lower_invocation(
                 activation,
                 tool_name,
                 command_path,
-                input: Box::new(input),
+                input,
                 stdin,
                 stdout,
                 principal,

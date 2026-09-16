@@ -2010,7 +2010,7 @@ where
                             }
                         }
                         ServerFrame::Binary(message) if Some(message.metadata.channel) == stdout_channel && message.metadata.kind == BinaryMessageKind::OutputU8 => {
-                            if let Err(error) = output.write_all(&message.payload).await.and_then(|_| Ok(())) {
+                            if let Err(error) = output.write_all(&message.payload).await.map(|_| ()) {
                                 cancel_native_streams(
                                     &session,
                                     binding.as_ref().map(|binding| binding.0),
@@ -2058,8 +2058,10 @@ where
                             }
                             stdout_terminal = true;
                         }
-                        ServerFrame::Message(PublicServerMessage::InvocationResult { result: value @ (PublicInvocationResult::ToolSuccess { .. } | PublicInvocationResult::ToolFailure { .. }), mappings, .. }) if mappings.is_empty() => {
-                            result = Some(value.clone());
+                        ServerFrame::Message(PublicServerMessage::InvocationResult { result: value, mappings, .. })
+                            if mappings.is_empty()
+                                && matches!(value.as_ref(), PublicInvocationResult::ToolSuccess { .. } | PublicInvocationResult::ToolFailure { .. }) => {
+                            result = Some((**value).clone());
                         }
                         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
                         ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
@@ -2801,7 +2803,7 @@ where
             Ok(true)
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
-            let value = match result {
+            let value = match result.as_ref() {
                 PublicInvocationResult::None => None,
                 PublicInvocationResult::Value { value } => {
                     let graph = output_graph.ok_or_else(|| {
@@ -3591,10 +3593,10 @@ mod tests {
             target: PublicNativeToolTarget::Component {
                 component_id: uuid::Uuid::new_v4(),
             },
-            input: PublicTypedValue {
+            input: Box::new(PublicTypedValue {
                 schema: SchemaGraph::anonymous(SchemaType::u8()),
                 value: serde_json::json!(7),
-            },
+            }),
             stdin: true,
             stdout: true,
             version: 1,
@@ -3731,7 +3733,7 @@ mod tests {
 
             let result_message = PublicServerMessage::InvocationResult {
                 mappings: Vec::new(),
-                result: server_result,
+                result: Box::new(server_result),
                 version: 1,
             };
             if result_before_stdout_end {
@@ -5331,7 +5333,7 @@ mod tests {
                 },
                 PublicServerMessage::InvocationResult {
                     mappings: Vec::new(),
-                    result: PublicInvocationResult::None,
+                    result: Box::new(PublicInvocationResult::None),
                     version: 1,
                 },
                 PublicServerMessage::AttachmentRevoked {

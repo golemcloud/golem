@@ -2887,7 +2887,7 @@ impl WorkerService {
                     Ok(success) => NativeToolResult::Success(NativeToolSuccess {
                         result: success
                             .result
-                            .map(|value| value.try_into().map(Box::new))
+                            .map(|value| (*value).try_into().map(Box::new))
                             .transpose()
                             .map_err(|error| {
                                 WorkerServiceError::Internal(format!(
@@ -6147,7 +6147,7 @@ mod tests {
                 result: golem_common::model::AgentInvocationResult::ExternalTool {
                     result: Ok(
                         golem_common::model::tool::SerializableToolInvocationResult {
-                            result: Some(empty_constructor_parameters()),
+                            result: Some(Box::new(empty_constructor_parameters())),
                         },
                     ),
                 },

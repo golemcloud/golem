@@ -1881,7 +1881,7 @@ async fn agent_invocation_to_public(
                     idempotency_key,
                     tool_name: tool_name.into_inner(),
                     command_path,
-                    input,
+                    input: *input,
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),

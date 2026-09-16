@@ -573,7 +573,7 @@ pub enum SerializableToolRpcError {
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct SerializableToolInvocationResult {
-    pub result: Option<crate::schema::TypedSchemaValue>,
+    pub result: Option<Box<crate::schema::TypedSchemaValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

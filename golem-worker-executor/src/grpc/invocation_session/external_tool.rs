@@ -229,7 +229,7 @@ where
                 idempotency_key: key,
                 tool_name,
                 command_path: tool.command_path.clone(),
-                input: TypedSchemaValue::new(graph, value),
+                input: Box::new(TypedSchemaValue::new(graph, value)),
                 stdin: false,
                 stdout: false,
                 activation,

@@ -913,10 +913,10 @@ fn external_tool_results_round_trip_and_treat_nan_as_replay_equivalent() {
 
     let success = AgentInvocationResult::ExternalTool {
         result: Ok(SerializableToolInvocationResult {
-            result: Some(TypedSchemaValue::new(
+            result: Some(Box::new(TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::f64()),
                 SchemaValue::F64(f64::NAN),
-            )),
+            ))),
         }),
     };
     let decoded_success: AgentInvocationResult =

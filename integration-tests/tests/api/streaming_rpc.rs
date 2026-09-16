@@ -1954,12 +1954,13 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         PublicServerMessage::InvocationAccepted { .. }
     ));
     let PublicServerMessage::InvocationResult {
-        mappings,
-        result: PublicInvocationResult::Value { value },
-        ..
+        mappings, result, ..
     } = &scalar[1]
     else {
         anyhow::bail!("scalar public invocation did not return a result")
+    };
+    let PublicInvocationResult::Value { value } = result.as_ref() else {
+        anyhow::bail!("scalar public invocation did not return a value")
     };
     assert!(mappings.is_empty());
     assert_eq!(value, &serde_json::json!("42"));
@@ -1985,12 +1986,13 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     .await?;
     assert_eq!(produced.len(), 7);
     let PublicServerMessage::InvocationResult {
-        mappings,
-        result: PublicInvocationResult::Value { value },
-        ..
+        mappings, result, ..
     } = &produced[1]
     else {
         anyhow::bail!("streaming public invocation did not return an initial result")
+    };
+    let PublicInvocationResult::Value { value } = result.as_ref() else {
+        anyhow::bail!("streaming public invocation did not return a value")
     };
     let [output_mapping] = mappings.as_slice() else {
         anyhow::bail!("streaming result did not expose exactly one output stream")
@@ -2101,10 +2103,11 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                 terminal: true,
                 ..
             } => assert_eq!(channel, input_channel),
-            PublicServerMessage::InvocationResult {
-                result: PublicInvocationResult::Value { value },
-                ..
-            } => consumed = Some(value),
+            PublicServerMessage::InvocationResult { result, .. } => {
+                if let PublicInvocationResult::Value { value } = *result {
+                    consumed = Some(value);
+                }
+            }
             PublicServerMessage::InvocationFinished {
                 outcome: PublicInvocationOutcome::Success,
                 ..

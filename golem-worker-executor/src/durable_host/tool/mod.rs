@@ -462,7 +462,7 @@ where
     let (value, targets) = accessor.with(|mut access| {
         let ctx = access.get();
         let value = match &response {
-            Ok(result) => result.result.as_ref(),
+            Ok(result) => result.result.as_deref(),
             Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
                 SerializableToolError::CustomError(value) => Some(&value.payload),
                 _ => None,
@@ -1617,7 +1617,9 @@ fn decode_tool_terminal(
                         "invalid durable tool result payload: {error}"
                     ))
                 })?;
-            Ok(Ok(SerializableToolInvocationResult { result }))
+            Ok(Ok(SerializableToolInvocationResult {
+                result: result.map(Box::new),
+            }))
         }
         Err(error) => Ok(Err(error)),
     }

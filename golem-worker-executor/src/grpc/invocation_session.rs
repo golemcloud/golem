@@ -2734,7 +2734,10 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
                 idempotency_key,
                 tool_name,
                 command_path,
-                input: golem_common::schema::TypedSchemaValue::new(graph, erase_streams(value)),
+                input: Box::new(golem_common::schema::TypedSchemaValue::new(
+                    graph,
+                    erase_streams(value),
+                )),
                 stdin,
                 stdout,
                 activation,

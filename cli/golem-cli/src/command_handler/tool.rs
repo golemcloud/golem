@@ -413,7 +413,7 @@ impl ToolCommandHandler {
                     tool_name: args.tool_name.to_string(),
                     command_path: args.command_path,
                     target: public_target.clone(),
-                    input,
+                    input: Box::new(input),
                     stdin: args.stdin.is_some(),
                     stdout: args.stdout,
                     version: INVOCATION_SESSION_VERSION,

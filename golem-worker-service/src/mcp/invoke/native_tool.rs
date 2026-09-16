@@ -768,7 +768,7 @@ mod tests {
         let result = project_result(
             &export,
             PublicExternalToolResult::Success(SerializableToolInvocationResult {
-                result: Some(value.clone()),
+                result: Some(Box::new(value.clone())),
             }),
             vec![0, 255, 17],
         )

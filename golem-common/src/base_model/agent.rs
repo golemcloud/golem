@@ -32,20 +32,15 @@ use uuid::Uuid;
 /// This is persisted at creation time. In particular, an instance name that
 /// happens to look like an external-tool owner never grants that authority.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
 #[serde(rename_all = "kebab-case")]
 pub enum OwnerKind {
+    #[default]
     ComponentAgent,
     EphemeralExternalTool,
-}
-
-impl Default for OwnerKind {
-    fn default() -> Self {
-        Self::ComponentAgent
-    }
 }
 
 impl OwnerKind {

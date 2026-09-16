@@ -45,7 +45,7 @@ pub use crate::schema::agent::ParsedAgentId;
 /// instead of treating failure to parse an agent id as component-wide access.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
-    Agent(ParsedAgentId),
+    Agent(Box<ParsedAgentId>),
     ComponentBaseline,
 }
 
@@ -58,6 +58,7 @@ impl ResolvedOwnerContext {
         kind.validate_instance_name(raw_agent_id)?;
         match kind {
             OwnerKind::ComponentAgent => ParsedAgentId::parse(raw_agent_id, resolver)
+                .map(Box::new)
                 .map(Self::Agent)
                 .map_err(|error| error.to_string()),
             OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),

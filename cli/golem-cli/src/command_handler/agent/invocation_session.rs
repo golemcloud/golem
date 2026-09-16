@@ -1546,12 +1546,12 @@ async fn handle_response(
             }
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
-            match result {
+            match result.as_ref() {
                 PublicInvocationResult::Value { value } => {
                     let Some(output_type) = output_schema.schema() else {
                         bail!("session returned a value for a unit-returning method");
                     };
-                    let value = decode_output_value(graph, output_type, &value, bindings)?;
+                    let value = decode_output_value(graph, output_type, value, bindings)?;
                     discover_streams(
                         graph,
                         output_type,

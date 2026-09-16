@@ -1238,7 +1238,9 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     };
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
-            result: Some("match".to_string().into_typed_schema_value().unwrap()),
+            result: Some(Box::new(
+                "match".to_string().into_typed_schema_value().unwrap(),
+            )),
         }),
     };
 
