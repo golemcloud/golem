@@ -1073,6 +1073,7 @@ impl WorkerService for DefaultWorkerService {
                 _,
                 OplogEntry::Create {
                     agent_id,
+                    owner_kind,
                     agent_mode: persisted_agent_mode,
                     component_revision,
                     env,
@@ -1088,9 +1089,19 @@ impl WorkerService for DefaultWorkerService {
                     instance_id,
                 },
             )) => {
+                owner_kind
+                    .validate_instance_name(&agent_id.agent_id)
+                    .unwrap_or_else(|error| {
+                        panic!("invalid authoritative owner metadata for {owned_agent_id}: {error}")
+                    });
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
-                let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+                let agent_type_name = matches!(owner_kind, golem_common::model::agent::OwnerKind::ComponentAgent)
+                    .then(|| ParsedAgentId::parse_agent_type_name(&agent_id.agent_id))
+                    .transpose()
+                    .unwrap_or_else(|error| {
+                        panic!("invalid agent type in authoritative owner metadata for {owned_agent_id}: {error}")
+                    });
                 let component_metadata = self
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))
@@ -1112,7 +1123,11 @@ impl WorkerService for DefaultWorkerService {
                 let config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        lac.enrich_with_type(&component_metadata.metadata, agent_type_name.as_ref())
+                        lac.enrich_with_type(
+                            &component_metadata.metadata,
+                            owner_kind,
+                            agent_type_name.as_ref(),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap_or_else(|err| {
@@ -1121,6 +1136,7 @@ impl WorkerService for DefaultWorkerService {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
+                    owner_kind,
                     env,
                     config,
                     environment_id,

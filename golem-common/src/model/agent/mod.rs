@@ -41,6 +41,37 @@ pub use crate::base_model::agent::*;
 use crate::model::AgentId;
 pub use crate::schema::agent::ParsedAgentId;
 
+/// Resolved execution-owner context. Consumers must branch on this value
+/// instead of treating failure to parse an agent id as component-wide access.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedOwnerContext {
+    Agent(ParsedAgentId),
+    ComponentBaseline,
+}
+
+impl ResolvedOwnerContext {
+    pub fn from_authoritative_kind<R: AgentTypeSchemaResolver>(
+        kind: OwnerKind,
+        raw_agent_id: &str,
+        resolver: R,
+    ) -> Result<Self, String> {
+        kind.validate_instance_name(raw_agent_id)?;
+        match kind {
+            OwnerKind::ComponentAgent => ParsedAgentId::parse(raw_agent_id, resolver)
+                .map(Self::Agent)
+                .map_err(|error| error.to_string()),
+            OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
+        }
+    }
+
+    pub fn agent(&self) -> Option<&ParsedAgentId> {
+        match self {
+            Self::Agent(agent) => Some(agent),
+            Self::ComponentBaseline => None,
+        }
+    }
+}
+
 const EPHEMERAL_INVOCATION_PHANTOM_NAMESPACE_V1: Uuid =
     uuid::uuid!("b6414d8d-acfb-4f13-9c5d-64a79af394e5");
 

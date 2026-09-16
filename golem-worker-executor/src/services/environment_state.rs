@@ -25,8 +25,8 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess,
-    ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, HostToolId, RegisteredTool, ToolBindingOwner, ToolDeploymentState,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
@@ -132,17 +132,6 @@ pub enum ToolDiscoveryError {
     InconsistentSnapshot { details: String },
 }
 
-impl ToolDiscoveryError {
-    fn dangling_binding(agent_type: &AgentTypeName, tool_name: &ToolName) -> Self {
-        Self::InconsistentSnapshot {
-            details: format!(
-                "binding for agent type '{}' references missing tool '{}'",
-                agent_type.0, tool_name
-            ),
-        }
-    }
-}
-
 impl Display for ToolDiscoveryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -172,7 +161,7 @@ impl From<WorkerExecutorError> for ToolDiscoveryError {
 
 pub struct ToolDiscoverySnapshot {
     registered_tools: BTreeMap<ToolName, Arc<DiscoveredTool>>,
-    agent_tool_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
+    tool_bindings: BTreeMap<ToolBindingOwner, BTreeSet<ToolName>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -249,21 +238,25 @@ impl ToolActivationSnapshot {
 
 pub fn get_tool_activation_from_deployment(
     deployment: Option<&ToolDeploymentState>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
     tool_name: &ToolName,
 ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
     let Some(deployment) = deployment else {
         return Ok(ToolActivationOutcome::NotRegistered);
     };
     let binding = deployment
-        .agent_tool_bindings
-        .get(agent_type)
+        .tool_bindings
+        .get(owner)
         .and_then(|bindings| bindings.get(tool_name));
     let registered_tool = deployment.registered_tools.get(tool_name);
 
     let Some(registered_tool) = registered_tool else {
         return match binding {
-            Some(_) => Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name)),
+            Some(_) => Err(ToolDiscoveryError::InconsistentSnapshot {
+                details: format!(
+                    "binding for {owner:?} references unregistered tool '{tool_name}'"
+                ),
+            }),
             None => Ok(ToolActivationOutcome::NotRegistered),
         };
     };
@@ -277,7 +270,7 @@ pub fn get_tool_activation_from_deployment(
             .name()
             .is_some_and(|name| name == tool_name.as_str())
         && binding.deployment_revision == deployment.deployment_revision
-        && binding.agent_type_name == *agent_type
+        && binding.owner == *owner
         && binding.tool_name == *tool_name
         && binding.version == registered_tool.definition.version
         && binding.metadata_version == registered_tool.metadata_version
@@ -294,7 +287,8 @@ pub fn get_tool_activation_from_deployment(
         return Err(ToolDiscoveryError::InconsistentSnapshot {
             details: format!(
                 "registration and binding for agent type '{}' and tool '{}' do not describe one deployment activation",
-                agent_type.0, tool_name
+                format!("{owner:?}"),
+                tool_name
             ),
         });
     }
@@ -332,7 +326,7 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
     fn from(value: ToolDeploymentState) -> Self {
         let ToolDeploymentState {
             registered_tools,
-            agent_tool_bindings,
+            tool_bindings,
             ..
         } = value;
 
@@ -341,7 +335,7 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
                 .into_iter()
                 .map(|(name, tool)| (name, Arc::new(tool.into())))
                 .collect(),
-            agent_tool_bindings: agent_tool_bindings
+            tool_bindings: tool_bindings
                 .into_iter()
                 .map(|(agent_type, bindings)| (agent_type, bindings.into_keys().collect()))
                 .collect(),
@@ -351,12 +345,12 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
 
 pub fn get_accessible_tools_from_snapshot(
     snapshot: Option<&ToolDiscoverySnapshot>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
 ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
     let Some(snapshot) = snapshot else {
         return Ok(Vec::new());
     };
-    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
+    let Some(bindings) = snapshot.tool_bindings.get(owner) else {
         return Ok(Vec::new());
     };
 
@@ -367,20 +361,24 @@ pub fn get_accessible_tools_from_snapshot(
                 .registered_tools
                 .get(tool_name)
                 .cloned()
-                .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
+                .ok_or_else(|| ToolDiscoveryError::InconsistentSnapshot {
+                    details: format!(
+                        "binding for {owner:?} references unregistered tool '{tool_name}'"
+                    ),
+                })
         })
         .collect()
 }
 
 pub fn get_accessible_tool_from_snapshot(
     snapshot: Option<&ToolDiscoverySnapshot>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
     tool_name: &ToolName,
 ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
-    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
+    let Some(bindings) = snapshot.tool_bindings.get(owner) else {
         return Ok(None);
     };
     if !bindings.contains(tool_name) {
@@ -392,7 +390,9 @@ pub fn get_accessible_tool_from_snapshot(
         .get(tool_name)
         .cloned()
         .map(Some)
-        .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
+        .ok_or_else(|| ToolDiscoveryError::InconsistentSnapshot {
+            details: format!("binding for {owner:?} references unregistered tool '{tool_name}'"),
+        })
 }
 
 #[async_trait]
@@ -428,7 +428,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
         _tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         Ok(ToolActivationOutcome::NotRegistered)
@@ -439,7 +439,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(Vec::new())
     }
@@ -449,7 +449,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
         _tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(None)
@@ -588,7 +588,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         let snapshot = self
@@ -596,7 +596,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .await?;
         get_tool_activation_from_deployment(
             snapshot.as_deref().map(|snapshot| &snapshot.state),
-            agent_type,
+            owner,
             tool_name,
         )
     }
@@ -606,14 +606,14 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
             .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
             .await?;
         get_accessible_tools_from_snapshot(
             snapshot.as_deref().map(|snapshot| &snapshot.discovery),
-            agent_type,
+            owner,
         )
     }
 
@@ -622,7 +622,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
@@ -630,7 +630,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .await?;
         get_accessible_tool_from_snapshot(
             snapshot.as_deref().map(|snapshot| &snapshot.discovery),
-            agent_type,
+            owner,
             tool_name,
         )
     }
@@ -671,8 +671,8 @@ mod tests {
     };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{
-        CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
-        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+        CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
+        ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
@@ -684,6 +684,7 @@ mod tests {
     fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
         RegisteredTool {
             deployment_revision,
+            component_bindings: Default::default(),
             release_id: None,
             definition: Tool {
                 version: "1.0.0".to_string(),
@@ -720,7 +721,9 @@ mod tests {
         CompiledToolBinding {
             deployment_revision: registered_tool.deployment_revision,
             release_id: registered_tool.release_id,
-            agent_type_name: agent_type.clone(),
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: agent_type.clone(),
+            },
             tool_name: tool_name.clone(),
             version: registered_tool.definition.version.clone(),
             metadata_version: registered_tool.metadata_version.clone(),
@@ -754,16 +757,20 @@ mod tests {
                     (beta_name.clone(), beta.clone()),
                     (unbound_name, unbound),
                 ]),
-                agent_tool_bindings: BTreeMap::from([
+                tool_bindings: BTreeMap::from([
                     (
-                        agent_a.clone(),
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_a.clone(),
+                        },
                         BTreeMap::from([
                             (alpha_name.clone(), binding(&agent_a, &alpha_name, &alpha)),
                             (beta_name.clone(), binding(&agent_a, &beta_name, &beta)),
                         ]),
                     ),
                     (
-                        agent_b.clone(),
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_b.clone(),
+                        },
                         BTreeMap::from([(beta_name.clone(), binding(&agent_b, &beta_name, &beta))]),
                     ),
                 ]),
@@ -773,12 +780,25 @@ mod tests {
         )
     }
 
+    fn agent_owner(agent_type_name: &AgentTypeName) -> ToolBindingOwner {
+        ToolBindingOwner::AgentType {
+            agent_type_name: agent_type_name.clone(),
+        }
+    }
+
     fn ready_activation(
         deployment: &ToolDeploymentState,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
     ) -> ToolActivationSnapshot {
-        match get_tool_activation_from_deployment(Some(deployment), agent_type, tool_name).unwrap()
+        match get_tool_activation_from_deployment(
+            Some(deployment),
+            &ToolBindingOwner::AgentType {
+                agent_type_name: agent_type.clone(),
+            },
+            tool_name,
+        )
+        .unwrap()
         {
             ToolActivationOutcome::Ready(activation) => *activation,
             outcome => panic!("expected ready activation, got {outcome:?}"),
@@ -796,8 +816,10 @@ mod tests {
         };
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-        let agent_a_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
-        let agent_b_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_b).unwrap();
+        let agent_a_tools =
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap();
+        let agent_b_tools =
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_b)).unwrap();
 
         assert_eq!(
             agent_a_tools
@@ -814,14 +836,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["beta"]
         );
-        let beta_for_agent_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
-            .unwrap()
-            .unwrap();
-        let beta_for_agent_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
-            .unwrap()
-            .unwrap();
+        let beta_for_agent_a =
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &beta)
+                .unwrap()
+                .unwrap();
+        let beta_for_agent_b =
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_b), &beta)
+                .unwrap()
+                .unwrap();
         assert!(Arc::ptr_eq(&agent_a_tools[1], &beta_for_agent_a));
         assert!(Arc::ptr_eq(&beta_for_agent_a, &beta_for_agent_b));
+    }
+
+    #[test]
+    fn component_baseline_binding_is_independent_from_agent_bindings() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        let beta = ToolName::try_from("beta").unwrap();
+        let component_id = ComponentId::new();
+        let mut baseline_binding = deployment.tool_bindings[&agent_owner(&agent_a)][&alpha].clone();
+        baseline_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
+        deployment.tool_bindings.insert(
+            baseline_binding.owner.clone(),
+            BTreeMap::from([(alpha.clone(), baseline_binding)]),
+        );
+        let snapshot = ToolDiscoverySnapshot::from(deployment.clone());
+        let baseline_owner = ToolBindingOwner::ComponentBaseline { component_id };
+
+        assert!(
+            get_accessible_tool_from_snapshot(Some(&snapshot), &baseline_owner, &alpha)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            get_accessible_tool_from_snapshot(Some(&snapshot), &baseline_owner, &beta)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            get_tool_activation_from_deployment(Some(&deployment), &baseline_owner, &beta).unwrap(),
+            ToolActivationOutcome::NotBound
+        ));
+        assert_eq!(
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a))
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -832,17 +893,17 @@ mod tests {
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &alpha)
                 .unwrap()
                 .is_some()
         );
         assert!(
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_b), &alpha)
                 .unwrap()
                 .is_none()
         );
         assert!(
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unbound)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &unbound)
                 .unwrap()
                 .is_none()
         );
@@ -853,15 +914,16 @@ mod tests {
         let (deployment, agent_a, _) = deployment_state();
         let unknown = ToolName::try_from("unknown").unwrap();
         let snapshot = ToolDiscoverySnapshot::from(deployment);
-        let before = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
+        let before =
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap();
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unknown)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &unknown)
                 .unwrap()
                 .is_none()
         );
         assert_eq!(
-            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap(),
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap(),
             before
         );
     }
@@ -874,17 +936,17 @@ mod tests {
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
-            get_accessible_tools_from_snapshot(None, &missing_agent)
+            get_accessible_tools_from_snapshot(None, &agent_owner(&missing_agent))
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            get_accessible_tools_from_snapshot(Some(&snapshot), &missing_agent)
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&missing_agent))
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            get_accessible_tool_from_snapshot(None, &missing_agent, &alpha)
+            get_accessible_tool_from_snapshot(None, &agent_owner(&missing_agent), &alpha)
                 .unwrap()
                 .is_none()
         );
@@ -897,13 +959,16 @@ mod tests {
         deployment.registered_tools.remove(&beta);
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-        let list_error = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap_err();
+        let list_error =
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a))
+                .unwrap_err();
         let get_error =
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta).unwrap_err();
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &beta)
+                .unwrap_err();
 
         let expected_message = concat!(
-            "Inconsistent tool deployment snapshot: binding for agent type ",
-            "'AgentA' references missing tool 'beta'"
+            "Inconsistent tool deployment snapshot: binding for AgentType { ",
+            "agent_type_name: AgentTypeName(\"AgentA\") } references unregistered tool 'beta'"
         );
         assert_eq!(list_error.to_string(), expected_message);
         assert_eq!(get_error.to_string(), expected_message);
@@ -934,7 +999,7 @@ mod tests {
             ToolSource::Host { .. } => panic!("test fixture must be component-backed"),
         };
         deployment.registered_tools.clear();
-        deployment.agent_tool_bindings.clear();
+        deployment.tool_bindings.clear();
 
         let ToolDispatchTarget::Component(entity) = activation.into_dispatch_target().unwrap()
         else {
@@ -968,8 +1033,8 @@ mod tests {
             "preserved".to_string(),
         );
         let binding = deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap();
@@ -1008,8 +1073,8 @@ mod tests {
         let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap()
@@ -1027,15 +1092,25 @@ mod tests {
         let missing = ToolName::try_from("missing").unwrap();
 
         assert_eq!(
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &unbound).unwrap(),
+            get_tool_activation_from_deployment(
+                Some(&deployment),
+                &agent_owner(&agent_a),
+                &unbound
+            )
+            .unwrap(),
             ToolActivationOutcome::NotBound
         );
         assert_eq!(
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &missing).unwrap(),
+            get_tool_activation_from_deployment(
+                Some(&deployment),
+                &agent_owner(&agent_a),
+                &missing
+            )
+            .unwrap(),
             ToolActivationOutcome::NotRegistered
         );
         assert_eq!(
-            get_tool_activation_from_deployment(None, &agent_a, &unbound).unwrap(),
+            get_tool_activation_from_deployment(None, &agent_owner(&agent_a), &unbound).unwrap(),
             ToolActivationOutcome::NotRegistered
         );
     }
@@ -1045,8 +1120,8 @@ mod tests {
         let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap()
@@ -1064,7 +1139,8 @@ mod tests {
                 size: 0,
             });
 
-        let result = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha);
+        let result =
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha);
 
         assert!(matches!(
             result,
@@ -1077,15 +1153,16 @@ mod tests {
         let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap()
             .deployment_revision = DeploymentRevision::try_from(2_u64).unwrap();
 
         let error =
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha)
+                .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1094,19 +1171,37 @@ mod tests {
     }
 
     #[test]
+    fn activation_lookup_rejects_binding_owner_mismatch() {
+        let (mut deployment, agent_a, agent_b) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .owner = agent_owner(&agent_b);
+
+        assert!(matches!(
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
+            Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+        ));
+    }
+
+    #[test]
     fn activation_lookup_rejects_mismatched_release_identity() {
         let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap()
             .release_id = Some(golem_common::model::tool_release::ToolReleaseId::new());
 
         assert!(matches!(
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
             Err(ToolDiscoveryError::InconsistentSnapshot { .. })
         ));
     }
@@ -1122,15 +1217,15 @@ mod tests {
         )
         .unwrap();
         deployment
-            .agent_tool_bindings
-            .get_mut(&agent_a)
+            .tool_bindings
+            .get_mut(&agent_owner(&agent_a))
             .unwrap()
             .get_mut(&alpha)
             .unwrap()
             .metadata_digest = mismatched_digest;
 
         assert!(matches!(
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
             Err(ToolDiscoveryError::InconsistentSnapshot { .. })
         ));
     }
@@ -1149,7 +1244,8 @@ mod tests {
             .name = "other".to_string();
 
         let error =
-            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+            get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha)
+                .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1166,7 +1262,7 @@ mod tests {
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &alpha)
                 .unwrap()
                 .is_some()
         );

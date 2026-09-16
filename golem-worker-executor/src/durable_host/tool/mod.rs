@@ -70,7 +70,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::{AgentPrincipal, Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::component::ComponentName;
@@ -92,7 +92,7 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseEntityInvocation, HostResponseGolemToolTool,
     HostResponseGolemToolTools,
 };
-use golem_common::model::tool::ToolName;
+use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
@@ -146,7 +146,6 @@ pub struct ToolRpcEntry {
 #[derive(Clone)]
 struct ToolRpcOwnerContext {
     owner_id: OwnedAgentId,
-    agent_type: AgentTypeName,
 }
 
 /// Host-side resource table entry backing the
@@ -1317,15 +1316,10 @@ fn tool_rpc_for_current_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     tool_name: ToolName,
 ) -> anyhow::Result<ToolRpcEntry> {
-    let agent_type = ctx
-        .parsed_agent_id()
-        .map(|agent_id| agent_id.agent_type)
-        .ok_or_else(|| anyhow!("tool RPC resources require an agent owner"))?;
     Ok(ToolRpcEntry {
         tool_name,
         owner: ToolRpcOwnerContext {
             owner_id: ctx.state.owned_agent_id.clone(),
-            agent_type,
         },
     })
 }
@@ -1425,10 +1419,20 @@ where
     } = attempt;
     let environment_state_service =
         accessor.with(|mut access| access.get().state.environment_state_service.clone());
-    let (owner_component_id, owner_component_revision) = accessor.with(|mut access| {
-        let component = access.get().owner_component_metadata();
-        (component.id, component.revision)
-    });
+    let (owner_component_id, owner_component_revision, binding_owner) =
+        accessor.with(|mut access| {
+            let state = access.get();
+            let component = state.owner_component_metadata();
+            let owner = match state.owner_context() {
+                ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                    agent_type_name: agent.agent_type.clone(),
+                },
+                ResolvedOwnerContext::ComponentBaseline => ToolBindingOwner::ComponentBaseline {
+                    component_id: component.id,
+                },
+            };
+            (component.id, component.revision, owner)
+        });
     let input = match input {
         Ok(input) => input,
         Err(error) => {
@@ -1461,7 +1465,7 @@ where
             rpc.owner.owner_id.environment_id,
             owner_component_id,
             owner_component_revision,
-            &rpc.owner.agent_type,
+            &binding_owner,
             &rpc.tool_name,
         )
         .await
@@ -1478,8 +1482,8 @@ where
                 stdout_requested,
                 call_mode,
                 SerializableToolRpcError::Denied(format!(
-                    "tool '{}' is not bound to agent type '{}'",
-                    rpc.tool_name, rpc.owner.agent_type
+                    "tool '{}' is not bound to owner '{binding_owner:?}'",
+                    rpc.tool_name
                 )),
                 stdin,
             ));
@@ -3879,10 +3883,18 @@ fn terminal_tool_discovery_error(message: String) -> anyhow::Error {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
-        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let owner_component_metadata = self.owner_component_metadata();
+        let component_id = owner_component_metadata.id;
+        let component_revision = owner_component_metadata.revision;
+        let binding_owner = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                agent_type_name: agent.agent_type.clone(),
+            },
+            ResolvedOwnerContext::ComponentBaseline => {
+                ToolBindingOwner::ComponentBaseline { component_id }
+            }
+        };
 
         let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
@@ -3899,28 +3911,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = if let Some(agent_type) = &agent_type {
-                loop {
-                    let result = self
-                        .state
-                        .environment_state_service
-                        .get_accessible_tools(
-                            environment_id,
-                            component_id,
-                            component_revision,
-                            agent_type,
-                        )
-                        .await;
-                    match handle
-                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result,
-                        InternalRetryResult::RetryInternally => continue,
-                    }
+            let result = loop {
+                let result = self
+                    .state
+                    .environment_state_service
+                    .get_accessible_tools(
+                        environment_id,
+                        component_id,
+                        component_revision,
+                        &binding_owner,
+                    )
+                    .await;
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
                 }
-            } else {
-                Err(ToolDiscoveryError::AgentContextRequired)
             };
 
             handle
@@ -3934,12 +3942,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
-            let agent_type = agent_type
-                .as_ref()
-                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
-                "failed to discover tools for agent type '{}' in environment '{environment_id}': {error}",
-                agent_type
+                "failed to discover tools for owner '{binding_owner:?}' in environment '{environment_id}': {error}"
             ))
         })
     }
@@ -3948,11 +3952,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         tool_name: String,
     ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
-        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let owner_component_metadata = self.owner_component_metadata();
+        let component_id = owner_component_metadata.id;
+        let component_revision = owner_component_metadata.revision;
+        let binding_owner = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                agent_type_name: agent.agent_type.clone(),
+            },
+            ResolvedOwnerContext::ComponentBaseline => {
+                ToolBindingOwner::ComponentBaseline { component_id }
+            }
+        };
 
         let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
@@ -3971,33 +3983,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = if let Some(agent_type) = &agent_type {
-                if let Some(valid_tool_name) = &valid_tool_name {
-                    loop {
-                        let result = self
-                            .state
-                            .environment_state_service
-                            .get_accessible_tool(
-                                environment_id,
-                                component_id,
-                                component_revision,
-                                agent_type,
-                                valid_tool_name,
-                            )
-                            .await;
-                        match handle
-                            .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                            .await?
-                        {
-                            InternalRetryResult::Persist => break result,
-                            InternalRetryResult::RetryInternally => continue,
-                        }
+            let result = if let Some(valid_tool_name) = &valid_tool_name {
+                loop {
+                    let result = self
+                        .state
+                        .environment_state_service
+                        .get_accessible_tool(
+                            environment_id,
+                            component_id,
+                            component_revision,
+                            &binding_owner,
+                            valid_tool_name,
+                        )
+                        .await;
+                    match handle
+                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
                     }
-                } else {
-                    Ok(None)
                 }
             } else {
-                Err(ToolDiscoveryError::AgentContextRequired)
+                Ok(None)
             };
 
             handle
@@ -4011,12 +4019,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
-            let agent_type = agent_type
-                .as_ref()
-                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
-                "failed to discover tool '{}' for agent type '{}' in environment '{environment_id}': {error}",
-                tool_name, agent_type
+                "failed to discover tool '{}' for owner '{binding_owner:?}' in environment '{environment_id}': {error}",
+                tool_name
             ))
         })
     }
@@ -5215,6 +5220,7 @@ mod tests {
                 release_id: None,
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: Default::default(),
                 source: ToolSource::Component {
                     component_id,
                     component_revision: ComponentRevision::try_from(7_u64).unwrap(),

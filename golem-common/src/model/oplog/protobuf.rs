@@ -729,6 +729,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .agent_id
                     .ok_or("Missing agent_id field")?
                     .try_into()?,
+                owner_kind: crate::model::agent::OwnerKind::try_from(create.owner_kind)?,
                 agent_mode: golem_api_grpc::proto::golem::component::AgentMode::try_from(
                     create.agent_mode,
                 )
@@ -1363,6 +1364,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         agent_id: Some(create.agent_id.into()),
+                        owner_kind: create.owner_kind.into(),
                         agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(
                             create.agent_mode,
                         ) as i32,
@@ -3108,6 +3110,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
                 timestamp: create.timestamp,
                 agent_id: create.agent_id,
+                owner_kind: create.owner_kind,
                 agent_mode: create.agent_mode,
                 component_revision: create.component_revision,
                 env: create.env.into_iter().collect(),
@@ -3946,6 +3949,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let entry = match value {
             OplogEntry::Create {
                 agent_id,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -3961,6 +3965,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::Create(RawCreateParameters {
                 agent_id: Some(agent_id.into()),
+                owner_kind: owner_kind.into(),
                 agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
                     as i32,
                 component_revision: component_revision.into(),
@@ -4503,6 +4508,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
         match value.entry.ok_or("Missing entry in RawOplogEntry")? {
             Entry::Create(p) => {
                 let agent_id = p.agent_id.ok_or("Missing agent_id")?.try_into()?;
+                let owner_kind = crate::model::agent::OwnerKind::try_from(p.owner_kind)?;
                 let agent_mode: AgentMode =
                     golem_api_grpc::proto::golem::component::AgentMode::try_from(p.agent_mode)
                         .map_err(|e| format!("Invalid agent_mode: {e}"))?
@@ -4536,6 +4542,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Create {
                     timestamp,
                     agent_id,
+                    owner_kind,
                     agent_mode,
                     component_revision,
                     env,

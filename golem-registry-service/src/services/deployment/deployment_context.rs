@@ -45,7 +45,7 @@ use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, RemoteToolDeployment, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolSource,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolName, ToolSource,
 };
 use golem_common::model::tool_release::ToolReleaseId;
 use golem_common::schema::agent::reachable_defs;
@@ -154,6 +154,11 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                &self
+                    .components
+                    .values()
+                    .map(|component| (component.id, component.component_name.clone()))
+                    .collect(),
                 &published_tools,
             )?,
             published_tools,
@@ -329,7 +334,7 @@ impl DeploymentContext {
                 release_id: None,
                 definition: metadata.definition.clone(),
                 provision: metadata.provision.clone(),
-                component_bindings: valid_component_bindings,
+                component_bindings: valid_component_bindings.clone(),
                 source: source.clone(),
                 owner_account_id: component.account_id,
                 owner_account_email: component.account_email.clone(),
@@ -344,7 +349,9 @@ impl DeploymentContext {
 
                 let Some(binding) = compile_tool_binding(
                     deployment_revision,
-                    agent_type,
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type.clone(),
+                    },
                     &tool_name,
                     environment_binding,
                     agent_binding,
@@ -360,6 +367,30 @@ impl DeploymentContext {
                     continue;
                 };
                 agent_tool_bindings.push(binding);
+            }
+            for (component_name, component_binding) in &valid_component_bindings {
+                let Some(owner_component) = self.components.get(component_name) else {
+                    continue;
+                };
+                if let Some(binding) = compile_tool_binding(
+                    deployment_revision,
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: owner_component.id,
+                    },
+                    &tool_name,
+                    environment_binding,
+                    Some(component_binding),
+                    None,
+                    component.account_id,
+                    &component.account_email,
+                    source.clone(),
+                    &metadata.definition.version,
+                    TOOL_METADATA_WIT_VERSION,
+                    metadata_digest,
+                    warnings,
+                ) {
+                    agent_tool_bindings.push(binding);
+                }
             }
         }
 
@@ -436,7 +467,7 @@ impl DeploymentContext {
                     errors,
                 )
             });
-            let valid_component_bindings = deployment
+            let valid_component_bindings: BTreeMap<ComponentName, ToolBindingInput> = deployment
                 .component_bindings
                 .iter()
                 .filter_map(|(component_name, binding)| {
@@ -479,7 +510,7 @@ impl DeploymentContext {
                 release_id: Some(release.id),
                 definition: release.definition.clone(),
                 provision: deployment.provision.clone(),
-                component_bindings: valid_component_bindings,
+                component_bindings: valid_component_bindings.clone(),
                 source: release.source.clone(),
                 owner_account_id: release.owner_account_id,
                 owner_account_email: resolved.owner.email.clone(),
@@ -492,7 +523,9 @@ impl DeploymentContext {
             for agent_type in agent_types {
                 let Some(binding) = compile_tool_binding(
                     deployment_revision,
-                    agent_type,
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type.clone(),
+                    },
                     &deployment.name,
                     environment_binding,
                     valid_agent_bindings.get(agent_type).copied(),
@@ -508,6 +541,30 @@ impl DeploymentContext {
                     continue;
                 };
                 agent_tool_bindings.push(binding);
+            }
+            for (component_name, component_binding) in &valid_component_bindings {
+                let Some(owner_component) = self.components.get(component_name) else {
+                    continue;
+                };
+                if let Some(binding) = compile_tool_binding(
+                    deployment_revision,
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: owner_component.id,
+                    },
+                    &deployment.name,
+                    environment_binding,
+                    Some(component_binding),
+                    Some(release.id),
+                    release.owner_account_id,
+                    &resolved.owner.email,
+                    release.source.clone(),
+                    &release.version,
+                    &release.metadata_version,
+                    release.metadata_digest,
+                    warnings,
+                ) {
+                    agent_tool_bindings.push(binding);
+                }
             }
         }
 
@@ -1064,7 +1121,7 @@ fn validate_tool_binding<'a>(
 #[allow(clippy::too_many_arguments)]
 fn compile_tool_binding(
     deployment_revision: golem_common::model::deployment::DeploymentRevision,
-    agent_type: &AgentTypeName,
+    owner: ToolBindingOwner,
     tool_name: &ToolName,
     environment: Option<&ToolBindingInput>,
     agent: Option<&ToolBindingInput>,
@@ -1078,10 +1135,10 @@ fn compile_tool_binding(
     warnings: &mut Vec<super::DeployValidationWarning>,
 ) -> Option<CompiledToolBinding> {
     let (binding, revealable_scope_narrowed) = diff::effective_tool_binding(environment, agent)?;
-    if revealable_scope_narrowed {
+    if revealable_scope_narrowed && let ToolBindingOwner::AgentType { agent_type_name } = &owner {
         warnings.push(super::DeployValidationWarning::ToolRevealableSecretKeysDropped(
             golem_common::base_model::deploy_validation_warning::ToolRevealableSecretKeysDropped {
-                agent_type: agent_type.clone(),
+                agent_type: agent_type_name.clone(),
                 tool_name: tool_name.clone(),
             },
         ));
@@ -1090,7 +1147,7 @@ fn compile_tool_binding(
     Some(CompiledToolBinding {
         deployment_revision,
         release_id,
-        agent_type_name: agent_type.clone(),
+        owner,
         tool_name: tool_name.clone(),
         version: version.to_string(),
         metadata_version: metadata_version.to_string(),
@@ -1760,7 +1817,7 @@ mod tests {
     fn compile_tools_registers_remote_source_with_consumer_provision_and_bindings() {
         let (agent_a_name, agent_a) = test_registered_agent_type("AgentA");
         let (agent_b_name, agent_b) = test_registered_agent_type("AgentB");
-        let remote = test_remote_tool(
+        let mut remote = test_remote_tool(
             "grep",
             Some(ToolBindingInput {
                 parameters: NormalizedJsonValue::new(json!({ "scope": "environment" })),
@@ -1774,9 +1831,20 @@ mod tests {
                 },
             )]),
         );
+        let baseline_component = test_tool_component("baseline", BTreeMap::new());
+        remote.0.component_bindings.insert(
+            baseline_component.component_name.clone(),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(json!({ "scope": "component" })),
+                ..ToolBindingInput::default()
+            },
+        );
         let context = DeploymentContext {
             environment: test_environment(),
-            components: BTreeMap::new(),
+            components: BTreeMap::from([(
+                baseline_component.component_name.clone(),
+                baseline_component.clone(),
+            )]),
             http_api_deployments: BTreeMap::new(),
             mcp_deployments: BTreeMap::new(),
             registered_agent_types: HashMap::from([
@@ -1796,7 +1864,6 @@ mod tests {
 
         assert!(errors.is_empty());
         assert!(warnings.is_empty());
-        assert!(context.components.is_empty());
         assert_eq!(compiled.registered_tools.len(), 1);
         let registered = &compiled.registered_tools[0];
         assert_eq!(
@@ -1809,19 +1876,30 @@ mod tests {
             registered.owner_account_email.as_str(),
             "publisher@example.com"
         );
-        assert_eq!(compiled.agent_tool_bindings.len(), 2);
+        assert_eq!(compiled.agent_tool_bindings.len(), 3);
         let bindings = compiled
             .agent_tool_bindings
             .iter()
-            .map(|binding| {
-                (
-                    binding.agent_type_name.clone(),
-                    binding.parameters.0.clone(),
-                )
+            .filter_map(|binding| match &binding.owner {
+                ToolBindingOwner::AgentType { agent_type_name } => {
+                    Some((agent_type_name.clone(), binding.parameters.0.clone()))
+                }
+                ToolBindingOwner::ComponentBaseline { .. } => None,
             })
             .collect::<BTreeMap<_, _>>();
         assert_eq!(bindings[&agent_a_name], json!({ "scope": "agent" }));
         assert_eq!(bindings[&agent_b_name], json!({ "scope": "environment" }));
+        let baseline = compiled
+            .agent_tool_bindings
+            .iter()
+            .find(|binding| {
+                binding.owner
+                    == ToolBindingOwner::ComponentBaseline {
+                        component_id: baseline_component.id,
+                    }
+            })
+            .unwrap();
+        assert_eq!(baseline.parameters.0, json!({ "scope": "component" }));
 
         let unbound = test_remote_tool("git", None, BTreeMap::new());
         let compiled = context.compile_tools_with_remote(
@@ -1858,6 +1936,96 @@ mod tests {
         assert_eq!(compiled.registered_tools.len(), 1);
         assert!(compiled.registered_tools[0].component_bindings.is_empty());
         assert!(compiled.agent_tool_bindings.is_empty());
+    }
+
+    #[test]
+    fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_cli() {
+        let component = test_tool_component("consumer", BTreeMap::new());
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::from([(component.component_name.clone(), component.clone())]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::new(),
+        };
+        let hash = |parameters, readable| {
+            let environment_binding = ToolBindingInput {
+                parameters: NormalizedJsonValue::new(parameters),
+                secret_keys_readable: readable,
+                ..ToolBindingInput::default()
+            };
+            let component_binding = ToolBindingInput {
+                parameters: NormalizedJsonValue::new(json!({ "component": true })),
+                ..ToolBindingInput::default()
+            };
+            let mut remote =
+                test_remote_tool("grep", Some(environment_binding.clone()), BTreeMap::new());
+            remote
+                .0
+                .component_bindings
+                .insert(component.component_name.clone(), component_binding.clone());
+            let mut errors = Vec::new();
+            let compiled = context.compile_tools_with_remote(
+                golem_common::model::deployment::DeploymentRevision::INITIAL,
+                std::slice::from_ref(&remote),
+                &mut errors,
+                &mut Vec::new(),
+            );
+            assert!(errors.is_empty());
+            assert!(context.registered_agent_types.is_empty());
+
+            let server_hash = context.hash_with_tools(&compiled, &[]).unwrap();
+            let release = &remote.1.as_ref().unwrap().release;
+            let effective =
+                diff::effective_tool_binding(Some(&environment_binding), Some(&component_binding))
+                    .unwrap()
+                    .0;
+            let cli_hash = diff::Deployment {
+                components: BTreeMap::from([(
+                    component.component_name.0.clone(),
+                    HashOf::from_hash(component.hash),
+                )]),
+                remote_tools: BTreeMap::from([(
+                    "grep".to_string(),
+                    diff::RemoteToolDeployment {
+                        release_id: release.id,
+                        version: release.version.clone(),
+                        source_digest: golem_common::model::tool_release::tool_source_digest(
+                            &release.source,
+                        ),
+                        owner_account_id: release.owner_account_id,
+                        owner_account_email: remote.1.as_ref().unwrap().owner.email.clone(),
+                        metadata_version: release.metadata_version.clone(),
+                        metadata_digest: release.metadata_digest,
+                        provision: remote.0.provision.clone(),
+                        component_bindings: BTreeMap::from([(
+                            component.component_name.0.clone(),
+                            effective,
+                        )]),
+                        bindings: BTreeMap::new(),
+                    }
+                    .into(),
+                )]),
+                ..diff::Deployment::default()
+            }
+            .hash()
+            .unwrap();
+            assert_eq!(cli_hash, server_hash);
+            server_hash
+        };
+
+        let baseline = hash(json!({ "environment": 1 }), SecretKeyScope::All);
+        assert_ne!(
+            baseline,
+            hash(json!({ "environment": 2 }), SecretKeyScope::All)
+        );
+        assert_ne!(
+            baseline,
+            hash(
+                json!({ "environment": 1 }),
+                SecretKeyScope::Keys(BTreeSet::new())
+            )
+        );
     }
 
     #[test]
@@ -1978,7 +2146,12 @@ mod tests {
         let bindings = compiled
             .agent_tool_bindings
             .iter()
-            .map(|binding| (binding.agent_type_name.clone(), binding.tool_name.clone()))
+            .filter_map(|binding| match &binding.owner {
+                ToolBindingOwner::AgentType { agent_type_name } => {
+                    Some((agent_type_name.clone(), binding.tool_name.clone()))
+                }
+                ToolBindingOwner::ComponentBaseline { .. } => None,
+            })
             .collect::<BTreeSet<_>>();
 
         assert!(errors.is_empty());
@@ -2343,7 +2516,9 @@ mod tests {
 
         let binding = compile_tool_binding(
             golem_common::model::deployment::DeploymentRevision::INITIAL,
-            &AgentTypeName("AgentA".to_string()),
+            ToolBindingOwner::AgentType {
+                agent_type_name: AgentTypeName("AgentA".to_string()),
+            },
             &ToolName::try_from("grep").unwrap(),
             Some(&environment),
             Some(&agent),

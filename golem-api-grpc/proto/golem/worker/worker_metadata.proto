@@ -38,6 +38,12 @@ message AgentMetadata {
   // Distinguishes a freshly-created agent from a previous, now-deleted
   // instance that shared the same `AgentId`.
   golem.common.UUID fingerprint = 20;
+  OwnerKind owner_kind = 21;
+}
+
+enum OwnerKind {
+  COMPONENT_AGENT = 0;
+  EPHEMERAL_EXTERNAL_TOOL = 1;
 }
 
 message UpdateRecord {

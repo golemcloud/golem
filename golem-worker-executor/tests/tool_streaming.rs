@@ -31,8 +31,8 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolFilesystemAccess,
-    ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingOwner, ToolDeploymentState,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -159,6 +159,7 @@ fn deployment_state(
                 metadata_digest: Default::default(),
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: Default::default(),
                 source: ToolSource::Component {
                     component_id: provider_component_id,
                     component_revision: provider_revision,
@@ -186,7 +187,9 @@ fn deployment_state(
                     deployment_revision,
                     release_id: tool.release_id,
                     metadata_digest: tool.metadata_digest,
-                    agent_type_name: agent_type.clone(),
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type.clone(),
+                    },
                     tool_name: name.clone(),
                     version: tool.definition.version.clone(),
                     metadata_version: tool.metadata_version.clone(),
@@ -202,10 +205,13 @@ fn deployment_state(
         })
         .collect();
 
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type,
+    };
     ToolDeploymentState {
         deployment_revision,
         registered_tools,
-        agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+        tool_bindings: BTreeMap::from([(owner, bindings)]),
     }
 }
 
@@ -314,7 +320,7 @@ impl EnvironmentStateService for ReorderedToolActivationService {
         environment_id: golem_common::model::environment::EnvironmentId,
         component_id: golem_common::model::component::ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
@@ -329,7 +335,7 @@ impl EnvironmentStateService for ReorderedToolActivationService {
                         environment_id,
                         component_id,
                         component_revision,
-                        agent_type,
+                        owner,
                         tool_name,
                     )
                     .await

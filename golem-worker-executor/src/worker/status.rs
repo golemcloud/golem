@@ -2878,6 +2878,7 @@ mod test {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
                         owned_agent_id.agent_id(),
+                        golem_common::model::agent::OwnerKind::ComponentAgent,
                         AgentMode::Durable,
                         component_revision,
                         vec![],

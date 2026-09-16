@@ -43,15 +43,15 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::{agent_id, data_value, widen_infallible};
-use golem_schema::schema::wit::encode_graph;
+use golem_schema::schema::wit::{decode_value, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -354,7 +354,7 @@ fn activation_with_policy(
     let binding = CompiledToolBinding {
         deployment_revision,
         release_id: None,
-        agent_type_name,
+        owner: ToolBindingOwner::AgentType { agent_type_name },
         tool_name,
         version: "1.0.0".to_string(),
         metadata_version: "0.1.0".to_string(),
@@ -2277,6 +2277,11 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    let entity_component = executor
+        .update_component(&entity_component.id, &host_api_tests.wasm_name)
+        .await?;
+    assert_ne!(owner_component.id, entity_component.id);
+    assert_ne!(owner_component.revision, entity_component.revision);
     let agent_id = agent_id!("LocalConfigAgent", "entity-owner-config");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
@@ -2310,10 +2315,13 @@ async fn entity_agent_config_uses_owner_component_declarations(
         context.account_id,
         FilesystemCapability::Incapable,
     ));
-    // The executable deliberately has no LocalConfigAgent declaration. A successful lookup proves
-    // the entity host resolves configuration through the owner component and owner agent state,
-    // rather than accidentally consulting the executable component's metadata.
+    // The executable deliberately has no LocalConfigAgent declaration. Successful config and
+    // agent-type lookups therefore prove that both use the pinned owner component revision.
     let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
+    let expected_owner_component_id = owner_component.id;
+    let expected_owner_component_revision = owner_component.revision;
+    let expected_entity_component_id = entity_component.id;
+    let expected_entity_component_revision = entity_component.revision;
     run_synchronous_entity_invocation(
         &active_agent,
         owner_metadata,
@@ -2322,14 +2330,48 @@ async fn entity_agent_config_uses_owner_component_declarations(
         activation,
         move |_instance, store, _principal| {
             Box::pin(async move {
-                AgentHost::get_config_value(
+                assert_eq!(
+                    store.data().component_metadata().id,
+                    expected_entity_component_id
+                );
+                assert_eq!(
+                    store.data().component_metadata().revision,
+                    expected_entity_component_revision
+                );
+                assert_eq!(
+                    store.data().durable_ctx().owner_component_metadata().id,
+                    expected_owner_component_id
+                );
+                assert_eq!(
+                    store
+                        .data()
+                        .durable_ctx()
+                        .owner_component_metadata()
+                        .revision,
+                    expected_owner_component_revision
+                );
+
+                let config = AgentHost::get_config_value(
                     store.data_mut().durable_ctx_mut(),
                     vec!["foo".to_string()],
                     expected,
                 )
-                .await
-                .map(|_| ())
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                .await?
+                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let config = decode_value(&config)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                assert_eq!(config, SchemaValue::S32(7));
+
+                let agent_type = AgentHost::get_agent_type(
+                    store.data_mut().durable_ctx_mut(),
+                    "LocalConfigAgent".to_string(),
+                )
+                .await?;
+                assert!(
+                    agent_type.is_some(),
+                    "entity agent-type lookup must use the owner's component revision"
+                );
+                Ok(())
             })
         },
     )

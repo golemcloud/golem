@@ -106,6 +106,7 @@ interface oplog {
     record create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
         env: list<tuple<string, string>>,
@@ -118,6 +119,11 @@ interface oplog {
         local-agent-config: list<local-agent-config-entry>,
         original-phantom-id: option<uuid>,
         instance-id: uuid
+    }
+
+    enum owner-kind {
+        component-agent,
+        ephemeral-external-tool,
     }
 
     /// Parameters of an enriched durable host-call `start` entry.
@@ -586,6 +592,7 @@ interface oplog {
     record raw-create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
         env: list<tuple<string, string>>,

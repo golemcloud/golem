@@ -1920,9 +1920,11 @@ mod tests {
                         deployment_revision,
                         release_id: None,
                         metadata_digest: Default::default(),
-                        agent_type_name: golem_common::model::agent::AgentTypeName(
-                            "Agent".to_string(),
-                        ),
+                        owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                            agent_type_name: golem_common::model::agent::AgentTypeName(
+                                "Agent".to_string(),
+                            ),
+                        },
                         tool_name,
                         version: "1".to_string(),
                         metadata_version: "1".to_string(),

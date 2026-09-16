@@ -169,6 +169,18 @@ impl ComponentDto {
             wasm_hash: self.wasm_hash,
             component_config: diff::ComponentConfig {
                 schema: self.metadata.config_schema().clone(),
+                initial_permissions: {
+                    let card = &self
+                        .metadata
+                        .component_provision_config()
+                        .initial_permissions;
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: card.lower_positive.clone(),
+                        lower_negative: card.lower_negative.clone(),
+                        upper_positive: card.upper_positive.clone(),
+                        upper_negative: card.upper_negative.clone(),
+                    }
+                },
                 config: self
                     .metadata
                     .component_provision_config()

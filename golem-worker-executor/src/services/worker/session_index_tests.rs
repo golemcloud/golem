@@ -189,6 +189,7 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
 fn agent_metadata(id: &OwnedAgentId) -> AgentMetadata {
     AgentMetadata {
         agent_id: id.agent_id.clone(),
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
         environment_id: id.environment_id,
         created_by: AccountId::new(),

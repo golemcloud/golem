@@ -25,7 +25,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
+    AgentConfigSource, AgentTypeName, ParsedAgentId, ResolvedOwnerContext,
+    typed_constructor_parameters,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::card::AgentVerb;
@@ -232,7 +233,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let agent_secrets = self
                 .state
                 .environment_state_service
-                .get_agent_secrets(self.state.component_metadata.environment_id)
+                .get_agent_secrets(self.owner_component_metadata().environment_id)
                 .await?;
 
             let agent_secret = agent_secrets.get(&canonical_path);
@@ -320,13 +321,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get_all(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
-                        self.state.component_metadata.revision,
+                        owner_component_id,
+                        self.owner_component_metadata().revision,
                     )
                     .await
                     .map_err(|err| err.to_string());
@@ -372,13 +374,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let component_revision = self.state.component_metadata.revision;
+            let component_revision = self.owner_component_metadata().revision;
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
+                        owner_component_id,
                         component_revision,
                         &agent_type_name,
                     )
@@ -435,8 +438,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .agent_types_service()
                         .get(
                             self.owned_agent_id.environment_id,
-                            self.owned_agent_id.agent_id.component_id,
-                            self.state.component_metadata.revision,
+                            self.owner_component_metadata().id,
+                            self.owner_component_metadata().revision,
                             &agent_type_name,
                         )
                         .await?
@@ -631,7 +634,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.component_metadata().metadata;
+        let component_metadata = &self.owner_component_metadata().metadata;
         match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
@@ -687,7 +690,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            if promise_id.agent_id.component_id != self.state.component_metadata.id {
+            if promise_id.agent_id.component_id != self.owner_component_metadata().id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 break 'result handle
                     .complete(
@@ -697,7 +700,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            let agent_type = match self.state.agent_id.as_ref() {
+            let agent_type = match self.state.owner_context.agent() {
                 Some(agent_id) => agent_id.agent_type.clone(),
                 None => {
                     let error = "Creating webhook urls is only supported for agentic components"
@@ -715,7 +718,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .agent_webhooks_service
                 .get_agent_webhook_url_for_promise(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     &agent_type,
                     &promise_id,
                 )
@@ -756,16 +759,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
-        let is_secret_config = self.parsed_agent_id().is_some_and(|agent_id| {
-            self.owner_component_metadata()
+        let is_secret_config = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent_id) => self
+                .owner_component_metadata()
                 .metadata
                 .find_agent_type_by_name(&agent_id.agent_type)
                 .is_some_and(|agent_type| {
                     agent_type.config.iter().any(|entry| {
                         entry.path == path && entry.source == AgentConfigSource::Secret
                     })
-                })
-        });
+                }),
+            ResolvedOwnerContext::ComponentBaseline => self
+                .owner_component_metadata()
+                .metadata
+                .config_schema()
+                .declarations
+                .iter()
+                .any(|entry| entry.path == path && entry.source == AgentConfigSource::Secret),
+        };
         let is_live = self.state.is_live();
         let denied = if is_live {
             let targets = config_segments_target(agent_owner(self), &path)
@@ -803,17 +814,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     });
                 }
 
-                let agent_id = ctx
-                    .parsed_agent_id()
-                    .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+                let (declarations, schema) = match ctx.owner_context() {
+                    ResolvedOwnerContext::Agent(agent_id) => {
+                        let agent_type = ctx
+                            .owner_component_metadata()
+                            .metadata
+                            .find_agent_type_by_name(&agent_id.agent_type)
+                            .expect(
+                                "Active agent type of agent was not declared in component metadata",
+                            );
+                        (agent_type.config, agent_type.schema)
+                    }
+                    ResolvedOwnerContext::ComponentBaseline => {
+                        let config_schema = ctx.owner_component_metadata().metadata.config_schema();
+                        (
+                            config_schema.declarations.clone(),
+                            config_schema.schema.clone(),
+                        )
+                    }
+                };
 
-                let agent_type = ctx
-                    .owner_component_metadata()
-                    .metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .expect("Active agent type of agent was not declared in component metadata");
-
-                let declaration = agent_type.config.iter().find(|c| c.path == path);
+                let declaration = declarations.iter().find(|c| c.path == path);
                 let declaration_value_type = declaration.map(|d| d.value_type.clone());
 
                 let schema_value = match declaration {
@@ -833,7 +854,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             &path_str,
                             &expected_graph,
                             &expected_graph.root,
-                            &agent_type.schema,
+                            &schema,
                             declaration_value_type
                                 .as_ref()
                                 .expect("existing config declaration must have a value type"),
@@ -843,7 +864,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             path,
                             &path_str,
                             expected_graph,
-                            &agent_type.schema,
+                            &schema,
                             declaration_value_type
                                 .as_ref()
                                 .expect("existing config declaration must have a value type"),

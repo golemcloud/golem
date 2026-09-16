@@ -2188,6 +2188,10 @@ impl<'a> Component<'a> {
         &self.properties.source
     }
 
+    pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
+        self.layer_properties().initial_card.value().as_ref()
+    }
+
     pub fn applied_layers(&self) -> &[(ComponentLayerId, Option<String>)] {
         self.layer_properties().applied_layers.as_slice()
     }

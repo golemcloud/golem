@@ -128,6 +128,8 @@ pub enum ComponentError {
         agent_type: AgentTypeName,
         message: String,
     },
+    #[error("Invalid initial permission card for component: {message}")]
+    InvalidComponentInitialPermissionCard { message: String },
     #[error("Config for agent {agent} at key {rendered_key} is not declared", rendered_key = key.join("."))]
     AgentConfigNotDeclared {
         agent: AgentTypeName,
@@ -215,6 +217,7 @@ impl SafeDisplay for ComponentError {
             Self::ConflictingToolFileTarget { .. } => self.to_string(),
             Self::NewAgentTypeMissingInitialPermissions(_) => self.to_string(),
             Self::InvalidAgentInitialPermissionCard { .. } => self.to_string(),
+            Self::InvalidComponentInitialPermissionCard { .. } => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
             Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),

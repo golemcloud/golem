@@ -742,7 +742,7 @@ mod protobuf {
     };
     use crate::model::deployment::DeploymentRevision;
     use crate::model::tool::{
-        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput,
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
         ToolDeploymentMetadata, ToolDeploymentState, ToolName, ToolProvisionConfig, ToolSource,
     };
     use std::collections::{BTreeMap, BTreeSet};
@@ -1225,6 +1225,7 @@ mod protobuf {
             proto: golem_api_grpc::proto::golem::component::ComponentProvisionConfig,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
+                initial_permissions: crate::serialization::deserialize(&proto.initial_permissions)?,
                 env: proto.env.into_iter().collect(),
                 config: proto
                     .config
@@ -1251,6 +1252,8 @@ mod protobuf {
         type Error = String;
         fn try_from(config: ComponentProvisionConfig) -> Result<Self, Self::Error> {
             Ok(Self {
+                initial_permissions: crate::serialization::serialize(&config.initial_permissions)
+                    .expect("failed to serialize component initial permission card"),
                 env: config.env.into_iter().collect(),
                 config: config
                     .config
@@ -1476,7 +1479,12 @@ mod protobuf {
             let tagged_source = Some(value.source.into());
             Self {
                 deployment_revision: value.deployment_revision.into(),
-                agent_type_name: value.agent_type_name.0,
+                owner: Some(match value.owner {
+                    ToolBindingOwner::AgentType { agent_type_name } =>
+                        golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::AgentTypeName(agent_type_name.0),
+                    ToolBindingOwner::ComponentBaseline { component_id } =>
+                        golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::ComponentBaselineId(component_id.into()),
+                }),
                 tool_name: value.tool_name.into_inner(),
                 version: value.version,
                 metadata_version: value.metadata_version,
@@ -1505,7 +1513,12 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 deployment_revision: DeploymentRevision::try_from(value.deployment_revision)?,
-                agent_type_name: AgentTypeName(value.agent_type_name),
+                owner: match value.owner.ok_or("missing CompiledToolBinding.owner")? {
+                    golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::AgentTypeName(agent_type_name) =>
+                        ToolBindingOwner::AgentType { agent_type_name: AgentTypeName(agent_type_name) },
+                    golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::ComponentBaselineId(component_id) =>
+                        ToolBindingOwner::ComponentBaseline { component_id: component_id.try_into()? },
+                },
                 tool_name: ToolName::try_from(value.tool_name)?,
                 version: value.version,
                 metadata_version: value.metadata_version,
@@ -1584,8 +1597,8 @@ mod protobuf {
                     .into_values()
                     .map(Into::into)
                     .collect(),
-                agent_tool_bindings: value
-                    .agent_tool_bindings
+                tool_bindings: value
+                    .tool_bindings
                     .into_values()
                     .flat_map(BTreeMap::into_values)
                     .map(Into::into)
@@ -1620,8 +1633,8 @@ mod protobuf {
                     return Err(format!("duplicate registered tool {name}"));
                 }
             }
-            let mut agent_tool_bindings = BTreeMap::new();
-            for proto in value.agent_tool_bindings {
+            let mut tool_bindings = BTreeMap::new();
+            for proto in value.tool_bindings {
                 let metadata_digest_missing = proto.metadata_digest.is_none();
                 let tool_name = ToolName::try_from(proto.tool_name.as_str())?;
                 let registered = registered_tools.get(&tool_name).ok_or_else(|| {
@@ -1659,8 +1672,8 @@ mod protobuf {
                         binding.tool_name
                     ));
                 }
-                if agent_tool_bindings
-                    .entry(binding.agent_type_name.clone())
+                if tool_bindings
+                    .entry(binding.owner.clone())
                     .or_insert_with(BTreeMap::new)
                     .insert(binding.tool_name.clone(), binding)
                     .is_some()
@@ -1671,7 +1684,7 @@ mod protobuf {
             Ok(Self {
                 deployment_revision,
                 registered_tools,
-                agent_tool_bindings,
+                tool_bindings,
             })
         }
     }
@@ -1689,7 +1702,7 @@ mod tests {
     use crate::model::deployment::DeploymentRevision;
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
-        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput,
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
         ToolDeploymentMetadata, ToolDeploymentState, ToolName, ToolProvisionConfig, ToolSource,
     };
     use crate::schema::SchemaGraph;
@@ -1816,6 +1829,13 @@ mod tests {
                     files: Vec::new(),
                 },
             )]),
+        )
+        .with_component_config(
+            crate::schema::ComponentConfigSchema::default(),
+            ComponentProvisionConfig {
+                initial_permissions: card.clone(),
+                ..Default::default()
+            },
         );
 
         let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
@@ -1825,6 +1845,10 @@ mod tests {
         assert_eq!(
             decoded.agent_type_initial_permission_card(&agent_type),
             Some(&card)
+        );
+        assert_eq!(
+            decoded.component_provision_config().initial_permissions,
+            card
         );
     }
 
@@ -1973,7 +1997,7 @@ mod tests {
         let proto = golem_api_grpc::proto::golem::registry::ToolDeploymentState {
             deployment_revision: 2,
             registered_tools: vec![registered_tool.into()],
-            agent_tool_bindings: Vec::new(),
+            tool_bindings: Vec::new(),
         };
 
         let decoded = ToolDeploymentState::try_from(proto);
@@ -2014,7 +2038,9 @@ mod tests {
         let binding = CompiledToolBinding {
             deployment_revision,
             release_id: None,
-            agent_type_name: agent_type_name.clone(),
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: agent_type_name.clone(),
+            },
             tool_name: tool_name.clone(),
             version: registered.definition.version.clone(),
             metadata_version: registered.metadata_version.clone(),
@@ -2027,13 +2053,22 @@ mod tests {
             filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
             source,
         };
+        let component_id = ComponentId::new();
+        let mut component_binding = binding.clone();
+        component_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
         let state = ToolDeploymentState {
             deployment_revision,
             registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
-            agent_tool_bindings: BTreeMap::from([(
-                agent_type_name,
-                BTreeMap::from([(tool_name, binding)]),
-            )]),
+            tool_bindings: BTreeMap::from([
+                (
+                    ToolBindingOwner::AgentType { agent_type_name },
+                    BTreeMap::from([(tool_name, binding)]),
+                ),
+                (
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    BTreeMap::from([(component_binding.tool_name.clone(), component_binding)]),
+                ),
+            ]),
         };
         let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState = state.into();
 
@@ -2075,7 +2110,9 @@ mod tests {
         let binding = CompiledToolBinding {
             deployment_revision,
             release_id: None,
-            agent_type_name: agent_type_name.clone(),
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: agent_type_name.clone(),
+            },
             tool_name: tool_name.clone(),
             version: registered.definition.version.clone(),
             metadata_version: registered.metadata_version.clone(),
@@ -2088,18 +2125,27 @@ mod tests {
             filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
             source,
         };
+        let component_id = ComponentId::new();
+        let mut component_binding = binding.clone();
+        component_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
         let state = ToolDeploymentState {
             deployment_revision,
             registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
-            agent_tool_bindings: BTreeMap::from([(
-                agent_type_name,
-                BTreeMap::from([(tool_name, binding)]),
-            )]),
+            tool_bindings: BTreeMap::from([
+                (
+                    ToolBindingOwner::AgentType { agent_type_name },
+                    BTreeMap::from([(tool_name, binding)]),
+                ),
+                (
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    BTreeMap::from([(component_binding.tool_name.clone(), component_binding)]),
+                ),
+            ]),
         };
 
         let mut mismatched_binding_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
             state.clone().into();
-        mismatched_binding_proto.agent_tool_bindings[0].deployment_revision = 2;
+        mismatched_binding_proto.tool_bindings[0].deployment_revision = 2;
         assert!(
             ToolDeploymentState::try_from(mismatched_binding_proto).is_err(),
             "a coherent deployment snapshot must reject bindings from another revision"
@@ -2107,7 +2153,7 @@ mod tests {
 
         let mut mismatched_release_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
             state.clone().into();
-        mismatched_release_proto.agent_tool_bindings[0].tool_release_id =
+        mismatched_release_proto.tool_bindings[0].tool_release_id =
             Some(crate::model::tool_release::ToolReleaseId::new().0.into());
         assert!(
             ToolDeploymentState::try_from(mismatched_release_proto).is_err(),
@@ -2116,7 +2162,7 @@ mod tests {
 
         let mut mismatched_digest_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
             state.clone().into();
-        mismatched_digest_proto.agent_tool_bindings[0].metadata_digest =
+        mismatched_digest_proto.tool_bindings[0].metadata_digest =
             Some(crate::model::diff::Hash::empty().into());
         assert!(
             ToolDeploymentState::try_from(mismatched_digest_proto).is_err(),
@@ -2127,8 +2173,8 @@ mod tests {
             state.clone().into();
         assert!(proto.registered_tools[0].source.is_some());
         assert!(proto.registered_tools[0].tagged_source.is_some());
-        assert!(proto.agent_tool_bindings[0].source.is_some());
-        assert!(proto.agent_tool_bindings[0].tagged_source.is_some());
+        assert!(proto.tool_bindings[0].source.is_some());
+        assert!(proto.tool_bindings[0].tagged_source.is_some());
         let decoded = ToolDeploymentState::try_from(proto.clone()).unwrap();
 
         assert_eq!(decoded, state);
@@ -2136,8 +2182,8 @@ mod tests {
         let mut legacy_proto = proto;
         legacy_proto.registered_tools[0].tagged_source = None;
         legacy_proto.registered_tools[0].metadata_digest = None;
-        legacy_proto.agent_tool_bindings[0].tagged_source = None;
-        legacy_proto.agent_tool_bindings[0].metadata_digest = None;
+        legacy_proto.tool_bindings[0].tagged_source = None;
+        legacy_proto.tool_bindings[0].metadata_digest = None;
         let decoded_legacy = ToolDeploymentState::try_from(legacy_proto).unwrap();
 
         assert_eq!(decoded_legacy, state);
@@ -2176,7 +2222,7 @@ mod tests {
                     metadata_version,
                 },
             )]),
-            agent_tool_bindings: BTreeMap::new(),
+            tool_bindings: BTreeMap::new(),
         };
 
         let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =

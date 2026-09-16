@@ -34,7 +34,8 @@ use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::model::card::{
-    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByEnvironmentDefault,
+    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
+    CardManagedByEnvironmentDefault,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -1030,6 +1031,21 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 }
                 for component_revision_record in active_component_revisions {
                     let component_revision = component_revision_record.revision_id.try_into()?;
+                    let component_root = (
+                        component_revision_record
+                            .metadata
+                            .value()
+                            .component_provision_config()
+                            .initial_permissions
+                            .card_id,
+                        CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                            component_id: ComponentId(component_revision_record.component_id),
+                            component_revision,
+                        }),
+                    );
+                    if !card_roots.contains(&component_root) {
+                        card_roots.push(component_root);
+                    }
                     for (agent_type, config) in component_revision_record
                         .metadata
                         .value()

@@ -37,8 +37,8 @@ use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
     ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
-    ToolManifestProvisionConfig, initial_permission_from_manifest_card,
-    initial_permission_recipient_context,
+    ToolManifestProvisionConfig, component_initial_permission_recipient_context,
+    initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -1360,7 +1360,13 @@ impl ComponentCommandHandler {
                         component_bindings: manifest_config
                             .component_bindings
                             .iter()
-                            .map(|(name, binding)| (name.0.clone(), binding.clone()))
+                            .filter_map(|(name, binding)| {
+                                diff::effective_tool_binding(
+                                    manifest_config.environment_binding.as_ref(),
+                                    Some(binding),
+                                )
+                                .map(|(binding, _)| (name.0.clone(), binding))
+                            })
                             .collect(),
                         bindings,
                     }
@@ -1620,6 +1626,13 @@ impl ComponentCommandHandler {
                     component.config().as_ref(),
                 )?,
             )?,
+            component_initial_card: component
+                .initial_card()
+                .map(initial_permission_from_manifest_card)
+                .transpose()
+                .with_context(|| {
+                    format!("Invalid initialCard for component {}", component_name.0)
+                })?,
             component_env: resolve_env_vars("component", component_name.as_str(), component.env())?,
             component_files: component.files().clone(),
             component_plugins: resolve_plugin_parameters(
@@ -1962,6 +1975,21 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             component_config: diff::ComponentConfig {
                 schema: properties.config_schema.clone(),
+                initial_permissions: {
+                    let context =
+                        component_initial_permission_recipient_context(environment, component_name);
+                    let permissions = crate::model::component::resolve_component_initial_permission(
+                        properties.component_initial_card.clone(),
+                        &properties.component_files,
+                        &context,
+                    );
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: permissions.lower_bound.positive,
+                        lower_negative: permissions.lower_bound.negative,
+                        upper_positive: permissions.upper_bound.positive,
+                        upper_negative: permissions.upper_bound.negative,
+                    }
+                },
                 config: properties
                     .component_config
                     .iter()
@@ -2016,7 +2044,7 @@ impl ComponentCommandHandler {
                     component_name: component_name.clone(),
                     config_schema: component_deploy_properties.config_schema.clone(),
                     component_provision_config: component_stager
-                        .component_provision_config(None)
+                        .component_provision_config(None, environment, component_name)
                         .await?,
                     agent_types,
                     agent_type_provision_configs: component_stager
@@ -2129,7 +2157,11 @@ impl ComponentCommandHandler {
                     component_provision_config: if component_stager.component_config_changed() {
                         Some(
                             component_stager
-                                .component_provision_config(Some(&changed_files))
+                                .component_provision_config(
+                                    Some(&changed_files),
+                                    environment,
+                                    &component.name,
+                                )
                                 .await
                                 .map_err(UpdateStagedComponentError::Other)?,
                         )

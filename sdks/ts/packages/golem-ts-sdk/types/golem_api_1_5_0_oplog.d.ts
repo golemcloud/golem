@@ -162,9 +162,11 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -686,6 +688,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];

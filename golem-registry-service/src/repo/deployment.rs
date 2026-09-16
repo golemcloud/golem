@@ -1413,11 +1413,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .with_ro("list_deployment_agent_tool_bindings")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT environment_id, deployment_revision_id, agent_type_name,
+                    SELECT environment_id, deployment_revision_id, binding_owner,
                            tool_name, compiled_binding
-                    FROM deployment_agent_tool_bindings
+                    FROM deployment_tool_bindings
                     WHERE environment_id = $1 AND deployment_revision_id = $2
-                    ORDER BY agent_type_name, tool_name
+                    ORDER BY binding_owner, tool_name
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id),
@@ -2241,14 +2241,14 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<()> {
         tx.execute(
             sqlx::query(indoc! { r#"
-                INSERT INTO deployment_agent_tool_bindings
-                    (environment_id, deployment_revision_id, agent_type_name,
+                INSERT INTO deployment_tool_bindings
+                    (environment_id, deployment_revision_id, binding_owner,
                      tool_name, compiled_binding)
                 VALUES ($1, $2, $3, $4, $5)
             "#})
             .bind(agent_tool_binding.environment_id)
             .bind(agent_tool_binding.deployment_revision_id)
-            .bind(&agent_tool_binding.agent_type_name)
+            .bind(&agent_tool_binding.binding_owner)
             .bind(&agent_tool_binding.tool_name)
             .bind(&agent_tool_binding.compiled_binding),
         )

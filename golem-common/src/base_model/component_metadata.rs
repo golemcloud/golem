@@ -194,8 +194,6 @@ pub struct ComponentMetadataInnerData {
     #[cfg_attr(feature = "full", oai(default))]
     pub config_schema: ComponentConfigSchema,
 
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub component_provision_config: ComponentProvisionConfig,
 
     #[serde(default)]
@@ -217,7 +215,7 @@ pub struct ComponentMetadataInnerData {
     pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -226,6 +224,7 @@ pub struct ComponentMetadataInnerData {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentProvisionConfig {
+    pub initial_permissions: PolymorphicCard,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
@@ -234,6 +233,19 @@ pub struct ComponentProvisionConfig {
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
     pub files: Vec<InitialAgentFile>,
+}
+
+impl Default for ComponentProvisionConfig {
+    fn default() -> Self {
+        Self {
+            initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
+                .to_polymorphic_card(),
+            env: BTreeMap::new(),
+            config: Vec::new(),
+            plugins: Vec::new(),
+            files: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

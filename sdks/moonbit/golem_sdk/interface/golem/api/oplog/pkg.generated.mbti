@@ -187,6 +187,7 @@ pub(all) struct CountBoxState {
 pub(all) struct CreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -430,6 +431,13 @@ pub(all) struct OplogRegion {
   end : UInt64
 } derive(Eq, @debug.Debug)
 
+pub(all) enum OwnerKind {
+  COMPONENT_AGENT
+  EPHEMERAL_EXTERNAL_TOOL
+} derive(Eq, @debug.Debug)
+pub fn OwnerKind::from(Int) -> Self
+pub fn OwnerKind::ordinal(Self) -> Int
+
 pub(all) struct PairState {
   left : Int
   right : Int
@@ -579,6 +587,7 @@ pub(all) struct RawCompletionDiscardedParameters {
 pub(all) struct RawCreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]

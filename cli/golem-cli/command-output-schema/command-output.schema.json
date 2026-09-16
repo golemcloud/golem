@@ -4898,11 +4898,12 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -5527,7 +5528,7 @@
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
         "componentBindings": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
+          "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
         },
         "bindings": {
           "type": "object",

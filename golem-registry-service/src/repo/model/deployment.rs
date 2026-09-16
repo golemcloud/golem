@@ -687,7 +687,7 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
 pub struct DeploymentAgentToolBindingRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
-    pub agent_type_name: String,
+    pub binding_owner: String,
     pub tool_name: String,
     pub compiled_binding: Blob<CompiledToolBinding>,
 }
@@ -697,7 +697,14 @@ impl DeploymentAgentToolBindingRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: binding.deployment_revision.into(),
-            agent_type_name: binding.agent_type_name.0.clone(),
+            binding_owner: match &binding.owner {
+                golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                    format!("agent:{agent_type_name}")
+                }
+                golem_common::model::tool::ToolBindingOwner::ComponentBaseline { component_id } => {
+                    format!("component:{component_id}")
+                }
+            },
             tool_name: binding.tool_name.to_string(),
             compiled_binding: Blob::new(binding),
         }
@@ -736,7 +743,7 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                 Ok((name, registered))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, DeployRepoError>>()?;
-        let mut agent_tool_bindings = std::collections::BTreeMap::new();
+        let mut tool_bindings = std::collections::BTreeMap::new();
         for record in value.agent_tool_bindings {
             if record.deployment_revision_id != value.deployment_revision_id {
                 return Err(DeployRepoError::InternalError(anyhow!(
@@ -747,7 +754,14 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
             }
             let mut binding = record.compiled_binding.into_value();
             if binding.deployment_revision != deployment_revision
-                || binding.agent_type_name.0 != record.agent_type_name
+                || match &binding.owner {
+                    golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                        format!("agent:{agent_type_name}")
+                    }
+                    golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                        component_id,
+                    } => format!("component:{component_id}"),
+                } != record.binding_owner
                 || binding.tool_name.as_str() != record.tool_name
             {
                 return Err(DeployRepoError::InternalError(anyhow!(
@@ -785,15 +799,15 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     binding.tool_name
                 )));
             }
-            agent_tool_bindings
-                .entry(binding.agent_type_name.clone())
+            tool_bindings
+                .entry(binding.owner.clone())
                 .or_insert_with(std::collections::BTreeMap::new)
                 .insert(binding.tool_name.clone(), binding);
         }
         Ok(Self {
             deployment_revision,
             registered_tools,
-            agent_tool_bindings,
+            tool_bindings,
         })
     }
 }
@@ -907,6 +921,10 @@ impl DeploymentRevisionCreationRecord {
         let remote_tools = diff::remote_tool_deployments(
             registered_tools.clone(),
             agent_tool_bindings.clone(),
+            &components
+                .iter()
+                .map(|component| (component.id, component.component_name.clone()))
+                .collect(),
             &published_tool_names,
         )?;
         let registered_tools = registered_tools

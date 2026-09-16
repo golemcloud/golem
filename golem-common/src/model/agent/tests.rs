@@ -22,6 +22,32 @@ use crate::model::agent::{
     AgentTypeSchemaResolver, InvocationFreshnessDisposition, ParsedAgentId,
     ephemeral_invocation_phantom_id,
 };
+
+#[test]
+fn external_tool_owner_identity_is_stable_and_reserved() {
+    let key = crate::model::IdempotencyKey::new("same-request".to_string());
+    let name1 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
+    let name2 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
+    assert_eq!(name1, name2);
+    assert!(crate::model::agent::OwnerKind::is_reserved_instance_name(
+        &name1
+    ));
+    assert!(
+        crate::model::agent::OwnerKind::ComponentAgent
+            .validate_instance_name(&name1)
+            .is_err()
+    );
+    assert!(
+        crate::model::agent::OwnerKind::EphemeralExternalTool
+            .validate_instance_name(&name1)
+            .is_ok()
+    );
+    assert!(
+        crate::model::agent::OwnerKind::EphemeralExternalTool
+            .validate_instance_name("caller-controlled")
+            .is_err()
+    );
+}
 use crate::schema::{
     AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
     NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,

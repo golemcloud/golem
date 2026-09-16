@@ -91,6 +91,7 @@ impl Diffable for Component {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentConfig {
     pub schema: ComponentConfigSchema,
+    pub initial_permissions: crate::model::diff::agent::AgentTypeInitialPermission,
     pub config: BTreeMap<String, NormalizedJsonValue>,
     pub env: BTreeMap<String, String>,
     #[serde(serialize_with = "serialize_with_mode")]

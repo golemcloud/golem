@@ -1409,7 +1409,7 @@ where
             file_loader: ctx.state.file_loader.clone(),
             filesystem_generation_handle: ctx.filesystem_generation_handle(),
             owned_agent_id: ctx.owned_agent_id.clone(),
-            agent_id: ctx.state.agent_id.clone(),
+            agent_id: ctx.state.owner_context.agent().cloned(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
             current_revision: ctx.state.component_metadata.revision,
         }

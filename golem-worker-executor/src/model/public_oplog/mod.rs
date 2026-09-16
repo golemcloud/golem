@@ -724,6 +724,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Create {
                 timestamp,
                 agent_id,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -757,7 +758,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let local_agent_config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        let typed = lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
+                        let typed =
+                            lac.enrich_with_type(&metadata.metadata, owner_kind, agent_type_name)?;
                         Ok::<_, String>(PublicTypedAgentConfigEntry {
                             path: typed.path,
                             value: typed.value,
@@ -768,6 +770,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    owner_kind,
                     agent_mode,
                     component_revision,
                     env: env.into_iter().collect(),

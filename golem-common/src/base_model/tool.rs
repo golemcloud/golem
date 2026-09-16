@@ -324,19 +324,15 @@ pub struct RegisteredTool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledToolBinding {
     pub deployment_revision: DeploymentRevision,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default))]
     pub release_id: Option<ToolReleaseId>,
-    pub agent_type_name: AgentTypeName,
+    pub owner: ToolBindingOwner,
     pub tool_name: ToolName,
     pub version: String,
     pub metadata_version: String,
@@ -350,9 +346,17 @@ pub struct CompiledToolBinding {
     pub secret_keys_revealable: SecretKeyScope,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default))]
-    #[cfg_attr(feature = "full", oai(default))]
     pub filesystem_access: ToolFilesystemAccess,
     pub source: ToolSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ToolBindingOwner {
+    AgentType { agent_type_name: AgentTypeName },
+    ComponentBaseline { component_id: ComponentId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -392,7 +396,7 @@ impl From<RegisteredTool> for DeployedRegisteredTool {
 pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
-    pub agent_tool_bindings: BTreeMap<AgentTypeName, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
 }
 
 #[cfg(test)]

@@ -11765,6 +11765,7 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       discriminator:
         propertyName: type
@@ -11773,6 +11774,7 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          ComponentInitial: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
           RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       type: object
@@ -11799,6 +11801,19 @@ components:
           format: uint64
         agentType:
           type: string
+    CardManagedByComponentInitial:
+      type: object
+      title: CardManagedByComponentInitial
+      required:
+      - componentId
+      - componentRevision
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
     CardManagedByEnvironmentDefault:
       type: object
       title: CardManagedByEnvironmentDefault
@@ -11860,6 +11875,18 @@ components:
             - AgentInitial
             example: AgentInitial
       - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByComponentInitial:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentInitial
+            example: ComponentInitial
+      - $ref: '#/components/schemas/CardManagedByComponentInitial'
     CardManagedBy_CardManagedByEnvironmentDefault:
       allOf:
       - type: object
@@ -12034,6 +12061,13 @@ components:
             config: []
             env: {}
             files: {}
+            initialPermissions:
+              lowerBound:
+                negative: []
+                positive: []
+              upperBound:
+                negative: []
+                positive: []
             pluginInstallations: []
           allOf:
           - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
@@ -12041,6 +12075,13 @@ components:
               config: []
               env: {}
               files: {}
+              initialPermissions:
+                lowerBound:
+                  negative: []
+                  positive: []
+                upperBound:
+                  negative: []
+                  positive: []
               pluginInstallations: []
         agentTypes:
           type: array
@@ -12116,6 +12157,7 @@ components:
       - knownExports
       - producers
       - memories
+      - componentProvisionConfig
       - agentMethodStreams
       properties:
         knownExports:
@@ -12148,18 +12190,7 @@ components:
                   value:
                     fields: []
         componentProvisionConfig:
-          default:
-            config: []
-            env: {}
-            files: []
-            plugins: []
-          allOf:
-          - $ref: '#/components/schemas/ComponentProvisionConfig'
-          - default:
-              config: []
-              env: {}
-              files: []
-              plugins: []
+          $ref: '#/components/schemas/ComponentProvisionConfig'
         agentTypes:
           type: array
           default: []
@@ -12190,11 +12221,14 @@ components:
       type: object
       title: ComponentProvisionConfig
       required:
+      - initialPermissions
       - env
       - config
       - plugins
       - files
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/PolymorphicCard'
         env:
           type: object
           additionalProperties:
@@ -12214,7 +12248,11 @@ components:
     ComponentProvisionConfigCreation:
       type: object
       title: ComponentProvisionConfigCreation
+      required:
+      - initialPermissions
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
         env:
           type: object
           default: {}

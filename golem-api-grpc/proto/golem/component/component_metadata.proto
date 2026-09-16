@@ -39,6 +39,7 @@ message ComponentProvisionConfig {
   repeated golem.worker.TypedAgentConfigEntry config = 2;
   repeated PluginInstallation plugins = 3;
   repeated InitialAgentFile files = 4;
+  bytes initial_permissions = 5;
 }
 
 message AgentMethodStreams {

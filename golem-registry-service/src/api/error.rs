@@ -563,6 +563,13 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,
             })),
+            ComponentError::InvalidComponentInitialPermissionCard { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
+                    cause: None,
+                }))
+            }
             ComponentError::AgentFileNotFoundInArchive { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],

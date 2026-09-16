@@ -567,6 +567,7 @@ impl Display for ShardAssignment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,

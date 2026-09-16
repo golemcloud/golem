@@ -45,7 +45,7 @@ use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{OwnerKind, Principal};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -461,6 +461,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&target_agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -485,12 +488,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
-        self.worker_service
+        let source_metadata = self
+            .worker_service
             .get(&owned_source_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
+        if source_metadata.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return Err(WorkerExecutorError::invalid_request(
+                "External-tool owners cannot be forked",
+            ));
+        }
 
         Ok((owned_source_agent_id, owned_target_agent_id))
     }
@@ -544,6 +553,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // See https://github.com/golemcloud/golem/issues/3099
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
+            owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
             environment_id,
@@ -725,6 +735,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -741,6 +752,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,

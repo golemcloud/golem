@@ -75,8 +75,28 @@ pub(all) struct LocalAgentConfigEntry {
       path : Array[String]; value : @types.TypedSchemaValue
 } derive(Debug, Eq)
 ///|
+pub(all) enum OwnerKind {
+      COMPONENT_AGENT; EPHEMERAL_EXTERNAL_TOOL
+} derive(Debug, Eq)
+
+pub fn OwnerKind::ordinal(self : OwnerKind) -> Int {
+      match self {
+            COMPONENT_AGENT => 0
+            EPHEMERAL_EXTERNAL_TOOL => 1
+      }
+}
+
+///|
+pub fn OwnerKind::from(self : Int) -> OwnerKind {
+      match self {
+            0 => COMPONENT_AGENT
+            1 => EPHEMERAL_EXTERNAL_TOOL
+            _ => panic()
+      }
+}
+///|
 pub(all) struct CreateParameters {
-      timestamp : @system-clock.Instant; agent_id : @types.AgentId; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; created_by : @types.AccountId; environment_id : @host.EnvironmentId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[PluginInstallationDescription]; local_agent_config : Array[LocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
+      timestamp : @system-clock.Instant; agent_id : @types.AgentId; owner_kind : OwnerKind; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; created_by : @types.AccountId; environment_id : @host.EnvironmentId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[PluginInstallationDescription]; local_agent_config : Array[LocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
 } derive(Debug, Eq)
 ///|
 /// Parameters of an enriched durable host-call `start` entry.
@@ -489,7 +509,7 @@ pub(all) suberror WorkerError {
 } derive(Debug, Eq)
 ///|
 pub(all) struct RawCreateParameters {
-      timestamp : @system-clock.Instant; agent_id : @types.AgentId; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; environment_id : @host.EnvironmentId; created_by : @types.AccountId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[EnvironmentPluginGrantId]; local_agent_config : Array[RawLocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
+      timestamp : @system-clock.Instant; agent_id : @types.AgentId; owner_kind : OwnerKind; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; environment_id : @host.EnvironmentId; created_by : @types.AccountId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[EnvironmentPluginGrantId]; local_agent_config : Array[RawLocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
 } derive(Debug, Eq)
 ///|
 pub(all) struct RawStartParameters {
@@ -744,7 +764,8 @@ pub fn enrich_oplog_entries(environment_id : @host.EnvironmentId, agent_id : @ty
                         let ptr0 = mbt_ffi_str2ptr(((payload).agent_id).agent_id)
                         mbt_ffi_store32((iter_base) + 52, ((payload).agent_id).agent_id.length())
                         mbt_ffi_store32((iter_base) + 48, ptr0)
-                        mbt_ffi_store8((iter_base) + 56, (payload).agent_mode.ordinal())
+                        mbt_ffi_store8((iter_base) + 56, (payload).owner_kind.ordinal())
+                        mbt_ffi_store8((iter_base) + 57, (payload).agent_mode.ordinal())
                         mbt_ffi_store64((iter_base) + 64, ((payload).component_revision).reinterpret_as_int64())
 
                         let address = mbt_ffi_malloc(((payload).env).length() * 16);
@@ -5668,7 +5689,7 @@ pub fn enrich_oplog_entries(environment_id : @host.EnvironmentId, agent_id : @ty
                                           _ => panic()
                                     }
 
-                                    PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 8), nanoseconds : (mbt_ffi_load32((iter_base) + 16)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 24)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64()}}, agent_id : result}, agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 48)), component_revision : (mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 72)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 136)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_active_plugins : array498, local_agent_config : array737, original_phantom_id : lifted739, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 192)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64()}})
+                                    PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 8), nanoseconds : (mbt_ffi_load32((iter_base) + 16)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 24)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64()}}, agent_id : result}, owner_kind : OwnerKind::from(mbt_ffi_load8_u((iter_base) + 48)), agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 49)), component_revision : (mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 72)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 136)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_active_plugins : array498, local_agent_config : array737, original_phantom_id : lifted739, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 192)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64()}})
                               }
                               1 => {
 
@@ -36635,7 +36656,7 @@ pub fn GetOplog::get_next(self : GetOplog) -> Result[Array[PublicOplogEntry]?, O
                                                       _ => panic()
                                                 }
 
-                                                PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 8), nanoseconds : (mbt_ffi_load32((iter_base) + 16)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 24)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64()}}, agent_id : result}, agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 48)), component_revision : (mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 72)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 136)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_active_plugins : array9, local_agent_config : array248, original_phantom_id : lifted250, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 192)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64()}})
+                                                PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 8), nanoseconds : (mbt_ffi_load32((iter_base) + 16)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 24)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64()}}, agent_id : result}, owner_kind : OwnerKind::from(mbt_ffi_load8_u((iter_base) + 48)), agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 49)), component_revision : (mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 72)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 136)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_active_plugins : array9, local_agent_config : array248, original_phantom_id : lifted250, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 192)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64()}})
                                           }
                                           1 => {
 
@@ -67618,7 +67639,7 @@ pub fn SearchOplog::get_next(self : SearchOplog) -> Result[Array[(UInt64, Public
                                                       _ => panic()
                                                 }
 
-                                                PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 16), nanoseconds : (mbt_ffi_load32((iter_base) + 24)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 40)).reinterpret_as_uint64()}}, agent_id : result}, agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 56)), component_revision : (mbt_ffi_load64((iter_base) + 64)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 104)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 152)).reinterpret_as_uint64(), initial_active_plugins : array9, local_agent_config : array248, original_phantom_id : lifted250, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 208)).reinterpret_as_uint64()}})
+                                                PublicOplogEntry::Create(CreateParameters::{timestamp : @system-clock.Instant::{seconds : mbt_ffi_load64((iter_base) + 16), nanoseconds : (mbt_ffi_load32((iter_base) + 24)).reinterpret_as_uint()}, agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 40)).reinterpret_as_uint64()}}, agent_id : result}, owner_kind : OwnerKind::from(mbt_ffi_load8_u((iter_base) + 56)), agent_mode : AgentMode::from(mbt_ffi_load8_u((iter_base) + 57)), component_revision : (mbt_ffi_load64((iter_base) + 64)).reinterpret_as_uint64(), env : array, created_by : @types.AccountId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 80)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 88)).reinterpret_as_uint64()}}, environment_id : @host.EnvironmentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 96)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 104)).reinterpret_as_uint64()}}, parent : lifted, component_size : (mbt_ffi_load64((iter_base) + 144)).reinterpret_as_uint64(), initial_total_linear_memory_size : (mbt_ffi_load64((iter_base) + 152)).reinterpret_as_uint64(), initial_active_plugins : array9, local_agent_config : array248, original_phantom_id : lifted250, instance_id : @types.Uuid::{high_bits : (mbt_ffi_load64((iter_base) + 200)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((iter_base) + 208)).reinterpret_as_uint64()}})
                                           }
                                           1 => {
 

@@ -22,8 +22,11 @@ use crate::model::app::{
     CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
 };
 use crate::model::app_raw;
-use crate::model::component::initial_permission_recipient_context;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
+use crate::model::component::{
+    component_initial_permission_recipient_context, initial_permission_recipient_context,
+    resolve_component_initial_permission,
+};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::plugin::PluginGrantKey;
 use anyhow::{Context as AnyhowContext, anyhow};
@@ -378,6 +381,8 @@ impl<'a> ComponentStager<'a> {
     pub async fn component_provision_config(
         &self,
         changed_files: Option<&ChangedComponentFiles>,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
     ) -> anyhow::Result<ComponentProvisionConfigCreation> {
         let archive_paths = match changed_files {
             None => {
@@ -394,6 +399,13 @@ impl<'a> ComponentStager<'a> {
             "component manifest",
         )?;
         Ok(ComponentProvisionConfigCreation {
+            initial_permissions: resolve_component_initial_permission(
+                self.component_deploy_properties
+                    .component_initial_card
+                    .clone(),
+                self.manifest_component_files().await?,
+                &component_initial_permission_recipient_context(environment, component_name),
+            ),
             env: self.component_deploy_properties.component_env.clone(),
             config: self.component_deploy_properties.component_config.clone(),
             plugin_installations: self

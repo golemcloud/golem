@@ -9,6 +9,7 @@ import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/worker/worker_metadata.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_error.proto";
 import "golem/worker/worker_id.proto";
@@ -162,6 +163,7 @@ message RawCreateParameters {
   optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
+  OwnerKind owner_kind = 14;
 }
 
 message RawStartParameters {

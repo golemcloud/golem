@@ -40,8 +40,9 @@ use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName, InitialAgentFileUpload};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    CardManagedBy, CardManagedByAgentInitial, ClassPermissionTarget, ComponentResourcePattern,
-    ComponentVerb, DelegationSurface, EnvironmentVerb, PermissionTarget, PolymorphicCard,
+    CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial, ClassPermissionTarget,
+    ComponentResourcePattern, ComponentVerb, DelegationSurface, EnvironmentVerb, PermissionTarget,
+    PolymorphicCard, negative_permission_envelopes_for_recipient_patterns,
     permission_envelopes_for_recipient_patterns,
 };
 use golem_common::model::component::{
@@ -167,6 +168,30 @@ impl ComponentWriteService {
         );
         let card = record.clone().try_into()?;
 
+        Ok((card, record))
+    }
+
+    fn prepare_component_initial_permission_card_record(
+        &self,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
+        auth: &AuthCtx,
+    ) -> Result<(PolymorphicCard, CardRecord), ComponentError> {
+        let delegation_surface = auth
+            .delegation_surface_for_card_derivation("create component initial permission card")?;
+        let card = prepare_initial_card_for_minting(initial_permissions, delegation_surface)
+            .map_err(|message| ComponentError::InvalidComponentInitialPermissionCard { message })?;
+        let record = CardRecord::polymorphic_creation(
+            card,
+            Some(CardManagedBy::ComponentInitial(
+                CardManagedByComponentInitial {
+                    component_id,
+                    component_revision,
+                },
+            )),
+        );
+        let card = record.clone().try_into()?;
         Ok((card, record))
     }
 
@@ -310,7 +335,18 @@ impl ComponentWriteService {
                 .plugin_installations,
             &resolved_grants,
         )?;
+        let (component_initial_permissions, component_card_record) = self
+            .prepare_component_initial_permission_card_record(
+                component_id,
+                ComponentRevision::INITIAL,
+                &component_creation
+                    .component_provision_config
+                    .initial_permissions,
+                auth,
+            )?;
+        cards_to_create.push(component_card_record);
         let component_provision_config = ComponentProvisionConfig {
+            initial_permissions: component_initial_permissions,
             env: component_creation.component_provision_config.env.clone(),
             config: component_config,
             plugins: component_plugins,
@@ -529,7 +565,16 @@ impl ComponentWriteService {
             let grants = self
                 .resolve_all_plugin_grants(&environment, grant_ids, auth)
                 .await?;
+            let (initial_permissions, card_record) = self
+                .prepare_component_initial_permission_card_record(
+                    component_id,
+                    component.revision,
+                    &config.initial_permissions,
+                    auth,
+                )?;
+            cards_to_create.push(card_record);
             final_component_provision_config = ComponentProvisionConfig {
+                initial_permissions,
                 env: config.env,
                 config: validate_and_transform_component_config_entries(
                     &final_config_schema,
@@ -1408,35 +1453,27 @@ fn prepare_agent_initial_card_for_minting(
     initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
     delegation_surface: &DelegationSurface,
 ) -> Result<PolymorphicCard, ComponentError> {
+    prepare_initial_card_for_minting(initial_permissions, delegation_surface).map_err(|message| {
+        ComponentError::InvalidAgentInitialPermissionCard {
+            agent_type: agent_type_name.clone(),
+            message,
+        }
+    })
+}
+
+fn prepare_initial_card_for_minting(
+    initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
+    delegation_surface: &DelegationSurface,
+) -> Result<PolymorphicCard, String> {
     let mut card = initial_permissions.to_polymorphic_card();
     let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)
-        .map_err(
-            |message| ComponentError::InvalidAgentInitialPermissionCard {
-                agent_type: agent_type_name.clone(),
-                message,
-            },
-        )?;
-    let lower_negative = permission_envelopes_for_recipient_patterns(&card.lower_negative)
-        .map_err(
-            |message| ComponentError::InvalidAgentInitialPermissionCard {
-                agent_type: agent_type_name.clone(),
-                message,
-            },
-        )?;
+        .map_err(|message| message)?;
+    let lower_negative = negative_permission_envelopes_for_recipient_patterns(&card.lower_negative)
+        .map_err(|message| message)?;
     let upper_positive = permission_envelopes_for_recipient_patterns(&card.upper_positive)
-        .map_err(
-            |message| ComponentError::InvalidAgentInitialPermissionCard {
-                agent_type: agent_type_name.clone(),
-                message,
-            },
-        )?;
-    let upper_negative = permission_envelopes_for_recipient_patterns(&card.upper_negative)
-        .map_err(
-            |message| ComponentError::InvalidAgentInitialPermissionCard {
-                agent_type: agent_type_name.clone(),
-                message,
-            },
-        )?;
+        .map_err(|message| message)?;
+    let upper_negative = negative_permission_envelopes_for_recipient_patterns(&card.upper_negative)
+        .map_err(|message| message)?;
     delegation_surface
         .validate_attenuation(
             &lower_positive,
@@ -1444,9 +1481,8 @@ fn prepare_agent_initial_card_for_minting(
             &upper_positive,
             &upper_negative,
         )
-        .map_err(|error| ComponentError::InvalidAgentInitialPermissionCard {
-            agent_type: agent_type_name.clone(),
-            message: format!("card derivation is not allowed by the creator's cards: {error:?}"),
+        .map_err(|error| {
+            format!("card derivation is not allowed by the creator's cards: {error:?}")
         })
         .map(|parent_ids| {
             card.parent_ids = parent_ids;
@@ -2087,8 +2123,9 @@ mod initial_agent_file_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        prepare_agent_initial_card_for_minting, resolve_tool_deployment_metadata_for_creation,
-        resolve_tool_files_for_update, tool_definitions_by_name, tool_state_for_update,
+        prepare_agent_initial_card_for_minting, prepare_initial_card_for_minting,
+        resolve_tool_deployment_metadata_for_creation, resolve_tool_files_for_update,
+        tool_definitions_by_name, tool_state_for_update,
         validate_and_transform_component_config_entries, validate_component_config_schema,
         validate_component_metadata_invariants,
     };
@@ -2096,7 +2133,8 @@ mod tests {
     use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{
-        CardId, DelegationCard, DelegationSurface, permission_envelopes_for_recipient_patterns,
+        CardId, DelegationCard, DelegationSurface, parse_permission, parse_polymorphic_permission,
+        permission_envelopes_for_recipient_patterns,
     };
     use golem_common::model::component::{
         AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermissions,
@@ -2167,6 +2205,72 @@ mod tests {
         DelegationSurface { cards: vec![card] }
     }
 
+    const EXTERNAL_OWNER_RECIPIENT: &str =
+        "owner@example.com/app/prod/component/~external-tool-owner";
+    const COMPONENT_AGENTS: &str = "owner@example.com/app/prod/component/*";
+
+    fn external_owner_attenuation_surface(lower: bool) -> DelegationSurface {
+        let positive = parse_permission(&format!(
+            "agent({COMPONENT_AGENTS}) @ {EXTERNAL_OWNER_RECIPIENT} : invoke : *"
+        ))
+        .unwrap();
+        let negative = parse_permission(&format!(
+            "agent({COMPONENT_AGENTS}) @ {EXTERNAL_OWNER_RECIPIENT} : delete :"
+        ))
+        .unwrap();
+        DelegationSurface {
+            cards: vec![DelegationCard {
+                source_card_id: Some(CardId::new()),
+                lower_positive: if lower {
+                    vec![positive.clone()]
+                } else {
+                    Vec::new()
+                },
+                lower_negative: if lower {
+                    vec![negative.clone()]
+                } else {
+                    Vec::new()
+                },
+                upper_positive: if lower { Vec::new() } else { vec![positive] },
+                upper_negative: if lower { Vec::new() } else { vec![negative] },
+            }],
+        }
+    }
+
+    fn external_owner_initial_permissions(
+        lower: bool,
+        concrete_negative: bool,
+    ) -> AgentTypeInitialPermissions {
+        let positive = parse_polymorphic_permission(&format!(
+            "agent(?agent) @ {EXTERNAL_OWNER_RECIPIENT} : invoke : *"
+        ))
+        .unwrap();
+        let negative_owner = if concrete_negative {
+            COMPONENT_AGENTS
+        } else {
+            "?agent"
+        };
+        let negative = parse_polymorphic_permission(&format!(
+            "agent({negative_owner}) @ {EXTERNAL_OWNER_RECIPIENT} : delete :"
+        ))
+        .unwrap();
+        if lower {
+            AgentTypeInitialPermissions::from_patterns(
+                vec![positive],
+                vec![negative],
+                Vec::new(),
+                Vec::new(),
+            )
+        } else {
+            AgentTypeInitialPermissions::from_patterns(
+                Vec::new(),
+                Vec::new(),
+                vec![positive],
+                vec![negative],
+            )
+        }
+    }
+
     fn tool(name: &str, version: &str) -> Tool {
         Tool {
             version: version.to_string(),
@@ -2227,6 +2331,54 @@ mod tests {
             error,
             ComponentError::InvalidAgentInitialPermissionCard { .. }
         ));
+    }
+
+    #[test]
+    fn component_initial_card_uses_creator_attenuation_and_delegation() {
+        let parent_id = CardId::new();
+        let initial_permission =
+            AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
+
+        let card =
+            prepare_initial_card_for_minting(&initial_permission, &parent_surface(parent_id))
+                .unwrap();
+        assert_eq!(card.parent_ids, vec![parent_id]);
+
+        let error =
+            prepare_initial_card_for_minting(&initial_permission, &DelegationSurface::default())
+                .unwrap_err();
+        assert!(error.contains("not allowed by the creator's cards"));
+    }
+
+    #[test]
+    fn component_initial_card_lower_negative_does_not_widen_external_owner_agent() {
+        let relative = external_owner_initial_permissions(true, false);
+        assert!(
+            prepare_initial_card_for_minting(&relative, &external_owner_attenuation_surface(true),)
+                .is_err()
+        );
+
+        let concrete = external_owner_initial_permissions(true, true);
+        let card =
+            prepare_initial_card_for_minting(&concrete, &external_owner_attenuation_surface(true))
+                .unwrap();
+        assert_eq!(card.lower_negative, concrete.lower_bound.negative);
+    }
+
+    #[test]
+    fn component_initial_card_upper_negative_does_not_widen_external_owner_agent() {
+        let relative = external_owner_initial_permissions(false, false);
+        assert!(prepare_initial_card_for_minting(
+            &relative,
+            &external_owner_attenuation_surface(false),
+        )
+        .is_err());
+
+        let concrete = external_owner_initial_permissions(false, true);
+        let card =
+            prepare_initial_card_for_minting(&concrete, &external_owner_attenuation_surface(false))
+                .unwrap();
+        assert_eq!(card.upper_negative, concrete.upper_bound.negative);
     }
 
     #[test]

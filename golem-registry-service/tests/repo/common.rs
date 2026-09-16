@@ -41,7 +41,8 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolName, ToolProvisionConfig,
+    ToolSource,
 };
 use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
@@ -5339,7 +5340,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                     CompiledToolBinding {
                         deployment_revision,
                         release_id: tool.release_id,
-                        agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        owner: ToolBindingOwner::AgentType {
+                            agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        },
                         tool_name: alpha_name,
                         version: tool.definition.version.clone(),
                         metadata_version: tool.metadata_version.clone(),
@@ -5518,14 +5521,16 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "2.0.0"
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .metadata_version,
         TOOL_METADATA_WIT_VERSION
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .parameters
             .0,
         serde_json::json!({ "revision": 2 })
@@ -5665,7 +5670,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_binding = CompiledToolBinding {
         deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
         release_id: Some(remote_release_id),
-        agent_type_name: AgentTypeName(agent_type_name.clone()),
+        owner: ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone()),
+        },
         tool_name: ToolName::try_from("remote-search").unwrap(),
         version: "1.0.0".to_string(),
         metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
@@ -5689,6 +5696,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_hash = diff::remote_tool_deployments(
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
+        &BTreeMap::new(),
         &BTreeSet::new(),
     )
     .unwrap()["remote-search"]

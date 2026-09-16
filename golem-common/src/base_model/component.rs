@@ -191,6 +191,7 @@ declare_structs! {
 
     #[derive(Default)]
     pub struct ComponentProvisionConfigCreation {
+        pub initial_permissions: AgentTypeInitialPermissions,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,

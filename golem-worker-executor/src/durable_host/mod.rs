@@ -131,7 +131,9 @@ pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentPrincipal, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -325,6 +327,32 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
+pub(crate) fn owner_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentBaseline => {
+            let card = StoredCard::Polymorphic(
+                component
+                    .metadata
+                    .component_provision_config()
+                    .initial_permissions
+                    .clone(),
+            );
+            Ok(component_baseline_effective_surface_from_wallet(
+                component,
+                owned_agent_id,
+                [&card],
+            ))
+        }
+    }
+}
+
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
@@ -336,8 +364,49 @@ pub(crate) fn agent_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent_name: owned_agent_id.agent_id.agent_id.clone(),
-        agent_type: agent_id.agent_type.clone(),
+        owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+            agent_id.agent_type.clone(),
+        ),
     }
+}
+
+fn component_baseline_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        owner:
+            golem_common::model::card::recipient::RecipientOwnerContext::ComponentExternalToolOwner,
+    }
+}
+
+pub(crate) fn owner_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_monomorphization_context(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentBaseline => {
+            component_baseline_monomorphization_context(component, owned_agent_id)
+        }
+    }
+}
+
+fn component_baseline_effective_surface_from_wallet<'a>(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> golem_common::model::card::EffectiveSurface {
+    let context = component_baseline_monomorphization_context(component, owned_agent_id);
+    golem_common::model::card::agent_effective_surface_from_wallet(&context, cards)
 }
 
 fn agent_initial_card_from_component_metadata(
@@ -742,7 +811,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -881,7 +950,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let agent_type_provision_configs = match &runtime {
-            OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
+            OwnerRuntime::Agent => owner_context.agent().and_then(|agent_id| {
                 component_metadata
                     .metadata
                     .agent_type_provision_configs()
@@ -890,16 +959,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let agent_config = if agent_id.is_some() {
-            effective_agent_config(
-                worker_config.initial_agent_config.clone(),
-                agent_type_provision_configs
+        let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
+            let provisioned_config = match &owner_context {
+                ResolvedOwnerContext::Agent(_) => agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
+                ResolvedOwnerContext::ComponentBaseline => component_metadata
+                    .metadata
+                    .component_provision_config()
+                    .config
+                    .clone(),
+            };
+            effective_agent_config(
+                worker_config.initial_agent_config.clone(),
+                provisioned_config,
             )?
         } else {
-            HashMap::new()
+            worker_config
+                .initial_agent_config
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.value.clone()))
+                .collect()
         };
 
         let stdin = ManagedStdIn::disabled();
@@ -949,7 +1030,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
         };
         let state = PrivateDurableWorkerState::new(
-            agent_id,
+            owner_context,
             oplog_service,
             oplog.clone(),
             promise_service.clone(),
@@ -1330,19 +1411,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
-        let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
-                &self.state.component_metadata,
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
+                self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
-            golem_common::model::card::agent_delegation_surface_from_wallet(
-                &context,
-                self.state.agent_wallet_cards.values(),
-            )
-        } else {
-            golem_common::model::card::DelegationSurface::default()
+            ),
+            ResolvedOwnerContext::ComponentBaseline => component_baseline_monomorphization_context(
+                self.owner_component_metadata(),
+                &self.owned_agent_id,
+            ),
         };
+        let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
+            &context,
+            self.state.agent_wallet_cards.values(),
+        );
 
         AuthCtx::agent_with_permission_surfaces(
             self.created_by(),
@@ -1726,20 +1809,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if matches!(self.runtime, OwnerRuntime::Entity(_)) {
             return;
         }
-        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
                 self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
+            ),
+            ResolvedOwnerContext::ComponentBaseline => component_baseline_monomorphization_context(
+                self.owner_component_metadata(),
+                &self.owned_agent_id,
+            ),
+        };
+        self.state.agent_effective_surface =
             golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                 &context,
                 self.state.agent_wallet_cards.values(),
                 self.state.invocation_scope_card.as_ref(),
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
-        };
+            );
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
@@ -2193,7 +2279,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
-        self.state.agent_id.clone()
+        self.state.owner_context.agent().cloned()
+    }
+
+    pub fn owner_context(&self) -> &ResolvedOwnerContext {
+        &self.state.owner_context
     }
 
     pub fn agent_mode(&self) -> AgentMode {
@@ -2224,7 +2314,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
-        self.state.agent_id.as_ref().and_then(|agent_id| {
+        self.state.owner_context.agent().and_then(|agent_id| {
             self.owner_component_metadata()
                 .metadata
                 .agent_type_provision_config(&agent_id.agent_type)
@@ -7671,7 +7761,9 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "Cart(alice)".to_string(),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+                AgentTypeName("Cart".to_string()),
+            ),
         }
     }
 
@@ -9763,7 +9855,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
@@ -10082,7 +10174,7 @@ impl WakeupScheduler {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -10136,15 +10228,24 @@ impl PrivateDurableWorkerState {
             OwnerRuntime::Agent => {
                 let initial_agent_wallet_cards =
                     || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
-                        match agent_id.as_ref() {
-                            Some(agent_id) => {
+                        match &owner_context {
+                            ResolvedOwnerContext::Agent(agent_id) => {
                                 let card = agent_initial_card_from_component_metadata(
                                     &component_metadata,
                                     agent_id,
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
                             }
-                            None => Ok(BTreeMap::new()),
+                            ResolvedOwnerContext::ComponentBaseline => {
+                                let card = StoredCard::Polymorphic(
+                                    component_metadata
+                                        .metadata
+                                        .component_provision_config()
+                                        .initial_permissions
+                                        .clone(),
+                                );
+                                Ok(BTreeMap::from([(card.card_id(), card)]))
+                            }
                         }
                     };
                 if let Some(snapshot_idx) = last_snapshot_index {
@@ -10172,8 +10273,8 @@ impl PrivateDurableWorkerState {
             agent_id: owned_agent_id.agent_id.clone(),
         })
         .wallet_id_hash();
-        let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
-            (OwnerRuntime::Agent, Some(agent_id)) => {
+        let agent_effective_surface = match (&runtime, &owner_context) {
+            (OwnerRuntime::Agent, ResolvedOwnerContext::Agent(agent_id)) => {
                 let context =
                     agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
@@ -10181,14 +10282,20 @@ impl PrivateDurableWorkerState {
                     agent_wallet_cards.values(),
                 )
             }
-            (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
+            (OwnerRuntime::Agent, ResolvedOwnerContext::ComponentBaseline) => {
+                component_baseline_effective_surface_from_wallet(
+                    &component_metadata,
+                    &owned_agent_id,
+                    agent_wallet_cards.values(),
+                )
+            }
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {
             oplog_service,
             oplog,
-            agent_id,
+            owner_context,
             http_call_count: 0,
             per_invocation_http_call_limit,
             rpc_call_count: 0,
@@ -10577,7 +10684,7 @@ impl PrivateDurableWorkerState {
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.
     /// Should be called on all executor-constructed retry property bags before policy resolution.
     pub fn enrich_retry_properties(&self, props: &mut RetryProperties) {
-        if let Some(agent_id) = &self.agent_id {
+        if let Some(agent_id) = self.owner_context.agent() {
             props.set(
                 "agent-type",
                 PredicateValue::Text(agent_id.agent_type.to_string()),

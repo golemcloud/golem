@@ -311,10 +311,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
         );
         let agent_mode = registered_agent_type.agent_type.mode;
+        let owner_component = self.owner_component_metadata();
         let remote_owner = AgentOwnerPattern::Agent {
             account: registered_agent_type.implemented_by.account_email.clone(),
-            application: self.component_metadata().application_name.clone(),
-            environment: self.component_metadata().environment_name.clone(),
+            application: owner_component.application_name.clone(),
+            environment: owner_component.environment_name.clone(),
             component: golem_common::model::component::ComponentName(
                 registered_agent_type.implemented_by.component_name.clone(),
             ),
@@ -679,7 +680,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 stream_auth_ctx,
             )
             .await?;
-            let caller_revision = self.state.component_metadata.revision;
+            let caller_revision = self.owner_component_metadata().revision;
             let input_root = rpc_input_root(&prepared);
             let output_root = rpc_output_root(&prepared);
             let (input, input_mappings) = streams
@@ -1222,7 +1223,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 stream_auth_ctx,
             )
             .await?;
-            let caller_revision = self.state.component_metadata.revision;
+            let caller_revision = self.owner_component_metadata().revision;
             let (input, input_mappings) = streams
                 .materialize_agent_input(
                     &input_value,

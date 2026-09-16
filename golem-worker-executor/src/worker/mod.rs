@@ -110,8 +110,8 @@ use golem_common::cache::SimpleCache;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal, Snapshotting,
-    SnapshottingConfig, ephemeral_invocation_phantom_id,
+    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    ResolvedOwnerContext, Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
@@ -428,6 +428,7 @@ impl StartupAttemptTracker {
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
+    owner_context: ResolvedOwnerContext,
     parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
@@ -1029,7 +1030,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             "worker_read_only_cache",
         );
 
-        let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component));
+        let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component.clone()));
 
         let last_known_status_detached = Arc::new(AtomicBool::new(false));
         let status_flusher = status_flusher::AgentStatusFlusher::new(
@@ -1081,6 +1082,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let worker = Worker {
             owned_agent_id,
+            owner_context: ResolvedOwnerContext::from_authoritative_kind(
+                initial_worker_metadata.owner_kind,
+                &initial_worker_metadata.agent_id.agent_id,
+                &initial_component.metadata,
+            )
+            .map_err(WorkerExecutorError::invalid_request)?,
             parsed_agent_id: agent_id.clone(),
             oplog,
             worker_event_service: Arc::new(WorkerEventServiceDefault::new(
@@ -1211,28 +1218,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let worker_metadata = self.get_latest_worker_metadata().await;
-        let agent_effective_surface = match &self.parsed_agent_id {
-            Some(agent_id) => agent_effective_surface_from_component_metadata(
-                &owner_component_metadata,
-                &self.owned_agent_id,
-                agent_id,
-            )?,
-            None => golem_common::model::card::EffectiveSurface::default(),
+        let agent_effective_surface = match &self.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => {
+                agent_effective_surface_from_component_metadata(
+                    &owner_component_metadata,
+                    &self.owned_agent_id,
+                    agent_id,
+                )?
+            }
+            ResolvedOwnerContext::ComponentBaseline => {
+                crate::durable_host::owner_effective_surface_from_component_metadata(
+                    &owner_component_metadata,
+                    &self.owned_agent_id,
+                    &self.owner_context,
+                )?
+            }
         };
         let executable_revision = executable_component.revision;
-        let initial_agent_config = match &self.parsed_agent_id {
-            Some(agent_id) => {
+        let initial_agent_config = match &self.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => {
                 let component_config = owner_component_metadata
                     .metadata
                     .agent_type_config(&agent_id.agent_type)
-                    .map(|config| config.to_vec())
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .to_vec();
                 effective_agent_config(worker_metadata.config, component_config)?
                     .into_iter()
                     .map(|(path, value)| TypedAgentConfigEntry { path, value })
                     .collect()
             }
-            None => worker_metadata.config,
+            ResolvedOwnerContext::ComponentBaseline => effective_agent_config(
+                worker_metadata.config,
+                owner_component_metadata
+                    .metadata
+                    .component_provision_config()
+                    .config
+                    .clone(),
+            )?
+            .into_iter()
+            .map(|(path, value)| TypedAgentConfigEntry { path, value })
+            .collect(),
         };
         let filesystem_generation = self
             .owner_runtime_resources
@@ -1296,7 +1321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ctx::create(
             worker_metadata.created_by,
             self.owned_agent_id.clone(),
-            self.parsed_agent_id.clone(),
+            self.owner_context.clone(),
             self.promise_service(),
             self.worker_service(),
             self.worker_enumeration_service(),
@@ -6193,6 +6218,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_worker_metadata,
                 last_known_status,
             }) => {
+                initial_worker_metadata
+                    .owner_kind
+                    .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                    .map_err(WorkerExecutorError::runtime)?;
                 let persisted_status = last_known_status.clone();
                 // make sure we are fully up to date on the oplog
                 let agent_mode = initial_worker_metadata.agent_mode;
@@ -6224,18 +6253,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
 
-                let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &initial_component.metadata,
-                    )
-                    .map_err(|err| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
-                    })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
+                let owner_context = ResolvedOwnerContext::from_authoritative_kind(
+                    initial_worker_metadata.owner_kind,
+                    &owned_agent_id.agent_id.agent_id,
+                    &initial_component.metadata,
+                )
+                .map_err(WorkerExecutorError::invalid_request)?;
+                if matches!(owner_context, ResolvedOwnerContext::ComponentBaseline)
+                    && initial_worker_metadata.agent_mode == AgentMode::Durable
+                {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "An external tool owner cannot use durable mode",
+                    ));
+                }
+                let agent_id = owner_context.agent().cloned();
 
                 // For an existing worker, the authoritative `agent_mode` was decided at create
                 // time and is persisted in the `Create` oplog entry; we do not re-resolve it
@@ -6279,6 +6310,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             None => {
                 // Create and initialize a new worker.
+                OwnerKind::ComponentAgent
+                    .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                    .map_err(WorkerExecutorError::invalid_request)?;
                 let component = this
                     .component_service()
                     .get_metadata(component_id, component_revision)
@@ -6361,6 +6395,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
+                    owner_kind: OwnerKind::ComponentAgent,
                     env: worker_env,
                     config: initial_agent_config,
                     environment_id: component.environment_id,
@@ -6390,6 +6425,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.agent_id.clone(),
+                    initial_worker_metadata.owner_kind,
                     initial_worker_metadata.agent_mode,
                     initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.env.clone(),
@@ -7458,7 +7494,7 @@ impl RunningWorker {
         let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
-            parent.parsed_agent_id.clone(),
+            parent.owner_context.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),

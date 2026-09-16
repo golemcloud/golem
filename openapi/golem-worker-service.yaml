@@ -2533,6 +2533,7 @@ components:
       title: AgentMetadataDto
       required:
       - agentId
+      - ownerKind
       - environmentId
       - createdBy
       - env
@@ -2553,6 +2554,8 @@ components:
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         environmentId:
           type: string
           format: uuid
@@ -3544,6 +3547,7 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       discriminator:
         propertyName: type
@@ -3552,6 +3556,7 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          ComponentInitial: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
           RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       type: object
@@ -3578,6 +3583,19 @@ components:
           format: uint64
         agentType:
           type: string
+    CardManagedByComponentInitial:
+      type: object
+      title: CardManagedByComponentInitial
+      required:
+      - componentId
+      - componentRevision
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
     CardManagedByEnvironmentDefault:
       type: object
       title: CardManagedByEnvironmentDefault
@@ -3639,6 +3657,18 @@ components:
             - AgentInitial
             example: AgentInitial
       - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByComponentInitial:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentInitial
+            example: ComponentInitial
+      - $ref: '#/components/schemas/CardManagedByComponentInitial'
     CardManagedBy_CardManagedByEnvironmentDefault:
       allOf:
       - type: object
@@ -4694,6 +4724,16 @@ components:
         end:
           type: integer
           format: uint64
+    OwnerKind:
+      type: string
+      description: |-
+        Authoritative kind of an execution owner.
+
+        This is persisted at creation time. In particular, an instance name that
+        happens to look like an external-tool owner never grants that authority.
+      enum:
+      - component-agent
+      - ephemeral-external-tool
     PathDirection:
       type: string
       enum:
@@ -8680,6 +8720,7 @@ components:
       required:
       - timestamp
       - agentId
+      - ownerKind
       - agentMode
       - componentRevision
       - env
@@ -8696,6 +8737,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         agentMode:
           $ref: '#/components/schemas/AgentMode'
         componentRevision:

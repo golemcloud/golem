@@ -2029,6 +2029,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Create(CreateParams {
             timestamp: timestamp(),
             agent_id: agent_id("generated-agent"),
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: BTreeMap::from_iter([("ENV".to_string(), "value".to_string())]),
@@ -5101,14 +5102,13 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             provision: golem_common::model::tool::ToolProvisionConfig::default(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
-                                golem_common::model::tool::ToolBindingInput {
-                                    version: Some("1.0.0".to_string()),
+                                golem_common::model::diff::EffectiveToolBinding {
                                     parameters: golem_common::model::json::NormalizedJsonValue::new(
                                         json!({ "index": "current" }),
                                     ),
-                                    account: None,
                                     secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
                                     secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                                    filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
                                 },
                             )]),
                             bindings: BTreeMap::from_iter([(
@@ -5134,14 +5134,13 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             provision: golem_common::model::tool::ToolProvisionConfig::default(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
-                                golem_common::model::tool::ToolBindingInput {
-                                    version: Some("1.1.0".to_string()),
+                                golem_common::model::diff::EffectiveToolBinding {
                                     parameters: golem_common::model::json::NormalizedJsonValue::new(
                                         json!({ "index": "new" }),
                                     ),
-                                    account: None,
                                     secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
                                     secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                                    filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
                                 },
                             )]),
                             bindings: BTreeMap::from_iter([(
