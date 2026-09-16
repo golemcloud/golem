@@ -309,6 +309,59 @@ describe('agent reflection', () => {
     expect(client.method('echo').definition.name).toBe('echo');
   });
 
+  it('validates reflected config before creating clients in both JSON and value styles', () => {
+    const registered = registeredType();
+    registered.agentType.config = [
+      { source: 'local', path: ['greeting'], valueType: registered.agentType.schema.root },
+      { source: 'secret', path: ['apiKey'], valueType: registered.agentType.schema.root },
+    ];
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);
+    const reflected = getAgentType('ReflectedEcho')!;
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => reflected.client.get({ id: 'one' }, [{ path: ['other'], value: 'x' }])).toThrow(
+      "Unknown config path 'other'",
+    );
+    expect(() => reflected.client.get({ id: 'one' }, [{ path: ['apiKey'], value: 'x' }])).toThrow(
+      "Cannot override secret config field 'apiKey'",
+    );
+    expect(() =>
+      reflected.client.get({ id: 'one' }, [{ path: ['greeting'], value: 42 }]),
+    ).toThrow();
+    expect(() =>
+      reflected.client.getValue(v.record([v.string('one')]), [
+        {
+          path: ['greeting'],
+          value: { graph: stringGraph, value: v.u32(42) },
+        },
+      ]),
+    ).toThrow("Invalid config value at 'greeting'");
+    expect(vi.mocked(WasmRpc.create)).toHaveBeenCalledTimes(creates);
+
+    reflected.client.get({ id: 'one' }, [{ path: ['greeting'], value: 'hello' }]);
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toMatchObject([{ path: ['greeting'] }]);
+
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReflectedEcho',
+      {
+        graph: schemaGraphToWit(stringGraph),
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const agentId = new ParsedAgentId('ReflectedEcho(one)');
+    expect(
+      agentId
+        .client(reflected, [
+          {
+            path: ['greeting'],
+            value: { graph: stringGraph, value: v.string('hello') },
+          },
+        ])
+        .method('echo').definition.name,
+    ).toBe('echo');
+  });
+
   it('rejects binding a reflected ephemeral type to an existing identity', () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType('ephemeral'));
     vi.mocked(parseAgentId).mockReturnValueOnce([
