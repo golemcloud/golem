@@ -99,6 +99,27 @@ object SchemaRefSpec extends ZIOSpecDefault {
         rendered.get("type").one == Right(Json.String("object"))
       )
     },
+    test("requires explicit null for an absent option and renders it as required") {
+      val optional = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(RecordType(List(NamedFieldType("maybe", SchemaType(OptionType(SchemaType(StringType)))))))
+        )
+      )
+      assertTrue(
+        optional.packJson(Json.Object()).isLeft,
+        optional.packJson(Json.Object("maybe" -> Json.Null)) == Right(RecordValue(List(OptionValue(None)))),
+        optional.toJsonSchema().get("required").one == Right(Json.Array(Json.String("maybe")))
+      )
+    },
+    test("rejects numbers that overflow after float narrowing") {
+      val f32 = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(F32Type())))
+      val f64 = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(F64Type())))
+      assertTrue(
+        f32.packJson(Json.Number(BigDecimal("1e100"))).isLeft,
+        f64.packJson(Json.Number(BigDecimal("1e1000"))).isLeft
+      )
+    },
     test("detects nested stream schemas") {
       val streaming = SchemaRef(
         SchemaGraph(
@@ -106,7 +127,8 @@ object SchemaRefSpec extends ZIOSpecDefault {
           SchemaType(RecordType(List(NamedFieldType("items", SchemaType(StreamType(Some(SchemaType(StringType))))))))
         )
       )
-      assertTrue(!SchemaRef(graph).containsStream, streaming.containsStream)
+      val selectedScalar = SchemaRef(streaming.graph, SchemaType(StringType))
+      assertTrue(!SchemaRef(graph).containsStream, streaming.containsStream, !selectedScalar.containsStream)
     },
     test("rejects missing, unexpected, and malformed reflected outputs") {
       val input    = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(RecordType(Nil))))

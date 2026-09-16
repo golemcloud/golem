@@ -431,13 +431,17 @@ private[reflection] object Transport {
     phantom: Option[Uuid],
     config: List[golem.config.ConfigOverride]
   ): Either[GolemReflectError, Transport] =
-    encode(constructor).map { payload =>
-      val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
-        JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
-      )
-      new Transport(
-        WasmRpcApi.newClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
-      )
+    encode(constructor).flatMap { payload =>
+      try {
+        val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
+          JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
+        )
+        Right(
+          new Transport(
+            WasmRpcApi.newClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
+          )
+        )
+      } catch { case NonFatal(error) => Left(GolemReflectError.Remote(error.getMessage)) }
     }
 }
 

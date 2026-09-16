@@ -17,11 +17,12 @@ import golem.schema.validation.ValueValidation
 import zio.blocks.schema.json.Json
 
 import scala.collection.immutable.ListMap
+import scala.util.control.NonFatal
 
 final case class SchemaIssue(message: String, path: List[String] = Nil)
 
 final class SchemaRef private (val graph: SchemaGraph, val root: SchemaType) {
-  def containsStream: Boolean = graph.containsStream
+  def containsStream: Boolean = SchemaGraph(graph.defs, root).containsStream
 
   def validateValue(value: SchemaValue): Either[List[SchemaIssue], SchemaValue] =
     ValueValidation
@@ -73,7 +74,7 @@ private object CanonicalJson {
 
   private def attempt[A](value: => A): Either[SchemaIssue, A] =
     try Right(value)
-    catch { case error: IllegalArgumentException => Left(SchemaIssue(error.getMessage)) }
+    catch { case NonFatal(error) => Left(SchemaIssue(error.getMessage)) }
 
   private def fail(message: String): Nothing = throw new IllegalArgumentException(message)
 
@@ -99,10 +100,7 @@ private object CanonicalJson {
         Json.Object(
           "type"       -> Json.String("object"),
           "properties" -> Json.Object(recordFields.map(field => field.name -> schemaJson(graph, field.body)): _*),
-          "required"   -> Json.Array(recordFields.collect {
-            case field if resolve(graph, field.body).body match { case OptionType(_) => false; case _ => true } =>
-              Json.String(field.name)
-          }: _*),
+          "required"   -> Json.Array(recordFields.map(field => Json.String(field.name)): _*),
           "additionalProperties" -> Json.Boolean(false)
         )
       case VariantType(cases) =>
@@ -261,8 +259,14 @@ private object CanonicalJson {
       case U16Type(_) => U16Value(integral(json, 0, 65535).toInt)
       case U32Type(_) => U32Value(integral(json, 0, BigInt("4294967295")).toLong)
       case U64Type(_) => U64Value(safeLong(json, unsigned = true))
-      case F32Type(_) => F32Value(decimal(json).toFloat)
-      case F64Type(_) => F64Value(decimal(json).toDouble)
+      case F32Type(_) =>
+        val value = decimal(json).toFloat
+        if (!java.lang.Float.isFinite(value)) fail("number is outside the f32 range")
+        F32Value(value)
+      case F64Type(_) =>
+        val value = decimal(json).toDouble
+        if (!java.lang.Double.isFinite(value)) fail("number is outside the f64 range")
+        F64Value(value)
       case CharType   =>
         val text = string(json)
         if (text.codePointCount(0, text.length) != 1) fail("expected one Unicode scalar")
