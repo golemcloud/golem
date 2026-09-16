@@ -7943,10 +7943,11 @@ async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Available languages:"));
+    // Missing template is a usage error, so the help (with the languages) goes to stderr
+    assert!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
+        .filter(|language| !outputs.stderr_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(
