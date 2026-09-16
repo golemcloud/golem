@@ -16,7 +16,7 @@ use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
 use crate::model::agent::RawAgentId;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties};
+use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::ResolvedEnvironmentIdentity;
@@ -48,7 +48,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{diff, tool};
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
+use golem_common::schema::agent::{
+    AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
@@ -343,6 +345,11 @@ pub fn initial_permission_from_manifest_card(
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
+    pub config_schema: ComponentConfigSchema,
+    pub component_config: Vec<AgentConfigEntryDto>,
+    pub component_env: BTreeMap<String, String>,
+    pub component_files: Vec<InitialComponentFile>,
+    pub component_plugins: Vec<app_raw::PluginInstallation>,
     pub agent_types: Vec<AgentTypeSchema>,
     pub tools: Vec<Tool>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,

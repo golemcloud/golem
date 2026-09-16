@@ -2974,6 +2974,7 @@
         "build",
         "customCommands",
         "clean",
+        "configSchema",
         "config",
         "env",
         "plugins",
@@ -2990,6 +2991,7 @@
         "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
         "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
+        "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
         "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
@@ -2999,6 +3001,70 @@
         "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
         "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" },
         "toolBindings": { "$ref": "#/definitions/ComponentLayerToolBindingsProperty" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/ComponentConfigSchema" }
+          ]
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerConfigSchemaTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/ComponentConfigSchema" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "skip" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ComponentConfigSchema": {
+      "type": "object",
+      "required": ["schema"],
+      "properties": {
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "declarations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentConfigDeclarationSchema" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentConfigDeclarationSchema": {
+      "type": "object",
+      "required": ["source", "path", "value_type"],
+      "properties": {
+        "source": { "type": "string", "enum": ["Local", "Secret"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "value_type": { "$ref": "#/definitions/SchemaType" }
       },
       "additionalProperties": false
     },
@@ -5497,15 +5563,27 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged"],
+      "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffMapValue" }
+        },
+        "toolDeploymentConfigChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentConfigDiffMapValue" }
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeProvisionConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+      ]
     },
     "AgentTypeProvisionConfigDiffPayload": {
       "type": "object",
@@ -5520,14 +5598,56 @@
         },
         "fileChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" }
         },
         "pluginChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffPayload" }
-        }
+          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" }
+        },
+        "initialPermissionChanged": { "type": "boolean" }
       },
       "additionalProperties": false
+    },
+    "ToolDeploymentConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/ToolDeploymentConfigDiffPayload" }
+      ]
+    },
+    "ToolDeploymentConfigDiffPayload": {
+      "type": "object",
+      "required": ["definitionChanged", "configChanged", "environmentBindingChanged"],
+      "properties": {
+        "definitionChanged": { "type": "boolean" },
+        "configChanged": { "type": "boolean" },
+        "envChanges": { "type": "object", "additionalProperties": { "type": "string" } },
+        "fileChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" } },
+        "pluginChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" } },
+        "environmentBindingChanged": { "type": "boolean" },
+        "componentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } },
+        "agentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentFileDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentFileDiffPayload" }
+      ]
+    },
+    "PluginInstallationDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/PluginInstallationDiffPayload" }
+      ]
+    },
+    "ToolBindingDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/ToolBindingInput" }
+      ]
     },
     "AgentFileDiffPayload": {
       "type": "object",
@@ -5540,12 +5660,10 @@
     },
     "PluginInstallationDiffPayload": {
       "type": "object",
+      "required": ["priorityChanged", "parametersChanged"],
       "properties": {
         "priorityChanged": { "type": "boolean" },
-        "parametersChanged": { "type": "boolean" },
-        "pluginRegistrationIdChanged": { "type": "boolean" },
-        "pluginNameChanged": { "type": "boolean" },
-        "pluginVersionChanged": { "type": "boolean" }
+        "parametersChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },

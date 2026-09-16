@@ -1092,6 +1092,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
     current.components.insert(
         "component".to_string(),
         HashOf::form_value(golem_common::model::diff::Component {
+            component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -1106,6 +1107,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
     new.components.insert(
         "component".to_string(),
         HashOf::form_value(golem_common::model::diff::Component {
+            component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -4426,6 +4428,20 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties
                 .config
                 .apply_layer(&layer_id, selection, Some(json!("replacement")));
+            properties.config_schema.apply_layer(
+                &layer_id,
+                selection,
+                Some(golem_common::schema::ComponentConfigSchema {
+                    schema: golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                    declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                        source: golem_common::model::agent::AgentConfigSource::Local,
+                        path: vec!["generated".to_string()],
+                        value_type: golem_common::schema::SchemaType::string(),
+                    }],
+                }),
+            );
             properties.env.apply_layer(
                 &layer_id,
                 selection,
@@ -4913,6 +4929,11 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                 let mut new = golem_common::model::diff::Deployment::default();
 
                 let current_component = golem_common::model::diff::Component {
+                    component_config: golem_common::model::diff::ComponentConfig {
+                        env: BTreeMap::from_iter([("BASELINE".to_string(), "old".to_string())]),
+                        ..Default::default()
+                    }
+                    .into(),
                     wasm_hash: current_component_hash,
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
@@ -4946,6 +4967,11 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                 };
 
                 let new_component = golem_common::model::diff::Component {
+                    component_config: golem_common::model::diff::ComponentConfig {
+                        env: BTreeMap::from_iter([("BASELINE".to_string(), "new".to_string())]),
+                        ..Default::default()
+                    }
+                    .into(),
                     wasm_hash: new_component_hash,
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),

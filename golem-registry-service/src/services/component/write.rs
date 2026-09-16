@@ -32,7 +32,9 @@ use crate::services::registry_change_notifier::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentTypeProvisionConfig, ComponentProvisionConfig,
+};
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName, InitialAgentFileUpload};
@@ -59,10 +61,12 @@ use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionC
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::schema::SchemaValue;
-use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
+use golem_common::schema::agent::{
+    AgentTypeSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
+};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::validation::validate_tool;
-use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
@@ -214,14 +218,21 @@ impl ComponentWriteService {
             .await?;
 
         let referenced_paths: HashSet<ArchiveFilePath> = component_creation
-            .agent_type_provision_configs
-            .values()
-            .flat_map(|c| c.files.keys().cloned())
+            .component_provision_config
+            .files
+            .keys()
+            .cloned()
             .chain(
                 component_creation
-                    .tool_deployment_configs
+                    .agent_type_provision_configs
                     .values()
-                    .flat_map(|config| config.provision.files.keys().cloned()),
+                    .flat_map(|c| c.files.keys().cloned())
+                    .chain(
+                        component_creation
+                            .tool_deployment_configs
+                            .values()
+                            .flat_map(|config| config.provision.files.keys().cloned()),
+                    ),
             )
             .collect();
         let uploaded_files = match files_archive {
@@ -246,24 +257,31 @@ impl ComponentWriteService {
         // Batch-resolve all plugin grants referenced across all agent types in one pass,
         // so the same grant is only fetched once even if shared by multiple agent types.
         let all_grant_ids: HashSet<EnvironmentPluginGrantId> = component_creation
-            .agent_type_provision_configs
-            .values()
-            .flat_map(|c| {
-                c.plugin_installations
-                    .iter()
-                    .map(|p| p.environment_plugin_grant_id)
-            })
+            .component_provision_config
+            .plugin_installations
+            .iter()
+            .map(|p| p.environment_plugin_grant_id)
             .chain(
                 component_creation
-                    .tool_deployment_configs
+                    .agent_type_provision_configs
                     .values()
-                    .flat_map(|config| {
-                        config
-                            .provision
-                            .plugin_installations
+                    .flat_map(|c| {
+                        c.plugin_installations
                             .iter()
-                            .map(|plugin| plugin.environment_plugin_grant_id)
-                    }),
+                            .map(|p| p.environment_plugin_grant_id)
+                    })
+                    .chain(
+                        component_creation
+                            .tool_deployment_configs
+                            .values()
+                            .flat_map(|config| {
+                                config
+                                    .provision
+                                    .plugin_installations
+                                    .iter()
+                                    .map(|plugin| plugin.environment_plugin_grant_id)
+                            }),
+                    ),
             )
             .collect();
         let resolved_grants = self
@@ -273,6 +291,31 @@ impl ComponentWriteService {
         let mut provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
             BTreeMap::new();
         let mut cards_to_create = Vec::new();
+
+        validate_component_config_schema(
+            &component_creation.config_schema,
+            &component_creation.agent_types,
+        )?;
+        let component_config = validate_and_transform_component_config_entries(
+            &component_creation.config_schema,
+            component_creation.component_provision_config.config.clone(),
+        )?;
+        let component_files = resolve_component_files_for_creation(
+            &component_creation.component_provision_config.files,
+            &uploaded_files,
+        )?;
+        let component_plugins = resolve_plugins_for_creation(
+            &component_creation
+                .component_provision_config
+                .plugin_installations,
+            &resolved_grants,
+        )?;
+        let component_provision_config = ComponentProvisionConfig {
+            env: component_creation.component_provision_config.env.clone(),
+            config: component_config,
+            plugins: component_plugins,
+            files: component_files,
+        };
 
         for (agent_type_name, creation) in &component_creation.agent_type_provision_configs {
             let agent_type = component_creation
@@ -317,6 +360,8 @@ impl ComponentWriteService {
         )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
+            component_creation.config_schema,
+            component_provision_config,
             component_creation.agent_types,
             wasm.clone(),
             provision_configs,
@@ -398,6 +443,8 @@ impl ComponentWriteService {
 
         let ComponentUpdate {
             current_revision,
+            config_schema,
+            component_provision_config,
             agent_types: agent_type_update,
             agent_type_provision_config_updates,
             tools: tool_update,
@@ -431,6 +478,12 @@ impl ComponentWriteService {
             Some(agent_types) => agent_types,
             None => component.metadata.agent_types().to_vec(),
         };
+        let final_config_schema =
+            config_schema.unwrap_or_else(|| component.metadata.config_schema().clone());
+        validate_component_config_schema(&final_config_schema, &agent_types)?;
+        let pending_component_provision_config = component_provision_config;
+        let mut final_component_provision_config =
+            component.metadata.component_provision_config().clone();
 
         let (tool_definitions, mut final_tool_deployment_metadata) =
             tool_state_for_update(component.metadata.tools(), tool_update)?;
@@ -442,16 +495,21 @@ impl ComponentWriteService {
                 provision_configs_for_agent_types(&agent_types, final_provision_configs);
         }
 
-        let referenced_paths: HashSet<ArchiveFilePath> = agent_type_provision_config_updates
+        let referenced_paths: HashSet<ArchiveFilePath> = pending_component_provision_config
             .iter()
-            .flat_map(|updates| updates.values())
-            .flat_map(|update| update.files_to_add_or_update.keys().cloned())
+            .flat_map(|config| config.files.keys().cloned())
             .chain(
-                tool_deployment_config_updates
+                agent_type_provision_config_updates
                     .iter()
                     .flat_map(|updates| updates.values())
-                    .filter_map(|update| update.provision.as_ref())
-                    .flat_map(|update| update.files_to_add_or_update.keys().cloned()),
+                    .flat_map(|update| update.files_to_add_or_update.keys().cloned())
+                    .chain(
+                        tool_deployment_config_updates
+                            .iter()
+                            .flat_map(|updates| updates.values())
+                            .filter_map(|update| update.provision.as_ref())
+                            .flat_map(|update| update.files_to_add_or_update.keys().cloned()),
+                    ),
             )
             .collect();
         let uploaded_files = match new_files_archive {
@@ -461,6 +519,36 @@ impl ComponentWriteService {
             }
             None => HashMap::new(),
         };
+
+        if let Some(config) = pending_component_provision_config {
+            let grant_ids: HashSet<_> = config
+                .plugin_installations
+                .iter()
+                .map(|plugin| plugin.environment_plugin_grant_id)
+                .collect();
+            let grants = self
+                .resolve_all_plugin_grants(&environment, grant_ids, auth)
+                .await?;
+            final_component_provision_config = ComponentProvisionConfig {
+                env: config.env,
+                config: validate_and_transform_component_config_entries(
+                    &final_config_schema,
+                    config.config,
+                )?,
+                plugins: resolve_plugins_for_creation(&config.plugin_installations, &grants)?,
+                files: resolve_component_files_for_creation(&config.files, &uploaded_files)?,
+            };
+        } else {
+            final_component_provision_config.config =
+                validate_and_transform_component_config_entries(
+                    &final_config_schema,
+                    final_component_provision_config
+                        .config
+                        .into_iter()
+                        .map(AgentConfigEntryDto::from)
+                        .collect(),
+                )?;
+        }
 
         let mut provision_configs_changed = false;
 
@@ -579,6 +667,8 @@ impl ComponentWriteService {
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
             let metadata = analyze_and_validate_component_wasm(
+                final_config_schema.clone(),
+                final_component_provision_config.clone(),
                 agent_types,
                 new_wasm.clone(),
                 final_provision_configs,
@@ -594,6 +684,8 @@ impl ComponentWriteService {
                 .await?;
 
             let metadata = analyze_and_validate_component_wasm(
+                final_config_schema.clone(),
+                final_component_provision_config.clone(),
                 agent_types,
                 Arc::from(old_data),
                 final_provision_configs,
@@ -602,6 +694,9 @@ impl ComponentWriteService {
             .await?;
             component.metadata = metadata;
         } else {
+            component.metadata = component
+                .metadata
+                .with_component_config(final_config_schema, final_component_provision_config);
             if provision_configs_changed {
                 component.metadata = component
                     .metadata
@@ -1384,6 +1479,146 @@ fn resolve_files_for_creation(
         .collect()
 }
 
+fn resolve_component_files_for_creation(
+    files: &BTreeMap<ArchiveFilePath, golem_common::model::component::AgentFileOptions>,
+    uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
+) -> Result<Vec<InitialAgentFile>, ComponentError> {
+    files
+        .iter()
+        .map(|(archive_path, options)| {
+            let (content_hash, size) = uploaded_files.get(archive_path).ok_or_else(|| {
+                ComponentError::InvalidComponentConfig(format!(
+                    "file '{archive_path}' was not found in the uploaded archive"
+                ))
+            })?;
+            Ok(InitialAgentFile {
+                path: options.target_path.clone(),
+                content_hash: *content_hash,
+                permissions: options.permissions,
+                size: *size,
+            })
+        })
+        .collect()
+}
+
+fn validate_component_config_schema(
+    schema: &ComponentConfigSchema,
+    agent_types: &[AgentTypeSchema],
+) -> Result<(), ComponentError> {
+    validate_graph(&schema.schema).map_err(|errors| {
+        ComponentError::InvalidComponentConfig(
+            errors.into_iter().map(|error| error.to_string()).join("; "),
+        )
+    })?;
+    let mut declarations = BTreeMap::new();
+    for declaration in &schema.declarations {
+        if declaration.path.is_empty()
+            || declaration
+                .path
+                .iter()
+                .any(|segment| segment.is_empty() || segment.contains('.'))
+        {
+            return Err(ComponentError::InvalidComponentConfig(format!(
+                "invalid declaration path '{}'",
+                declaration.path.join(".")
+            )));
+        }
+        let mut graph = schema.schema.clone();
+        graph.root = declaration.value_type.clone();
+        validate_graph(&graph).map_err(|errors| {
+            ComponentError::InvalidComponentConfig(
+                errors.into_iter().map(|error| error.to_string()).join("; "),
+            )
+        })?;
+        if declarations
+            .insert(&declaration.path, declaration)
+            .is_some()
+        {
+            return Err(ComponentError::InvalidComponentConfig(format!(
+                "duplicate declaration path '{}'",
+                declaration.path.join(".")
+            )));
+        }
+        for agent in agent_types {
+            if let Some(agent_declaration) = agent
+                .config
+                .iter()
+                .find(|candidate| candidate.path == declaration.path)
+                && (agent_declaration.source != declaration.source
+                    || !is_equivalent_cross_graph(
+                        &schema.schema,
+                        &declaration.value_type,
+                        &agent.schema,
+                        &agent_declaration.value_type,
+                    ))
+            {
+                return Err(ComponentError::InvalidComponentConfig(format!(
+                    "declaration '{}' conflicts with agent '{}'",
+                    declaration.path.join("."),
+                    agent.type_name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_and_transform_component_config_entries(
+    schema: &ComponentConfigSchema,
+    config_entries: Vec<AgentConfigEntryDto>,
+) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in config_entries {
+        let declaration = schema
+            .declarations
+            .iter()
+            .find(|declaration| declaration.path == entry.path)
+            .ok_or_else(|| {
+                ComponentError::InvalidComponentConfig(format!(
+                    "config '{}' is not declared",
+                    entry.path.join(".")
+                ))
+            })?;
+        if declaration.source != AgentConfigSource::Local {
+            return Err(ComponentError::InvalidComponentConfig(format!(
+                "secret config '{}' cannot be provided locally",
+                entry.path.join(".")
+            )));
+        }
+        if !seen.insert(entry.path.clone()) {
+            return Err(ComponentError::InvalidComponentConfig(format!(
+                "config '{}' was provided more than once",
+                entry.path.join(".")
+            )));
+        }
+        let value =
+            from_untrusted_json_value(&schema.schema, &declaration.value_type, &entry.value.0)
+                .map_err(|error| {
+                    ComponentError::InvalidComponentConfig(format!(
+                        "config '{}': {error}",
+                        entry.path.join(".")
+                    ))
+                })?;
+        validate_value(&schema.schema, &declaration.value_type, &value).map_err(|errors| {
+            ComponentError::InvalidComponentConfig(format!(
+                "config '{}': {}",
+                entry.path.join("."),
+                errors.iter().map(ToString::to_string).join(", ")
+            ))
+        })?;
+        results.push(TypedAgentConfigEntry {
+            path: entry.path,
+            value: typed_schema_value_with_projected_defs(
+                &schema.schema,
+                declaration.value_type.clone(),
+                value,
+            ),
+        });
+    }
+    Ok(results)
+}
+
 fn resolve_plugins_for_creation(
     plugin_installations: &[PluginInstallation],
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
@@ -1558,6 +1793,8 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
+    config_schema: ComponentConfigSchema,
+    component_provision_config: ComponentProvisionConfig,
     agent_types: Vec<AgentTypeSchema>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
@@ -1571,8 +1808,10 @@ async fn analyze_and_validate_component_wasm(
     }
 
     let component_metadata = run_cpu_bound_work(move || {
-        ComponentMetadata::analyse_component(
+        ComponentMetadata::analyse_component_with_config(
             &wasm,
+            config_schema,
+            component_provision_config,
             agent_types,
             agent_type_provision_configs,
             tool_deployment_metadata,
@@ -1850,10 +2089,11 @@ mod tests {
     use super::{
         prepare_agent_initial_card_for_minting, resolve_tool_deployment_metadata_for_creation,
         resolve_tool_files_for_update, tool_definitions_by_name, tool_state_for_update,
+        validate_and_transform_component_config_entries, validate_component_config_schema,
         validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
-    use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+    use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{
         CardId, DelegationCard, DelegationSurface, permission_envelopes_for_recipient_patterns,
@@ -1865,10 +2105,53 @@ mod tests {
     use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
-    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType};
     use std::collections::{BTreeMap, HashMap};
     use test_r::test;
+
+    fn bool_component_schema(source: AgentConfigSource) -> ComponentConfigSchema {
+        ComponentConfigSchema {
+            schema: SchemaGraph::empty(),
+            declarations: vec![AgentConfigDeclarationSchema {
+                source,
+                path: vec!["feature".to_string(), "enabled".to_string()],
+                value_type: SchemaType::Bool {
+                    metadata: MetadataEnvelope::default(),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn standalone_component_config_accepts_typed_local_value_without_agents() {
+        let schema = bool_component_schema(AgentConfigSource::Local);
+        validate_component_config_schema(&schema, &[]).unwrap();
+        let values = validate_and_transform_component_config_entries(
+            &schema,
+            vec![golem_common::model::worker::AgentConfigEntryDto {
+                path: vec!["feature".to_string(), "enabled".to_string()],
+                value: NormalizedJsonValue::new(serde_json::json!(true)),
+            }],
+        )
+        .unwrap();
+        assert_eq!(values.len(), 1);
+    }
+
+    #[test]
+    fn standalone_component_secret_cannot_be_supplied_as_local_value() {
+        let schema = bool_component_schema(AgentConfigSource::Secret);
+        let error = validate_and_transform_component_config_entries(
+            &schema,
+            vec![golem_common::model::worker::AgentConfigEntryDto {
+                path: vec!["feature".to_string(), "enabled".to_string()],
+                value: NormalizedJsonValue::new(serde_json::json!(true)),
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(error, ComponentError::InvalidComponentConfig(_)));
+    }
 
     fn parent_surface(parent_id: CardId) -> DelegationSurface {
         let defaults = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any)

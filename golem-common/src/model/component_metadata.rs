@@ -26,7 +26,9 @@ use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
 use crate::model::tool::{ToolDeploymentMetadata, ToolName};
-use crate::schema::agent::{AgentTypeSchema, FieldSource, contains_stream_in_graph};
+use crate::schema::agent::{
+    AgentTypeSchema, ComponentConfigSchema, FieldSource, contains_stream_in_graph,
+};
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -76,6 +78,23 @@ impl ComponentMetadata {
         })
     }
 
+    pub fn analyse_component_with_config(
+        data: &[u8],
+        config_schema: ComponentConfigSchema,
+        component_provision_config: ComponentProvisionConfig,
+        agent_types: Vec<AgentTypeSchema>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+    ) -> Result<Self, ComponentProcessingError> {
+        let raw = RawComponentMetadata::analyse_component(data)?;
+        let mut metadata = raw.into_metadata(agent_types, agent_type_provision_configs, tools);
+        metadata.config_schema = config_schema;
+        metadata.component_provision_config = component_provision_config;
+        Ok(Self {
+            data: Arc::new(metadata),
+        })
+    }
+
     pub fn from_parts(
         known_exports: KnownExports,
         memories: Vec<LinearMemory>,
@@ -111,6 +130,8 @@ impl ComponentMetadata {
                 memories,
                 root_package_name,
                 root_package_version,
+                config_schema: ComponentConfigSchema::default(),
+                component_provision_config: ComponentProvisionConfig::default(),
                 agent_method_streams: Self::derive_agent_method_streams(&agent_types),
                 agent_types,
                 agent_type_provision_configs,
@@ -134,6 +155,8 @@ impl ComponentMetadata {
                 memories: data.memories.clone(),
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
+                config_schema: data.config_schema.clone(),
+                component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs,
@@ -144,6 +167,9 @@ impl ComponentMetadata {
 
     pub fn redact_host_managed_values_for_external(&mut self) {
         let data = Arc::make_mut(&mut self.data);
+        for entry in &mut data.component_provision_config.config {
+            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        }
         for provision in data.agent_type_provision_configs.values_mut() {
             for entry in &mut provision.config {
                 entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
@@ -162,6 +188,8 @@ impl ComponentMetadata {
                 memories: data.memories.clone(),
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
+                config_schema: data.config_schema.clone(),
+                component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs: data.agent_type_provision_configs.clone(),
@@ -204,6 +232,27 @@ impl ComponentMetadata {
 
     pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
+    }
+
+    pub fn config_schema(&self) -> &ComponentConfigSchema {
+        &self.data.config_schema
+    }
+
+    pub fn component_provision_config(&self) -> &ComponentProvisionConfig {
+        &self.data.component_provision_config
+    }
+
+    pub fn with_component_config(
+        &self,
+        config_schema: ComponentConfigSchema,
+        component_provision_config: ComponentProvisionConfig,
+    ) -> Self {
+        let mut data = self.data.as_ref().clone();
+        data.config_schema = config_schema;
+        data.component_provision_config = component_provision_config;
+        Self {
+            data: Arc::new(data),
+        }
     }
 
     pub fn agent_method_stream_metadata(
@@ -580,6 +629,8 @@ impl RawComponentMetadata {
             memories,
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
+            config_schema: ComponentConfigSchema::default(),
+            component_provision_config: ComponentProvisionConfig::default(),
             agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),
             agent_types,
             agent_type_provision_configs,
@@ -677,7 +728,9 @@ impl Display for ComponentProcessingError {
 }
 
 mod protobuf {
-    use crate::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
+    use crate::base_model::component_metadata::{
+        AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
+    };
     use crate::base_model::json::NormalizedJsonValue;
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
@@ -806,6 +859,16 @@ mod protobuf {
                     .collect(),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
+                config_schema: value
+                    .config_schema
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
+                component_provision_config: value
+                    .component_provision_config
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
                 agent_types: value
                     .agent_types
                     .into_iter()
@@ -900,6 +963,8 @@ mod protobuf {
                     .collect(),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
+                config_schema: Some(value.config_schema.into()),
+                component_provision_config: Some(value.component_provision_config.try_into()?),
                 agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
                 agent_method_streams: value
                     .agent_method_streams
@@ -1148,6 +1213,52 @@ mod protobuf {
                 config,
                 plugins,
                 files,
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
+        for ComponentProvisionConfig
+    {
+        type Error = String;
+        fn try_from(
+            proto: golem_api_grpc::proto::golem::component::ComponentProvisionConfig,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                env: proto.env.into_iter().collect(),
+                config: proto
+                    .config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                plugins: proto
+                    .plugins
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                files: proto
+                    .files
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+    }
+
+    impl TryFrom<ComponentProvisionConfig>
+        for golem_api_grpc::proto::golem::component::ComponentProvisionConfig
+    {
+        type Error = String;
+        fn try_from(config: ComponentProvisionConfig) -> Result<Self, Self::Error> {
+            Ok(Self {
+                env: config.env.into_iter().collect(),
+                config: config
+                    .config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                plugins: config.plugins.into_iter().map(Into::into).collect(),
+                files: config.files.into_iter().map(Into::into).collect(),
             })
         }
     }

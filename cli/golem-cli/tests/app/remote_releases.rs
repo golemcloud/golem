@@ -208,6 +208,8 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
         .create_component(
             &publisher_environment.id.0,
             &ComponentCreation {
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
                 agent_types: Vec::new(),

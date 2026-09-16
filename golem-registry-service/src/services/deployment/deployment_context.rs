@@ -779,105 +779,81 @@ impl DeploymentContext {
         let mut replacements = Vec::new();
         let mut seen_secrets = HashMap::new();
 
-        for agent_type in self.registered_agent_types.values() {
-            for config in &agent_type.agent_type.config {
-                if config.source != AgentConfigSource::Secret {
-                    continue;
+        let component_declarations = self.components.values().flat_map(|component| {
+            let schema = component.metadata.config_schema();
+            schema
+                .declarations
+                .iter()
+                .map(move |declaration| (&schema.schema, declaration))
+        });
+        let agent_declarations = self.registered_agent_types.values().flat_map(|agent_type| {
+            agent_type
+                .agent_type
+                .config
+                .iter()
+                .map(move |declaration| (&agent_type.agent_type.schema, declaration))
+        });
+
+        for (declaration_graph, config) in component_declarations.chain(agent_declarations) {
+            if config.source != AgentConfigSource::Secret {
+                continue;
+            }
+
+            let canonical_agent_secret_path =
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
+
+            // The agent-type-declared secret value type is already a
+            // schema-native `SchemaType`; pair it with the agent's shared
+            // graph defs so any `SchemaType::Ref` inside resolves.
+            let config_secret_schema = ok_or_continue!(
+                stored_agent_secret_schema(
+                    &canonical_agent_secret_path,
+                    declaration_graph,
+                    &config.value_type,
+                ),
+                errors
+            );
+
+            match seen_secrets.entry(canonical_agent_secret_path.clone()) {
+                hash_map::Entry::Vacant(e) => {
+                    e.insert(config_secret_schema.clone());
                 }
-
-                let canonical_agent_secret_path =
-                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
-
-                // The agent-type-declared secret value type is already a
-                // schema-native `SchemaType`; pair it with the agent's shared
-                // graph defs so any `SchemaType::Ref` inside resolves.
-                let config_secret_schema = ok_or_continue!(
-                    stored_agent_secret_schema(
-                        &canonical_agent_secret_path,
-                        &agent_type.agent_type.schema,
-                        &config.value_type,
-                    ),
-                    errors
-                );
-
-                match seen_secrets.entry(canonical_agent_secret_path.clone()) {
-                    hash_map::Entry::Vacant(e) => {
-                        e.insert(config_secret_schema.clone());
-                    }
-                    hash_map::Entry::Occupied(e) => {
-                        let seen_secret_schema = e.get();
-                        // Compare the two agent-declared secret types
-                        // structurally across their own graphs: each agent type
-                        // carries its own `defs`, so a raw `SchemaGraph` equality
-                        // would spuriously differ even when the secret type is
-                        // logically identical.
-                        if !is_equivalent_cross_graph(
-                            seen_secret_schema,
-                            &seen_secret_schema.root,
-                            &config_secret_schema,
-                            &config_secret_schema.root,
-                        ) {
-                            ok_or_continue!(
-                                Err(DeployValidationError::AgentSecretTypeConflict {
-                                    path: canonical_agent_secret_path
-                                }),
-                                errors
-                            );
-                        }
-                        // we already processed this secret previously, nothing to do here
-                        continue;
-                    }
-                }
-
-                if let Some(environment_agent_secret_declaration) =
-                    env_secrets.get(&canonical_agent_secret_path)
-                {
-                    // secret does exist in environment, we need to check that types are compatible with deployment
+                hash_map::Entry::Occupied(e) => {
+                    let seen_secret_schema = e.get();
+                    // Compare the two agent-declared secret types
+                    // structurally across their own graphs: each agent type
+                    // carries its own `defs`, so a raw `SchemaGraph` equality
+                    // would spuriously differ even when the secret type is
+                    // logically identical.
                     if !is_equivalent_cross_graph(
-                        &environment_agent_secret_declaration.secret_type,
-                        &environment_agent_secret_declaration.secret_type.root,
+                        seen_secret_schema,
+                        &seen_secret_schema.root,
                         &config_secret_schema,
                         &config_secret_schema.root,
                     ) {
-                        if replace_incompatible_agent_secrets {
-                            let agent_secret_default = defaults.get(&canonical_agent_secret_path);
-
-                            let agent_secret_value = ok_or_continue!(
-                                parse_default_secret_value(
-                                    &canonical_agent_secret_path,
-                                    agent_secret_default,
-                                    &config_secret_schema,
-                                ),
-                                errors
-                            );
-
-                            replacements.push(DeploymentAgentSecretReplacement {
-                                agent_secret_id: environment_agent_secret_declaration.id,
-                                current_revision: environment_agent_secret_declaration.revision,
-                                path: canonical_agent_secret_path.clone(),
-                                secret_type: config_secret_schema,
-                                secret_value: agent_secret_value,
-                            });
-                        } else {
-                            errors.push(
-                                DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
-                                    path: canonical_agent_secret_path.clone(),
-                                    agent_secret_type: Box::new(config_secret_schema),
-                                    environment_secret_type: Box::new(
-                                        environment_agent_secret_declaration
-                                            .secret_type
-                                            .clone(),
-                                    ),
-                                },
-                            );
-                        }
-
-                        continue;
+                        ok_or_continue!(
+                            Err(DeployValidationError::AgentSecretTypeConflict {
+                                path: canonical_agent_secret_path
+                            }),
+                            errors
+                        );
                     }
+                    // we already processed this secret previously, nothing to do here
+                    continue;
+                }
+            }
 
-                    // declaration exists in environment but has no value.
-                    // if default was provided as part of deployment we can set it now.
-                    if environment_agent_secret_declaration.secret_value.is_none() {
+            if let Some(environment_agent_secret_declaration) =
+                env_secrets.get(&canonical_agent_secret_path)
+            {
+                // secret does exist in environment, we need to check that types are compatible with deployment
+                if !is_equivalent_cross_graph(
+                    &environment_agent_secret_declaration.secret_type,
+                    &environment_agent_secret_declaration.secret_type.root,
+                    &config_secret_schema,
+                    &config_secret_schema.root,
+                ) {
+                    if replace_incompatible_agent_secrets {
                         let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                         let agent_secret_value = ok_or_continue!(
@@ -889,16 +865,31 @@ impl DeploymentContext {
                             errors
                         );
 
-                        if let Some(secret_value) = agent_secret_value {
-                            updates.push(DeploymentAgentSecretUpdate {
-                                agent_secret_id: environment_agent_secret_declaration.id,
-                                current_revision: environment_agent_secret_declaration.revision,
-                                new_secret_value: secret_value,
-                            });
-                        }
+                        replacements.push(DeploymentAgentSecretReplacement {
+                            agent_secret_id: environment_agent_secret_declaration.id,
+                            current_revision: environment_agent_secret_declaration.revision,
+                            path: canonical_agent_secret_path.clone(),
+                            secret_type: config_secret_schema,
+                            secret_value: agent_secret_value,
+                        });
+                    } else {
+                        errors.push(
+                            DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                                path: canonical_agent_secret_path.clone(),
+                                agent_secret_type: Box::new(config_secret_schema),
+                                environment_secret_type: Box::new(
+                                    environment_agent_secret_declaration.secret_type.clone(),
+                                ),
+                            },
+                        );
                     }
-                } else {
-                    // secret does not yet exist in environment, create it with optional default.
+
+                    continue;
+                }
+
+                // declaration exists in environment but has no value.
+                // if default was provided as part of deployment we can set it now.
+                if environment_agent_secret_declaration.secret_value.is_none() {
                     let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                     let agent_secret_value = ok_or_continue!(
@@ -910,12 +901,32 @@ impl DeploymentContext {
                         errors
                     );
 
-                    creations.push(DeploymentAgentSecretCreation {
-                        path: canonical_agent_secret_path,
-                        secret_type: config_secret_schema,
-                        secret_value: agent_secret_value,
-                    });
+                    if let Some(secret_value) = agent_secret_value {
+                        updates.push(DeploymentAgentSecretUpdate {
+                            agent_secret_id: environment_agent_secret_declaration.id,
+                            current_revision: environment_agent_secret_declaration.revision,
+                            new_secret_value: secret_value,
+                        });
+                    }
                 }
+            } else {
+                // secret does not yet exist in environment, create it with optional default.
+                let agent_secret_default = defaults.get(&canonical_agent_secret_path);
+
+                let agent_secret_value = ok_or_continue!(
+                    parse_default_secret_value(
+                        &canonical_agent_secret_path,
+                        agent_secret_default,
+                        &config_secret_schema,
+                    ),
+                    errors
+                );
+
+                creations.push(DeploymentAgentSecretCreation {
+                    path: canonical_agent_secret_path,
+                    secret_type: config_secret_schema,
+                    secret_value: agent_secret_value,
+                });
             }
         }
 

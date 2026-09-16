@@ -49,6 +49,7 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::tool::ToolName;
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -2028,6 +2029,12 @@ impl Layer for ComponentLayer {
                 ),
             );
 
+            value.config_schema.apply_layer(
+                id,
+                selection,
+                properties.config_schema.value().clone(),
+            );
+
             value
                 .config
                 .apply_layer(id, selection, properties.config.value().clone());
@@ -2261,6 +2268,10 @@ impl<'a> Component<'a> {
         &self.properties().config
     }
 
+    pub fn config_schema(&self) -> &ComponentConfigSchema {
+        &self.properties().config_schema
+    }
+
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
@@ -2331,6 +2342,7 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
+    pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
     pub config: JsonProperty<ComponentLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2369,6 +2381,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
+            config_schema: value.config_schema.into(),
             config: value.agent_properties.config.into(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
@@ -2393,6 +2406,7 @@ impl ComponentLayerProperties {
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
+        self.config_schema.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
         self.env.compact_trace();
@@ -3025,6 +3039,7 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: ComponentConfigSchema,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -3063,6 +3078,7 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
+            config_schema: merged.config_schema.value().clone().unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
@@ -5295,6 +5311,54 @@ mod test {
                 "app:main[app-env:local]".to_string(),
                 "app:main[debug]".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn component_config_schema_follows_template_environment_and_custom_preset_order() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              base:
+                configSchema:
+                  declarations:
+                    - source: Local
+                      path: [template]
+                      value_type: { kind: bool, value: {} }
+                presets:
+                  app-env:local:
+                    configSchema:
+                      declarations:
+                        - source: Local
+                          path: [environment]
+                          value_type: { kind: bool, value: {} }
+                  debug:
+                    configSchema:
+                      declarations:
+                        - source: Local
+                          path: [custom]
+                          value_type: { kind: bool, value: {} }
+
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# };
+
+        let (app, _) = load_app_for_env(source, "local", &["debug"]);
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(component.config_schema().declarations.len(), 1);
+        assert_eq!(
+            component.config_schema().declarations[0].path,
+            vec!["custom".to_string()]
         );
     }
 

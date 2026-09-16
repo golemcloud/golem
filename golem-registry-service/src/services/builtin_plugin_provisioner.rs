@@ -233,6 +233,8 @@ async fn upload_or_update_component(
             env_id,
             ComponentCreation {
                 component_name: component_name.clone(),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: Vec::new(),
@@ -265,6 +267,8 @@ async fn upload_or_update_component(
                         existing.id,
                         ComponentUpdate {
                             current_revision: existing.revision,
+                            config_schema: None,
+                            component_provision_config: None,
                             agent_types: None,
                             agent_type_provision_config_updates: None,
                             tools: None,

@@ -11997,6 +11997,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommandNode'
+    ComponentConfigSchema:
+      type: object
+      properties:
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+        declarations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -12005,6 +12014,34 @@ components:
       properties:
         componentName:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          default:
+            config: []
+            env: {}
+            files: {}
+            pluginInstallations: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
+          - default:
+              config: []
+              env: {}
+              files: {}
+              pluginInstallations: []
         agentTypes:
           type: array
           default: []
@@ -12095,6 +12132,34 @@ components:
           type: string
         rootPackageVersion:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          default:
+            config: []
+            env: {}
+            files: []
+            plugins: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentProvisionConfig'
+          - default:
+              config: []
+              env: {}
+              files: []
+              plugins: []
         agentTypes:
           type: array
           default: []
@@ -12121,6 +12186,55 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolDeploymentMetadata'
+    ComponentProvisionConfig:
+      type: object
+      title: ComponentProvisionConfig
+      required:
+      - env
+      - config
+      - plugins
+      - files
+      properties:
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
+        plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstalledPlugin'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialAgentFile'
+    ComponentProvisionConfigCreation:
+      type: object
+      title: ComponentProvisionConfigCreation
+      properties:
+        env:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
+        pluginInstallations:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        files:
+          type: object
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -12130,6 +12244,10 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        configSchema:
+          $ref: '#/components/schemas/ComponentConfigSchema'
+        componentProvisionConfig:
+          $ref: '#/components/schemas/ComponentProvisionConfigCreation'
         agentTypes:
           type: array
           items:

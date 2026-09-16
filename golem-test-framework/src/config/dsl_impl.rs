@@ -325,6 +325,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &environment_id.0,
                 &ComponentCreation {
                     component_name,
+                    config_schema: Default::default(),
+                    component_provision_config: Default::default(),
                     agent_types,
                     agent_type_provision_configs,
                     tool_deployment_configs,
@@ -420,6 +422,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &component_id.0,
                 &ComponentUpdate {
                     current_revision: previous_revision,
+                    config_schema: None,
+                    component_provision_config: None,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.agent_types.clone()),

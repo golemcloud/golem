@@ -167,6 +167,64 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            component_config: diff::ComponentConfig {
+                schema: self.metadata.config_schema().clone(),
+                config: self
+                    .metadata
+                    .component_provision_config()
+                    .config
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.path.join("."),
+                            crate::model::json::NormalizedJsonValue::new(
+                                golem_schema::schema::render::to_json_value(
+                                    entry.value.graph(),
+                                    entry.value.root_type(),
+                                    entry.value.value(),
+                                )
+                                .unwrap_or_default(),
+                            ),
+                        )
+                    })
+                    .collect(),
+                env: self.metadata.component_provision_config().env.clone(),
+                files_by_path: self
+                    .metadata
+                    .component_provision_config()
+                    .files
+                    .iter()
+                    .map(|file| {
+                        (
+                            file.path.to_abs_string(),
+                            diff::AgentFile {
+                                hash: file.content_hash.0,
+                                permissions: file.permissions,
+                            }
+                            .into(),
+                        )
+                    })
+                    .collect(),
+                plugins_by_grant_id: self
+                    .metadata
+                    .component_provision_config()
+                    .plugins
+                    .iter()
+                    .map(|plugin| {
+                        (
+                            plugin.environment_plugin_grant_id.0,
+                            diff::PluginInstallation {
+                                priority: plugin.priority.0,
+                                name: plugin.plugin_name.clone(),
+                                version: plugin.plugin_version.clone(),
+                                grant_id: plugin.environment_plugin_grant_id.0,
+                                parameters: plugin.parameters.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }
+            .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
         })
@@ -243,6 +301,7 @@ mod tests {
         };
         let expected = diff::Component {
             wasm_hash,
+            component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([(
                 tool_name.as_str().to_string(),

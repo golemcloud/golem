@@ -27,6 +27,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName};
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::schema::ComponentConfigSchema;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -551,6 +552,8 @@ pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -584,6 +587,7 @@ impl ComponentTemplate {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -622,6 +626,8 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -655,6 +661,7 @@ impl Component {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -691,6 +698,8 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -722,6 +731,7 @@ impl ComponentPreset {
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
+            config_schema: self.config_schema,
             agent_properties: AgentLayerProperties {
                 config: self.config,
                 initial_card: self.initial_card,
@@ -1259,6 +1269,7 @@ pub struct ComponentLayerProperties {
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: Option<ComponentConfigSchema>,
     pub agent_properties: AgentLayerProperties,
 }
 
@@ -1987,6 +1998,7 @@ mod test {
                     (config, env_merge_mode, env),
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                 )| ComponentPreset {
+                    config_schema: None,
                     default: is_default.then_some(Marker),
                     component_wasm,
                     output_wasm,
@@ -2052,6 +2064,7 @@ mod test {
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                     presets,
                 )| ComponentTemplate {
+                    config_schema: None,
                     templates,
                     component_wasm,
                     output_wasm,
@@ -2120,6 +2133,7 @@ mod test {
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                     presets,
                 )| Component {
+                    config_schema: None,
                     templates,
                     dir,
                     component_wasm,
@@ -2919,6 +2933,45 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn schema_and_serde_accept_inherited_component_config_schema() {
+        let config_schema = serde_json::to_value(golem_common::schema::ComponentConfigSchema {
+            schema: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Local,
+                path: vec!["feature".to_string(), "name".to_string()],
+                value_type: golem_common::schema::SchemaType::string(),
+            }],
+        })
+        .unwrap();
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {
+                "configured": {
+                    "configSchema": config_schema,
+                    "presets": {
+                        "custom": { "configSchema": config_schema }
+                    }
+                }
+            },
+            "components": {
+                "app:main": {
+                    "templates": "configured",
+                    "componentWasm": "main.wasm",
+                    "presets": {
+                        "custom": { "configSchema": config_schema }
+                    },
+                    "config": { "feature": { "name": "enabled" } }
+                }
+            }
+        });
+
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+        serde_json::from_value::<Application>(value).unwrap();
     }
 
     #[test]

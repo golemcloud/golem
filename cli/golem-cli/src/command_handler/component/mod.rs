@@ -1610,6 +1610,32 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             wasm_path,
+            config_schema: component.config_schema().clone(),
+            component_config: resolve_config_values(
+                component_name,
+                &AgentTypeName("component".to_string()),
+                materialize_config_entries(
+                    &component.config_schema().declarations,
+                    &agent_types,
+                    component.config().as_ref(),
+                )?,
+            )?,
+            component_env: resolve_env_vars("component", component_name.as_str(), component.env())?,
+            component_files: component.files().clone(),
+            component_plugins: resolve_plugin_parameters(
+                "component",
+                component_name.as_str(),
+                &component
+                    .plugins()
+                    .iter()
+                    .map(|plugin| app_raw::PluginInstallation {
+                        account: plugin.account.clone(),
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        parameters: plugin.parameters.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )?,
             agent_types,
             tools,
             agent_type_configs,
@@ -1886,8 +1912,66 @@ impl ComponentCommandHandler {
             );
         }
 
+        let component_file_hashes = ifs_manager
+            .collect_file_hashes(
+                &format!("{}:component", component_name.0),
+                &properties.component_files,
+            )
+            .await?;
+        let component_files_by_path = component_file_hashes
+            .into_iter()
+            .map(|file| {
+                (
+                    file.target.path.to_abs_string(),
+                    diff::AgentFile {
+                        hash: file.hash.into(),
+                        permissions: file.target.permissions,
+                    }
+                    .into(),
+                )
+            })
+            .collect();
+        let component_plugins_by_grant_id = properties
+            .component_plugins
+            .iter()
+            .enumerate()
+            .map(|(idx, plugin)| {
+                let grant = PluginGrantKey::resolve(
+                    &plugin_grants,
+                    plugin.account.as_deref(),
+                    &plugin.name,
+                    &plugin.version,
+                )?
+                .ok_or_else(|| {
+                    anyhow!("Plugin {}/{} is not available", plugin.name, plugin.version)
+                })?;
+                Ok((
+                    grant.id.0,
+                    diff::PluginInstallation {
+                        priority: idx as i32,
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        grant_id: grant.id.0,
+                        parameters: plugin.parameters.clone().into_iter().collect(),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
+
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            component_config: diff::ComponentConfig {
+                schema: properties.config_schema.clone(),
+                config: properties
+                    .component_config
+                    .iter()
+                    .map(|entry| (entry.path.join("."), entry.value.clone()))
+                    .collect(),
+                env: properties.component_env.clone(),
+                files_by_path: component_files_by_path,
+                plugins_by_grant_id: component_plugins_by_grant_id,
+            }
+            .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
         })
@@ -1930,6 +2014,10 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
+                    config_schema: component_deploy_properties.config_schema.clone(),
+                    component_provision_config: component_stager
+                        .component_provision_config(None)
+                        .await?,
                     agent_types,
                     agent_type_provision_configs: component_stager
                         .agent_type_provision_configs(environment, component_name)
@@ -2035,6 +2123,19 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
+                    config_schema: component_stager
+                        .component_config_changed()
+                        .then(|| component_deploy_properties.config_schema.clone()),
+                    component_provision_config: if component_stager.component_config_changed() {
+                        Some(
+                            component_stager
+                                .component_provision_config(Some(&changed_files))
+                                .await
+                                .map_err(UpdateStagedComponentError::Other)?,
+                        )
+                    } else {
+                        None
+                    },
                     agent_types,
                     agent_type_provision_config_updates: component_stager
                         .agent_type_provision_config_updates(
@@ -2629,8 +2730,73 @@ fn materialize_agent_config_entries(
         return vec![];
     };
 
-    agent_type
-        .config
+    project_local_config_entries(&agent_type.config, config_root)
+}
+
+fn materialize_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_types: &[AgentTypeSchema],
+    config_root: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
+    let Some(config_root) = config_root else {
+        return Ok(vec![]);
+    };
+
+    let agent_local_paths = agent_types
+        .iter()
+        .flat_map(|agent| &agent.config)
+        .filter(|declaration| declaration.source == AgentConfigSource::Local)
+        .map(|declaration| &declaration.path)
+        .collect::<Vec<_>>();
+    validate_component_config(config_root, declarations, &agent_local_paths)?;
+
+    Ok(project_local_config_entries(declarations, config_root))
+}
+
+fn validate_component_config(
+    config_root: &serde_json::Value,
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_local_paths: &[&Vec<String>],
+) -> anyhow::Result<()> {
+    if !config_root.is_object() {
+        bail!("Component config must be an object");
+    }
+    let undeclared = collect_unused_leaf_paths(config_root, |path| {
+        declarations
+            .iter()
+            .any(|declaration| path.starts_with(&declaration.path))
+            || agent_local_paths
+                .iter()
+                .any(|declaration| path.starts_with(declaration))
+    });
+    if !undeclared.is_empty() {
+        bail!(
+            "Component config contains paths with no local declaration: {}",
+            undeclared.iter().map(|path| path.join(".")).join(", ")
+        );
+    };
+
+    let locally_supplied_secrets = declarations
+        .iter()
+        .filter(|declaration| declaration.source == AgentConfigSource::Secret)
+        .filter(|declaration| value_at_path(config_root, &declaration.path).is_some())
+        .filter(|declaration| !agent_local_paths.contains(&&declaration.path))
+        .map(|declaration| declaration.path.join("."))
+        .collect::<Vec<_>>();
+    if !locally_supplied_secrets.is_empty() {
+        bail!(
+            "Component config supplies values for secret declarations: {}",
+            locally_supplied_secrets.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn project_local_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    config_root: &serde_json::Value,
+) -> Vec<AgentConfigEntryDto> {
+    declarations
         .iter()
         .filter(|decl| decl.source == AgentConfigSource::Local)
         .filter_map(|decl| {
@@ -2667,6 +2833,72 @@ fn collect_unused_agent_config_paths(
     .collect::<Vec<_>>();
     unused.sort();
     unused
+}
+
+#[cfg(test)]
+mod component_config_tests {
+    use super::{
+        materialize_config_entries, project_local_config_entries, validate_component_config,
+    };
+    use golem_common::model::agent::AgentConfigSource;
+    use golem_common::schema::SchemaType;
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
+    use serde_json::json;
+    use test_r::test;
+
+    fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
+        AgentConfigDeclarationSchema {
+            source,
+            path: path.iter().map(|segment| segment.to_string()).collect(),
+            value_type: SchemaType::string(),
+        }
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_undeclared_config() {
+        let error =
+            materialize_config_entries(&[], &[], Some(&json!({ "unknown": "value" }))).unwrap_err();
+        assert!(error.to_string().contains("no local declaration"));
+        assert!(error.to_string().contains("unknown"));
+    }
+
+    #[test]
+    fn component_config_requires_object_root() {
+        for root in [json!("invalid"), json!(["invalid"]), json!(null)] {
+            assert!(materialize_config_entries(&[], &[], Some(&root)).is_err());
+        }
+        assert!(
+            materialize_config_entries(&[], &[], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            materialize_config_entries(&[], &[], Some(&json!({})))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_locally_supplied_secret() {
+        let declarations = vec![declaration(AgentConfigSource::Secret, &["token"])];
+        let error = materialize_config_entries(
+            &declarations,
+            &[],
+            Some(&json!({ "token": "not-a-secret-reference" })),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("secret declarations"));
+        assert!(error.to_string().contains("token"));
+    }
+
+    #[test]
+    fn agent_only_default_is_valid_but_not_projected_to_component_config() {
+        let agent_path = vec!["agent".to_string(), "prompt".to_string()];
+        let root = json!({ "agent": { "prompt": "helpful" } });
+        validate_component_config(&root, &[], &[&agent_path]).unwrap();
+        assert!(project_local_config_entries(&[], &root).is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -264,6 +264,9 @@
             "type": "string"
           }
         },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -373,6 +376,9 @@
             "type": "string"
           }
         },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -434,6 +440,9 @@
         },
         "tools": {
           "$ref": "#/definitions/toolBindings"
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -537,6 +546,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "toolsMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -2565,6 +2577,26 @@
         },
         "name": {
           "type": "string"
+        }
+      }
+    },
+    "componentConfigSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "type": "object" },
+        "declarations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "path", "value_type"],
+            "properties": {
+              "source": { "enum": ["Local", "Secret"] },
+              "path": { "type": "array", "items": { "type": "string" } },
+              "value_type": { "type": "object" }
+            }
+          }
         }
       }
     },
