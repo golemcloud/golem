@@ -5554,6 +5554,25 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
     let staged_after_component_update = deps
         .full_deployment_repo
         .get_staged_identity(environment_id)
@@ -5588,7 +5607,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
 
     let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             component_revision_id,
@@ -5601,7 +5620,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(latest_for_component.deployment_revision.get(), 2);
     let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             updated_component_revision_id,

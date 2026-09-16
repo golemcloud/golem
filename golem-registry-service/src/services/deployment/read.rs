@@ -424,14 +424,14 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
-    pub async fn get_latest_tool_deployment_state_by_component_revision(
+    pub async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
         self.deployment_repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),

@@ -160,7 +160,9 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    /// Use the active deployment when it contains this component revision; otherwise
+    /// use the latest deployment containing it for owners still running an older revision.
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
@@ -481,14 +483,14 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         self.repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 environment_id,
                 component_id,
                 component_revision_id,
@@ -1459,14 +1461,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .map(Some)
     }
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         let row = self
-            .with_ro("get_latest_tool_deployment_revision_by_component_revision")
+            .with_ro("get_active_tool_deployment_revision_by_component_revision")
             .fetch_optional(
                 sqlx::query(indoc! { r#"
                     SELECT deployment_revision_id
@@ -1474,7 +1476,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     WHERE environment_id = $1
                         AND component_id = $2
                         AND component_revision_id = $3
-                    ORDER BY deployment_revision_id DESC
+                    ORDER BY CASE WHEN deployment_revision_id = (
+                        SELECT cdr.deployment_revision_id
+                        FROM current_deployments cd
+                        JOIN current_deployment_revisions cdr
+                            ON cdr.environment_id = cd.environment_id
+                            AND cdr.revision_id = cd.current_revision_id
+                        WHERE cd.environment_id = $1
+                    ) THEN 0 ELSE 1 END, deployment_revision_id DESC
                     LIMIT 1
                 "#})
                 .bind(environment_id)

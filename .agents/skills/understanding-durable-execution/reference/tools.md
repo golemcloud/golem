@@ -19,6 +19,9 @@ Native external calls use `AgentInvocation::ExternalTool`, not a synthetic guest
 payload; retries attach to the accepted key before consulting deployment state. New admissions
 use the revision folded from oplog status, even when the owner's Store is not loaded. An update
 queued ahead of a tool does not change the binding already pinned at admission.
+Registry resolution prefers the active deployment when it contains that component revision,
+including after an environment rollback. Owners on revisions absent from the active deployment
+use the latest deployment that contains their revision. Accepted invocation snapshots are unchanged.
 
 Public REST, CLI and native invocation sessions address either an exact, already-existing real
 owner or a component target for which the executor creates an ephemeral virtual owner. They never
