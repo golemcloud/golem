@@ -30,8 +30,8 @@ QuickJS-backed WASI Preview 3 components.
   and value-only identity binding in `DynamicClient`. Narrow reflected `mode` before selecting
   a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
 
-The CLI currently rejects middleware attachment pending GOL-39. Test and document SDK world
-support, but do not claim middleware can be attached/deployed through current manifests.
+The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
+separate concerns and must be tested independently.
 
 ## Layout and public modules
 

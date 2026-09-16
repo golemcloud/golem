@@ -21,6 +21,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::PathSegment;
 
@@ -269,6 +270,15 @@ pub enum DeployValidationError {
     ToolBindingParametersMustBeObject {
         tool_name: ToolName,
         agent_type: Option<AgentTypeName>,
+    },
+    #[error("middleware merge mode is only valid on agent binding for tool {tool_name}")]
+    ToolBindingEnvironmentMiddlewareMergeMode { tool_name: ToolName },
+    #[error("Tool middleware{middleware}{agent_tool} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), agent_tool = agent_type_name.as_ref().zip(tool_name.as_ref()).map(|(agent, tool)| format!(" for agent {agent} and tool {tool}")).unwrap_or_default())]
+    ToolMiddleware {
+        middleware_name: Option<ToolMiddlewareName>,
+        agent_type_name: Option<AgentTypeName>,
+        tool_name: Option<ToolName>,
+        message: String,
     },
 }
 

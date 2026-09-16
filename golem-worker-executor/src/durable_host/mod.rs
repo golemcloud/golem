@@ -148,7 +148,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -5017,6 +5018,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -5055,6 +5057,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5999,9 +6002,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -6011,7 +6014,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -6219,10 +6222,29 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 store, &error,
                             )))
                         } else {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        }
+                    }
+                    SnapshotRecoveryResult::Unavailable(error) => {
+                        if store
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::ManualUpdate)
+                        {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        } else {
                             Err(error)
                         }
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
                     SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
@@ -6251,6 +6273,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
@@ -9179,6 +9205,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {

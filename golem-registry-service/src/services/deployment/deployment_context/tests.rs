@@ -13,6 +13,7 @@ use golem_common::model::mcp_deployment::{
     McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
 };
 use golem_common::model::tool::{RemoteToolDeployment, SecretKeyScope, ToolProvisionConfig};
+use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{
     ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
     ToolReleaseReference,
@@ -40,6 +41,7 @@ fn test_environment() -> Environment {
         name: EnvironmentName::try_from("dev").unwrap(),
         diff_model_version: 0,
         compatibility_check: false,
+        tool_compatibility_mode: Default::default(),
         version_check: false,
         security_overrides: false,
         owner_account_id: AccountId::new(),
@@ -1239,6 +1241,108 @@ fn compile_tools_inherits_environment_tools_and_adds_agent_tools() {
 }
 
 #[test]
+fn compile_tools_rejects_explicit_prepend_on_local_environment_binding() {
+    let tool_name = ToolName::try_from("grep").unwrap();
+    let (agent_name, agent_type) = test_registered_agent_type("AgentA");
+    let component = test_tool_component(
+        "tools",
+        BTreeMap::from([(
+            tool_name.clone(),
+            ToolDeploymentMetadata {
+                definition: test_tool(tool_name.as_str()),
+                provision: ToolProvisionConfig::default(),
+                environment_binding: Some(ToolBindingInput {
+                    middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                    ..ToolBindingInput::default()
+                }),
+                agent_bindings: BTreeMap::from([(
+                    agent_name.clone(),
+                    ToolBindingInput {
+                        middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                        ..ToolBindingInput::default()
+                    },
+                )]),
+            },
+        )]),
+    );
+    let context = DeploymentContext {
+        environment: test_environment(),
+        components: BTreeMap::from([(component.component_name.clone(), component)]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::new(),
+        registered_agent_types: HashMap::from([(agent_name.clone(), agent_type)]),
+    };
+    let mut errors = Vec::new();
+
+    let compiled = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+
+    assert_eq!(
+        errors,
+        vec![
+            DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                tool_name: tool_name.clone(),
+            }
+        ]
+    );
+    assert_eq!(compiled.registered_tools.len(), 1);
+    assert_eq!(compiled.agent_tool_bindings.len(), 1);
+    assert_eq!(compiled.agent_tool_bindings[0].agent_type_name, agent_name);
+    assert_eq!(compiled.agent_tool_bindings[0].tool_name, tool_name);
+}
+
+#[test]
+fn compile_tools_rejects_explicit_prepend_on_remote_environment_binding() {
+    let tool_name = ToolName::try_from("grep").unwrap();
+    let (agent_name, agent_type) = test_registered_agent_type("AgentA");
+    let remote = test_remote_tool(
+        tool_name.as_str(),
+        Some(ToolBindingInput {
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+            ..ToolBindingInput::default()
+        }),
+        BTreeMap::from([(
+            agent_name.clone(),
+            ToolBindingInput {
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Prepend),
+                ..ToolBindingInput::default()
+            },
+        )]),
+    );
+    let context = DeploymentContext {
+        environment: test_environment(),
+        components: BTreeMap::new(),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::new(),
+        registered_agent_types: HashMap::from([(agent_name.clone(), agent_type)]),
+    };
+    let mut errors = Vec::new();
+
+    let compiled = context.compile_tools_with_remote(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &[remote],
+        &mut errors,
+        &mut Vec::new(),
+    );
+
+    assert_eq!(
+        errors,
+        vec![
+            DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                tool_name: tool_name.clone(),
+            }
+        ]
+    );
+    assert_eq!(compiled.registered_tools.len(), 1);
+    assert_eq!(compiled.agent_tool_bindings.len(), 1);
+    assert_eq!(compiled.agent_tool_bindings[0].agent_type_name, agent_name);
+    assert_eq!(compiled.agent_tool_bindings[0].tool_name, tool_name);
+}
+
+#[test]
 fn compile_tools_accumulates_independent_binding_errors() {
     let tool_name = ToolName::try_from("grep").unwrap();
     let (agent_name, agent_type) = test_registered_agent_type("AgentA");
@@ -1249,6 +1353,7 @@ fn compile_tools_accumulates_independent_binding_errors() {
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        ..ToolBindingInput::default()
     };
     let component = test_tool_component(
         "tools",
@@ -1324,6 +1429,7 @@ fn compile_tools_accumulates_binding_errors_for_unknown_agent() {
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        ..ToolBindingInput::default()
     };
     let component = test_tool_component(
         "tools",
@@ -1428,6 +1534,7 @@ fn compile_tools_accumulates_binding_errors_for_duplicate_implementations() {
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        ..ToolBindingInput::default()
     };
     let metadata = ToolDeploymentMetadata {
         definition: test_tool(tool_name.as_str()),
@@ -1493,6 +1600,7 @@ fn compile_tools_accumulates_binding_errors_for_name_mismatched_definition() {
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        ..ToolBindingInput::default()
     };
     let component = test_tool_component(
         "tools",
@@ -1562,6 +1670,7 @@ fn compile_tool_binding_merges_parameters_and_narrows_revealable_secrets() {
             readable_path.clone(),
             dropped_path,
         ])),
+        ..ToolBindingInput::default()
     };
     let agent = ToolBindingInput {
         version: None,
@@ -1573,6 +1682,7 @@ fn compile_tool_binding_merges_parameters_and_narrows_revealable_secrets() {
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        ..ToolBindingInput::default()
     };
     let component = test_tool_component("tools", BTreeMap::new());
     let source = ToolSource::Component {

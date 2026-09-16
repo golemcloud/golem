@@ -125,8 +125,8 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
+    TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{
@@ -135,7 +135,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -708,6 +708,65 @@ fn into_pending_invocation_parts(
         payload,
         invocation_context,
     )
+}
+
+fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_agent_error(reason),
+        WorkerExecutorError::InvalidRequest { details }
+        | WorkerExecutorError::ParamTypeMismatch { details }
+        | WorkerExecutorError::ValueMismatch { details } => {
+            AgentError::InvalidRequest(details.clone())
+        }
+        WorkerExecutorError::PermissionDenied { details } => {
+            AgentError::PermissionDenied(details.clone())
+        }
+        WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        } => AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+            method: method.clone(),
+            host_function: host_function.clone(),
+        }),
+        WorkerExecutorError::InvocationFailed { error, .. }
+        | WorkerExecutorError::PreviousInvocationFailed { error, .. } => error.clone(),
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => AgentError::InternalError(
+            format!("Unexpected oplog entry during replay: expected {expected}, got {got}"),
+        ),
+        WorkerExecutorError::ComponentParseFailed { .. } => {
+            AgentError::InternalError(error.to_string())
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => AgentError::Unknown(error.to_string()),
+        _ => AgentError::InternalError(error.to_string()),
+    }
+}
+
+fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_infrastructure_recovery_error(reason)
+        }
+        WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::Unknown { .. }
+        | WorkerExecutorError::AgentCreationFailed { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
+        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
+        | WorkerExecutorError::FileSystemError { .. }
+        | WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady => true,
+        _ => false,
+    }
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -1801,18 +1860,65 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
+        if is_active
+            && self
+                .get_non_detached_last_known_status()
+                .await
+                .last_error_kind
+                == Some(OplogErrorKind::Recovery)
+        {
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::recovery_succeeded(),
+                None,
+            )
+            .await;
+        }
+
         let completed = match &result {
             Ok(()) => self
                 .startup_attempt
                 .complete_success_if_active(start_attempt, active_attempt),
             Err(_) => self.startup_attempt.complete(start_attempt, &result),
         };
-        drop(instance_guard);
 
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
+        drop(instance_guard);
         is_active
+    }
+
+    pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
+        let latest_status = self.get_non_detached_last_known_status().await;
+        let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
+            Ctx::get_last_error_and_retry_count(
+                self.all(),
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &latest_status,
+            )
+            .await
+        } else {
+            None
+        };
+        let retry_from = previous_error
+            .as_ref()
+            .map(|error| error.retry_from)
+            .unwrap_or(self.oplog.current_oplog_index().await);
+        let infrastructure_failure = is_infrastructure_recovery_error(error);
+        let error = recovery_agent_error(error);
+        let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
+            .then_some(RetryPolicyState::Terminal);
+        self.add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Recovery,
+            error,
+            retry_from,
+            false,
+            retry_policy_state,
+        ))
+        .await;
     }
 
     pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
@@ -8404,13 +8510,16 @@ fn lookup_result_from_cached_result(
                 Err(FailedInvocationResult {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
-                    // and the worker has not entered a terminal state, report it as
-                    // pending so lookup callers can observe the eventual terminal result.
+                    // and there is no terminal invocation outcome, report it as pending
+                    // so lookup callers can observe the eventual result. A recovery
+                    // failure makes the agent unavailable but does not finish this invocation.
                     trap_type: TrapType::Error { .. },
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && (status.status != AgentStatus::Failed
+                || status.last_error_kind == Some(OplogErrorKind::Recovery))
+            && status.status != AgentStatus::Exited =>
         {
             LookupResult::Pending
         }
@@ -8509,6 +8618,67 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    #[test]
+    fn recovery_error_classification_keeps_only_transient_failures_retryable() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::runtime("temporary outage")),
+            AgentError::Unknown(message) if message.contains("temporary outage")
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::invalid_request("invalid export")),
+            AgentError::InvalidRequest(message) if message == "invalid export"
+        ));
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ComponentParseFailed {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }),
+            AgentError::InternalError(message) if message.contains("invalid wasm")
+        ));
+        let component_id = ComponentId::new();
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(!is_infrastructure_recovery_error(
+            &WorkerExecutorError::ComponentParseFailed {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                reason: "invalid wasm".to_string(),
+            }
+        ));
+    }
+
+    #[test]
+    fn recovery_error_classification_unwraps_failed_resume() {
+        let error = WorkerExecutorError::failed_to_resume_worker(
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "agent".to_string(),
+            },
+            WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError("retry me".to_string()),
+                stderr: String::new(),
+            },
+        );
+
+        assert_eq!(
+            recovery_agent_error(&error),
+            AgentError::TransientError("retry me".to_string())
+        );
+    }
+
+    #[test]
+    fn recovery_error_classification_preserves_read_only_violation() {
+        assert!(matches!(
+            recovery_agent_error(&WorkerExecutorError::ReadOnlyViolation {
+                method: "get-state".to_string(),
+                host_function: "filesystem.write".to_string(),
+            }),
+            AgentError::ReadOnlyViolation(_)
+        ));
+    }
 
     #[test]
     fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
@@ -9101,6 +9271,31 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
+        let key = IdempotencyKey::fresh();
+        let mut status = status_with_current_key(AgentStatus::Failed, &key);
+        status.last_error_kind = Some(OplogErrorKind::Recovery);
+        let lookup = lookup_result_from_cached_result(
+            &status,
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("prior retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
     }
 
     #[test]

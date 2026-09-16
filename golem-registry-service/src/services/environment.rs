@@ -243,6 +243,9 @@ impl EnvironmentService {
         if let Some(compatibility_check) = update.compatibility_check {
             environment.compatibility_check = compatibility_check;
         }
+        if let Some(tool_compatibility_mode) = update.tool_compatibility_mode {
+            environment.tool_compatibility_mode = tool_compatibility_mode;
+        }
         if let Some(version_check) = update.version_check {
             environment.version_check = version_check;
         }

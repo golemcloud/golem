@@ -17,7 +17,7 @@ use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::json::NormalizedJsonValue;
-use crate::base_model::oplog::AgentResourceId;
+use crate::base_model::oplog::{AgentResourceId, OplogErrorKind};
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
@@ -119,6 +119,7 @@ declare_structs! {
         pub updates: Vec<UpdateRecord>,
         pub created_at: Timestamp,
         pub last_error: Option<String>,
+        pub last_error_kind: Option<OplogErrorKind>,
         pub component_size: u64,
         pub total_linear_memory_size: u64,
         pub exported_resource_instances: Vec<ExportedResourceMetadata>,
