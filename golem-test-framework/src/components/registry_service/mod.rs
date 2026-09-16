@@ -230,19 +230,19 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_COMPUTE_GCU",
-            "0".to_string(),
+            "1000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_MEMORY_GB_SECONDS",
-            "0".to_string(),
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_DURABLE_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__OVERAGE_ELIGIBLE",
@@ -456,19 +456,19 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_COMPUTE_GCU",
-            "0".to_string(),
+            "1000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_MEMORY_GB_SECONDS",
-            "0".to_string(),
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__OVERAGE_ELIGIBLE",
@@ -533,19 +533,19 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_COMPUTE_GCU",
-            "0".to_string(),
+            "1000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_MEMORY_GB_SECONDS",
-            "0".to_string(),
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
-            "0".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__OVERAGE_ELIGIBLE",

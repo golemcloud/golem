@@ -5741,6 +5741,14 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
     assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
     assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
     let account_id = deps.create_account().await.revision.account_id;
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    usage.metering = Some(ResourceUsageMetering::all_enabled());
+    deps.account_usage_repo.add(&usage).await.unwrap();
     let policy = deps
         .account_usage_service()
         .get_resource_policy(AccountId(account_id), &AuthCtx::System)
@@ -5824,11 +5832,21 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
 pub async fn test_plan_reseed_clamps_overrides_before_range_expansion(deps: &Deps) {
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
+    let current_plan = deps
+        .plan_repo
+        .get_by_id(account.revision.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
     let mut plan = RegistryServiceConfig::default()
         .initial_plans
         .remove("default")
         .unwrap();
     plan.plan_id = PlanId(account.revision.plan_id);
+    plan.monthly_compute_gcu = current_plan.monthly_compute_gcu.get();
+    plan.monthly_memory_gb_seconds = current_plan.monthly_memory_gb_seconds.get();
+    plan.monthly_durable_storage_gb_month = current_plan.monthly_durable_storage_gb_month.get();
+    plan.monthly_ephemeral_storage_gb_month = current_plan.monthly_ephemeral_storage_gb_month.get();
     plan.max_memory_per_agent = 25;
     plan.max_memory_per_agent_ceiling = 400;
     plan.max_memory_per_agent_user_configurable = true;
