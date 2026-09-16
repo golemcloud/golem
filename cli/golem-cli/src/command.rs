@@ -152,7 +152,6 @@ impl Verbosity {
     }
 }
 
-// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Global options")]
 pub struct GolemCliGlobalFlags {
@@ -2417,7 +2416,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <NAME> for interactive setup
         #[command(after_help = crate::command_examples::PROFILE_NEW)]
         New {
             /// Name of the newly created profile
@@ -2915,6 +2914,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
+        ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
     }
 }
 

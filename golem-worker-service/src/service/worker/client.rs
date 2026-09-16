@@ -138,7 +138,17 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
         Ok(InvocationRejectionReason::Unauthorized) => {
             WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
         }
-        Ok(InvocationRejectionReason::Internal) => WorkerServiceError::Internal(rejected.error),
+        Ok(InvocationRejectionReason::Internal) => match rejected.worker_error {
+            Some(worker_error) => worker_error
+                .try_into()
+                .map(WorkerServiceError::GolemError)
+                .unwrap_or_else(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "failed to decode worker execution error: {error}"
+                    ))
+                }),
+            None => WorkerServiceError::Internal(rejected.error),
+        },
         _ => WorkerServiceError::TypeChecker(rejected.error),
     }
 }
@@ -796,10 +806,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
                 |error| match error {
-                    CallWorkerExecutorError::FailedToConnectToPod(status)
-                        if status.code() == Code::NotFound =>
-                    {
-                        WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                    CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                        if status.code() == Code::NotFound {
+                            WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                        } else if let Some(error) =
+                            WorkerExecutorError::from_status_details(&status)
+                        {
+                            WorkerServiceError::GolemError(error)
+                        } else {
+                            WorkerServiceError::InternalCallError(
+                                CallWorkerExecutorError::FailedToConnectToPod(status),
+                            )
+                        }
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -2473,12 +2491,14 @@ mod rejection_mapping_tests {
     use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_service_base::clients::shard_manager::{
         BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
         ShardManagerError, ShardRegistration,
     };
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
@@ -2508,6 +2528,52 @@ mod rejection_mapping_tests {
         assert!(matches!(
             public_error_for_rejection(InvocationRejectionReason::Validation),
             agent_error::Error::BadRequest(_)
+        ));
+    }
+
+    #[test]
+    fn typed_pre_acceptance_rejection_preserves_previous_invocation_failure() {
+        let expected = WorkerExecutorError::PreviousInvocationFailed {
+            error: OplogAgentError::Unknown("guest failure".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: expected.to_string(),
+            worker_error: Some(expected.clone().into()),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            decode_invocation_rejection(rejection),
+            super::WorkerServiceError::GolemError(error) if error == expected
+        ));
+    }
+
+    #[test]
+    fn rejection_reason_remains_authoritative_with_typed_worker_error() {
+        let validation: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Validation as i32,
+            error: "invalid request".to_string(),
+            worker_error: Some(WorkerExecutorError::invalid_request("invalid request").into()),
+            ..Default::default()
+        })
+        .into();
+        let unauthorized: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Unauthorized as i32,
+            error: "unauthorized".to_string(),
+            worker_error: Some(WorkerExecutorError::InvalidAccount.into()),
+            ..Default::default()
+        })
+        .into();
+
+        assert!(matches!(
+            validation.error,
+            Some(agent_error::Error::BadRequest(_))
+        ));
+        assert!(matches!(
+            unauthorized.error,
+            Some(agent_error::Error::Unauthorized(_))
         ));
     }
 
@@ -2758,6 +2824,7 @@ mod rejection_mapping_tests {
                             idempotency_key,
                             agent_id,
                             component_revision: None,
+                            worker_error: None,
                         },
                     )),
                 },

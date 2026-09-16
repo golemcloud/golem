@@ -3197,7 +3197,7 @@ fn arb_agent_update_result() -> OutputDocumentStrategy {
     serialized_output(
         (
             proptest::collection::vec(arb_agent_update_meta(), 0..5),
-            proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..3),
+            proptest::collection::vec(arb_agent_action_error(), 0..3),
         )
             .prop_map(
                 |(agents, errors)| crate::model::deploy::TryUpdateAllWorkersView { agents, errors },
@@ -3274,6 +3274,18 @@ fn arb_agent_redeployment_meta()
                     from_version,
                     version,
                 }
+            },
+        )
+        .boxed()
+}
+
+fn arb_agent_action_error() -> BoxedStrategy<crate::model::agent::AgentActionError> {
+    (arb_small_string(), arb_small_string(), arb_small_string())
+        .prop_map(
+            |(component_name, agent_id, error)| crate::model::agent::AgentActionError {
+                component_name: golem_common::model::component::ComponentName(component_name),
+                agent_id: crate::model::agent::RawAgentId(agent_id),
+                error,
             },
         )
         .boxed()
@@ -4056,9 +4068,14 @@ fn arb_agent_delete_all_result() -> OutputDocumentStrategy {
         (
             any::<bool>(),
             proptest::collection::vec(arb_agent_deletion_meta(), 0..5),
+            proptest::collection::vec(arb_agent_action_error(), 0..3),
         )
-            .prop_map(|(deleted, agents)| {
-                crate::model::agent::action_result::AgentDeleteAllView { deleted, agents }
+            .prop_map(|(deleted, agents, errors)| {
+                crate::model::agent::action_result::AgentDeleteAllView {
+                    deleted,
+                    agents,
+                    errors,
+                }
             }),
     )
 }
@@ -4068,9 +4085,14 @@ fn arb_agent_redeploy_result() -> OutputDocumentStrategy {
         (
             any::<bool>(),
             proptest::collection::vec(arb_agent_redeployment_meta(), 0..5),
+            proptest::collection::vec(arb_agent_action_error(), 0..3),
         )
-            .prop_map(|(redeployed, agents)| {
-                crate::model::agent::action_result::AgentRedeployResult { redeployed, agents }
+            .prop_map(|(redeployed, agents, errors)| {
+                crate::model::agent::action_result::AgentRedeployResult {
+                    redeployed,
+                    agents,
+                    errors,
+                }
             }),
     )
 }

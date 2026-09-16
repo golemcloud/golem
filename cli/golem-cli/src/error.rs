@@ -34,6 +34,7 @@ impl Error for PipedExitCode {}
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
+    ProfileNew,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -46,7 +47,12 @@ pub enum HintError {
         expected_cli_diff_model_version: u32,
         server_diff_model_version: u32,
     },
-    ShowClapHelp(ShowClapHelpTarget),
+    /// A usage error that is reported the way clap reports missing arguments: the error
+    /// message and the help of the target command are printed to stderr.
+    ShowClapHelp {
+        target: ShowClapHelpTarget,
+        error: String,
+    },
 }
 
 impl Error for HintError {}
@@ -244,6 +250,15 @@ pub mod service {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(response) => response.agent_error(),
                 _ => None,
+            }
+        }
+
+        pub fn is_previous_invocation_failed(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.has_code(api::error_code::INTERNAL_PREVIOUS_INVOCATION_FAILED)
+                }
+                _ => false,
             }
         }
 
@@ -541,6 +556,23 @@ pub mod service {
             assert!(!rendered.contains("Agent Service response:"));
             assert!(!rendered.contains("Worker stderr:"));
             assert!(!rendered.contains("Worker cause:"));
+        }
+
+        #[test]
+        fn previous_invocation_failed_is_classified_by_exact_error_code() {
+            let mut response = agent_error_response();
+            response.code = Some("INTERNAL_PREVIOUS_INVOCATION_FAILED".to_string());
+            let previous_invocation_failed = ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(response),
+            };
+            let unrelated_failure = ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(agent_error_response()),
+            };
+
+            assert!(previous_invocation_failed.is_previous_invocation_failed());
+            assert!(!unrelated_failure.is_previous_invocation_failed());
         }
     }
 }
