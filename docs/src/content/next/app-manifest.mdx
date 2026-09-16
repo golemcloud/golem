@@ -200,9 +200,9 @@ agents:
 
 The effective chain is the environment universal list `U`, followed by the merged per-tool list `P`, followed by the leaf tool: `U ++ P ++ [leaf]`, outermost first. On agent tool bindings, `middlewareMergeMode` is `prepend` by default and can be `append` or `replace`; it changes only `P`. Environment tool bindings cannot set it. In the example, replacing `P` removes `path-policy` for `SupportAgent`, but both `audit` occurrences remain. Compact entries such as `path-policy@1.2.0` are also accepted. An installation's `account` and `version`, when present, assert the selected declaration rather than selecting another release.
 
-`deployment.compatibilityMode` controls middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Until middleware chain traversal is implemented, deployments can compile and expose these chains, but invoking a tool with a nonempty chain fails closed before leaf dispatch. Tools without middleware continue to dispatch normally.
+`deployment.toolCompatibilityMode` controls middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Until middleware chain traversal is implemented, deployments can compile and expose these chains, but invoking a tool with a nonempty chain fails closed before leaf dispatch. Tools without middleware continue to dispatch normally.
 
-Like the other deployment options, `compatibilityMode` is an environment property synchronized by `golem environment sync-deployment-options` or before deploying content changes. Updating it does not redeploy or recompile the active revision: the next deployment uses the new mode, while existing deployment snapshots retain their recorded mode and compiled plans for replay and rollback.
+Like the other deployment options, `toolCompatibilityMode` is an environment property synchronized by `golem environment sync-deployment-options` or before deploying content changes. Updating it does not redeploy or recompile the active revision: the next deployment uses the new mode, while existing deployment snapshots retain their recorded mode and compiled plans for replay and rollback.
 
 ### Secret policy
 
@@ -647,7 +647,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
-    path: "environments.<environment-name>.deployment.compatibilityMode",
+    path: "environments.<environment-name>.deployment.toolCompatibilityMode",
   }}>
     ***Optional tool middleware compatibility mode***. Accepted values are `structural-subtype` (the default), `strict-equality`, and `nominal`. Structural subtype mode warns about inputs discarded by a middleware; strict equality ignores documentation and schema-version metadata; nominal mode checks named command, input, and error structures and dynamically validates runtime shapes.
   </Field>

@@ -801,7 +801,7 @@ impl Application {
         self.selected_environment()
             .deployment
             .as_ref()
-            .map(app_raw::DeploymentOptions::compatibility_mode)
+            .map(app_raw::DeploymentOptions::tool_compatibility_mode)
             .unwrap_or_default()
     }
 

@@ -1172,7 +1172,7 @@ pub mod environment {
         /// Deployment options are environment-level policy flags applied during
         /// `deploy`. The currently synced fields are:
         ///   - `compatibilityCheck` - enforce backward-compatible component upgrades.
-        ///   - `compatibilityMode` - tool middleware comparison mode for new deployments.
+        ///   - `toolCompatibilityMode` - tool middleware comparison mode for new deployments.
         ///   - `versionCheck` - enforce monotonic component version bumps.
         ///   - `securityOverrides` - environment-level security overrides (e.g. allowed signing keys).
         ///

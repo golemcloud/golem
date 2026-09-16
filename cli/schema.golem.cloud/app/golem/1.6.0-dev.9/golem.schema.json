@@ -1333,7 +1333,7 @@
         "compatibilityCheck": {
           "type": "boolean"
         },
-        "compatibilityMode": {
+        "toolCompatibilityMode": {
           "enum": ["strict-equality", "structural-subtype", "nominal"]
         },
         "versionCheck": {

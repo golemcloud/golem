@@ -1340,7 +1340,7 @@ pub struct DeploymentOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compatibility_check: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub compatibility_mode:
+    pub tool_compatibility_mode:
         Option<golem_common::schema::tool::compatibility::ToolCompatibilityMode>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub version_check: Option<bool>,
@@ -1352,7 +1352,7 @@ impl DeploymentOptions {
     pub fn new_local() -> Self {
         Self {
             compatibility_check: Some(false),
-            compatibility_mode: None,
+            tool_compatibility_mode: None,
             version_check: Some(false),
             security_overrides: Some(true),
         }
@@ -1361,7 +1361,7 @@ impl DeploymentOptions {
     pub fn new_cloud() -> Self {
         Self {
             compatibility_check: None,
-            compatibility_mode: None,
+            tool_compatibility_mode: None,
             version_check: None,
             security_overrides: None,
         }
@@ -1371,8 +1371,8 @@ impl DeploymentOptions {
         if self.compatibility_check.is_none() {
             self.compatibility_check = other.compatibility_check;
         }
-        if self.compatibility_mode.is_none() {
-            self.compatibility_mode = other.compatibility_mode;
+        if self.tool_compatibility_mode.is_none() {
+            self.tool_compatibility_mode = other.tool_compatibility_mode;
         }
         if self.version_check.is_none() {
             self.version_check = other.version_check;
@@ -1387,10 +1387,10 @@ impl DeploymentOptions {
         self.compatibility_check.unwrap_or(true)
     }
 
-    pub fn compatibility_mode(
+    pub fn tool_compatibility_mode(
         &self,
     ) -> golem_common::schema::tool::compatibility::ToolCompatibilityMode {
-        self.compatibility_mode.unwrap_or_default()
+        self.tool_compatibility_mode.unwrap_or_default()
     }
 
     pub fn version_check(&self) -> bool {
@@ -1404,7 +1404,7 @@ impl DeploymentOptions {
     pub fn to_diffable(&self) -> diff::Environment {
         diff::Environment {
             compatibility_check: self.compatibility_check(),
-            tool_compatibility_mode: self.compatibility_mode(),
+            tool_compatibility_mode: self.tool_compatibility_mode(),
             version_check: self.version_check(),
             security_overrides: self.security_overrides(),
         }

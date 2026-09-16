@@ -676,13 +676,29 @@ fn arb_cli_options_model() -> BoxedStrategy<CliOptions> {
 }
 
 fn arb_deployment_options_model() -> BoxedStrategy<DeploymentOptions> {
-    (any::<bool>(), any::<bool>(), any::<bool>())
+    use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+    (
+        any::<bool>(),
+        arb_opt(
+            prop_oneof![
+                Just(ToolCompatibilityMode::StrictEquality),
+                Just(ToolCompatibilityMode::StructuralSubtype),
+                Just(ToolCompatibilityMode::Nominal),
+            ]
+            .boxed(),
+        ),
+        any::<bool>(),
+        any::<bool>(),
+    )
         .prop_map(
-            |(compatibility_check, version_check, security_overrides)| DeploymentOptions {
-                compatibility_check: Some(compatibility_check),
-                compatibility_mode: None,
-                version_check: Some(version_check),
-                security_overrides: Some(security_overrides),
+            |(compatibility_check, tool_compatibility_mode, version_check, security_overrides)| {
+                DeploymentOptions {
+                    compatibility_check: Some(compatibility_check),
+                    tool_compatibility_mode,
+                    version_check: Some(version_check),
+                    security_overrides: Some(security_overrides),
+                }
             },
         )
         .boxed()
@@ -1481,7 +1497,7 @@ fn middleware_manifest_slots_and_distinct_release_ids_parse() {
           local:
             server: local
             deployment:
-              compatibilityMode: nominal
+              toolCompatibilityMode: nominal
             tools:
               middleware:
                 - audit@1.0.0
@@ -1528,7 +1544,7 @@ fn middleware_manifest_slots_and_distinct_release_ids_parse() {
             .deployment
             .as_ref()
             .unwrap()
-            .compatibility_mode(),
+            .tool_compatibility_mode(),
         golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal
     );
 }
@@ -1584,7 +1600,7 @@ fn tool_middleware_declaration_properties_roundtrip() {
 }
 
 #[test]
-fn compatibility_mode_schema_accepts_every_rust_value() {
+fn tool_compatibility_mode_schema_accepts_every_rust_value() {
     use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 
     for mode in [
@@ -1593,23 +1609,55 @@ fn compatibility_mode_schema_accepts_every_rust_value() {
         ToolCompatibilityMode::Nominal,
     ] {
         let options: DeploymentOptions = serde_json::from_value(serde_json::json!({
-            "compatibilityMode": mode,
+            "toolCompatibilityMode": mode,
         }))
         .unwrap();
         assert_eq!(options.to_diffable().tool_compatibility_mode, mode);
         assert_eq!(
-            serde_json::to_value(&options).unwrap()["compatibilityMode"],
+            serde_json::to_value(&options).unwrap()["toolCompatibilityMode"],
             serde_json::to_value(mode).unwrap()
         );
         let manifest = serde_json::json!({
             "environments": {
-                "local": { "deployment": { "compatibilityMode": mode } }
+                "local": { "deployment": { "toolCompatibilityMode": mode } }
             }
         });
         assert!(
             JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
             "schema rejected Rust compatibility mode {mode:?}"
         );
+        let app = Application::from_yaml_str(&serde_yaml::to_string(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            app.environments["local"]
+                .deployment
+                .as_ref()
+                .unwrap()
+                .tool_compatibility_mode(),
+            mode
+        );
+    }
+}
+
+#[test]
+fn removed_manifest_compatibility_mode_is_rejected() {
+    for deployment in [
+        serde_json::json!({ "compatibilityMode": "nominal" }),
+        serde_json::json!({
+            "compatibilityMode": "nominal",
+            "toolCompatibilityMode": "strict-equality",
+        }),
+    ] {
+        let manifest = serde_json::json!({
+            "environments": { "local": { "deployment": deployment } }
+        });
+        let error =
+            Application::from_yaml_str(&serde_yaml::to_string(&manifest).unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `compatibilityMode`")
+        );
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
     }
 }
 
