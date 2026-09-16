@@ -951,11 +951,16 @@ fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
                 (
                     arb_ident().prop_map(ComponentName),
                     arb_opt(arb_ident()),
-                    arb_opt(prop::collection::vec(arb_ident(), 0..=2).boxed()),
-                    arb_opt(prop::collection::vec(arb_ident(), 0..=2).boxed()),
+                    prop_oneof![
+                        Just((None, None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|include| (Some(include), None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|exclude| (None, Some(exclude))),
+                    ],
                 )
                     .prop_map(
-                        |(owner_component, security_scheme, include, exclude)| {
+                        |(owner_component, security_scheme, (include, exclude))| {
                             McpDeploymentToolOptions {
                                 owner_component,
                                 security_scheme,
@@ -974,6 +979,9 @@ fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
             subdomain: None,
             agents,
             tools,
+        })
+        .prop_filter("MCP deployments require an agent or tool", |deployment| {
+            !deployment.agents.is_empty() || !deployment.tools.is_empty()
         })
         .boxed()
 }

@@ -3615,13 +3615,37 @@
     },
     "ToolBindingState": {
       "type": "object",
-      "required": ["version", "parameters", "account", "secretKeysReadable", "secretKeysRevealable"],
+      "required": [
+        "version",
+        "parameters",
+        "account",
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess",
+        "middleware",
+        "middlewareMergeMode"
+      ],
       "properties": {
         "version": { "type": ["string", "null"] },
         "parameters": { "type": "object" },
         "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestConfigKeyScope" } },
         "secretKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
-        "secretKeysRevealable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } }
+        "secretKeysRevealable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
+        "middleware": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -3635,11 +3659,36 @@
         "secretKeysReadableMergeMode": { "const": "intersect" },
         "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
         "secretKeysRevealableMergeMode": { "const": "intersect" },
-        "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" }
+        "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "middleware": { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+        "middlewareMergeMode": { "$ref": "#/definitions/ToolMiddlewareMergeMode" }
       },
       "additionalProperties": false
     },
+    "ManifestToolMiddlewareInstallation": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["name", "parameters", "filesystemAccess"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "parameters": { "$ref": "#/definitions/JsonValue" },
+            "account": { "type": "string" },
+            "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "ManifestSecretKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "ManifestConfigKeyScope": {
       "oneOf": [
         { "type": "string" },
         { "type": "array", "items": { "type": "string" } }

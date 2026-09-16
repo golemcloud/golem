@@ -4615,6 +4615,22 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 secret_keys_readable: Some(crate::model::app_raw::ManifestSecretKeyScope::Keys(
                     vec!["api".to_string(), "token".to_string()],
                 )),
+                middleware: Some(vec![
+                    crate::model::app_raw::ToolMiddlewareInstallation::Shortcut(
+                        "redact@1.0.0".to_string(),
+                    ),
+                    crate::model::app_raw::ToolMiddlewareInstallation::Structured(
+                        crate::model::app_raw::ToolMiddlewareInstallationStruct {
+                            name: "audit".parse().unwrap(),
+                            version: None,
+                            parameters: golem_common::model::json::NormalizedJsonValue::new(
+                                json!({"enabled": true}),
+                            ),
+                            account: None,
+                            filesystem_access: Default::default(),
+                        },
+                    ),
+                ]),
                 ..Default::default()
             };
             properties.tool_bindings.apply_layer(

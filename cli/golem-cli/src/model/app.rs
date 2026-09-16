@@ -7565,10 +7565,16 @@ mod test {
               deployments:
                 local:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
                 implicit:
                   - subdomain: implicit-mcp
+                    agents:
+                      Echo: {}
                 cloud:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -7623,6 +7629,8 @@ mod test {
               deployments:
                 local:
                   - domain: mcp.example.com
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -7657,6 +7665,8 @@ mod test {
               deployments:
                 local:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
