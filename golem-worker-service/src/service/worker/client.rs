@@ -2350,6 +2350,7 @@ mod one_shot_session_tests {
         state
             .validate_trusted_request(&InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(SchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),

@@ -3171,7 +3171,8 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3196,6 +3197,13 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     deps.component_repo
         .update(
@@ -3219,7 +3227,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 }
 
 pub async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
@@ -3298,7 +3306,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .await
         .unwrap();
 
-    deps.component_repo
+    let updated = deps
+        .component_repo
         .update(
             ComponentRevisionRecord {
                 component_id: component_id.0,
@@ -3314,6 +3323,13 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         )
         .await
         .unwrap();
+    let current_component_card_id = updated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert!(
         deps.component_repo
@@ -3336,8 +3352,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "the staged-card listing follows the current component revision"
+        vec![current_component_card_id],
+        "the staged-card listing contains the current component card but not the older agent card"
     );
 
     assert_eq!(
@@ -3456,7 +3472,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3481,13 +3498,20 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
@@ -3540,7 +3564,8 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3565,13 +3590,20 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert_eq!(
         deps.component_repo
             .list_initial_permission_card_ids_by_account(owner.revision.account_id)
             .await
             .unwrap(),
-        vec![initial_card.card_id]
+        vec![component_card_id, initial_card.card_id]
     );
 
     deps.component_repo
@@ -3805,7 +3837,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap()
         .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
-    deps.component_repo
+    let recreated = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3823,6 +3856,13 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         )
         .await
         .unwrap();
+    let recreated_component_card_id = recreated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
@@ -3831,8 +3871,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "agent-initial cards from a deleted component incarnation must not reappear after same-name recreation"
+        vec![recreated_component_card_id],
+        "the recreated component card must appear without agent cards from the deleted incarnation"
     );
     assert!(
         services

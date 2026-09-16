@@ -1,7 +1,7 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::model::card::{CardGetView, CardListView, CardRevokeView};
-use golem_client::model::StoredCard;
+use golem_client::model::{CardManagedBy, StoredCard};
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
@@ -49,8 +49,19 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .into_iter()
         .next()
         .expect("card list produced no JSON output");
-    assert_eq!(account_cards.cards.len(), 1);
-    let initial_card_id = card_id(&account_cards.cards[0]);
+    assert_eq!(account_cards.cards.len(), 2);
+    let initial_card_id = account_cards
+        .cards
+        .iter()
+        .find_map(|card| match card {
+            StoredCard::Concrete(card)
+                if matches!(&card.managed_by, Some(CardManagedBy::AgentInitial(_))) =>
+            {
+                Some(card.card_id)
+            }
+            _ => None,
+        })
+        .expect("account card list did not contain the agent initial card");
 
     let output = ctx
         .cli([
@@ -126,5 +137,11 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .into_iter()
         .next()
         .expect("card list after revoke produced no JSON output");
-    assert!(account_cards.cards.is_empty());
+    assert_eq!(account_cards.cards.len(), 1);
+    assert!(account_cards.cards.iter().all(|card| match card {
+        StoredCard::Concrete(card) => {
+            matches!(&card.managed_by, Some(CardManagedBy::ComponentInitial(_)))
+        }
+        StoredCard::Polymorphic(_) => false,
+    }));
 }
