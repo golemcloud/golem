@@ -88,7 +88,7 @@ use crate::services::{
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
-    ConcurrentAgentPermitState, InvocationLoop, run_invocation_loop_task,
+    ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
@@ -480,6 +480,19 @@ pub trait WorkerDeletionHook: Send + Sync {
 
     fn claimed(&self, _owned_agent_id: &OwnedAgentId, _started: bool) {}
 
+    fn observe_result(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _result: BoxFuture<'static, Result<(), WorkerExecutorError>>,
+    ) {
+    }
+
+    fn unload_deadline(&self, _owned_agent_id: &OwnedAgentId, deadline: Instant) -> Instant {
+        deadline
+    }
+
+    async fn before_filesystem_cleanup(&self, _owned_agent_id: &OwnedAgentId) {}
+
     async fn before_stage(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -541,6 +554,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     deps: All<Ctx>,
     card_interest_index: Arc<CardInterestIndex>,
     instance: Arc<Mutex<WorkerInstance>>,
+    unload_cleanup: StdMutex<Option<invocation_loop::UnloadCleanup>>,
     resolved: OnceCell<ResolvedWorkerData<Ctx>>,
     initialization_complete: AtomicBool,
 }
@@ -1101,9 +1115,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps: All::from_other(deps),
             card_interest_index,
             instance: Arc::new(Mutex::new(WorkerInstance::Unresolved)),
+            unload_cleanup: StdMutex::new(None),
             resolved: OnceCell::new(),
             initialization_complete: AtomicBool::new(false),
         })
+    }
+
+    /// Joins final cleanup after the caller has fenced and stopped the runtime. Unlike the
+    /// bounded unload notification, success proves the owned filesystem deletion was verified.
+    /// Must be called without lifecycle, cache, or metadata locks held.
+    pub(crate) async fn wait_for_unload_cleanup(&self) -> Result<(), WorkerExecutorError> {
+        let instance = self.instance.lock().await;
+        let cleanup = self.unload_cleanup.lock().unwrap().clone();
+        let missing_cleanup_error = match instance.deletion_runtime() {
+            WorkerInstance::CleanupFailed(error) if cleanup.is_none() => Some(error.clone()),
+            WorkerInstance::Running(_)
+            | WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_) => Some(WorkerExecutorError::runtime(
+                "worker runtime has not stopped before cleanup wait",
+            )),
+            _ => None,
+        };
+        drop(instance);
+        if let Some(error) = missing_cleanup_error {
+            return Err(error);
+        }
+        match cleanup {
+            Some(cleanup) => cleanup.wait().await,
+            None => Ok(()),
+        }
     }
 
     pub(crate) async fn ensure_created(
@@ -1866,6 +1906,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !self.active_agents().contains_worker_generation(self).await {
             return Ok(None);
         }
+        let retry_cleanup = matches!(
+            instance.deletion_runtime(),
+            WorkerInstance::CleanupFailed(_)
+        );
         let (outcome, sender) = match &mut *instance {
             WorkerInstance::Deleting(deleting) => match deleting.handle.result() {
                 None | Some(Ok(())) => (
@@ -1897,6 +1941,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let started = matches!(outcome, DeleteOutcome::Started(_));
         drop(instance);
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
+            let handle = match &outcome {
+                DeleteOutcome::Started(handle) | DeleteOutcome::AlreadyDeleting(handle) => {
+                    handle.clone()
+                }
+            };
+            hook.observe_result(
+                &self.owned_agent_id,
+                async move { handle.wait().await }.boxed(),
+            );
             hook.claimed(&self.owned_agent_id, started);
         }
         match &outcome {
@@ -1907,7 +1960,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker = self.clone();
         let sender = sender.expect("started deletion has a completion sender");
         tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(worker.run_deletion_attempt())
+            let result = std::panic::AssertUnwindSafe(worker.run_deletion_attempt(retry_cleanup))
                 .catch_unwind()
                 .await
                 .unwrap_or_else(|_| {
@@ -1922,7 +1975,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Runs monotonic cleanup. A retry skips every stage already completed by an earlier attempt.
-    async fn run_deletion_attempt(self: &Arc<Self>) -> Result<(), WorkerExecutorError> {
+    async fn run_deletion_attempt(
+        self: &Arc<Self>,
+        retry_cleanup: bool,
+    ) -> Result<(), WorkerExecutorError> {
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
         if !self
             .deletion_stage_completed(WorkerDeletionStage::ExecutionFenced)
@@ -1969,11 +2025,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
             self.durable_stream_attachment_reconciler.stop().await;
-            if let WorkerInstance::Deleting(deleting) = &*self.instance.lock().await
-                && let WorkerInstance::CleanupFailed(error) = &*deleting.runtime
-            {
-                return Err(error.clone());
+            let cleanup_error = {
+                let instance = self.instance.lock().await;
+                match instance.deletion_runtime() {
+                    WorkerInstance::CleanupFailed(error) => Some(error.clone()),
+                    _ => None,
+                }
+            };
+            if let Some(error) = cleanup_error {
+                // A shutdown failure observed by this attempt belongs to its immutable result.
+                // Only an explicit claim made after the failure may join or retry final cleanup.
+                if !retry_cleanup {
+                    return Err(error);
+                }
+                let cleanup = self.unload_cleanup.lock().unwrap().clone().ok_or(error)?;
+                let retry = cleanup.retry();
+                *self.unload_cleanup.lock().unwrap() = Some(retry.clone());
+                retry.wait().await?;
+                *self.instance.lock().await.deletion_runtime_mut() =
+                    WorkerInstance::StoppedForDeletion;
             }
+            self.wait_for_unload_cleanup().await?;
             self.complete_deletion_stage(WorkerDeletionStage::RuntimeStopped)
                 .await;
         }
@@ -6305,13 +6377,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(ref pending_error) = fail_pending_invocations {
                     self.fail_pending_invocations(pending_error.clone()).await;
                 }
-                *runtime = if matches!(final_state, FinalWorkerState::Deleting) {
-                    // The invocation loop is already gone. The attempt that observed its failure
-                    // reports it; a later deletion retry can continue durable cleanup.
-                    WorkerInstance::CleanupFailed(error.clone())
-                } else {
-                    WorkerInstance::CleanupFailed(error)
-                };
+                *runtime = WorkerInstance::CleanupFailed(error);
                 StopResult::Stopped
             }
             WorkerInstance::WaitingForPermit(_) => {
@@ -7517,14 +7583,14 @@ type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
 
 pub(crate) struct CreateWorkerInstanceError {
     pub(crate) error: WorkerExecutorError,
-    pub(crate) filesystem_cleanup_failed: bool,
+    pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
 }
 
 impl From<WorkerExecutorError> for CreateWorkerInstanceError {
     fn from(error: WorkerExecutorError) -> Self {
         Self {
             error,
-            filesystem_cleanup_failed: false,
+            filesystem_cleanup_failure: None,
         }
     }
 }
@@ -7871,7 +7937,9 @@ impl RunningWorker {
             .resolved_limits(parent.resource_entry.max_disk_space_limit())
             .map_err(|error| CreateWorkerInstanceError {
                 error: WorkerExecutorError::runtime(error.to_string()),
-                filesystem_cleanup_failed: error.cleanup_failed(),
+                filesystem_cleanup_failure: error.cleanup_failed().then(|| {
+                    UnloadCleanupFailure::Other(WorkerExecutorError::runtime(error.to_string()))
+                }),
             })?;
         let pressure = filesystems.pressure_policy();
         let pressure_recovery =
@@ -7889,7 +7957,11 @@ impl RunningWorker {
             .await
             .map_err(|failure| CreateWorkerInstanceError {
                 error: WorkerExecutorError::runtime(failure.source.to_string()),
-                filesystem_cleanup_failed: failure.source.cleanup_failed(),
+                filesystem_cleanup_failure: failure.source.cleanup_failed().then(|| {
+                    UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
+                        failure.source.to_string(),
+                    ))
+                }),
             })?;
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
@@ -7924,7 +7996,10 @@ impl RunningWorker {
                             "{startup_error}; additionally failed to clean up the created agent filesystem: {}",
                             cleanup_error.source
                         )),
-                        filesystem_cleanup_failed: true,
+                        filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
+                            failure: cleanup_error,
+                            close_error: None,
+                        }),
                     },
                 });
             }
@@ -7939,6 +8014,7 @@ impl RunningWorker {
                         WorkerExecutorError::runtime(format!(
                             "Failed to open worker resource usage window: {error}"
                         )),
+                        None,
                     )
                     .await);
                 }
@@ -8290,20 +8366,25 @@ async fn cleanup_open_agent_filesystem(
         std::time::Instant::now() + Duration::from_secs(30),
     )
     .await
-    .err();
-    let startup_error = match close_error {
+    .err()
+    .map(|error| WorkerExecutorError::runtime(error.to_string()));
+    let startup_error = match &close_error {
         Some(error) => WorkerExecutorError::runtime(format!("{startup_error}; {error}")),
         None => startup_error,
     };
-    cleanup_typed_agent_filesystem(filesystem, startup_error).await
+    cleanup_typed_agent_filesystem(filesystem, startup_error, close_error).await
 }
 
-async fn cleanup_typed_agent_filesystem(
-    filesystem: SealedFilesystem,
+async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
+    filesystem: SealedFilesystem<Adapter>,
     startup_error: WorkerExecutorError,
+    close_error: Option<WorkerExecutorError>,
 ) -> CreateWorkerInstanceError {
     match delete_agent_filesystem(filesystem).await {
-        Ok(()) => startup_error.into(),
+        Ok(()) => CreateWorkerInstanceError {
+            error: startup_error,
+            filesystem_cleanup_failure: close_error.map(UnloadCleanupFailure::Other),
+        },
         Err(cleanup_error) => {
             warn!(error = %cleanup_error.source, "Failed to clean up filesystem after worker startup failure");
             CreateWorkerInstanceError {
@@ -8311,7 +8392,10 @@ async fn cleanup_typed_agent_filesystem(
                     "{startup_error}; additionally failed to clean up the agent filesystem: {}",
                     cleanup_error.source
                 )),
-                filesystem_cleanup_failed: true,
+                filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
+                    failure: cleanup_error,
+                    close_error,
+                }),
             }
         }
     }

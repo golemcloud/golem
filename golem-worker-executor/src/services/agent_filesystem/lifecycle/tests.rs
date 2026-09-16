@@ -6594,6 +6594,116 @@ async fn delete_observer_waits_for_sandbox_verification() {
 }
 
 #[test]
+#[timeout("5s")]
+async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = filesystem.generation.as_ref().unwrap().clone();
+    control.push_delete_and_verify(Err(sandbox_error(
+        "first deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let first = delete(seal(filesystem)).await.unwrap_err();
+    assert!(first.source.to_string().contains("first deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Err(sandbox_error(
+        "persistent deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let second = first.retry().await.unwrap_err();
+    assert!(second.source.to_string().contains("persistent deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Ok(()));
+    let gate = control.block("delete_and_verify");
+    let retry = tokio::spawn(second.retry());
+    gate.wait_started().await;
+    retry.abort();
+    assert!(retry.await.unwrap_err().is_cancelled());
+    gate.release();
+    gate.wait_completed().await;
+
+    // A stale failure still refers to the old cleanup owner, not a newly provisioned path.
+    first.retry().await.unwrap();
+    assert!(generation.sandbox.read().await.is_none());
+    assert!(first.source.to_string().contains("first deletion"));
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("delete_and_verify("))
+            .count(),
+        3
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("10s")]
+async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+    let parent = tempfile::tempdir().unwrap();
+    let provisioning = SandboxFilesystemProvisioning::new(
+        Some(parent.path().to_path_buf()),
+        None,
+        golem_common::model::RetryConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let agent = agent_id();
+    let filesystem = create_fresh(
+        provisioning.clone(),
+        agent.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let root = filesystem
+        .generation
+        .as_ref()
+        .unwrap()
+        .sandbox
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .root()
+        .to_path_buf();
+    let component = root.parent().unwrap();
+    let moved = component.with_extension("moved");
+    std::fs::rename(component, &moved).unwrap();
+    std::fs::write(component, b"block directory traversal").unwrap();
+
+    let failure = delete_created(filesystem).await.unwrap_err();
+    assert_eq!(
+        failure.source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+    assert_eq!(
+        failure.retry().await.unwrap_err().source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+
+    std::fs::remove_file(component).unwrap();
+    std::fs::rename(&moved, component).unwrap();
+    failure.retry().await.unwrap();
+    assert!(!root.exists());
+
+    let replacement = create_fresh(provisioning, agent, ResolvedStorageLimits::Unlimited)
+        .await
+        .unwrap();
+    std::fs::write(root.join("replacement"), b"new generation").unwrap();
+    failure.retry().await.unwrap();
+    drop(failure);
+    assert_eq!(
+        std::fs::read(root.join("replacement")).unwrap(),
+        b"new generation"
+    );
+    delete_created(replacement).await.unwrap();
+}
+
+#[test]
 async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
