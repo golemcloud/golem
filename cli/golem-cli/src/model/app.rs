@@ -849,8 +849,14 @@ impl Application {
         for (agent_type_name, component_name) in mapping {
             let component = self.component(component_name);
             let component_base = component.agent_base_properties();
+            let component_tool_bindings = component.layer_properties().tool_bindings.clone_value();
             let (properties, layer_properties) = self
-                .resolve_agent(component_name, agent_type_name, component_base)
+                .resolve_agent(
+                    component_name,
+                    agent_type_name,
+                    component_base,
+                    component_tool_bindings,
+                )
                 .with_context(|| {
                     format!(
                         "Failed to resolve agent '{}' for component '{}'",
@@ -884,6 +890,7 @@ impl Application {
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
         component_base: app_raw::AgentLayerProperties,
+        component_tool_bindings: ToolBindingsProperty<AgentLayer>,
     ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
         let base_component_id = AgentLayerId::Component(component_name.clone());
         let mut agent_layer_store = Store::new();
@@ -892,7 +899,10 @@ impl Application {
             .add_layer(AgentLayer {
                 id: base_component_id.clone(),
                 parents: vec![],
-                properties: AgentLayerPropertiesKind::Common(Box::new(component_base)),
+                properties: AgentLayerPropertiesKind::ComponentBase {
+                    properties: Box::new(component_base),
+                    tool_bindings: component_tool_bindings,
+                },
             })
             .map_err(|err| anyhow!(err.to_string()))
             .with_context(|| {
@@ -955,9 +965,10 @@ impl Application {
                         .add_layer(AgentLayer {
                             id: template_id.clone(),
                             parents: vec![latest_parent_id],
-                            properties: AgentLayerPropertiesKind::Common(Box::new(
-                                template_agent_props,
-                            )),
+                            properties: AgentLayerPropertiesKind::ComponentTemplate {
+                                properties: Box::new(template_agent_props),
+                                tool_bindings: template_layer_props.tool_bindings.clone(),
+                            },
                         })
                         .map_err(|err| anyhow!(err.to_string()))
                         .with_context(|| {
@@ -2047,6 +2058,11 @@ impl Layer for ComponentLayer {
                     properties.files.value().clone(),
                 ),
             );
+            if let Some(layer) = &properties.tool_bindings_layer {
+                value
+                    .tool_bindings
+                    .apply_layer(id, selection, layer.clone());
+            }
             value.file_sources.apply_layer(
                 id,
                 selection,
@@ -2326,12 +2342,23 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
+    pub tool_bindings: ToolBindingsProperty<ComponentLayer>,
+    #[serde(skip)]
+    tool_bindings_layer: Option<(MapMergeMode, IndexMap<String, app_raw::ToolBinding>)>,
     #[serde(skip)]
     file_sources: VecProperty<ComponentLayer, PathBuf>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
+        let tool_bindings_layer = (value.agent_properties.tools.is_some()
+            || value.agent_properties.tools_merge_mode.is_some())
+        .then(|| {
+            (
+                value.agent_properties.tools_merge_mode.unwrap_or_default(),
+                value.agent_properties.tools.unwrap_or_default(),
+            )
+        });
         Self {
             applied_layers: vec![],
             component_wasm: value.component_wasm.into(),
@@ -2350,6 +2377,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.agent_properties.plugins.unwrap_or_default().into(),
             files_merge_mode: value.agent_properties.files_merge_mode,
             files: value.agent_properties.files.unwrap_or_default().into(),
+            tool_bindings: ToolBindingsProperty::default(),
+            tool_bindings_layer,
             file_sources: Vec::new().into(),
         }
     }
@@ -2369,6 +2398,7 @@ impl ComponentLayerProperties {
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
+        self.tool_bindings.compact_trace();
         self.file_sources.compact_trace();
     }
 
@@ -2745,6 +2775,14 @@ struct AgentLayer {
 #[derive(Debug, Clone, Serialize)]
 enum AgentLayerPropertiesKind {
     Empty,
+    ComponentBase {
+        properties: Box<app_raw::AgentLayerProperties>,
+        tool_bindings: ToolBindingsProperty<AgentLayer>,
+    },
+    ComponentTemplate {
+        properties: Box<app_raw::AgentLayerProperties>,
+        tool_bindings: ToolBindingsProperty<ComponentLayer>,
+    },
     Common(Box<app_raw::AgentLayerProperties>),
     Presets {
         presets: IndexMap<String, app_raw::AgentLayerProperties>,
@@ -2775,6 +2813,20 @@ impl Layer for AgentLayer {
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
         let (property_layers_to_apply, selection) = match &self.properties {
+            AgentLayerPropertiesKind::ComponentBase {
+                properties,
+                tool_bindings,
+            } => {
+                value.tool_bindings = tool_bindings.clone();
+                (vec![properties.as_ref()], None)
+            }
+            AgentLayerPropertiesKind::ComponentTemplate {
+                properties,
+                tool_bindings,
+            } => {
+                value.tool_bindings.apply_template(&self.id, tool_bindings);
+                (vec![properties.as_ref()], None)
+            }
             AgentLayerPropertiesKind::Empty => (vec![], None),
             AgentLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
             AgentLayerPropertiesKind::Presets {
@@ -5127,6 +5179,7 @@ mod test {
         ComponentPresetSelector, SubjectSource, ToolName, includes_from_yaml_file,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::property::Property;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
@@ -7022,6 +7075,120 @@ mod test {
                     "agent:test-agent:common".to_string(),
                 ]
             );
+        });
+    }
+
+    #[test]
+    fn component_tool_defaults_are_preserved_and_overridden_per_agent() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+                componentPresets: narrowed
+            componentTemplates:
+              defaults:
+                tools:
+                  search:
+                    parameters: { root: /template, depth: 2 }
+                    secretKeysReadable: [shared, template]
+                presets:
+                  narrowed:
+                    tools:
+                      search:
+                        parameters: { root: /component }
+                        secretKeysReadable: [shared, preset]
+            components:
+              app:main:
+                templates: defaults
+                componentWasm: dummy-component.wasm
+                tools:
+                  extra: {}
+            agents:
+              first:
+                tools:
+                  search:
+                    parameters: { depth: 1 }
+                    secretKeysReadable: [shared, agent]
+              second:
+                toolsMergeMode: replace
+                tools:
+                  extra:
+                    parameters: { own: true }
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["narrowed"]);
+        let component_name = ComponentName("app:main".to_string());
+        let component = app.component(&component_name);
+        let baseline = component.layer_properties().tool_bindings.value();
+        assert_eq!(baseline["search"].parameters["root"], json!("/component"));
+        assert_eq!(baseline["search"].parameters["depth"], json!(2));
+        assert_eq!(baseline["search"].secret_keys_readable.len(), 2);
+        assert!(baseline.contains_key("extra"));
+
+        with_resolved_agent(&app, "app:main", "first", |agent| {
+            let bindings = agent.tool_bindings();
+            assert_eq!(bindings["search"].parameters["root"], json!("/component"));
+            assert_eq!(bindings["search"].parameters["depth"], json!(1));
+            assert_eq!(bindings["search"].secret_keys_readable.len(), 3);
+            assert!(bindings.contains_key("extra"));
+        });
+        with_resolved_agent(&app, "app:main", "second", |agent| {
+            let bindings = agent.tool_bindings();
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings["extra"].parameters["own"], json!(true));
+        });
+    }
+
+    #[test]
+    fn agent_templates_apply_tool_operations_to_component_defaults() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              remove-default:
+                toolsMergeMode: remove
+                tools:
+                  search: {}
+              clear-defaults:
+                toolsMergeMode: replace
+              narrow:
+                tools:
+                  search:
+                    parameters: { depth: 7 }
+                    secretKeysReadable: [shared, template]
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                tools:
+                  search:
+                    parameters: { root: /component, depth: 2 }
+                    secretKeysReadable: [shared, component]
+                  other: {}
+            agents:
+              removing:
+                templates: remove-default
+              clearing:
+                templates: clear-defaults
+              narrowing:
+                templates: narrow
+        "# };
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        with_resolved_agent(&app, "app:main", "removing", |agent| {
+            assert!(!agent.tool_bindings().contains_key("search"));
+            assert!(agent.tool_bindings().contains_key("other"));
+        });
+        with_resolved_agent(&app, "app:main", "clearing", |agent| {
+            assert!(agent.tool_bindings().is_empty());
+        });
+        with_resolved_agent(&app, "app:main", "narrowing", |agent| {
+            let binding = &agent.tool_bindings()["search"];
+            assert_eq!(binding.parameters["root"], json!("/component"));
+            assert_eq!(binding.parameters["depth"], json!(7));
+            assert_eq!(binding.secret_keys_readable.len(), 2);
+            assert!(agent.tool_bindings().contains_key("other"));
         });
     }
 

@@ -293,6 +293,13 @@ impl ComponentRevisionRecord {
                             })
                             .collect(),
                         environment_binding: metadata.environment_binding.clone(),
+                        component_bindings: metadata
+                            .component_bindings
+                            .iter()
+                            .map(|(component_name, binding)| {
+                                (component_name.0.clone(), binding.clone())
+                            })
+                            .collect(),
                         agent_bindings: metadata
                             .agent_bindings
                             .iter()

@@ -382,6 +382,7 @@ pub struct ToolManifestProvisionConfig {
 pub struct ToolManifestDeploymentConfig {
     pub provision: ToolManifestProvisionConfig,
     pub environment_binding: Option<golem_common::model::tool::ToolBindingInput>,
+    pub component_bindings: BTreeMap<ComponentName, golem_common::model::tool::ToolBindingInput>,
     pub agent_bindings: BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
 }
 

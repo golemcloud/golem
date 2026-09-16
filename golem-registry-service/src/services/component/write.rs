@@ -1069,7 +1069,11 @@ impl ComponentWriteService {
             .as_ref()
             .and_then(|metadata| metadata.environment_binding.clone());
         let old_agent_bindings = existing
-            .map(|metadata| metadata.agent_bindings)
+            .as_ref()
+            .map(|metadata| metadata.agent_bindings.clone())
+            .unwrap_or_default();
+        let old_component_bindings = existing
+            .map(|metadata| metadata.component_bindings)
             .unwrap_or_default();
 
         Ok(ToolDeploymentMetadata {
@@ -1078,6 +1082,7 @@ impl ComponentWriteService {
             environment_binding: update
                 .environment_binding
                 .compute_new_value(old_environment_binding),
+            component_bindings: update.component_bindings.unwrap_or(old_component_bindings),
             agent_bindings: update.agent_bindings.unwrap_or(old_agent_bindings),
         })
     }
@@ -1164,6 +1169,7 @@ fn resolve_tool_deployment_metadata_for_creation(
                 definition,
                 provision,
                 environment_binding: config.environment_binding,
+                component_bindings: config.component_bindings,
                 agent_bindings: config.agent_bindings,
             },
         );
@@ -1900,6 +1906,7 @@ mod tests {
             definition,
             provision: ToolProvisionConfig::default(),
             environment_binding: None,
+            component_bindings: BTreeMap::new(),
             agent_bindings: BTreeMap::new(),
         }
     }
@@ -1976,6 +1983,7 @@ mod tests {
                         files: BTreeMap::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),

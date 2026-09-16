@@ -52,8 +52,8 @@ use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolDeploymentState, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::tool::Tool;
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
@@ -64,6 +64,7 @@ use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use heck::ToKebabCase;
 use sqlx::FromRow;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -539,6 +540,7 @@ pub struct DeploymentRegisteredToolRecord {
     pub owner_account_email: String,
     pub tool_definition: Blob<Tool>,
     pub tool_provision_config: Blob<ToolProvisionConfig>,
+    pub component_bindings: Blob<BTreeMap<ComponentName, ToolBindingInput>>,
     pub metadata_version: String,
     pub metadata_digest: Option<SqlBlake3Hash>,
     pub published: bool,
@@ -603,6 +605,7 @@ impl DeploymentRegisteredToolRecord {
             owner_account_email: registered_tool.owner_account_email.into_inner(),
             tool_definition: Blob::new(registered_tool.definition),
             tool_provision_config: Blob::new(registered_tool.provision),
+            component_bindings: Blob::new(registered_tool.component_bindings),
             metadata_version: registered_tool.metadata_version,
             metadata_digest: Some(registered_tool.metadata_digest.into()),
             published,
@@ -670,6 +673,7 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
                 .map(golem_common::model::tool_release::ToolReleaseId),
             definition,
             provision: value.tool_provision_config.into_value(),
+            component_bindings: value.component_bindings.into_value(),
             source,
             owner_account_id: value.owner_account_id.into(),
             owner_account_email: AccountEmail::new(value.owner_account_email),

@@ -147,6 +147,13 @@ impl ComponentDto {
                             })
                             .collect(),
                         environment_binding: metadata.environment_binding.clone(),
+                        component_bindings: metadata
+                            .component_bindings
+                            .iter()
+                            .map(|(component_name, binding)| {
+                                (component_name.0.clone(), binding.clone())
+                            })
+                            .collect(),
                         agent_bindings: metadata
                             .agent_bindings
                             .iter()
@@ -215,6 +222,7 @@ mod tests {
                         files: Vec::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -245,6 +253,7 @@ mod tests {
                     files_by_path: BTreeMap::new(),
                     plugins_by_grant_id: BTreeMap::new(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 }
                 .into(),

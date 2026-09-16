@@ -940,6 +940,22 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     files: Vec::new(),
                 },
                 environment_binding: None,
+                component_bindings: BTreeMap::from([(
+                    golem_common::model::component::ComponentName("component".to_string()),
+                    golem_common::model::tool::ToolBindingInput {
+                        version: Some("1.0.0".to_string()),
+                        parameters: golem_common::model::json::NormalizedJsonValue::new(
+                            json!({ "index": "docs" }),
+                        ),
+                        account: Some(golem_common::model::account::AccountEmail::new(
+                            "component-owner@example.com",
+                        )),
+                        secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                        secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(
+                            BTreeSet::new(),
+                        ),
+                    },
+                )]),
                 agent_bindings: BTreeMap::new(),
             },
         )]),
@@ -1040,6 +1056,27 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
                     "manifest-plugin-secret".to_string(),
                 )]),
             }],
+        ),
+    );
+    properties.tool_bindings.apply_layer(
+        &layer,
+        None,
+        (
+            crate::model::cascade::property::map::MapMergeMode::Upsert,
+            indexmap::IndexMap::from([(
+                "search".to_string(),
+                crate::model::app_raw::ToolBinding {
+                    version: Some("1.0.0".to_string()),
+                    parameters: Some(indexmap::IndexMap::from([(
+                        "index".to_string(),
+                        json!("docs"),
+                    )])),
+                    secret_keys_readable: Some(crate::model::app_raw::ManifestSecretKeyScope::All(
+                        "*".to_string(),
+                    )),
+                    ..Default::default()
+                },
+            )]),
         ),
     );
     properties
@@ -4429,6 +4466,44 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                     files,
                 ),
             );
+            let binding = crate::model::app_raw::ToolBinding {
+                version: Some("1.0.0".to_string()),
+                parameters: Some(indexmap::IndexMap::from([(
+                    "endpoint".to_string(),
+                    json!("https://example.com"),
+                )])),
+                secret_keys_readable: Some(crate::model::app_raw::ManifestSecretKeyScope::Keys(
+                    vec!["api".to_string(), "token".to_string()],
+                )),
+                ..Default::default()
+            };
+            properties.tool_bindings.apply_layer(
+                &layer_id,
+                selection,
+                (
+                    crate::model::cascade::property::map::MapMergeMode::Upsert,
+                    indexmap::IndexMap::from([("search".to_string(), binding.clone())]),
+                ),
+            );
+            properties.tool_bindings.apply_layer(
+                &second_layer_id,
+                selection,
+                (
+                    crate::model::cascade::property::map::MapMergeMode::Replace,
+                    indexmap::IndexMap::from([("search".to_string(), binding)]),
+                ),
+            );
+            properties.tool_bindings.apply_layer(
+                &layer_id,
+                selection,
+                (
+                    crate::model::cascade::property::map::MapMergeMode::Remove,
+                    indexmap::IndexMap::from([(
+                        "removed".to_string(),
+                        crate::model::app_raw::ToolBinding::default(),
+                    )]),
+                ),
+            );
 
             properties
         })
@@ -4998,6 +5073,18 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: current_file_hash,
                             provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            component_bindings: BTreeMap::from([(
+                                "component".to_string(),
+                                golem_common::model::tool::ToolBindingInput {
+                                    version: Some("1.0.0".to_string()),
+                                    parameters: golem_common::model::json::NormalizedJsonValue::new(
+                                        json!({ "index": "current" }),
+                                    ),
+                                    account: None,
+                                    secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                                    secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                                },
+                            )]),
                             bindings: BTreeMap::from_iter([(
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding.clone(),
@@ -5019,6 +5106,18 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: new_file_hash,
                             provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            component_bindings: BTreeMap::from([(
+                                "component".to_string(),
+                                golem_common::model::tool::ToolBindingInput {
+                                    version: Some("1.1.0".to_string()),
+                                    parameters: golem_common::model::json::NormalizedJsonValue::new(
+                                        json!({ "index": "new" }),
+                                    ),
+                                    account: None,
+                                    secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                                    secret_keys_revealable: golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                                },
+                            )]),
                             bindings: BTreeMap::from_iter([(
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding,

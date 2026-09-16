@@ -99,6 +99,7 @@ pub struct RemoteToolDeployment {
     pub metadata_version: String,
     pub metadata_digest: Hash,
     pub provision: ToolProvisionConfig,
+    pub component_bindings: BTreeMap<String, ToolBindingInput>,
     pub bindings: BTreeMap<AgentTypeName, EffectiveToolBinding>,
 }
 
@@ -182,6 +183,11 @@ pub fn remote_tool_deployments(
                     metadata_version: tool.metadata_version,
                     metadata_digest: tool.metadata_digest,
                     provision: tool.provision,
+                    component_bindings: tool
+                        .component_bindings
+                        .into_iter()
+                        .map(|(name, binding)| (name.0, binding))
+                        .collect(),
                     bindings,
                 }
                 .into(),
@@ -302,6 +308,7 @@ mod tests {
             metadata_version: "0.1.0".to_string(),
             metadata_digest: Hash::new(blake3::hash(b"metadata-a")),
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             bindings: BTreeMap::new(),
         }
     }
@@ -343,6 +350,7 @@ mod tests {
                 schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source,
             owner_account_id: AccountId::new(),
             owner_account_email: AccountEmail::new("owner@example.com"),
@@ -444,6 +452,20 @@ mod tests {
         changed_provision.provision.config =
             NormalizedJsonValue::new(serde_json::json!({ "consumer": true }));
         assert_ne!(base_hash, deployment_hash(changed_provision, false));
+
+        let mut changed_component_baseline = base.clone();
+        changed_component_baseline.component_bindings.insert(
+            "consumer".to_string(),
+            crate::model::tool::ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 5 })),
+                ..crate::model::tool::ToolBindingInput::default()
+            },
+        );
+        assert!(changed_component_baseline.bindings.is_empty());
+        assert_ne!(
+            base_hash,
+            deployment_hash(changed_component_baseline, false)
+        );
 
         let mut changed_binding = base.clone();
         changed_binding.bindings.insert(

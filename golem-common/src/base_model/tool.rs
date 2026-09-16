@@ -210,6 +210,9 @@ pub struct ToolDeploymentMetadata {
     pub environment_binding: Option<ToolBindingInput>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
 }
 
@@ -227,6 +230,9 @@ pub struct RemoteToolDeployment {
     pub release: ToolReleaseReference,
     pub provision: ToolProvisionConfig,
     pub environment_binding: Option<ToolBindingInput>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
@@ -304,6 +310,10 @@ pub struct RegisteredTool {
     pub release_id: Option<ToolReleaseId>,
     pub definition: Tool,
     pub provision: ToolProvisionConfig,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
     pub source: ToolSource,
     pub owner_account_id: AccountId,
     pub owner_account_email: AccountEmail,

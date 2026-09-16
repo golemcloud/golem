@@ -216,6 +216,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -315,6 +321,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -417,6 +429,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -519,6 +537,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"

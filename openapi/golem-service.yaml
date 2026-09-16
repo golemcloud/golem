@@ -23310,6 +23310,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object
@@ -24054,6 +24059,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfigCreation'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object
@@ -24071,6 +24081,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput'
           - {}
+        componentBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           additionalProperties:
@@ -24085,6 +24099,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object

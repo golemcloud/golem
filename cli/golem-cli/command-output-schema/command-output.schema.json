@@ -2977,7 +2977,8 @@
         "config",
         "env",
         "plugins",
-        "files"
+        "files",
+        "toolBindings"
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
@@ -2996,7 +2997,8 @@
         "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
         "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
         "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
-        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" }
+        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" },
+        "toolBindings": { "$ref": "#/definitions/ComponentLayerToolBindingsProperty" }
       },
       "additionalProperties": false
     },
@@ -3469,6 +3471,99 @@
       },
       "additionalProperties": false
     },
+    "ComponentLayerToolBindingsProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingState" }
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerToolBindingsTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerToolBindingsUpsertTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsRemoveTraceElem" }
+      ]
+    },
+    "ComponentLayerToolBindingsUpsertTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "upsert" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsRemoveTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "removedNames"],
+      "properties": {
+        "type": { "const": "remove" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "removedNames": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolBindingState": {
+      "type": "object",
+      "required": ["version", "parameters", "account", "secretKeysReadable", "secretKeysRevealable"],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "parameters": { "type": "object" },
+        "account": { "type": ["string", "null"] },
+        "secretKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "secretKeysRevealable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } }
+      },
+      "additionalProperties": false
+    },
+    "ManifestToolBinding": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "parametersMergeMode": { "$ref": "#/definitions/MapMergeMode" },
+        "parameters": { "type": "object" },
+        "account": { "type": "string" },
+        "secretKeysReadableMergeMode": { "const": "intersect" },
+        "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "secretKeysRevealableMergeMode": { "const": "intersect" },
+        "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestSecretKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
     "ComponentLayerJsonProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -3755,7 +3850,7 @@
     },
     "ToolDeploymentMetadata": {
       "type": "object",
-      "required": ["definition", "provision", "environmentBinding", "agentBindings"],
+      "required": ["definition", "provision", "environmentBinding", "componentBindings", "agentBindings"],
       "properties": {
         "definition": { "$ref": "#/definitions/Tool" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
@@ -3764,6 +3859,10 @@
             { "$ref": "#/definitions/ToolBindingInput" },
             { "type": "null" }
           ]
+        },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
         },
         "agentBindings": {
           "type": "object",
@@ -5348,6 +5447,7 @@
         "metadataVersion",
         "metadataDigest",
         "provision",
+        "componentBindings",
         "bindings"
       ],
       "properties": {
@@ -5359,6 +5459,10 @@
         "metadataVersion": { "type": "string" },
         "metadataDigest": { "type": "string" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
+        },
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }

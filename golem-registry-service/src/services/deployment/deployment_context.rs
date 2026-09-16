@@ -293,10 +293,14 @@ impl DeploymentContext {
                 continue;
             }
 
-            let (component, metadata, valid, (environment_binding, valid_agent_bindings)) =
-                implementations
-                    .pop()
-                    .expect("tool implementation list is never empty");
+            let (
+                component,
+                metadata,
+                valid,
+                (environment_binding, valid_component_bindings, valid_agent_bindings),
+            ) = implementations
+                .pop()
+                .expect("tool implementation list is never empty");
             if !valid {
                 continue;
             }
@@ -325,6 +329,7 @@ impl DeploymentContext {
                 release_id: None,
                 definition: metadata.definition.clone(),
                 provision: metadata.provision.clone(),
+                component_bindings: valid_component_bindings,
                 source: source.clone(),
                 owner_account_id: component.account_id,
                 owner_account_email: component.account_email.clone(),
@@ -431,6 +436,21 @@ impl DeploymentContext {
                     errors,
                 )
             });
+            let valid_component_bindings = deployment
+                .component_bindings
+                .iter()
+                .filter_map(|(component_name, binding)| {
+                    validate_tool_binding(
+                        &deployment.name,
+                        None,
+                        binding,
+                        &resolved.owner.email,
+                        &release.version,
+                        errors,
+                    )
+                    .map(|binding| (component_name.clone(), binding.clone()))
+                })
+                .collect();
             let mut valid_agent_bindings = BTreeMap::new();
             for (agent_type, binding) in &deployment.agent_bindings {
                 if !self.registered_agent_types.contains_key(agent_type) {
@@ -459,6 +479,7 @@ impl DeploymentContext {
                 release_id: Some(release.id),
                 definition: release.definition.clone(),
                 provision: deployment.provision.clone(),
+                component_bindings: valid_component_bindings,
                 source: release.source.clone(),
                 owner_account_id: release.owner_account_id,
                 owner_account_email: resolved.owner.email.clone(),
@@ -504,6 +525,7 @@ impl DeploymentContext {
         errors: &mut Vec<DeployValidationError>,
     ) -> (
         Option<&'a ToolBindingInput>,
+        BTreeMap<ComponentName, ToolBindingInput>,
         BTreeMap<AgentTypeName, &'a ToolBindingInput>,
     ) {
         let environment_binding = metadata.environment_binding.as_ref().and_then(|binding| {
@@ -516,6 +538,21 @@ impl DeploymentContext {
                 errors,
             )
         });
+        let component_bindings = metadata
+            .component_bindings
+            .iter()
+            .filter_map(|(component_name, binding)| {
+                validate_tool_binding(
+                    tool_name,
+                    None,
+                    binding,
+                    &component.account_email,
+                    &metadata.definition.version,
+                    errors,
+                )
+                .map(|binding| (component_name.clone(), binding.clone()))
+            })
+            .collect();
         let mut agent_bindings = BTreeMap::new();
         for (agent_type, binding) in &metadata.agent_bindings {
             if !self.registered_agent_types.contains_key(agent_type) {
@@ -536,7 +573,7 @@ impl DeploymentContext {
                 agent_bindings.insert(agent_type.clone(), binding);
             }
         }
-        (environment_binding, agent_bindings)
+        (environment_binding, component_bindings, agent_bindings)
     }
 
     pub fn compile_http_api_routes(
@@ -1455,6 +1492,7 @@ mod tests {
                     ..ToolProvisionConfig::default()
                 },
                 environment_binding,
+                component_bindings: BTreeMap::new(),
                 agent_bindings,
             },
             Some(ResolvedGrantedToolRelease {
@@ -1466,6 +1504,57 @@ mod tests {
                 },
             }),
         )
+    }
+
+    fn invalid_component_bindings() -> BTreeMap<ComponentName, ToolBindingInput> {
+        BTreeMap::from([
+            (
+                ComponentName("wrong-version".to_string()),
+                ToolBindingInput {
+                    version: Some("2.0.0".to_string()),
+                    ..ToolBindingInput::default()
+                },
+            ),
+            (
+                ComponentName("wrong-account".to_string()),
+                ToolBindingInput {
+                    account: Some(AccountEmail::new("other@example.com")),
+                    ..ToolBindingInput::default()
+                },
+            ),
+            (
+                ComponentName("nonobject-parameters".to_string()),
+                ToolBindingInput {
+                    parameters: NormalizedJsonValue::new(json!(["not", "an", "object"])),
+                    ..ToolBindingInput::default()
+                },
+            ),
+        ])
+    }
+
+    fn assert_component_binding_errors(errors: &[DeployValidationError]) {
+        assert_eq!(errors.len(), 3);
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            DeployValidationError::ToolBindingVersionMismatch {
+                agent_type: None,
+                ..
+            }
+        )));
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            DeployValidationError::ToolBindingAccountMismatch {
+                agent_type: None,
+                ..
+            }
+        )));
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            DeployValidationError::ToolBindingParametersMustBeObject {
+                agent_type: None,
+                ..
+            }
+        )));
     }
 
     fn test_registered_agent_type(
@@ -1572,6 +1661,13 @@ mod tests {
     #[test]
     fn compile_tools_registers_unbound_tool_without_agent_bindings() {
         let tool_name = ToolName::try_from("grep").unwrap();
+        let component_bindings = BTreeMap::from([(
+            ComponentName("consumer".to_string()),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(json!({ "scope": "component" })),
+                ..ToolBindingInput::default()
+            },
+        )]);
         let component = test_tool_component(
             "tools",
             BTreeMap::from([(
@@ -1580,6 +1676,7 @@ mod tests {
                     definition: test_tool(tool_name.as_str()),
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: component_bindings.clone(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -1604,6 +1701,47 @@ mod tests {
         assert!(warnings.is_empty());
         assert_eq!(compiled.registered_tools.len(), 1);
         assert_eq!(compiled.registered_tools[0].definition.name(), Some("grep"));
+        assert_eq!(
+            compiled.registered_tools[0].component_bindings,
+            component_bindings
+        );
+        assert!(compiled.agent_tool_bindings.is_empty());
+    }
+
+    #[test]
+    fn compile_tools_validates_local_component_bindings_without_agent_bindings() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let component = test_tool_component(
+            "tools",
+            BTreeMap::from([(
+                tool_name.clone(),
+                ToolDeploymentMetadata {
+                    definition: test_tool(tool_name.as_str()),
+                    provision: ToolProvisionConfig::default(),
+                    environment_binding: None,
+                    component_bindings: invalid_component_bindings(),
+                    agent_bindings: BTreeMap::new(),
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::from([(component.component_name.clone(), component)]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::new(),
+        };
+        let mut errors = Vec::new();
+
+        let compiled = context.compile_tools(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &mut errors,
+            &mut Vec::new(),
+        );
+
+        assert_component_binding_errors(&errors);
+        assert_eq!(compiled.registered_tools.len(), 1);
+        assert!(compiled.registered_tools[0].component_bindings.is_empty());
         assert!(compiled.agent_tool_bindings.is_empty());
     }
 
@@ -1686,6 +1824,32 @@ mod tests {
     }
 
     #[test]
+    fn compile_tools_validates_remote_component_bindings_without_agent_bindings() {
+        let mut remote = test_remote_tool("grep", None, BTreeMap::new());
+        remote.0.component_bindings = invalid_component_bindings();
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::new(),
+        };
+        let mut errors = Vec::new();
+
+        let compiled = context.compile_tools_with_remote(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &[remote],
+            &mut errors,
+            &mut Vec::new(),
+        );
+
+        assert_component_binding_errors(&errors);
+        assert_eq!(compiled.registered_tools.len(), 1);
+        assert!(compiled.registered_tools[0].component_bindings.is_empty());
+        assert!(compiled.agent_tool_bindings.is_empty());
+    }
+
+    #[test]
     fn compile_tools_accumulates_remote_collisions_and_unavailable_references() {
         let grep = ToolName::try_from("grep").unwrap();
         let local = test_tool_component(
@@ -1696,6 +1860,7 @@ mod tests {
                     definition: test_tool(grep.as_str()),
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -1762,6 +1927,7 @@ mod tests {
                         definition: test_tool(grep.as_str()),
                         provision: ToolProvisionConfig::default(),
                         environment_binding: Some(ToolBindingInput::default()),
+                        component_bindings: BTreeMap::new(),
                         agent_bindings: BTreeMap::new(),
                     },
                 ),
@@ -1771,6 +1937,7 @@ mod tests {
                         definition: test_tool(git.as_str()),
                         provision: ToolProvisionConfig::default(),
                         environment_binding: None,
+                        component_bindings: BTreeMap::new(),
                         agent_bindings: BTreeMap::from([(
                             agent_a_name.clone(),
                             ToolBindingInput::default(),
@@ -1835,6 +2002,7 @@ mod tests {
                     definition: test_tool(tool_name.as_str()),
                     provision: ToolProvisionConfig::default(),
                     environment_binding: Some(invalid_binding.clone()),
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::from([(agent_name.clone(), invalid_binding)]),
                 },
             )]),
@@ -1909,6 +2077,7 @@ mod tests {
                     definition: test_tool("grep"),
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::from([(unknown_agent, invalid_binding)]),
                 },
             )]),
@@ -1956,6 +2125,7 @@ mod tests {
             definition: test_tool(tool_name.as_str()),
             provision: ToolProvisionConfig::default(),
             environment_binding: None,
+            component_bindings: BTreeMap::new(),
             agent_bindings: BTreeMap::new(),
         };
         let first = test_tool_component(
@@ -2010,6 +2180,7 @@ mod tests {
             definition: test_tool(tool_name.as_str()),
             provision: ToolProvisionConfig::default(),
             environment_binding: None,
+            component_bindings: BTreeMap::new(),
             agent_bindings: BTreeMap::from([(unknown_agent, invalid_binding)]),
         };
         let first = test_tool_component(
@@ -2079,6 +2250,7 @@ mod tests {
                     definition: test_tool("git"),
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::from([(unknown_agent, invalid_binding)]),
                 },
             )]),

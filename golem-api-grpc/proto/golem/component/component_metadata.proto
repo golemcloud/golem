@@ -45,6 +45,7 @@ message ToolDeploymentMetadata {
   ToolProvisionConfig provision = 2;
   optional ToolBindingInput environment_binding = 3;
   map<string, ToolBindingInput> agent_bindings = 4;
+  map<string, ToolBindingInput> component_bindings = 5;
 }
 
 message ToolProvisionConfig {

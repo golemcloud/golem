@@ -41,7 +41,7 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
+    ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
@@ -2792,6 +2792,7 @@ pub async fn test_component_stage(deps: &Deps) {
                     },
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -4610,6 +4611,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                     .unwrap(),
                     definition: release_tool,
                     provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
                     source: release_source,
                     owner_account_id: AccountId(owner_account_id),
                     owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -4742,6 +4744,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         release_id: None,
         definition: definition.clone(),
         provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
         source: component_source.clone(),
         owner_account_id: actor,
         owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -5300,6 +5303,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 .unwrap(),
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
                 source: source.clone(),
                 owner_account_id: AccountId(owner_account_id),
                 owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -5630,6 +5634,13 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             config: NormalizedJsonValue::new(serde_json::json!({ "consumer": true })),
             ..ToolProvisionConfig::default()
         },
+        component_bindings: BTreeMap::from([(
+            golem_common::model::component::ComponentName("consumer".to_string()),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "baseline": "remote" })),
+                ..ToolBindingInput::default()
+            },
+        )]),
         source: remote_source.clone(),
         owner_account_id: AccountId(owner_account_id),
         owner_account_email: golem_common::model::account::AccountEmail::new(

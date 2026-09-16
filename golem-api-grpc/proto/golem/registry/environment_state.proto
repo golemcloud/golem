@@ -54,6 +54,7 @@ message RegisteredTool {
   optional golem.common.UUID tool_release_id = 8;
   golem.common.Hash metadata_digest = 9;
   ToolSource tagged_source = 10;
+  map<string, golem.component.ToolBindingInput> component_bindings = 11;
 }
 
 message CompiledToolBinding {

@@ -952,6 +952,14 @@ mod protobuf {
                     .environment_binding
                     .map(TryInto::try_into)
                     .transpose()?,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        ToolBindingInput::try_from(binding)
+                            .map(|binding| (ComponentName(name), binding))
+                    })
+                    .collect::<Result<_, _>>()?,
                 agent_bindings: value
                     .agent_bindings
                     .into_iter()
@@ -972,6 +980,11 @@ mod protobuf {
                 definition: Some(value.definition.into()),
                 provision: Some(value.provision.into()),
                 environment_binding: value.environment_binding.map(Into::into),
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| (name.0, binding.into()))
+                    .collect(),
                 agent_bindings: value
                     .agent_bindings
                     .into_iter()
@@ -1286,6 +1299,11 @@ mod protobuf {
                 tool_release_id: value.release_id.map(|id| id.0.into()),
                 metadata_digest: Some(value.metadata_digest.into()),
                 tagged_source,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| (name.0, binding.into()))
+                    .collect(),
             }
         }
     }
@@ -1317,6 +1335,13 @@ mod protobuf {
                     .provision
                     .ok_or("missing RegisteredTool.provision")?
                     .try_into()?,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        Ok((ComponentName(name), ToolBindingInput::try_from(binding)?))
+                    })
+                    .collect::<Result<_, String>>()?,
                 source: tool_source_from_proto(value.tagged_source, value.source)?,
                 owner_account_id: AccountId::try_from(
                     value
@@ -1748,6 +1773,10 @@ mod tests {
             )])),
             secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
         };
+        let component_binding = ToolBindingInput {
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/component" })),
+            ..binding.clone()
+        };
 
         ComponentMetadata::from_parts_with_tools(
             KnownExports {
@@ -1772,6 +1801,10 @@ mod tests {
                         files: Vec::new(),
                     },
                     environment_binding: Some(binding.clone()),
+                    component_bindings: BTreeMap::from([(
+                        ComponentName("CallerComponent".to_string()),
+                        component_binding,
+                    )]),
                     agent_bindings: BTreeMap::from([(
                         AgentTypeName("CoderAgent".to_string()),
                         binding,
@@ -1815,6 +1848,7 @@ mod tests {
             release_id: None,
             definition: sample_tool(),
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source: ToolSource::Component {
                 component_id: ComponentId::new(),
                 component_revision: ComponentRevision::try_from(1_u64).unwrap(),
@@ -1859,6 +1893,7 @@ mod tests {
             release_id: None,
             definition,
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source: source.clone(),
             owner_account_id,
             owner_account_email: owner_account_email.clone(),
@@ -1919,6 +1954,7 @@ mod tests {
             release_id: None,
             definition,
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source: source.clone(),
             owner_account_id,
             owner_account_email: owner_account_email.clone(),
@@ -2016,6 +2052,7 @@ mod tests {
                     .unwrap(),
                     definition,
                     provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
                     source: ToolSource::Host {
                         host_tool_id: crate::model::tool::HostToolId::try_from(
                             "host-search".to_string(),

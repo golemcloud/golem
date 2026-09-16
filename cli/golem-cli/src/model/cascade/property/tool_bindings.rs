@@ -96,6 +96,7 @@ pub enum ToolBindingsPropertyTraceElem<L: Layer> {
 #[serde(rename_all = "camelCase")]
 pub struct ToolBindingsProperty<L: Layer> {
     value: IndexMap<String, ToolBindingState>,
+    // Templates replay these operations against a different parent; compaction must preserve their semantics.
     trace: Vec<ToolBindingsPropertyTraceElem<L>>,
 }
 
@@ -104,6 +105,40 @@ impl<L: Layer> Default for ToolBindingsProperty<L> {
         Self {
             value: IndexMap::new(),
             trace: Vec::new(),
+        }
+    }
+}
+
+impl<L: Layer> ToolBindingsProperty<L> {
+    pub(crate) fn clone_value<L2: Layer>(&self) -> ToolBindingsProperty<L2> {
+        ToolBindingsProperty {
+            value: self.value.clone(),
+            trace: Vec::new(),
+        }
+    }
+
+    pub(crate) fn apply_template<L2: Layer>(
+        &mut self,
+        id: &L::Id,
+        template: &ToolBindingsProperty<L2>,
+    ) {
+        for layer in &template.trace {
+            let (mode, bindings) = match layer {
+                ToolBindingsPropertyTraceElem::Upsert { bindings, .. } => {
+                    (MapMergeMode::Upsert, bindings.clone())
+                }
+                ToolBindingsPropertyTraceElem::Replace { bindings, .. } => {
+                    (MapMergeMode::Replace, bindings.clone())
+                }
+                ToolBindingsPropertyTraceElem::Remove { removed_names, .. } => (
+                    MapMergeMode::Remove,
+                    removed_names
+                        .iter()
+                        .map(|name| (name.clone(), ToolBinding::default()))
+                        .collect(),
+                ),
+            };
+            self.apply_layer(id, None, (mode, bindings));
         }
     }
 }
@@ -151,11 +186,9 @@ impl<L: Layer> Property<L> for ToolBindingsProperty<L> {
                 });
             }
             MapMergeMode::Remove => {
-                let mut removed_names = Vec::new();
+                let removed_names = bindings.keys().cloned().collect();
                 for name in bindings.keys() {
-                    if self.value.shift_remove(name).is_some() {
-                        removed_names.push(name.clone());
-                    }
+                    self.value.shift_remove(name);
                 }
                 self.trace.push(ToolBindingsPropertyTraceElem::Remove {
                     id: id.clone(),
@@ -168,8 +201,8 @@ impl<L: Layer> Property<L> for ToolBindingsProperty<L> {
 
     fn compact_trace(&mut self) {
         self.trace.retain(|element| match element {
-            ToolBindingsPropertyTraceElem::Upsert { bindings, .. }
-            | ToolBindingsPropertyTraceElem::Replace { bindings, .. } => !bindings.is_empty(),
+            ToolBindingsPropertyTraceElem::Upsert { bindings, .. } => !bindings.is_empty(),
+            ToolBindingsPropertyTraceElem::Replace { .. } => true,
             ToolBindingsPropertyTraceElem::Remove { removed_names, .. } => {
                 !removed_names.is_empty()
             }
@@ -187,6 +220,42 @@ mod tests {
     use indexmap::IndexMap;
     use serde_json::json;
     use test_r::test;
+
+    #[test]
+    fn compacted_templates_preserve_removal_and_empty_replacement() {
+        let id = "component".to_string();
+        for mode in [MapMergeMode::Remove, MapMergeMode::Replace] {
+            let mut template = ToolBindingsProperty::<TestLayer>::default();
+            let bindings = if matches!(mode, MapMergeMode::Remove) {
+                IndexMap::from_iter([("search".to_string(), ToolBinding::default())])
+            } else {
+                IndexMap::new()
+            };
+            template.apply_layer(&id, None, (mode, bindings));
+            let mut compacted = template.clone();
+            compacted.compact_trace();
+            for template in [&template, &compacted] {
+                let mut owner = ToolBindingsProperty::<TestLayer>::default();
+                owner.apply_layer(
+                    &id,
+                    None,
+                    (
+                        MapMergeMode::Upsert,
+                        IndexMap::from_iter([
+                            ("search".to_string(), ToolBinding::default()),
+                            ("other".to_string(), ToolBinding::default()),
+                        ]),
+                    ),
+                );
+                owner.apply_template(&id, template);
+                assert!(!owner.value().contains_key("search"));
+                assert_eq!(
+                    owner.value().contains_key("other"),
+                    matches!(mode, MapMergeMode::Remove)
+                );
+            }
+        }
+    }
 
     #[test]
     fn upsert_merges_binding_fields_and_parameters() {

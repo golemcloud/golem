@@ -162,6 +162,7 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
             files: BTreeMap::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings: BTreeMap::new(),
     }
 }

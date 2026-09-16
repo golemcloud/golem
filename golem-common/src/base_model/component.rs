@@ -186,6 +186,9 @@ declare_structs! {
         pub environment_binding: Option<ToolBindingInput>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
+        pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
         pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
     }
 
@@ -208,6 +211,7 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub environment_binding: OptionalFieldUpdate<ToolBindingInput>,
+        pub component_bindings: Option<BTreeMap<ComponentName, ToolBindingInput>>,
         pub agent_bindings: Option<BTreeMap<AgentTypeName, ToolBindingInput>>,
     }
 

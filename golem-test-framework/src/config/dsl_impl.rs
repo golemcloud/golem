@@ -92,6 +92,7 @@ fn default_tool_deployment_configs(
                         files: BTreeMap::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             ))
@@ -120,6 +121,7 @@ fn default_tool_deployment_config_updates(
                         file_permission_updates: BTreeMap::new(),
                     }),
                     environment_binding: OptionalFieldUpdate::NoChange,
+                    component_bindings: None,
                     agent_bindings: None,
                 },
             ))

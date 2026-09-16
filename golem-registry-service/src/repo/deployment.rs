@@ -1347,6 +1347,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
+                        r.component_bindings,
                         r.metadata_version,
                         r.metadata_digest,
                         r.published,
@@ -1385,6 +1386,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
+                        r.component_bindings,
                         r.metadata_version,
                         r.metadata_digest,
                         r.published,
@@ -2203,9 +2205,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                      component_id, component_revision_id, component_name,
                      host_tool_id, implementation_version,
                      owner_account_id, owner_account_email,
-                     tool_definition, tool_provision_config, metadata_version, metadata_digest,
+                     tool_definition, tool_provision_config, component_bindings,
+                     metadata_version, metadata_digest,
                      published, deployment_hash)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             "#})
             .bind(registered_tool.environment_id)
             .bind(registered_tool.deployment_revision_id)
@@ -2221,6 +2224,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(&registered_tool.owner_account_email)
             .bind(&registered_tool.tool_definition)
             .bind(&registered_tool.tool_provision_config)
+            .bind(&registered_tool.component_bindings)
             .bind(&registered_tool.metadata_version)
             .bind(registered_tool.metadata_digest)
             .bind(registered_tool.published)

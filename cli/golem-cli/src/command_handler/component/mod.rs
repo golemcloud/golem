@@ -31,6 +31,7 @@ use crate::model::agent::action_result::{
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
@@ -1065,7 +1066,7 @@ impl ComponentCommandHandler {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
                     &mut issues,
-                    agent.tool_bindings(),
+                    agent.tool_bindings().keys(),
                     "agents.tools",
                     Some(agent_name),
                     Some(agent.source()),
@@ -1073,9 +1074,25 @@ impl ComponentCommandHandler {
                 );
             }
         }
-
         let mut used_tools = BTreeSet::new();
         for component_name in app.component_names() {
+            let component = app.component(component_name);
+            validate_tool_binding_references(
+                &mut issues,
+                component.layer_properties().tool_bindings.value().keys(),
+                "components.tools",
+                None,
+                Some(component.source()),
+                &implementations,
+            );
+            used_tools.extend(
+                app.component(component_name)
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .keys()
+                    .filter_map(|name| ToolName::try_from(name.as_str()).ok()),
+            );
             for dependency in &app.component(component_name).properties().dependencies {
                 if let ComponentDependency::Tool { tool_name, .. } = dependency {
                     used_tools.insert(tool_name.clone());
@@ -1194,6 +1211,31 @@ impl ComponentCommandHandler {
                 }
             }
 
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(tool_name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    tool_name,
+                    definition,
+                    owner,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    component_bindings.insert(component_name.clone(), binding);
+                }
+            }
+
             let provision = match match source.implementation.local_component_name() {
                 Some(component_name) => app.resolve_tool_provision(tool_name, component_name),
                 None => app.resolve_remote_tool_provision(tool_name),
@@ -1271,6 +1313,7 @@ impl ComponentCommandHandler {
                     plugins,
                 },
                 environment_binding: None,
+                component_bindings,
                 agent_bindings,
             };
 
@@ -1295,6 +1338,7 @@ impl ComponentCommandHandler {
                     }),
                     provision: provision.clone(),
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config.component_bindings.clone(),
                     agent_bindings: manifest_config.agent_bindings.clone(),
                 };
                 let bindings = effective_remote_tool_bindings(
@@ -1313,6 +1357,11 @@ impl ComponentCommandHandler {
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
                         provision,
+                        component_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .map(|(name, binding)| (name.0.clone(), binding.clone()))
+                            .collect(),
                         bindings,
                     }
                     .into(),
@@ -1820,6 +1869,13 @@ impl ComponentCommandHandler {
                     files_by_path,
                     plugins_by_grant_id,
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config
+                        .component_bindings
+                        .iter()
+                        .map(|(component_name, binding)| {
+                            (component_name.0.clone(), binding.clone())
+                        })
+                        .collect(),
                     agent_bindings: manifest_config
                         .agent_bindings
                         .iter()
@@ -2079,15 +2135,15 @@ impl ComponentCommandHandler {
     }
 }
 
-fn validate_tool_binding_references(
+fn validate_tool_binding_references<'a>(
     issues: &mut Vec<ToolValidationIssue>,
-    bindings: &BTreeMap<String, ToolBindingState>,
+    names: impl IntoIterator<Item = &'a String>,
     field_prefix: &str,
     agent_name: Option<&AgentTypeName>,
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
 ) {
-    for raw_name in bindings.keys() {
+    for raw_name in names {
         let field_path = format!("{field_prefix}.{raw_name}");
         let path = match agent_name {
             Some(agent_name) => ToolEntityPath::agent(agent_name, field_path),
@@ -2617,6 +2673,7 @@ fn collect_unused_agent_config_paths(
 mod tool_binding_tests {
     use super::{
         effective_remote_tool_bindings, resolve_secret_scope, validate_effective_tool_binding,
+        validate_tool_binding_references,
     };
     use crate::model::app_raw::ManifestSecretKeyScope;
     use crate::model::tool_deployment::{
@@ -2631,6 +2688,28 @@ mod tool_binding_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use test_r::test;
+
+    #[test]
+    fn component_tool_references_are_validated_without_agent_bindings() {
+        let names = [
+            "missing".to_string(),
+            "invalid name".to_string(),
+            "middleware".to_string(),
+        ];
+        let mut issues = Vec::new();
+        validate_tool_binding_references(
+            &mut issues,
+            names.iter(),
+            "components.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+            &BTreeMap::new(),
+        );
+        assert_eq!(issues.len(), 3);
+        assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
+        assert_eq!(issues[1].code, ToolValidationCode::InvalidName);
+        assert_eq!(issues[2].code, ToolValidationCode::ReservedMiddleware);
+    }
 
     fn keys(values: &[&str]) -> SecretKeyScope {
         SecretKeyScope::Keys(

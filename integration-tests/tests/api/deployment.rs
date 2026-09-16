@@ -101,6 +101,7 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
             files: BTreeMap::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings: BTreeMap::new(),
     }
 }
@@ -140,6 +141,7 @@ fn remote_tool_request(
             files: Vec::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings,
     }
 }
@@ -177,6 +179,7 @@ fn remote_tool_hash_input(
             plugins: Vec::new(),
             files: Vec::new(),
         },
+        component_bindings: BTreeMap::new(),
         bindings,
     }
 }
@@ -1297,6 +1300,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                     ToolDeploymentConfigUpdate {
                         provision: None,
                         environment_binding: OptionalFieldUpdate::NoChange,
+                        component_bindings: None,
                         agent_bindings: None,
                     },
                 )])),

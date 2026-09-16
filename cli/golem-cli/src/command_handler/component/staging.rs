@@ -652,6 +652,7 @@ impl<'a> ComponentStager<'a> {
                             .await?,
                     },
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config.component_bindings.clone(),
                     agent_bindings: manifest_config.agent_bindings.clone(),
                 },
             );
@@ -689,42 +690,46 @@ impl<'a> ComponentStager<'a> {
                 .resolve_archive_files_for_tool(&tool_name, &changed_files.archive_paths_by_source)
                 .await?;
 
-            let (plugin_updates, environment_binding, agent_bindings) = match change {
-                diff::BTreeMapDiffValue::Create => (
-                    resolved_plugins
-                        .iter()
-                        .cloned()
-                        .map(PluginInstallationAction::Install)
-                        .collect(),
-                    OptionalFieldUpdate::update_from_option(
-                        manifest_config.environment_binding.clone(),
-                    ),
-                    Some(manifest_config.agent_bindings.clone()),
-                ),
-                diff::BTreeMapDiffValue::Delete => continue,
-                diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
-                    return Err(anyhow!(
-                        "Cannot stage tool {} from a hash-only deployment config diff; component details were not loaded",
-                        tool_name.as_str().log_color_highlight()
-                    ));
-                }
-                diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => (
-                    self.plugin_updates_for_tool_change(
-                        &tool_name,
-                        &diff.plugin_changes,
-                        &resolved_plugins,
-                    )?,
-                    if diff.environment_binding_changed {
+            let (plugin_updates, environment_binding, component_bindings, agent_bindings) =
+                match change {
+                    diff::BTreeMapDiffValue::Create => (
+                        resolved_plugins
+                            .iter()
+                            .cloned()
+                            .map(PluginInstallationAction::Install)
+                            .collect(),
                         OptionalFieldUpdate::update_from_option(
                             manifest_config.environment_binding.clone(),
-                        )
-                    } else {
-                        OptionalFieldUpdate::NoChange
-                    },
-                    (!diff.agent_binding_changes.is_empty())
-                        .then(|| manifest_config.agent_bindings.clone()),
-                ),
-            };
+                        ),
+                        Some(manifest_config.component_bindings.clone()),
+                        Some(manifest_config.agent_bindings.clone()),
+                    ),
+                    diff::BTreeMapDiffValue::Delete => continue,
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
+                        return Err(anyhow!(
+                            "Cannot stage tool {} from a hash-only deployment config diff; component details were not loaded",
+                            tool_name.as_str().log_color_highlight()
+                        ));
+                    }
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => (
+                        self.plugin_updates_for_tool_change(
+                            &tool_name,
+                            &diff.plugin_changes,
+                            &resolved_plugins,
+                        )?,
+                        if diff.environment_binding_changed {
+                            OptionalFieldUpdate::update_from_option(
+                                manifest_config.environment_binding.clone(),
+                            )
+                        } else {
+                            OptionalFieldUpdate::NoChange
+                        },
+                        (!diff.component_binding_changes.is_empty())
+                            .then(|| manifest_config.component_bindings.clone()),
+                        (!diff.agent_binding_changes.is_empty())
+                            .then(|| manifest_config.agent_bindings.clone()),
+                    ),
+                };
 
             result.insert(
                 tool_name.clone(),
@@ -747,6 +752,7 @@ impl<'a> ComponentStager<'a> {
                             .unwrap_or_default(),
                     }),
                     environment_binding,
+                    component_bindings,
                     agent_bindings,
                 },
             );
@@ -1352,6 +1358,7 @@ mod tests {
                             file_changes: BTreeMap::new(),
                             plugin_changes: BTreeMap::new(),
                             environment_binding_changed: true,
+                            component_binding_changes: BTreeMap::new(),
                             agent_binding_changes: BTreeMap::new(),
                         },
                     }),
@@ -1540,6 +1547,7 @@ mod tests {
             file_changes: BTreeMap::new(),
             plugin_changes: BTreeMap::new(),
             environment_binding_changed: false,
+            component_binding_changes: BTreeMap::new(),
             agent_binding_changes: BTreeMap::new(),
         };
         tool_diff

@@ -566,6 +566,10 @@ pub struct ComponentTemplate {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -589,8 +593,8 @@ impl ComponentTemplate {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -633,6 +637,10 @@ pub struct Component {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -656,8 +664,8 @@ impl Component {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -698,6 +706,10 @@ pub struct ComponentPreset {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 impl ComponentPreset {
@@ -719,8 +731,8 @@ impl ComponentPreset {
                 plugins: self.plugins,
                 files_merge_mode: self.files_merge_mode,
                 files: self.files,
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools,
             },
         }
     }
@@ -1991,6 +2003,8 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    tools_merge_mode: None,
+                    tools: None,
                 },
             )
             .boxed()
@@ -2054,6 +2068,8 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    tools_merge_mode: None,
+                    tools: None,
                     presets,
                 },
             )
@@ -2121,6 +2137,8 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    tools_merge_mode: None,
+                    tools: None,
                     presets,
                 },
             )

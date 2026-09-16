@@ -95,6 +95,8 @@ pub struct ToolDeploymentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_binding: Option<ToolBindingInput>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub component_bindings: BTreeMap<String, ToolBindingInput>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_bindings: BTreeMap<String, ToolBindingInput>,
 }
 
@@ -117,6 +119,8 @@ pub struct ToolDeploymentConfigDiff {
     pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
     pub environment_binding_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub component_binding_changes: BTreeMapDiff<String, ToolBindingInput>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_binding_changes: BTreeMapDiff<String, ToolBindingInput>,
 }
 
@@ -136,6 +140,10 @@ impl Diffable for ToolDeploymentConfig {
             .diff_with_current(&current.plugins_by_grant_id)?
             .unwrap_or_default();
         let environment_binding_changed = new.environment_binding != current.environment_binding;
+        let component_binding_changes = new
+            .component_bindings
+            .diff_with_current(&current.component_bindings)?
+            .unwrap_or_default();
         let agent_binding_changes = new
             .agent_bindings
             .diff_with_current(&current.agent_bindings)?
@@ -148,6 +156,7 @@ impl Diffable for ToolDeploymentConfig {
                 || !file_changes.is_empty()
                 || !plugin_changes.is_empty()
                 || environment_binding_changed
+                || !component_binding_changes.is_empty()
                 || !agent_binding_changes.is_empty()
             {
                 Some(ToolDeploymentConfigDiff {
@@ -157,6 +166,7 @@ impl Diffable for ToolDeploymentConfig {
                     file_changes,
                     plugin_changes,
                     environment_binding_changed,
+                    component_binding_changes,
                     agent_binding_changes,
                 })
             } else {
@@ -204,6 +214,7 @@ mod tests {
             files_by_path: BTreeMap::new(),
             plugins_by_grant_id: BTreeMap::new(),
             environment_binding,
+            component_bindings: BTreeMap::new(),
             agent_bindings: BTreeMap::new(),
         }
     }
@@ -228,6 +239,40 @@ mod tests {
             diff.tool_deployment_config_changes.get("grep"),
             Some(BTreeMapDiffValue::Update(DiffForHashOf::ValueDiff { diff }))
                 if diff.environment_binding_changed && !diff.definition_changed
+        ));
+    }
+
+    #[test]
+    fn component_binding_only_tool_change_changes_component_hash_and_produces_value_diff() {
+        let agent_binding = ToolBindingInput {
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "scope": "agent" })),
+            ..ToolBindingInput::default()
+        };
+        let mut current_config = tool_config(None);
+        current_config
+            .agent_bindings
+            .insert("CoderAgent".to_string(), agent_binding.clone());
+        let mut new_config = current_config.clone();
+        new_config.component_bindings.insert(
+            "CallerComponent".to_string(),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "scope": "component" })),
+                ..agent_binding
+            },
+        );
+        let current = component(current_config);
+        let new = component(new_config);
+
+        assert_ne!(current.hash().unwrap(), new.hash().unwrap());
+        let diff = new.diff_with_current(&current).unwrap().unwrap();
+        assert!(!diff.wasm_changed);
+        assert!(matches!(
+            diff.tool_deployment_config_changes.get("grep"),
+            Some(BTreeMapDiffValue::Update(DiffForHashOf::ValueDiff { diff }))
+                if !diff.component_binding_changes.is_empty()
+                    && diff.agent_binding_changes.is_empty()
+                    && !diff.environment_binding_changed
+                    && !diff.definition_changed
         ));
     }
 
