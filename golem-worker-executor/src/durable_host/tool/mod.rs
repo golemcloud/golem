@@ -4734,11 +4734,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
 }
 
 impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self, tool_name: String) -> anyhow::Result<Resource<ToolRpcEntry>> {
-        self.observe_function_call("golem::tool::host::tool-rpc", "new");
-        let tool_name = ToolName::try_from(tool_name).map_err(|error| anyhow!(error))?;
-        let rpc = tool_rpc_for_current_owner(self, tool_name)?;
-        Ok(self.table().push(rpc)?)
+    async fn create(
+        &mut self,
+        tool_name: String,
+    ) -> anyhow::Result<Result<Resource<ToolRpcEntry>, RpcError>> {
+        self.observe_function_call("golem::tool::host::tool-rpc", "create");
+        let tool_name = match ToolName::try_from(tool_name) {
+            Ok(name) => name,
+            Err(error) => return Ok(Err(RpcError::ProtocolError(error.to_string()))),
+        };
+        let rpc = match tool_rpc_for_current_owner(self, tool_name) {
+            Ok(rpc) => rpc,
+            Err(error) => return Ok(Err(RpcError::ProtocolError(error.to_string()))),
+        };
+        Ok(Ok(self.table().push(rpc)?))
     }
 
     async fn drop(&mut self, rep: Resource<ToolRpcEntry>) -> anyhow::Result<()> {

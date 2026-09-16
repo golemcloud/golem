@@ -61,7 +61,7 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
   let rpc: ToolRpc | undefined;
   return {
     start(commandPath, input, stdin, withStdout) {
-      rpc ??= new ToolRpc(toolName);
+      rpc ??= ToolRpc.create(toolName);
       const inputEndpoints = stdin === undefined ? undefined : createStdin();
       const outputEndpoints = withStdout ? createStdout() : undefined;
       const future = rpc.asyncInvokeAndAwait(

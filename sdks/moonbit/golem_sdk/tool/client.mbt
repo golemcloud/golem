@@ -182,7 +182,7 @@ pub(all) struct ToolClient {
 
 ///|
 pub fn ToolClient::new(tool_name : String) -> ToolClient {
-  { rpc: @toolHost.ToolRpc::tool_rpc(tool_name), }
+  { rpc: @toolHost.ToolRpc::create(tool_name).unwrap(), }
 }
 
 ///|
@@ -192,7 +192,7 @@ pub fn ToolClient::for_definition(
   lookup_name : String,
   _definition : @toolCommon.Tool,
 ) -> ToolClient {
-  { rpc: @toolHost.ToolRpc::tool_rpc(lookup_name), }
+  { rpc: @toolHost.ToolRpc::create(lookup_name).unwrap(), }
 }
 
 ///|

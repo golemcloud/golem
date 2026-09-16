@@ -64,10 +64,10 @@ pub(all) struct RegisteredTool {
 
 pub(all) struct ToolRpc(Int) derive(Eq, @debug.Debug)
 pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
+pub fn ToolRpc::create(String) -> Result[Self, RpcError]
 pub fn ToolRpc::drop(Self) -> Unit
 pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, RpcError]
 pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, RpcError]
-pub fn ToolRpc::tool_rpc(String) -> Self
 
 pub(all) struct ToolStdin(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdin::drop(Self) -> Unit

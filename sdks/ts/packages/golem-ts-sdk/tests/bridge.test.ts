@@ -153,6 +153,24 @@ describe('public bridge runtime', () => {
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
+  it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
+    const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
+    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+      throw error;
+    });
+    const transport = bridge.createToolClientTransport('invalid name');
+
+    let failure: unknown;
+    try {
+      transport.start([], {} as never, undefined, false);
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBe(error);
+    expect(createStdin).not.toHaveBeenCalled();
+  });
+
   it('stops a blocked stdin source when the host closes consumption', async () => {
     let closeConsumption!: () => void;
     const consumptionClosed = new Promise<void>((resolve) => {

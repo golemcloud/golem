@@ -25,7 +25,7 @@ pub struct AmbientToolRpc {
 impl AmbientToolRpc {
     pub fn new(tool_name: &str) -> Self {
         Self {
-            inner: ToolRpc::new(tool_name),
+            inner: ToolRpc::create(tool_name).expect("tool RPC creation failed"),
         }
     }
 }

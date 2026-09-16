@@ -72,15 +72,18 @@ vi.mock('golem:agent/host@2.0.0', () => ({
   WasmRpc: MockWasmRpc,
 }));
 
-vi.mock('golem:tool/host@0.1.0', () => ({
-  createStdin: vi.fn(),
-  createStdout: vi.fn(),
-  ToolRpc: vi.fn().mockImplementation(() => ({
+vi.mock('golem:tool/host@0.1.0', () => {
+  const rpc = vi.fn().mockImplementation(() => ({
     invokeAndAwait: vi.fn(),
     invoke: vi.fn(),
     asyncInvokeAndAwait: vi.fn(),
-  })),
-}));
+  }));
+  return {
+    createStdin: vi.fn(),
+    createStdout: vi.fn(),
+    ToolRpc: Object.assign(rpc, { create: rpc }),
+  };
+});
 
 vi.mock('golem:core/types@2.0.0', () => ({
   SchemaValueStream: {
