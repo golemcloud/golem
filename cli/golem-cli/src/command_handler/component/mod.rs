@@ -24,10 +24,10 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
-use crate::model::agent::AgentUpdateMode;
 use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
+use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
@@ -425,7 +425,7 @@ impl ComponentCommandHandler {
         // Best-effort, like updating: per-agent failures are collected and reported together,
         // only failures of listing the agents abort the whole operation.
         let mut agents = Vec::new();
-        let mut errors = BTreeMap::new();
+        let mut errors = Vec::new();
         for component in components {
             let result = self
                 .ctx
@@ -480,7 +480,7 @@ impl ComponentCommandHandler {
         //       keep the loop alive; an agent that fails first and gets deleted in a later round
         //       is not reported as an error.
         let mut agents = Vec::new();
-        let mut errors = BTreeMap::new();
+        let mut errors: Vec<AgentActionError> = Vec::new();
         let mut deleted_any = true;
         let mut first_round = true;
         while deleted_any {
@@ -495,13 +495,18 @@ impl ComponentCommandHandler {
                     deleted_any = true;
                 }
                 for agent_id in result.succeeded {
-                    errors.remove(&agent_id.0);
+                    errors.retain(|error| !error.is_for(&component.component_name, &agent_id));
                     agents.push(AgentDeletionMeta {
                         component_name: component.component_name.clone(),
                         agent_id,
                     });
                 }
-                errors.extend(result.errors);
+                for error in result.errors {
+                    errors.retain(|existing| {
+                        !existing.is_for(&error.component_name, &error.agent_id)
+                    });
+                    errors.push(error);
+                }
             }
             first_round = false;
         }

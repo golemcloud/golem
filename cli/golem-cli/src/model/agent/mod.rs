@@ -69,18 +69,35 @@ impl Display for RawAgentId {
     }
 }
 
+/// A failed agent of a best-effort bulk action (update, redeploy, delete-all). Agents are
+/// identified by component and agent id: agent ids are unique within a component only, an
+/// agent type moved to another component leaves its old agents behind in the previous one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionError {
+    pub component_name: ComponentName,
+    pub agent_id: RawAgentId,
+    pub error: String,
+}
+
+impl AgentActionError {
+    pub fn is_for(&self, component_name: &ComponentName, agent_id: &RawAgentId) -> bool {
+        self.component_name == *component_name && self.agent_id == *agent_id
+    }
+}
+
 /// Outcome of a best-effort bulk agent action (redeploy, delete-all): what succeeded, and the
-/// error for each agent it failed on, keyed by the (environment-unique) agent id.
+/// error for each agent it failed on.
 pub struct BulkAgentActionResult<T> {
     pub succeeded: Vec<T>,
-    pub errors: BTreeMap<String, String>,
+    pub errors: Vec<AgentActionError>,
 }
 
 impl<T> BulkAgentActionResult<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             succeeded: Vec::with_capacity(capacity),
-            errors: BTreeMap::new(),
+            errors: Vec::new(),
         }
     }
 }

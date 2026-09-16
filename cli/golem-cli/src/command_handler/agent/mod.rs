@@ -53,8 +53,9 @@ use colored::Colorize;
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
 use crate::model::agent::{
-    AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
-    AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId, RedeployAgentError,
+    AgentActionError, AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView,
+    AgentUpdateMode, AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId,
+    RedeployAgentError,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -1436,9 +1437,11 @@ impl AgentCommandHandler {
         {
             Ok(()) => {}
             Err(error) => {
-                update_results
-                    .errors
-                    .insert(agent_id.0.clone(), error_message_for_output(&error));
+                update_results.errors.push(AgentActionError {
+                    component_name: component.component_name.clone(),
+                    agent_id: agent_id.clone(),
+                    error: error_message_for_output(&error),
+                });
                 self.ctx.log_handler().log_output(update_results)?;
                 return Err(error);
             }
@@ -1968,10 +1971,11 @@ impl AgentCommandHandler {
                 .await;
 
             if let Err(error) = &result {
-                update_results.errors.insert(
-                    agent.agent_id.agent_id.clone(),
-                    error_message_for_output(error),
-                );
+                update_results.errors.push(AgentActionError {
+                    component_name: component_name.clone(),
+                    agent_id: agent.agent_id.agent_id.as_str().into(),
+                    error: error_message_for_output(error),
+                });
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -1997,10 +2001,11 @@ impl AgentCommandHandler {
                     )
                     .await
                 {
-                    update_results.errors.insert(
-                        agent.agent_id.agent_id.clone(),
-                        error_message_for_output(&error),
-                    );
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
                 }
             }
         }
@@ -2222,7 +2227,11 @@ impl AgentCommandHandler {
                             agent_id.bold().green(),
                         ),
                     );
-                    result.errors.insert(agent_id, message_for_output(&error));
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.into(),
+                        error: message_for_output(&error),
+                    });
                 }
             }
         }
@@ -2284,9 +2293,11 @@ impl AgentCommandHandler {
                             agent_id.bold().green(),
                         ),
                     );
-                    result
-                        .errors
-                        .insert(agent_id.clone(), error_message_for_output(&error));
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
                 }
             }
         }

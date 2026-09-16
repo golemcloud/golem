@@ -23,13 +23,12 @@
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
-use crate::model::agent::RawAgentId;
+use crate::model::agent::{AgentActionError, RawAgentId};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,8 +156,8 @@ impl StructuredOutput for AgentCancelInvocationResult {
 pub struct AgentRedeployResult {
     pub redeployed: bool,
     pub agents: Vec<AgentRedeploymentMeta>,
-    /// Per-agent redeploy errors, keyed by the (environment-unique) agent id.
-    pub errors: BTreeMap<String, String>,
+    /// The agents that failed to redeploy, with their errors.
+    pub errors: Vec<AgentActionError>,
 }
 
 impl TextOutput for AgentRedeployResult {
@@ -195,8 +194,8 @@ pub struct AgentDeleteAllView {
     /// True when every agent was deleted, i.e. `errors` is empty.
     pub deleted: bool,
     pub agents: Vec<AgentDeletionMeta>,
-    /// Per-agent delete errors, keyed by the (environment-unique) agent id.
-    pub errors: BTreeMap<String, String>,
+    /// The agents that failed to delete, with their errors.
+    pub errors: Vec<AgentActionError>,
 }
 
 impl TextOutput for AgentDeleteAllView {
@@ -223,10 +222,18 @@ impl TextOutput for AgentDeleteAllView {
     }
 }
 
-fn agent_errors_table(errors: &BTreeMap<String, String>) -> ComfyTable {
-    let mut table = new_table_full_condensed(vec![Column::new("Agent ID"), Column::new("Error")]);
-    for (agent_id, error) in errors {
-        table.add_row(vec![agent_id.to_string(), error.to_string()]);
+fn agent_errors_table(errors: &[AgentActionError]) -> ComfyTable {
+    let mut table = new_table_full_condensed(vec![
+        Column::new("Component"),
+        Column::new("Agent ID"),
+        Column::new("Error"),
+    ]);
+    for error in errors {
+        table.add_row(vec![
+            error.component_name.to_string(),
+            error.agent_id.to_string(),
+            error.error.clone(),
+        ]);
     }
     table
 }
