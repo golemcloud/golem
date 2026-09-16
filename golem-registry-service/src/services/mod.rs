@@ -33,6 +33,7 @@ pub mod environment_state;
 pub mod environment_tool_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
+pub mod mcp_oauth;
 pub mod native_tool_catalog;
 pub mod oauth2;
 pub mod oauth2_github_client;

@@ -5,6 +5,7 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use chrono::{DateTime, Utc};
+use golem_mcp_import::oauth::AuthorizationServerMetadata;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
@@ -20,19 +21,26 @@ pub struct McpOAuthGrantKey {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpOAuthFlowSecrets {
-    pub callback_uri: String,
     pub pkce_verifier: String,
-    pub issuer_url: String,
-    pub token_endpoint: String,
+    pub session: McpOAuthSession,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpOAuthSession {
+    pub deployment_revision: i64,
+    pub import_index: u32,
+    pub authorized_by: Uuid,
+    pub server: AuthorizationServerMetadata,
+    pub scopes: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpOAuthTokens {
+    pub session: McpOAuthSession,
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
     pub scopes: Vec<String>,
-    pub token_type: Option<String>,
 }
 
 macro_rules! redacted_debug {
@@ -46,6 +54,7 @@ macro_rules! redacted_debug {
 }
 
 redacted_debug!(McpOAuthFlowSecrets, "McpOAuthFlowSecrets");
+redacted_debug!(McpOAuthSession, "McpOAuthSession");
 redacted_debug!(McpOAuthTokens, "McpOAuthTokens");
 
 #[derive(Clone, Debug, PartialEq, Eq)]

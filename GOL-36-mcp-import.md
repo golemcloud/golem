@@ -387,6 +387,18 @@ agent's existing context and narrowing rules. Follow the same account/environmen
 ownership and accounting model as other tools. Do not automatically forward an
 ingress bearer token or invent application-end-user credential switching.
 
+In the current runtime, the calling agent's account is its component/environment
+owner account (also used for quota accounting), not the external requester or the
+operator authorizing OAuth. Derive the grant's credential-owner account from that
+environment on both operator and runtime paths; record the authorizing operator
+separately for audit. Otherwise a collaborator's grant would never resolve for
+the environment's agents. Operator authorization/disconnect require the existing
+security-scheme `Update` permission. Trusted internal runtime resolution follows
+the agent-secret lookup precedent and must not require administrative scheme
+`View`; the live bridge still enforces the owning agent's effective tool/network
+permissions and quota context. The operator identity is audit information, not a
+replacement runtime principal or a requirement to retain administrative access.
+
 The spec leaves outbound OAuth grant acquisition/storage details incomplete.
 Implement consent, token storage/refresh, revocation, and cache/session isolation
 consistently with the configured security scheme and caller context. Do not
@@ -963,11 +975,54 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   before interpreting provider errors too. The serializable metadata accessor
   supports this; shared-store claiming and effective-context rechecks remain with
   the registry credential service.
-- Remaining step-4 work: registry credential service/policy and accounting;
-  service configuration; initial unauthenticated probe, consent, callback/state
-  and token exchange/refresh integration, disconnect and CLI/API operations;
-  provider fixtures and combined validation. The existing inbound OIDC client is
-  not a substitute. Protocol helpers and a grant repository do not complete step 4.
+- The registry OAuth coordinator now resolves the exact deployed import and its
+  current scheme revision, distinguishing anonymous imports, inline credentials,
+  missing imports and missing grants. Operator operations use scheme `Update`;
+  runtime resolution uses a trusted owner context without admin `View`. Private
+  session data persists the validated provider metadata, scopes, deployment/import
+  reference and authorizing actor through token publication for later refresh.
+- Authenticated operator callback completion claims hashed state before the token
+  POST, rechecks actor/authority/context, validates issuer on success and error,
+  and rebuilds the client from saved metadata. Scheme changes and grant generation
+  changes fence token publication. Explicit reauthorization supersedes prior state;
+  disconnect and late completions cannot undo one another.
+- Refresh waiters use bounded backoff without repeatedly loading the complete
+  deployment. A successful refresher returns its published credential directly.
+  Missing/revoked grants and unresolved refreshes carry the scheme name and an
+  explicit reauthorization action. `RefreshUnresolved` must become a recorded
+  terminal rejection in the bridge, never an automatic transient-retry loop.
+- Oracle confirmed the ownership and claim/publication boundaries. Its requested
+  changes separate an impossible owner mismatch from context changes, remove
+  deadline failures after successful publication, and make abandoned refreshes
+  actionable. A pre-POST context read now precedes the refresh claim, so its
+  failure does not consume an otherwise usable refresh token.
+- Cancellation is deliberately treated like ambiguous response loss: no lease
+  expiry or token reuse. The coordinator leaves a cancelled claim fenced; future
+  operations wait finitely and require explicit reauthorization. Oracle suggested
+  best-effort asynchronous cleanup to shorten that wait, but it would still
+  require reauthorization and cannot cover crashes. The simpler abandonment
+  behavior is explicit and tested by cancelling after dispatch, verifying no
+  resend, and recovering via a new consent flow. This can make an interrupted
+  refresh require operator action, not just a service crash.
+- Coordinator/store tests: **13 passed**, including collaborator ownership,
+  saved-metadata/PKCE binding, callback replay/denial, scheme rotation and revoked
+  authority, exact-deployment lookup, concurrent refresh, response loss,
+  cancellation, refresh replacement/fallback and expiry boundaries. Bug-finder
+  run 1 exposed an unexpired stored token gated by the refresh timeout; retained
+  the regression and fixed the deadline boundary. Run 2 confirmed it resolved,
+  all 13 tests passed, and no new findings. The fully adjudicated loop is stopped.
+- Full import suite: **81 passed**. Registry all-target strict Clippy with
+  `--no-deps`, scoped format checks and `git diff --check` passed. The initial
+  dependency-inclusive Clippy attempt exhausted disk; after clearing obsolete
+  build caches it reached an existing `collapsible_if` lint in
+  `golem-common/src/base_model/mcp_import.rs`. Package-only linting is clean; the
+  broader lint remains for final validation rather than being silently suppressed.
+- Remaining step-4 work: production registry HTTP policy/accounting and service
+  configuration; initial unauthenticated probe; bootstrap/internal RPC and
+  operator API/CLI wiring, including callback parsing and status; resource-401
+  feedback and cache invalidation; provider fixtures and combined validation.
+  PostgreSQL execution remains unverified. The coordinator is an intermediate
+  checkpoint, not completion of step 4 or evidence of end-to-end OAuth operation.
 
 ## Review and decision history
 

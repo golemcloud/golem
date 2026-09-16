@@ -40,7 +40,7 @@ impl ProtectedResourceMetadata {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationServerMetadata {
     pub issuer: String,
     pub authorization_endpoint: String,

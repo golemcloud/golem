@@ -404,20 +404,32 @@ mod tests {
 
     fn flow(marker: &str) -> McpOAuthFlowSecrets {
         McpOAuthFlowSecrets {
-            callback_uri: "https://callback".into(),
             pkce_verifier: format!("pkce-{marker}"),
-            issuer_url: "https://issuer".into(),
-            token_endpoint: "https://issuer/token".into(),
+            session: crate::repo::model::mcp_oauth::McpOAuthSession {
+                deployment_revision: 1,
+                import_index: 0,
+                authorized_by: Uuid::new_v4(),
+                server: golem_mcp_import::oauth::AuthorizationServerMetadata {
+                    issuer: "https://issuer".into(),
+                    authorization_endpoint: "https://issuer/authorize".into(),
+                    token_endpoint: "https://issuer/token".into(),
+                    response_types_supported: vec!["code".into()],
+                    code_challenge_methods_supported: Some(vec!["S256".into()]),
+                    token_endpoint_auth_methods_supported: None,
+                    authorization_response_iss_parameter_supported: true,
+                },
+                scopes: vec!["tools".into()],
+            },
         }
     }
 
     fn tokens(marker: &str) -> McpOAuthTokens {
         McpOAuthTokens {
+            session: flow(marker).session,
             access_token: format!("access-{marker}"),
             refresh_token: Some(format!("refresh-{marker}")),
             expires_at: Some(Utc::now() + Duration::hours(1)),
             scopes: vec!["tools".into()],
-            token_type: Some("Bearer".into()),
         }
     }
 
