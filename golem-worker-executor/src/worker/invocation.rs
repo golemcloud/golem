@@ -51,9 +51,10 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 
-/// Polls an invocation task outside Wasmtime's fiber and accessor TLS scopes, with enough native
-/// stack for the nested host futures. Production runtime threads already have sufficient stack;
-/// smaller embedding runtimes grow a temporary stack that is released after each poll.
+/// Grows smaller native thread stacks for worker construction and nested invocation futures.
+/// The temporary stack is released after each poll, before the future yields. A poll must not
+/// suspend a Wasmtime fiber while on the temporary stack. Remaining-stack estimation uses native
+/// thread bounds, so growth is not guaranteed when already running on a Wasmtime fiber stack.
 pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     std::future::poll_fn(|cx| {

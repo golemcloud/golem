@@ -59,6 +59,7 @@ use crate::worker::entity_slot::EntitySlot;
 use crate::worker::instance::{
     EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
 };
+use crate::worker::invocation::with_invocation_stack;
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
@@ -941,7 +942,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .agents
             .get_or_insert_simple(&cache_key, || {
                 Box::pin(async move {
-                    let worker = Worker::new(
+                    let worker = with_invocation_stack(Worker::new(
                         &deps,
                         self.card_interest_index.clone(),
                         owned_agent_id.clone(),
@@ -953,7 +954,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         principal,
                         freshness_disposition,
                         creation_mode,
-                    )
+                    ))
                     .in_current_span()
                     .await;
 
