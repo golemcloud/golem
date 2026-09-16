@@ -344,7 +344,7 @@ fn expand(
         let awaited_value = if is_unit {
             quote! {
                 if invocation.value.is_some() {
-                    return Err(#golem_rust::GolemReflectError::InvalidType(
+                    return Err(#golem_rust::GolemReflectError::MalformedRemoteOutput(
                         format!("method `{}` returned a value instead of unit", #method_name),
                     ));
                 }
@@ -352,7 +352,7 @@ fn expand(
             }
         } else {
             quote! {
-                let value = invocation.value.ok_or_else(|| #golem_rust::GolemReflectError::InvalidType(
+                let value = invocation.value.ok_or_else(|| #golem_rust::GolemReflectError::MalformedRemoteOutput(
                     format!("method `{}` returned unit instead of a value", #method_name),
                 ))?;
                 #golem_rust::Invocation { metadata: invocation.metadata, value }
