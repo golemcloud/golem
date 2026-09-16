@@ -3282,6 +3282,7 @@ mod tests {
         created_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
+        invocation_modes_and_schedules: Mutex<Vec<(i32, Option<::prost_types::Timestamp>)>>,
         invocation_environments: Mutex<Vec<EnvironmentId>>,
         invocation_session_starts: Mutex<Vec<(AgentId, InvocationStart)>>,
         invocation_session_resumes: Mutex<Vec<(AgentId, ResumeAttach)>>,
@@ -3298,6 +3299,7 @@ mod tests {
                 created_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
+                invocation_modes_and_schedules: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
                 invocation_session_resumes: Mutex::new(Vec::new()),
@@ -3317,6 +3319,7 @@ mod tests {
                 created_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
+                invocation_modes_and_schedules: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
                 invocation_session_resumes: Mutex::new(Vec::new()),
@@ -3344,12 +3347,20 @@ mod tests {
             self.invocations.lock().unwrap().clone()
         }
 
+        fn invocation_modes_and_schedules(&self) -> Vec<(i32, Option<::prost_types::Timestamp>)> {
+            self.invocation_modes_and_schedules.lock().unwrap().clone()
+        }
+
         fn invocation_environment(&self) -> EnvironmentId {
             self.invocation_environments.lock().unwrap()[0]
         }
 
         fn invocation_session_start(&self) -> (AgentId, InvocationStart) {
             self.invocation_session_starts.lock().unwrap()[0].clone()
+        }
+
+        fn invocation_session_starts(&self) -> Vec<(AgentId, InvocationStart)> {
+            self.invocation_session_starts.lock().unwrap().clone()
         }
 
         fn invocation_session_start_count(&self) -> usize {
@@ -3655,8 +3666,8 @@ mod tests {
             agent_id: &AgentId,
             _: Option<String>,
             _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
-            _: i32,
-            _: Option<::prost_types::Timestamp>,
+            mode: i32,
+            schedule_at: Option<::prost_types::Timestamp>,
             idempotency_key: IdempotencyKey,
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
@@ -3672,6 +3683,10 @@ mod tests {
                 idempotency_key,
                 freshness_disposition,
             ));
+            self.invocation_modes_and_schedules
+                .lock()
+                .unwrap()
+                .push((mode, schedule_at));
             self.invocation_environments
                 .lock()
                 .unwrap()
@@ -5264,6 +5279,140 @@ mod tests {
             invocations
                 .iter()
                 .all(|invocation| invocation.2 == InvocationFreshnessDisposition::MayExist)
+        );
+    }
+
+    #[test]
+    async fn scheduled_ephemeral_invocation_preserves_supplied_identity_key_and_time() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let idempotency_key = IdempotencyKey::new("scheduled-tool-call".to_string());
+        let schedule_at = Utc::now();
+        let expected_schedule_at = ::prost_types::Timestamp {
+            seconds: schedule_at.timestamp(),
+            nanos: schedule_at.timestamp_subsec_nanos() as i32,
+        };
+        let mut request = harness.invoke_request();
+        request.mode = AgentInvocationMode::Schedule;
+        request.schedule_at = Some(schedule_at);
+        request.idempotency_key = Some(idempotency_key.clone());
+
+        let response = harness
+            .worker_service
+            .invoke_agent_rest(request, AuthCtx::system())
+            .await
+            .unwrap();
+
+        let invocations = harness.worker_client.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(response.agent_id, invocations[0].0);
+        assert_eq!(response.idempotency_key, idempotency_key);
+        assert_eq!(invocations[0].1, idempotency_key);
+        assert_eq!(
+            phantom_id(&invocations[0].0),
+            Some(ephemeral_invocation_phantom_id(&invocations[0].1))
+        );
+        assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
+        assert_eq!(
+            harness.worker_client.invocation_modes_and_schedules(),
+            vec![(
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                Some(expected_schedule_at),
+            )]
+        );
+    }
+
+    #[test]
+    async fn ephemeral_session_entry_is_stable_and_lookup_is_observation_only() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
+        let logical_agent_id = build_public_invocation_agent_id(
+            harness.component_id,
+            harness.agent_type_name.clone(),
+            empty_constructor_parameters(),
+            None,
+        )
+        .unwrap();
+        let mut start = InvocationStart {
+            agent_id: Some(logical_agent_id.into()),
+            method_name: Some("run".to_string()),
+            input: None,
+            idempotency_key: Some(idempotency_key.clone().into()),
+            context: None,
+            auth_ctx: None,
+            principal: Some(Default::default()),
+            environment_id: None,
+            config: Vec::new(),
+            component_owner_account_id: None,
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            schedule_at: None,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(Uuid::new_v4().into()),
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
+            scope_card: None,
+        };
+
+        let _responses = harness
+            .worker_service
+            .invoke_agent_session(
+                start.clone(),
+                Box::pin(stream::empty()),
+                true,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+
+        let starts = harness.worker_client.invocation_session_starts();
+        let (routed_agent_id, admitted_start) = &starts[0];
+        let admitted_agent_id: AgentId =
+            admitted_start.agent_id.clone().unwrap().try_into().unwrap();
+        assert_eq!(routed_agent_id, &admitted_agent_id);
+        assert_eq!(
+            admitted_start.mode,
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
+        );
+        assert_eq!(
+            phantom_id(&admitted_agent_id),
+            Some(ephemeral_invocation_phantom_id(&idempotency_key))
+        );
+        assert_eq!(
+            admitted_start.idempotency_key.clone().map(Into::into),
+            Some(idempotency_key.clone())
+        );
+        assert_eq!(
+            admitted_start.freshness_disposition(),
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+        );
+
+        start.agent_id = Some(admitted_agent_id.clone().into());
+        start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+        start.freshness_disposition =
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32;
+        let _responses = harness
+            .worker_service
+            .invoke_agent_session(start, Box::pin(stream::empty()), false, AuthCtx::system())
+            .await
+            .unwrap();
+
+        let starts = harness.worker_client.invocation_session_starts();
+        assert_eq!(starts.len(), 2);
+        let (lookup_routed_agent_id, lookup_start) = &starts[1];
+        assert_eq!(lookup_routed_agent_id, &admitted_agent_id);
+        assert_eq!(lookup_start.agent_id, Some(admitted_agent_id.into()));
+        assert_eq!(
+            lookup_start.mode,
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
+        );
+        assert_eq!(
+            lookup_start.idempotency_key.clone().map(Into::into),
+            Some(idempotency_key)
+        );
+        assert_eq!(
+            lookup_start.freshness_disposition(),
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
         );
     }
 
