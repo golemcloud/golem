@@ -870,6 +870,22 @@ pub struct ReflectedAgentMethod {
     transport: Rc<RpcTransport>,
 }
 
+fn validate_declared_output(
+    output: Option<&SchemaRef>,
+    value: Option<&SchemaValue>,
+    method: &str,
+) -> Result<(), GolemReflectError> {
+    match (output, value) {
+        (Some(schema), Some(value)) => schema
+            .validate_value(value)
+            .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string())),
+        (None, None) => Ok(()),
+        _ => Err(GolemReflectError::MalformedRemoteOutput(format!(
+            "method `{method}` returned an unexpected unit/value shape"
+        ))),
+    }
+}
+
 impl ReflectedAgentMethod {
     pub fn definition(&self) -> &AgentMethod {
         &self.definition
@@ -884,16 +900,11 @@ impl ReflectedAgentMethod {
             .transport
             .invoke_and_await(&self.definition.raw.name, input)
             .await?;
-        if let (Some(output), Some(value)) = (&self.definition.output, &invocation.value) {
-            output
-                .validate_value(value)
-                .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
-        } else if self.definition.output.is_some() != invocation.value.is_some() {
-            return Err(GolemReflectError::MalformedRemoteOutput(format!(
-                "method `{}` returned an unexpected unit/value shape",
-                self.definition.raw.name
-            )));
-        }
+        validate_declared_output(
+            self.definition.output.as_ref(),
+            invocation.value.as_ref(),
+            &self.definition.raw.name,
+        )?;
         Ok(invocation)
     }
 
@@ -1362,7 +1373,7 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentClientDefinition, GolemReflectError, SchemaRef};
+    use super::{AgentClientDefinition, GolemReflectError, SchemaRef, validate_declared_output};
     use crate::schema::{
         MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
         VariantValuePayload,
@@ -1426,6 +1437,29 @@ mod tests {
                 payload: None,
             })),
             Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_declared_outputs_are_distinct_remote_errors() {
+        let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        assert!(
+            validate_declared_output(
+                Some(&output),
+                Some(&SchemaValue::String("ok".to_string())),
+                "read",
+            )
+            .is_ok()
+        );
+        for value in [Some(SchemaValue::U32(7)), None] {
+            assert!(matches!(
+                validate_declared_output(Some(&output), value.as_ref(), "read"),
+                Err(GolemReflectError::MalformedRemoteOutput(_))
+            ));
+        }
+        assert!(matches!(
+            validate_declared_output(None, Some(&SchemaValue::Bool(true)), "unit"),
+            Err(GolemReflectError::MalformedRemoteOutput(_))
         ));
     }
 
@@ -1981,16 +2015,11 @@ where
             .transport
             .invoke_and_await(&self.definition.name, input)
             .await?;
-        if let (Some(schema), Some(value)) = (&self.definition.output, &invocation.value) {
-            schema
-                .validate_value(value)
-                .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
-        } else if self.definition.output.is_some() != invocation.value.is_some() {
-            return Err(GolemReflectError::MalformedRemoteOutput(format!(
-                "method `{}` returned an unexpected unit/value shape",
-                self.definition.name
-            )));
-        }
+        validate_declared_output(
+            self.definition.output.as_ref(),
+            invocation.value.as_ref(),
+            &self.definition.name,
+        )?;
         let value = invocation
             .value
             .as_ref()
@@ -2079,16 +2108,12 @@ impl<O: crate::FromSchema> Future for TypedPendingInvocation<O> {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
             Poll::Ready(Ok(invocation)) => {
-                if let (Some(schema), Some(value)) = (&this.output, &invocation.value) {
-                    if let Err(error) = schema.validate_value(value) {
-                        return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
-                            error.to_string(),
-                        )));
-                    }
-                } else if this.output.is_some() != invocation.value.is_some() {
-                    return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
-                        "pending invocation returned an unexpected unit/value shape".to_string(),
-                    )));
+                if let Err(error) = validate_declared_output(
+                    this.output.as_ref(),
+                    invocation.value.as_ref(),
+                    "pending invocation",
+                ) {
+                    return Poll::Ready(Err(error));
                 }
                 let value = match invocation.value.as_ref().map(O::from_value).transpose() {
                     Ok(value) => value,
