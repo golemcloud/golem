@@ -360,6 +360,75 @@ impl AgentType {
         &self.raw.config
     }
 
+    fn config_schema(&self, path: &[String]) -> Result<SchemaRef, GolemReflectError> {
+        let declaration = self
+            .raw
+            .config
+            .iter()
+            .find(|declaration| declaration.path == path)
+            .ok_or_else(|| {
+                GolemReflectError::InvalidInput(format!("unknown config path `{}`", path.join(".")))
+            })?;
+        if declaration.source == wire_common::AgentConfigSource::Secret {
+            return Err(GolemReflectError::InvalidInput(format!(
+                "secret config field `{}` cannot be overridden over RPC",
+                path.join(".")
+            )));
+        }
+        let mut wire_graph = self.raw.schema.clone();
+        wire_graph.root = declaration.value_type;
+        Ok(SchemaRef::new(
+            crate::decode_schema_graph(&wire_graph)
+                .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?,
+        ))
+    }
+
+    fn validate_config(
+        &self,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<Vec<AgentConfigValue>, GolemReflectError> {
+        config
+            .into_iter()
+            .map(|entry| {
+                let schema = self.config_schema(&entry.path)?;
+                schema.validate_value(entry.value.value())?;
+                Ok(AgentConfigValue {
+                    path: entry.path,
+                    value: TypedSchemaValue::new(
+                        SchemaGraph {
+                            defs: schema.graph.defs.clone(),
+                            root: schema.root.clone(),
+                        },
+                        entry.value.value().clone(),
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "json")]
+    pub fn pack_config_json(
+        &self,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<Vec<AgentConfigValue>, GolemReflectError> {
+        config
+            .into_iter()
+            .map(|(path, json)| {
+                let schema = self.config_schema(&path)?;
+                Ok(AgentConfigValue {
+                    path,
+                    value: TypedSchemaValue::new(
+                        SchemaGraph {
+                            defs: schema.graph.defs.clone(),
+                            root: schema.root.clone(),
+                        },
+                        schema.pack_json(&json)?,
+                    ),
+                })
+            })
+            .collect()
+    }
+
     pub fn client(&self) -> ReflectedAgentClientFactory {
         ReflectedAgentClientFactory {
             agent_type: self.clone(),
@@ -388,6 +457,14 @@ impl AgentType {
         &self,
         agent_id: &ParsedAgentId,
     ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.bind_with_config(agent_id, Vec::new())
+    }
+
+    pub fn bind_with_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
         if self.mode == AgentMode::Ephemeral {
             return Err(GolemReflectError::KnownEphemeralBinding(
                 self.name().to_string(),
@@ -403,17 +480,27 @@ impl AgentType {
         }
         self.constructor_input
             .validate_value(&parts.constructor_value)?;
+        let config = self.validate_config(config)?;
         let transport = RpcTransport::create(
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
-            Vec::new(),
+            config,
         )?;
         Ok(ReflectedAgentClient {
             agent_type: self.clone(),
             transport: Rc::new(transport),
             reusable_identity: Some(agent_id.clone()),
         })
+    }
+
+    #[cfg(feature = "json")]
+    pub fn bind_with_json_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.bind_with_config(agent_id, self.pack_config_json(config)?)
     }
 }
 
@@ -595,12 +682,29 @@ impl ReflectedAgentClientFactory {
         self.get_value(self.agent_type.constructor_input.pack_json(constructor)?)
     }
 
+    #[cfg(feature = "json")]
+    pub fn get_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.get_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            self.agent_type.pack_config_json(config)?,
+        )
+    }
+
     pub fn get_phantom_value(
         &self,
         constructor: SchemaValue,
         phantom_id: Uuid,
     ) -> Result<ReflectedAgentClient, GolemReflectError> {
-        self.create(constructor, Some(phantom_id), Vec::new(), true)
+        self.create(
+            constructor,
+            Some(phantom_id),
+            Vec::new(),
+            self.agent_type.mode == AgentMode::Durable,
+        )
     }
 
     pub fn get_phantom_value_with_config(
@@ -609,7 +713,26 @@ impl ReflectedAgentClientFactory {
         phantom_id: Uuid,
         config: Vec<AgentConfigValue>,
     ) -> Result<ReflectedAgentClient, GolemReflectError> {
-        self.create(constructor, Some(phantom_id), config, true)
+        self.create(
+            constructor,
+            Some(phantom_id),
+            config,
+            self.agent_type.mode == AgentMode::Durable,
+        )
+    }
+
+    #[cfg(feature = "json")]
+    pub fn get_phantom_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        phantom_id: Uuid,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.get_phantom_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            phantom_id,
+            self.agent_type.pack_config_json(config)?,
+        )
     }
 
     pub fn new_phantom_value(
@@ -669,6 +792,18 @@ impl ReflectedAgentClientFactory {
         self.new_phantom_value(self.agent_type.constructor_input.pack_json(constructor)?)
     }
 
+    #[cfg(feature = "json")]
+    pub fn new_phantom_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<NewPhantomClient, GolemReflectError> {
+        self.new_phantom_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            self.agent_type.pack_config_json(config)?,
+        )
+    }
+
     fn create(
         &self,
         constructor: SchemaValue,
@@ -685,6 +820,7 @@ impl ReflectedAgentClientFactory {
                     .agent_id_value(constructor.clone(), phantom_id)
             })
             .transpose()?;
+        let config = self.agent_type.validate_config(config)?;
         let transport = RpcTransport::create(
             self.agent_type.name().to_string(),
             constructor,
@@ -1528,12 +1664,20 @@ impl AgentClientDefinition {
     }
 
     pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, Vec::new())
+    }
+
+    pub fn bind_with_entries(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
-        let transport = RpcTransport::create(
+        let transport = RpcTransport::create_with_typed_config(
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
-            Vec::new(),
+            config,
         )?;
         Ok(TypedAgentClient {
             definition: self.data.clone(),
@@ -1574,14 +1718,6 @@ where
         phantom_id: Option<Uuid>,
     ) -> Result<ParsedAgentId, GolemReflectError> {
         make_agent_id_value(self.type_name(), constructor.to_value(), phantom_id)
-    }
-
-    pub fn get_phantom(
-        &self,
-        phantom_id: Uuid,
-        constructor: &Id,
-    ) -> Result<TypedAgentClient, GolemReflectError> {
-        self.create(constructor, Some(phantom_id), Vec::new(), true)
     }
 
     fn type_name(&self) -> &str {
@@ -1625,7 +1761,23 @@ impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientCon
 where
     Id: crate::IntoSchema,
 {
+    pub fn get_phantom(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(phantom_id), Vec::new(), true)
+    }
+
     pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, Vec::new())
+    }
+
+    fn bind_with_entries(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
         if parts.type_name != self.type_name() {
             return Err(GolemReflectError::InvalidType(format!(
@@ -1643,7 +1795,7 @@ where
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
-            Vec::new(),
+            config,
         )?;
         Ok(TypedAgentClient {
             definition: self.data.clone(),
@@ -1665,12 +1817,48 @@ impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientC
 where
     Id: crate::IntoSchema,
 {
+    pub fn get_phantom(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(phantom_id), Vec::new(), false)
+    }
+
     pub fn new_phantom(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
         self.create(constructor, None, Vec::new(), false)
     }
 }
 
-impl<Id, Config, Mode> CompleteAgentClientDefinition<Id, Config, Mode>
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn bind_with_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, encode_rpc_config::<Config>(config))
+    }
+
+    pub fn get_phantom_with_config(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            encode_rpc_config::<Config>(config),
+            true,
+        )
+    }
+}
+
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
 where
     Id: crate::IntoSchema,
     Config: super::ConfigSchema,
@@ -1685,7 +1873,7 @@ where
             constructor,
             Some(phantom_id),
             encode_rpc_config::<Config>(config),
-            true,
+            false,
         )
     }
 }
