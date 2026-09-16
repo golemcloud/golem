@@ -7,7 +7,8 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, OplogEntry, OplogPayload, QueuedCardEvent, UpdateDescription,
+    AgentError, AgentResourceId, OplogEntry, OplogErrorKind, OplogPayload, QueuedCardEvent,
+    UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
@@ -548,15 +549,17 @@ fn update_status_with_precomputed_regions(
 ) -> Result<AgentStatusRecord, String> {
     let active_plugins = last_known.active_plugins.clone();
 
-    let (status, current_retry_state, overridden_retry_config) = calculate_latest_worker_status(
-        last_known.status,
-        last_known.current_retry_state,
-        last_known.overridden_retry_config,
-        default_retry_policy,
-        &skipped_regions,
-        &deleted_regions,
-        &new_entries,
-    );
+    let (status, last_error_kind, current_retry_state, overridden_retry_config) =
+        calculate_latest_worker_status(
+            last_known.status,
+            last_known.last_error_kind,
+            last_known.current_retry_state,
+            last_known.overridden_retry_config,
+            default_retry_policy,
+            &skipped_regions,
+            &deleted_regions,
+            &new_entries,
+        );
 
     let pending_invocations =
         calculate_pending_invocations(last_known.pending_invocations, &new_entries);
@@ -663,6 +666,7 @@ fn update_status_with_precomputed_regions(
             .cloned()
             .unwrap_or(last_known.oplog_idx),
         status,
+        last_error_kind,
         overridden_retry_config,
         pending_invocations,
         pending_card_events,
@@ -697,6 +701,7 @@ fn update_status_with_precomputed_regions(
 
 fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
+    mut last_error_kind: Option<OplogErrorKind>,
     mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
@@ -705,6 +710,7 @@ fn calculate_latest_worker_status(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     AgentStatus,
+    Option<OplogErrorKind>,
     HashMap<OplogIndex, RetryPolicyState>,
     Option<RetryConfig>,
 ) {
@@ -730,6 +736,7 @@ fn calculate_latest_worker_status(
         // For non-skipped errors, update the worker status based on the accumulated retry count
         if !deleted_regions.is_in_deleted_region(*idx)
             && let OplogEntry::Error {
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
@@ -737,8 +744,12 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
         {
-            if matches!(error, AgentError::PermissionDenied(_)) {
+            last_error_kind = Some(*kind);
+            if *kind == OplogErrorKind::Invocation
+                && matches!(error, AgentError::PermissionDenied(_))
+            {
                 current_status = AgentStatus::Idle;
+                last_error_kind = None;
                 current_retry_state.clear();
             } else {
                 let count = current_retry_state
@@ -761,6 +772,9 @@ fn calculate_latest_worker_status(
             }
         }
 
+        let status_before_entry = current_status;
+        let unresolved_recovery = last_error_kind == Some(OplogErrorKind::Recovery);
+
         match entry {
             OplogEntry::Create { .. } => {
                 current_status = AgentStatus::Idle;
@@ -777,11 +791,17 @@ fn calculate_latest_worker_status(
             OplogEntry::CompletionDiscarded { .. } | OplogEntry::CompletionDelivered { .. } => {}
             OplogEntry::AgentInvocationStarted { .. } => {
                 current_status = AgentStatus::Running;
-                current_retry_state.clear();
+                if !unresolved_recovery {
+                    last_error_kind = None;
+                    current_retry_state.clear();
+                }
             }
             OplogEntry::AgentInvocationFinished { .. } => {
                 current_status = AgentStatus::Idle;
-                current_retry_state.clear();
+                if !unresolved_recovery {
+                    last_error_kind = None;
+                    current_retry_state.clear();
+                }
             }
             OplogEntry::Suspend { .. } => {
                 current_status = AgentStatus::Suspended;
@@ -794,6 +814,9 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::Interrupted { .. } => {
                 current_status = AgentStatus::Interrupted;
+            }
+            OplogEntry::Resumed { .. } => {
+                current_status = AgentStatus::Running;
             }
             OplogEntry::Exited { .. } => {
                 current_status = AgentStatus::Exited;
@@ -876,9 +899,37 @@ fn calculate_latest_worker_status(
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }
+            OplogEntry::RecoverySucceeded { .. } => {
+                if !deleted_regions.is_in_deleted_region(*idx)
+                    && last_error_kind == Some(OplogErrorKind::Recovery)
+                {
+                    if matches!(current_status, AgentStatus::Retrying | AgentStatus::Failed) {
+                        current_status = AgentStatus::Idle;
+                    }
+                    last_error_kind = None;
+                }
+            }
+        }
+
+        if unresolved_recovery
+            && !matches!(
+                entry,
+                OplogEntry::Error { .. }
+                    | OplogEntry::RecoverySucceeded { .. }
+                    | OplogEntry::Suspend { .. }
+                    | OplogEntry::Interrupted { .. }
+                    | OplogEntry::Exited { .. }
+            )
+        {
+            current_status = status_before_entry;
         }
     }
-    (current_status, current_retry_state, current_retry_policy)
+    (
+        current_status,
+        last_error_kind,
+        current_retry_state,
+        current_retry_policy,
+    )
 }
 
 fn calculate_revoked_cards(
@@ -921,6 +972,15 @@ fn calculate_skipped_regions(
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
+    calculate_skipped_regions_with_deleted_regions(initial_skipped, deleted_regions, None, entries)
+}
+
+fn calculate_skipped_regions_with_deleted_regions(
+    initial_skipped: DeletedRegions,
+    deleted_regions: &DeletedRegions,
+    ignored_snapshot_update_region: Option<&OplogRegion>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> DeletedRegions {
     let mut skipped_without_override = initial_skipped.clone();
     if skipped_without_override.is_overridden() {
         skipped_without_override.drop_override();
@@ -933,6 +993,18 @@ fn calculate_skipped_regions(
     for (idx, entry) in entries {
         // Skipping deleted regions (by revert) from constructing the skipped regions
         if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        if ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
+            && matches!(
+                entry,
+                OplogEntry::PendingUpdate {
+                    description: UpdateDescription::SnapshotBased { .. },
+                    ..
+                }
+            )
+        {
             continue;
         }
 
@@ -979,6 +1051,23 @@ fn calculate_skipped_regions(
     }
 
     new_skipped
+}
+
+/// Reconstructs the skipped regions that remain relevant while validating a prospective revert.
+/// Crossed snapshot-update baselines no longer hide the cut, while genuine jumps and existing
+/// reverts remain protected even when their marker entries will be dropped by the new revert.
+pub(crate) fn calculate_revert_validation_regions(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    dropped_region: &OplogRegion,
+) -> DeletedRegions {
+    let existing_deleted = calculate_deleted_regions(DeletedRegions::new(), entries);
+
+    calculate_skipped_regions_with_deleted_regions(
+        DeletedRegions::new(),
+        &existing_deleted,
+        Some(dropped_region),
+        entries,
+    )
 }
 
 /// Determines whether a pending agent invocation payload is a manual update and, if so, returns
@@ -1475,6 +1564,7 @@ pub(crate) fn fold_invocation_result_entries(
                 *cancelled_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::Error {
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::PermissionDenied(_),
                 ..
             } => {
@@ -1484,7 +1574,10 @@ pub(crate) fn fold_invocation_result_entries(
                     observe_result(idempotency_key, *oplog_idx);
                 }
             }
-            OplogEntry::Error { .. } => {
+            OplogEntry::Error {
+                kind: OplogErrorKind::Invocation,
+                ..
+            } => {
                 *cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &*current_idempotency_key {
                     observe_result(idempotency_key, *oplog_idx);

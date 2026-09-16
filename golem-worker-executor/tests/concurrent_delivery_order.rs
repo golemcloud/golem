@@ -40,7 +40,25 @@
 
 use test_r::test;
 use wasmtime::component::{Accessor, Component, Linker};
-use wasmtime::{Engine, Store};
+use wasmtime::{AsContextMut, Engine, Store};
+
+#[test]
+async fn host_only_materialization_waits_before_ready_root_settlement() -> anyhow::Result<()> {
+    let mut store = Store::new(&engine(), ());
+    let (release, wait) = tokio::sync::oneshot::channel::<u32>();
+    {
+        let materialization = store.run_concurrent(async |_accessor| wait.await);
+        tokio::pin!(materialization);
+        assert!(futures::poll!(&mut materialization).is_pending());
+        release.send(73).unwrap();
+        assert_eq!(materialization.await??, 73);
+    }
+    store
+        .as_context_mut()
+        .run_concurrent_and_settle(async |_accessor| (), &mut |_| true)
+        .await?;
+    Ok(())
+}
 
 /// Host-side state driving the completion order of the bespoke `call` host
 /// function.

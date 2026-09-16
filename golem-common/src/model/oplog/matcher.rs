@@ -220,6 +220,10 @@ impl PublicOplogEntry {
                 Self::string_match("error", &[], query_path, query)
                     || Self::string_match(&params.error, &[], query_path, query)
             }
+            PublicOplogEntry::RecoverySucceeded(_params) => {
+                Self::string_match("recoverysucceeded", &[], query_path, query)
+                    || Self::string_match("recovery-succeeded", &[], query_path, query)
+            }
             PublicOplogEntry::NoOp(_params) => Self::string_match("noop", &[], query_path, query),
             PublicOplogEntry::Jump(_params) => Self::string_match("jump", &[], query_path, query),
             PublicOplogEntry::Interrupted(_params) => {
@@ -341,6 +345,9 @@ impl PublicOplogEntry {
             }
             PublicOplogEntry::Restart(_params) => {
                 Self::string_match("restart", &[], query_path, query)
+            }
+            PublicOplogEntry::Resumed(_params) => {
+                Self::string_match("resumed", &[], query_path, query)
             }
             PublicOplogEntry::ActivatePlugin(_params) => {
                 Self::string_match("activateplugin", &[], query_path, query)

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod effect_bridge_external;
+pub mod effect_bridge_guest;
+pub mod effect_bridge_tool;
 pub mod fixtures;
 pub mod moonbit;
 pub mod parameter_naming;

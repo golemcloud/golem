@@ -19,8 +19,10 @@ use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::status::{
     calculate_last_known_status, calculate_last_known_status_for_existing_worker,
-    calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
-    calculate_total_linear_memory_size, hydrate_initial_pending_evidence, try_fold_status_from,
+    calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
+    calculate_oplog_processor_checkpoints, calculate_revert_validation_regions,
+    calculate_total_linear_memory_size, fold_invocation_result_entries,
+    hydrate_initial_pending_evidence, try_fold_status_from,
 };
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
@@ -40,9 +42,9 @@ use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
-    OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+    OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
     AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
@@ -311,6 +313,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
         .add(
             OplogEntry::error(
                 None,
+                OplogErrorKind::Invocation,
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 false,
@@ -318,6 +321,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
             ),
             move |mut status| {
                 status.status = AgentStatus::Retrying;
+                status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
                 status
                     .invocation_results
@@ -344,6 +348,7 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
         .add(
             OplogEntry::error(
                 None,
+                OplogErrorKind::Invocation,
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 false,
@@ -351,10 +356,343 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
                 status
                     .invocation_results
                     .insert(idempotency_key, status.oplog_idx);
+                status
+            },
+        )
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn recovery_failure_remains_failed_until_recovery_succeeds() {
+    let retry_from = OplogIndex::from_u64(1);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status
+                    .current_retry_state
+                    .insert(retry_from, RetryPolicyState::Terminal);
+                status
+            },
+        )
+        .add(OplogEntry::recovery_succeeded(), |mut status| {
+            status.status = AgentStatus::Idle;
+            status.last_error_kind = None;
+            status
+        })
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
+    let retry_from = OplogIndex::from_u64(1);
+    let idempotency_key = IdempotencyKey::fresh();
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status
+                    .current_retry_state
+                    .insert(retry_from, RetryPolicyState::Terminal);
+                status
+            },
+        )
+        .add(
+            OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: idempotency_key.clone(),
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                    method_name: "a".to_string(),
+                    input: SchemaValue::Record { fields: Vec::new() },
+                    principal: Principal::anonymous(),
+                    scope_card: None,
+                })),
+                trace_id: TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+                wallet_pin: None,
+            },
+            {
+                let idempotency_key = idempotency_key.clone();
+                move |mut status| {
+                    status.current_idempotency_key = Some(idempotency_key);
+                    status
+                }
+            },
+        )
+        .add(
+            OplogEntry::AgentInvocationFinished {
+                timestamp: Timestamp::now_utc(),
+                result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+                method_name: None,
+                consumed_fuel: 0,
+                component_revision: ComponentRevision::INITIAL,
+            },
+            {
+                let idempotency_key = idempotency_key.clone();
+                move |mut status| {
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status.current_idempotency_key = None;
+                    status
+                }
+            },
+        )
+        .add(OplogEntry::recovery_succeeded(), |mut status| {
+            status.status = AgentStatus::Idle;
+            status.last_error_kind = None;
+            status
+        })
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn stale_recovery_success_must_not_clear_a_later_interrupt() {
+    let retry_from = OplogIndex::from_u64(1);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status
+                    .current_retry_state
+                    .insert(retry_from, RetryPolicyState::Terminal);
+                status
+            },
+        )
+        .add(OplogEntry::interrupted(), |mut status| {
+            status.status = AgentStatus::Interrupted;
+            status
+        })
+        .add(OplogEntry::recovery_succeeded(), |mut status| {
+            status.status = AgentStatus::Interrupted;
+            status.last_error_kind = None;
+            status
+        })
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn recovery_success_in_deleted_region_must_not_clear_failure() {
+    let retry_from = OplogIndex::from_u64(1);
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(1),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+        ),
+        (OplogIndex::from_u64(2), OplogEntry::recovery_succeeded()),
+    ]);
+    let deleted_regions = DeletedRegionsBuilder::from_regions(vec![OplogRegion {
+        start: OplogIndex::from_u64(2),
+        end: OplogIndex::from_u64(2),
+    }])
+    .build();
+
+    let (status, last_error_kind, retry_state, _) = calculate_latest_worker_status(
+        AgentStatus::Idle,
+        None,
+        HashMap::new(),
+        None,
+        &RetryConfig::default(),
+        &DeletedRegions::default(),
+        &deleted_regions,
+        &entries,
+    );
+
+    assert_eq!(status, AgentStatus::Failed);
+    assert_eq!(last_error_kind, Some(OplogErrorKind::Recovery));
+    assert_eq!(
+        retry_state.get(&retry_from),
+        Some(&RetryPolicyState::Terminal)
+    );
+}
+
+#[test]
+fn recovery_success_preserves_retry_state_from_skipped_atomic_region() {
+    let atomic_retry_from = OplogIndex::from_u64(10);
+    let recovery_retry_from = OplogIndex::from_u64(20);
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(1),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("atomic attempt failed".to_string()),
+                atomic_retry_from,
+                true,
+                Some(RetryPolicyState::Counter(3)),
+            ),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                recovery_retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+        ),
+        (OplogIndex::from_u64(3), OplogEntry::recovery_succeeded()),
+    ]);
+    let skipped_regions = DeletedRegionsBuilder::from_regions(vec![OplogRegion {
+        start: OplogIndex::from_u64(1),
+        end: OplogIndex::from_u64(1),
+    }])
+    .build();
+
+    let (_, _, retry_state, _) = calculate_latest_worker_status(
+        AgentStatus::Idle,
+        None,
+        HashMap::new(),
+        None,
+        &RetryConfig::default(),
+        &skipped_regions,
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(
+        retry_state.get(&atomic_retry_from),
+        Some(&RetryPolicyState::Counter(3)),
+        "retry state from skipped atomic history is needed by subsequent attempts"
+    );
+}
+
+#[test]
+fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_state() {
+    let invocation_retry_from = OplogIndex::from_u64(10);
+    let recovery_retry_from = OplogIndex::from_u64(20);
+    let mut retry_state = HashMap::from([(invocation_retry_from, RetryPolicyState::Counter(2))]);
+
+    for attempt in 0..5 {
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(21 + attempt),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::Unknown("component service unavailable".to_string()),
+                recovery_retry_from,
+                false,
+                None,
+            ),
+        )]);
+        let (status, kind, updated_retry_state, _) = calculate_latest_worker_status(
+            AgentStatus::Retrying,
+            Some(OplogErrorKind::Recovery),
+            retry_state,
+            None,
+            &RetryConfig::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &entries,
+        );
+
+        assert_eq!(status, AgentStatus::Retrying);
+        assert_eq!(kind, Some(OplogErrorKind::Recovery));
+        assert_eq!(
+            updated_retry_state.get(&invocation_retry_from),
+            Some(&RetryPolicyState::Counter(2))
+        );
+        assert!(!updated_retry_state.contains_key(&recovery_retry_from));
+        retry_state = updated_retry_state;
+    }
+}
+
+#[test]
+async fn invocation_failure_is_classified_separately_from_recovery_failure() {
+    let retry_from = OplogIndex::from_u64(1);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::PermanentError("application failed".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Invocation);
+                status
+                    .current_retry_state
+                    .insert(retry_from, RetryPolicyState::Terminal);
+                status
+            },
+        )
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() {
+    let retry_from = OplogIndex::from_u64(1);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::PermissionDenied("startup denied".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Failed;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status
+                    .current_retry_state
+                    .insert(retry_from, RetryPolicyState::Terminal);
                 status
             },
         )
@@ -386,6 +724,56 @@ async fn invocation_results() {
         .build();
 
     run_test_case(test_case).await;
+}
+
+#[test]
+fn recovery_errors_are_not_invocation_results() {
+    let key = IdempotencyKey::fresh();
+    let retry_from = OplogIndex::from_u64(1);
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(1),
+            OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: key.clone(),
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                    method_name: "agent:method".to_string(),
+                    input: SchemaValue::Record { fields: Vec::new() },
+                    principal: Principal::anonymous(),
+                    scope_card: None,
+                })),
+                trace_id: TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+                wallet_pin: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::InternalError("replay diverged".to_string()),
+                retry_from,
+                false,
+                Some(RetryPolicyState::Terminal),
+            ),
+        ),
+    ]);
+    let mut current_idempotency_key = None;
+    let mut cancelled_idempotency_key = None;
+    let mut results = Vec::new();
+
+    fold_invocation_result_entries(
+        &mut current_idempotency_key,
+        &mut cancelled_idempotency_key,
+        &DeletedRegions::default(),
+        &entries,
+        |key, index| results.push((key.clone(), index)),
+    );
+
+    assert!(results.is_empty());
+    assert_eq!(current_idempotency_key, Some(key));
 }
 
 #[test]
@@ -638,6 +1026,142 @@ async fn single_manual_failed_update_during_snapshot() {
         .build();
 
     run_test_case(test_case).await;
+}
+
+#[test]
+fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+    };
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(10),
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(4),
+                    end: OplogIndex::from_u64(10),
+                },
+            ),
+        ),
+        (
+            OplogIndex::from_u64(20),
+            OplogEntry::pending_update(update.clone()),
+        ),
+        (
+            OplogIndex::from_u64(21),
+            OplogEntry::successful_update(*update.target_revision(), 100, None, Default::default()),
+        ),
+    ]);
+
+    let regions = calculate_revert_validation_regions(
+        &entries,
+        &OplogRegion {
+            start: OplogIndex::from_u64(7),
+            end: OplogIndex::from_u64(21),
+        },
+    );
+
+    assert!(regions.is_in_deleted_region(OplogIndex::from_u64(7)));
+    assert!(regions.is_in_deleted_region(OplogIndex::from_u64(10)));
+    assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(11)));
+    assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(20)));
+}
+
+#[test]
+fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+    };
+    let entries = BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::pending_update(update))]);
+
+    let regions = calculate_revert_validation_regions(
+        &entries,
+        &OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(3),
+        },
+    );
+
+    assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+}
+
+#[test]
+fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
+    let update_two = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+    };
+    let update_three = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(3).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+    };
+    let test_case = TestCase::builder(1)
+        .pending_update(&update_two, |_| {})
+        .successful_update(update_two, 200, &HashSet::new())
+        .revert(OplogIndex::INITIAL)
+        .pending_update(&update_three, |_| {})
+        .successful_update(update_three, 300, &HashSet::new())
+        .build();
+    let entries = test_case
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            (
+                OplogIndex::from_u64(index as u64 + 1),
+                entry.oplog_entry.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let physical_prefix = entries
+        .range(..=OplogIndex::from_u64(3))
+        .map(|(idx, entry)| (*idx, entry.clone()))
+        .collect();
+    let physical_prefix_status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        physical_prefix,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        physical_prefix_status.component_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+
+    let mut prospective_entries = entries;
+    prospective_entries.insert(
+        OplogIndex::from_u64(7),
+        OplogEntry::revert(OplogRegion {
+            start: OplogIndex::from_u64(4),
+            end: OplogIndex::from_u64(6),
+        }),
+    );
+    let prospective_status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        prospective_entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        prospective_status.component_revision,
+        ComponentRevision::new(1).unwrap()
+    );
+    assert!(
+        prospective_status
+            .deleted_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
 }
 
 #[test]
@@ -1507,6 +2031,7 @@ impl TestCaseBuilder {
         self.cancel_pending_invocation(idempotency_key.clone()).add(
             OplogEntry::error(
                 None,
+                OplogErrorKind::Invocation,
                 AgentError::PermissionDenied("permission denied".to_string()),
                 OplogIndex::INITIAL,
                 false,

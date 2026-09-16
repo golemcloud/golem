@@ -9,16 +9,6 @@ fn test_resource_drops() -> @model.SchemaValueResourceDrops {
 }
 
 ///|
-fn register_subtool_def_for_test(tool : ToolDef) -> Unit raise ToolBuildError {
-  let name = match tool.tool_name() {
-    Ok(name) => name
-    Err(error) => raise error
-  }
-  ensure_tool_name_available(name)
-  state.defs[name] = tool
-}
-
-///|
 fn decode_canonical_input_for_test(
   def : ToolDef,
   command_index : Int,
@@ -206,9 +196,7 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 ///|
 test "subtree-only tool cannot be invoked as a top-level tool" {
   let def = canonical_test_def()
-  register_subtool_def_invoker(def, async fn(_, _, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_subtool_def(def)
   assert_true(
     get_registered_tool("root")
     is Err(@toolCommon.ToolError::InvalidToolName("root")),
@@ -936,9 +924,7 @@ test "panic top-level registration rejects an existing private subtool name" {
       },
     ],
   }
-  register_subtool_def_invoker(def, fn(_, _, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_subtool_def(def)
   register_tool_def(def)
 }
 
@@ -1281,13 +1267,9 @@ test "normalization resolves value-is literals against inherited globals" {
       None,
     )
     .normalize_inherited_globals()
-  register_tool_def_invoker(parent, fn(_, _, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_tool_def(parent)
   let child = child_raw.normalize_inherited_globals()
-  register_subtool_def_invoker(child, fn(_, _, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_subtool_def(child)
 }
 
 ///|

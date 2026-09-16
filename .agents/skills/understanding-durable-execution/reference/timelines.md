@@ -129,6 +129,20 @@ Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_tar
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
+The serialized fire-and-forget `invoke` path records `Start → StartSpan → End → FinishSpan`.
+Replay must reconstruct `StartSpan` before awaiting the RPC terminal; the positional span entry
+otherwise blocks the terminal resolver. Each committed prefix is recoverable:
+
+- After `Start` alone, resolve the incomplete call through the normal re-execution eligibility
+  and checked live-admission path before creating the missing span.
+- After `StartSpan`, reconstruct the span, then repair the incomplete call under the original key.
+- After `End`, reuse the recorded result without dispatching. If the cursor is exhausted, perform
+  the checked `switch_to_live` transition before appending the missing `FinishSpan`.
+- With `FinishSpan` recorded, consume it normally during replay.
+
+Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result` and the
+fire-and-forget crash-prefix test, using committed `Start`, `StartSpan`, and `End` gates.
+
 ## 7. Atomic region rollback keeps the RPC key
 
 ```
@@ -206,7 +220,7 @@ worker's `AgentFingerprint` before publishing readiness. A payload-download fail
 an in-memory unavailable watermark skips it only for that startup attempt and is cleared after a
 successful preparation. A manual-update snapshot load failure is terminal and retains its cause.
 
-## 10. Suspend, evict, restart: one path
+## 10. Suspend, interrupt/resume, evict, restart: one path
 
 ```
 ... live invocation running ...
@@ -220,6 +234,28 @@ interrupted until resumed; `Suspend` resumes on demand; `Restart` recovers autom
 reconstruction mechanism is identical.
 Owners: `Worker::set_interrupting` (`Interrupt` / `Restart` / `Suspend`),
 `worker/invocation_loop.rs::run`, `RetryDecision`.
+
+For an interrupted active durable invocation, the resume request has this prefix:
+
+```
+#79 AgentInvocationStarted { key: K }
+#80 Start { fn: p3/wait, ... }             pending when interrupted
+#81 Interrupted (h)                        status = Interrupted
+#82 Resumed (h)                            timestamp only; committed under the instance lock
+     ... waiting for permits ...           status already = Running
+     reconstruct #79..#82, continue K      no PendingAgentInvocation is appended
+```
+
+`start_if_needed_internal` first obtains the memory requirement. If that succeeds, while the
+worker is still `Unloaded` under its instance lock, it appends and commits `Resumed` before moving
+the resident state to `WaitingForPermit`. Folding `#82` therefore changes the status to `Running`
+before the pending p3 wait can complete, even when permit admission delays reconstruction. The
+hint carries no invocation key because the unfinished invocation is already identified by the
+folded `current_idempotency_key`; it admits continuation rather than creating work.
+
+The guard is deliberately narrow: durable mode, folded status `Interrupted`, and an active key.
+`Restart` still follows automatic reconstruction and clean `Idle` semantics without `Resumed`;
+ephemeral workers remain fail-stop and do not gain a resume path.
 
 ## 11. Streaming RPC: producer restart mid-stream
 
