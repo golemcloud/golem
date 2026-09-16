@@ -178,19 +178,19 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU",
-            "5".to_string(),
+            "1000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
-            "50".to_string(),
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH",
-            "7".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
-            "11".to_string(),
+            "6000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__OVERAGE_ELIGIBLE",

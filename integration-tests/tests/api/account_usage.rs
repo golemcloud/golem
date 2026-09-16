@@ -46,6 +46,10 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
+const DEFAULT_MONTHLY_COMPUTE_GCU: u64 = 1_000_000_000_000;
+const DEFAULT_MONTHLY_MEMORY_GB_SECONDS: u64 = 1_000_000_000_000_000_000;
+const DEFAULT_MONTHLY_STORAGE_GB_MONTH: u64 = 6_000;
+
 fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
     if period.month == 1 {
         AccountUsagePeriod {
@@ -234,39 +238,60 @@ async fn account_usage_reports_all_customer_dimensions(
     assert!(limits.overage_allowed_by_plan);
     assert!(limits.latest_owner_transition.is_none());
     assert_eq!(limits.monthly.compute_gcu.metering, MeteringStatus::Enabled);
-    assert_eq!(limits.monthly.compute_gcu.plan_amount, Some(5));
-    assert_eq!(limits.monthly.compute_gcu.resolved_monthly_amount, Some(5));
+    assert_eq!(
+        limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
+    assert_eq!(
+        limits.monthly.compute_gcu.resolved_monthly_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
     assert_eq!(limits.monthly.compute_gcu.allow_overage_usage, Some(0.0));
     assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
-    assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
+    assert_eq!(
+        limits.monthly.compute_gcu.remaining,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU as f64 - 1.5)
+    );
     assert_eq!(limits.monthly.compute_gcu.unit, MonthlyComputeUnit::Gcu);
     assert_eq!(
         limits.monthly.compute_gcu.behavior,
         Some(MonthlyLimitBehavior::HardLimit)
     );
-    assert_eq!(limits.monthly.memory_gb_seconds.plan_amount, Some(50));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.plan_amount,
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS)
+    );
     assert_eq!(
         limits.monthly.memory_gb_seconds.resolved_monthly_amount,
-        Some(50)
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS)
     );
     assert_eq!(
         limits.monthly.memory_gb_seconds.allow_overage_usage,
         Some(0.0)
     );
     assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
-    assert_eq!(limits.monthly.memory_gb_seconds.remaining, Some(36));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.remaining,
+        Some(DEFAULT_MONTHLY_MEMORY_GB_SECONDS - 14)
+    );
     assert_eq!(
         limits.monthly.memory_gb_seconds.unit,
         MonthlyMemoryUnit::GbSeconds
     );
-    assert_eq!(limits.monthly.durable_storage_gb_month.plan_amount, Some(7));
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.plan_amount,
+        Some(DEFAULT_MONTHLY_STORAGE_GB_MONTH)
+    );
     assert_eq!(
         limits.monthly.durable_storage_gb_month.usage,
         Some(140.0 / byte_seconds_per_gb_month)
     );
     assert_eq!(
         limits.monthly.durable_storage_gb_month.remaining,
-        Some((7 * BYTE_SECONDS_PER_GB_MONTH - 140) as f64 / byte_seconds_per_gb_month)
+        Some(
+            (DEFAULT_MONTHLY_STORAGE_GB_MONTH * BYTE_SECONDS_PER_GB_MONTH - 140) as f64
+                / byte_seconds_per_gb_month
+        )
     );
     assert_eq!(
         limits.monthly.durable_storage_gb_month.unit,
@@ -274,7 +299,7 @@ async fn account_usage_reports_all_customer_dimensions(
     );
     assert_eq!(
         limits.monthly.ephemeral_storage_gb_month.plan_amount,
-        Some(11)
+        Some(DEFAULT_MONTHLY_STORAGE_GB_MONTH)
     );
     assert_eq!(
         limits.monthly.ephemeral_storage_gb_month.usage,
@@ -282,7 +307,10 @@ async fn account_usage_reports_all_customer_dimensions(
     );
     assert_eq!(
         limits.monthly.ephemeral_storage_gb_month.remaining,
-        Some((11 * BYTE_SECONDS_PER_GB_MONTH - 500) as f64 / byte_seconds_per_gb_month)
+        Some(
+            (DEFAULT_MONTHLY_STORAGE_GB_MONTH * BYTE_SECONDS_PER_GB_MONTH - 500) as f64
+                / byte_seconds_per_gb_month
+        )
     );
     assert_eq!(
         limits.monthly.ephemeral_storage_gb_month.unit,
@@ -938,7 +966,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         .await?;
     let dimension = AdminResourceGrantDimension::MonthlyComputeGcu;
     let request = SetAdminResourceGrant {
-        value: 9,
+        value: 2_000_000_000_000,
         reason: AdminResourceGrantReason::Support,
         expires_at: None,
     };
@@ -988,10 +1016,12 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
     );
     assert_eq!(granted.reason, AdminResourceGrantReason::Support);
     assert_eq!(granted.actor_account_id, admin.account_id);
-    assert_eq!(granted.old_value, 5);
+    assert_eq!(granted.old_value, DEFAULT_MONTHLY_COMPUTE_GCU);
     assert_eq!(
         granted.new_value,
-        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value: 9 })
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit {
+            value: 2_000_000_000_000
+        })
     );
     assert_eq!(granted.expires_at, None);
 
@@ -1000,10 +1030,13 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         granted_limits.monthly_usage_mode,
         MonthlyUsageMode::HardLimit
     );
-    assert_eq!(granted_limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(
+        granted_limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
     assert_eq!(
         granted_limits.monthly.compute_gcu.resolved_monthly_amount,
-        Some(9)
+        Some(2_000_000_000_000)
     );
     let active_grant = granted_limits
         .monthly
@@ -1011,7 +1044,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         .active_admin_grant
         .expect("compute grant must be exposed on its dimension");
     assert_eq!(active_grant.dimension, dimension);
-    assert_eq!(active_grant.value, 9);
+    assert_eq!(active_grant.value, 2_000_000_000_000);
 
     let cleared = admin_client
         .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
@@ -1021,10 +1054,12 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         AdminResourceGrantEventType::OverrideCleared
     );
     assert_eq!(cleared.actor_account_id, admin.account_id);
-    assert_eq!(cleared.old_value, 9);
+    assert_eq!(cleared.old_value, 2_000_000_000_000);
     assert_eq!(
         cleared.new_value,
-        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value: 5 })
+        AdminResourceGrantChangeValue::Finite(FiniteResourceLimit {
+            value: DEFAULT_MONTHLY_COMPUTE_GCU
+        })
     );
 
     let cleared_limits = user_client.get_account_limits(&user.account_id.0).await?;
@@ -1032,10 +1067,13 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         cleared_limits.monthly_usage_mode,
         MonthlyUsageMode::HardLimit
     );
-    assert_eq!(cleared_limits.monthly.compute_gcu.plan_amount, Some(5));
+    assert_eq!(
+        cleared_limits.monthly.compute_gcu.plan_amount,
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
+    );
     assert_eq!(
         cleared_limits.monthly.compute_gcu.resolved_monthly_amount,
-        Some(5)
+        Some(DEFAULT_MONTHLY_COMPUTE_GCU)
     );
     assert!(
         cleared_limits
@@ -1062,7 +1100,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
             &user.account_id.0,
             &dimension,
             &SetAdminResourceGrant {
-                value: 9,
+                value: 2_000_000_000_000,
                 reason: AdminResourceGrantReason::Promotional,
                 expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
             },
