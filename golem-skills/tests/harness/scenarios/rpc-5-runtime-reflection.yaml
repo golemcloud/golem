@@ -104,14 +104,14 @@ steps:
       `ReflectionTarget`, inspect `echo`, and bind its reflected durable client to
       `{ name: "target" }` to invoke `echo` with `{ message: "hello" }`. Parse the returned
       metadata agent ID with `AgentIdentity.parse`, resolve its type by the parsed identity,
-      and bind it through `Client.bind(identity, reflectedType)` to invoke `"again"`.
+      and bind it through `identity.client(reflectedType)` to invoke `"again"`.
 
-      Define a complete, unimplemented `defineAgent` spec named `ReflectionTarget`
+      Define a complete caller-only `defineAgentClient` spec named `ReflectionTarget`
       with the same string ID and `echo` method, then use its `agentId` and
-      `Client.bind` to call `"exact"`. Independently define a method-only
-      `Client.contract({ methods: { echo: ... } })`, bind that parsed identity
-      with `Client.bind`, and call `"method only"`. Finally bind it through
-      the schema-free `DynamicClient.bind` and invoke with packed `SchemaValue`
+      `identity.client` to call `"exact"`. Independently define a method-only
+      `defineAgentClient({ methods: { echo: ... } })`, bind that parsed identity
+      with `identity.client`, and call `"method only"`. Finally bind it through
+      the schema-free `identity.dynamicClient()` and invoke with packed `SchemaValue`
       input to return `"dynamic"`. These calls must not import or implement
       the target's implementation in the caller module.
 

@@ -43,7 +43,7 @@ Counter.implement({
 Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
 `PrincipalSchema` input. Public modules are namespaces from
 the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
-`defineAgent`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
+`defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
 
 ## Typed clients
@@ -71,34 +71,35 @@ schema contains a live stream is rejected because streams require an awaited inv
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
-An unimplemented `defineAgent` spec is a complete caller-owned contract: it has the exact name,
-constructor schema, lifecycle mode, and method codecs without registering an implementation. Its
-`agentId(input, phantomId?)` constructs a parsed environment-scoped identity.
-`Client.bind(identity, spec)` validates the exact name and constructor schema before opening RPC.
-For a method-only contract, use `Client.contract({ methods })` and `Client.bind(identity, contract)`;
-it performs no discovery and assumes durable result semantics.
+Use `defineAgentClient` for caller-only definitions. A complete definition has an exact name,
+constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
+registering an implementation. A method-only `{ methods }` definition has neither factory nor
+identity constructor; it binds without discovery and assumes durable result semantics. An
+unimplemented `defineAgent` spec remains usable as a shared implementation/caller definition.
+`identity.client(contract)` validates the exact name and constructor schema before opening RPC.
+`Client.bind(identity, contract)` and `DynamicClient.bind(identity)` remain lower-level functions.
 
 ```ts
 import { Effect, Schema } from "effect"
-import { AgentIdentity, Client, DynamicClient, defineAgent, method } from "@golemcloud/effect-golem"
+import { AgentIdentity, defineAgentClient, method } from "@golemcloud/effect-golem"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
-const Target = defineAgent({
+const Target = defineAgentClient({
   name: "Target",
   id: { name: Schema.String },
   methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
-}) // no .implement call in this caller
+})
 
 const calls = (inputTree: CoreTypes.SchemaValueTree) =>
   Effect.scoped(
     Effect.gen(function* () {
       const identity = yield* Target.agentId({ name: "main" })
-      const exact = yield* Client.bind(identity, Target)
+      const exact = yield* identity.client(Target)
       const first = yield* exact.echo({ message: "exact" })
-      const methods = Client.contract({ methods: Target.methods })
-      const second = yield* (yield* Client.bind(identity, methods)).echo({ message: "method only" })
+      const methods = defineAgentClient({ methods: Target.methods })
+      const second = yield* (yield* identity.client(methods)).echo({ message: "method only" })
       const parsed = yield* AgentIdentity.parse(identity.encoded)
-      const dynamic = yield* DynamicClient.bind(parsed)
+      const dynamic = yield* parsed.dynamicClient()
       const raw = yield* dynamic.method("echo").invoke(inputTree)
       // Dynamic methods accept native SchemaValueTree inputs and return metadata plus native values.
       return { first, second, raw }
@@ -137,7 +138,7 @@ Durable reflected types also bind through `Client.bind(identity, reflectedType)`
 constructor validation. Discovery misses remain `undefined`; host and malformed-schema failures
 enter the typed error channel. `invokeValue`, `triggerValue`,
 and `scheduleValue` accept native WIT schema-value trees when JSON cannot represent capabilities.
-`DynamicClient.bind(parsedIdentity)` binds without discovery and uses value-only methods; callers
+`parsedIdentity.dynamicClient()` binds without discovery and uses value-only methods; callers
 must supply the correct remote contract. Both APIs use scopes and fiber interruption and expose
 the same structured remote-call errors as typed clients.
 

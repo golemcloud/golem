@@ -3,6 +3,8 @@ import { Effect } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 import { AgentHostClient } from "./host/AgentHostClient.js"
+import { bind, type IdentityBinding } from "./Client.js"
+import { bind as bindDynamic } from "./DynamicClient.js"
 
 /** Identity parsing or construction failed at the host boundary. @since 1.6.0 @category errors */
 export class AgentIdentityError {
@@ -16,6 +18,12 @@ export interface Identity {
   readonly typeName: string
   readonly constructorValue: CoreTypes.SchemaValueTree
   readonly phantomId?: string
+  /** Bind a caller-owned or reflected contract without rediscovery. @since 1.6.0 @category constructors */
+  readonly client: <Client, Error, Requirements>(
+    binding: IdentityBinding<Client, Error, Requirements>,
+  ) => Effect.Effect<Client, Error, Requirements>
+  /** Bind schema-value methods without a contract or discovery. @since 1.6.0 @category constructors */
+  readonly dynamicClient: () => ReturnType<typeof bindDynamic>
 }
 
 /** Input used to construct an environment-scoped identity. @since 1.6.0 @category models */
@@ -64,6 +72,10 @@ const create = (
     get constructorValue() {
       return deepFreeze(copyValue(immutableConstructor))
     },
+    client: <Client, Error, Requirements>(
+      binding: IdentityBinding<Client, Error, Requirements>,
+    ): Effect.Effect<Client, Error, Requirements> => bind(identity, binding),
+    dynamicClient: () => bindDynamic(identity),
     ...(phantom === undefined ? {} : { phantomId: uuidToString(phantom) }),
   })
   rawPhantoms.set(identity, phantom)

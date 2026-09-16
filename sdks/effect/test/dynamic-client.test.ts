@@ -43,7 +43,9 @@ describe("DynamicClient", () => {
         connect: () => Effect.fail(new RpcHostError(structured, "WasmRpc.create")),
       })
       const identity = yield* parse("valid").pipe(Effect.provide(hostLayer()))
-      const connect = yield* bind(identity).pipe(Effect.scoped, Effect.provide(rpc), Effect.result)
+      const connect = yield* identity
+        .dynamicClient()
+        .pipe(Effect.scoped, Effect.provide(rpc), Effect.result)
       expect(connect).toMatchObject({
         _tag: "Failure",
         failure: { _tag: "RpcCallError", cause: structured },
@@ -82,7 +84,7 @@ describe("DynamicClient", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const identity = yield* parse("valid")
-          const client = yield* bind(identity)
+          const client = yield* identity.dynamicClient()
           const scheduled = yield* client
             .method("run")
             .schedule({ seconds: 1n, nanoseconds: 0 }, tree)

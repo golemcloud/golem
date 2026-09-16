@@ -10,12 +10,14 @@ QuickJS-backed WASI Preview 3 components.
 - Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
   `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
   fiber-interruptible.
-- Unimplemented `defineAgent` specs are complete caller-owned contracts. `spec.agentId` constructs
-  a parsed identity, and `Client.bind(identity, spec)` validates exact names and constructor schemas.
-  `Client.contract({ methods })` is method-only and binds without discovery using durable results.
+- `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended complete caller-only
+  contract with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
+  factory nor identity constructor and binds without discovery using durable results. Unimplemented
+  `defineAgent` specs remain available as shared contracts. `identity.client(contract)` validates
+  exact names and constructor schemas before opening RPC.
   `DynamicClient.bind(identity)` uses schema-native values with no contract or discovery. Complete
   ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
-  `getPhantom` or `newPhantom` factories. Do not add a flat `defineAgentClient` alias.
+  `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
   and never snapshotted.
 - Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
@@ -58,7 +60,7 @@ separate concerns and must be tested independently.
 - `integration-test/`: real Golem components and harness.
 
 Public code follows Effect package organization: users normally import namespaces (`Snapshot.*`,
-`Tool.*`, `Durability.*`). Only `defineAgent`, `defineConfig`, and `method` are flat DSL aliases.
+`Tool.*`, `Durability.*`). Only `defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases.
 Every public export needs JSDoc with `@since` and `@category`. Package exports block `internal/*`
 and `host/*`.
 

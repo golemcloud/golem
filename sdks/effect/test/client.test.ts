@@ -5,6 +5,7 @@ import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import * as AgentIdentity from "../src/AgentIdentity.js"
 import { defineAgent } from "../src/Agent.js"
+import { defineAgentClient } from "../src/index.js"
 import * as Client from "../src/Client.js"
 import { defineConfig } from "../src/Config.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
@@ -558,8 +559,17 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         config: ClientConfig,
         methods: { ping: method({ input: {}, success: Schema.Void }) },
       })
+      const caller = defineAgentClient({
+        name: "Configured",
+        id: {},
+        config: ClientConfig,
+        methods: Configured.methods,
+      })
       const runtime = makeRuntime()
       yield* Configured.client
+        .get({}, { overrides: { greeting: "hello" } })
+        .pipe(Effect.scoped, Effect.provide(runtime.layer))
+      yield* caller.client
         .get({}, { overrides: { greeting: "hello" } })
         .pipe(Effect.scoped, Effect.provide(runtime.layer))
       const remote = yield* Configured.client
@@ -567,7 +577,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(remote._tag).toBe("Failure")
       expect(runtime.calls).toHaveLength(0)
-      expect(runtime.lifecycle.connectionOpen).toBe(1)
+      expect(runtime.lifecycle.connectionOpen).toBe(2)
     }),
   )
 
@@ -604,15 +614,25 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect(constructorCopy).not.toBe(identity.constructorValue)
         expect(constructorCopy).toEqual(identity.constructorValue)
 
-        const exact = yield* Client.bind(identity, Counter)
+        const complete = defineAgentClient({
+          name: "Counter",
+          id: Counter.id,
+          methods: Counter.methods,
+        })
+        const exact = yield* identity.client(complete)
         expect(yield* exact.value({})).toBe(42)
+        expect(yield* (yield* complete.client.get({ initial: 7 })).value({})).toBe(42)
+        expect((yield* complete.agentId({ initial: 7 })).encoded).toBe(identity.encoded)
 
-        const methodOnly = Client.contract({ methods: Counter.methods })
-        const bound = yield* Client.bind(identity, methodOnly)
+        const methodOnly = defineAgentClient({ methods: Counter.methods })
+        expect("client" in methodOnly).toBe(false)
+        expect("agentId" in methodOnly).toBe(false)
+        const bound = yield* identity.client(methodOnly)
         expect(yield* bound.value({})).toBe(42)
+        expect(yield* (yield* Client.bind(identity, methodOnly)).value({})).toBe(42)
       }).pipe(Effect.scoped, Effect.provide(layer))
-      expect(runtime.lifecycle.connectionOpen).toBe(2)
-      expect(runtime.lifecycle.connectionDrop).toBe(2)
+      expect(runtime.lifecycle.connectionOpen).toBe(4)
+      expect(runtime.lifecycle.connectionDrop).toBe(4)
     }),
   )
 
@@ -656,7 +676,12 @@ describe("Client 1.6 config and ephemeral receipts", () => {
             Effect.flatMap((codec) => codec.encode({ initial: 1 })),
           ),
         })
-        expect(yield* Client.bind(wrongName, Counter).pipe(Effect.result)).toMatchObject({
+        const complete = defineAgentClient({
+          name: "Counter",
+          id: Counter.id,
+          methods: Counter.methods,
+        })
+        expect(yield* wrongName.client(complete).pipe(Effect.result)).toMatchObject({
           _tag: "Failure",
           failure: { _tag: "ClientBindingError" },
         })
@@ -666,7 +691,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
             Effect.flatMap((codec) => codec.encode({ job: "not a number" })),
           ),
         })
-        expect(yield* Client.bind(wrongConstructor, Counter).pipe(Effect.result)).toMatchObject({
+        expect(yield* wrongConstructor.client(complete).pipe(Effect.result)).toMatchObject({
           _tag: "Failure",
           failure: { _tag: "ClientBindingError" },
         })
@@ -675,7 +700,14 @@ describe("Client 1.6 config and ephemeral receipts", () => {
           { job: "j" },
           "12345678-1234-1234-1234-1234567890ab",
         )
-        expect(yield* Client.bind(ephemeral, Worker).pipe(Effect.result)).toMatchObject({
+        const ephemeralClient = defineAgentClient({
+          name: "Worker",
+          mode: "ephemeral",
+          id: Worker.id,
+          methods: Worker.methods,
+        })
+        expect("get" in ephemeralClient.client).toBe(false)
+        expect(yield* ephemeral.client(ephemeralClient).pipe(Effect.result)).toMatchObject({
           _tag: "Failure",
           failure: { _tag: "ClientBindingError" },
         })
@@ -683,6 +715,16 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       expect(runtime.lifecycle.connectionOpen).toBe(0)
     }),
   )
+
+  it("rejects incomplete client definitions without registering or opening RPC", () => {
+    for (const partial of [
+      { name: "Counter", methods: Counter.methods },
+      { id: Counter.id, methods: Counter.methods },
+      { mode: "durable", methods: Counter.methods },
+      { config: undefined, methods: Counter.methods },
+    ])
+      expect(() => defineAgentClient(partial as never)).toThrow(TypeError)
+  })
 
   it.effect("addresses a known ephemeral phantom and retains invocation metadata", () =>
     Effect.gen(function* () {

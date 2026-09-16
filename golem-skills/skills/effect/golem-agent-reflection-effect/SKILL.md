@@ -38,32 +38,33 @@ phantom operations; ephemeral factories expose `getPhantom` for known IDs and `n
 fresh logical clients, but no ordinary `get`. Reflected invocation results include host metadata
 and a `value` except for unit-returning methods, which omit it.
 
-An unimplemented `defineAgent` spec is a complete caller-owned contract. Its `agentId(input)`
-creates a parsed identity, and `Client.bind(identity, spec)` checks the exact name and constructor
-schema locally before opening RPC. A method-only `Client.contract({ methods })` has no lifecycle
-factory or discovery: `Client.bind(identity, contract)` assumes durable result semantics. Durable
+Use `defineAgentClient({ name, id, methods, mode?, config? })` for a complete caller-only contract.
+Its `agentId(input)` creates a parsed identity, and `identity.client(contract)` checks the exact
+name and constructor schema locally before opening RPC. A method-only
+`defineAgentClient({ methods })` has no lifecycle factory or discovery; binding assumes durable
+result semantics. An unimplemented `defineAgent` spec is also a complete shared contract. Durable
 reflected types bind through the same function after schema validation. Complete ephemeral specs
 and reflected ephemeral types reject generic existing-ID binding; use known/fresh phantom
 factories. Constructing an ephemeral identity requires a phantom ID.
 
 ```ts
 import { Effect, Schema } from "effect"
-import { AgentIdentity, Client, DynamicClient, defineAgent, method } from "@golemcloud/effect-golem"
+import { AgentIdentity, defineAgentClient, method } from "@golemcloud/effect-golem"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
-const Echo = defineAgent({
+const Echo = defineAgentClient({
   name: "Echo", id: { name: Schema.String },
   methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
-}) // specification only; no .implement call
+})
 
 const program = (inputTree: CoreTypes.SchemaValueTree) => Effect.scoped(Effect.gen(function* () {
   const identity = yield* Echo.agentId({ name: "main" })
-  const exact = yield* Client.bind(identity, Echo)
+  const exact = yield* identity.client(Echo)
   const one = yield* exact.echo({ message: "exact" })
-  const methods = Client.contract({ methods: Echo.methods })
-  const two = yield* (yield* Client.bind(identity, methods)).echo({ message: "method only" })
+  const methods = defineAgentClient({ methods: Echo.methods })
+  const two = yield* (yield* identity.client(methods)).echo({ message: "method only" })
   const parsed = yield* AgentIdentity.parse(identity.encoded)
-  const dynamic = yield* DynamicClient.bind(parsed)
+  const dynamic = yield* parsed.dynamicClient()
   const raw = yield* dynamic.method("echo").invoke(inputTree)
   return { one, two, raw }
 }))

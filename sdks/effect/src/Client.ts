@@ -4,6 +4,7 @@ import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
+import * as AgentIdentity from "./AgentIdentity.js"
 import type { Identity } from "./AgentIdentity.js"
 import { rawPhantomId } from "./AgentIdentity.js"
 import type { AgentMetadata } from "./Agent.js"
@@ -15,6 +16,7 @@ import {
 } from "./Config.js"
 import * as Datetime from "./Datetime.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
 import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
 import {
@@ -175,10 +177,60 @@ interface CompiledClient<C extends MethodParams = MethodParams> {
 }
 
 /** A caller-owned, lifecycle-free method contract. @since 1.6.0 @category models */
-export interface Contract<Methods extends Record<string, AnyMethodSpec>> extends IdentityBinding<
-  RemoteAgent<Methods>
-> {
+export interface MethodOnlyClient<
+  Methods extends Record<string, AnyMethodSpec>,
+> extends IdentityBinding<RemoteAgent<Methods>> {
   readonly methods: Methods
+}
+
+/** Complete caller-owned client definition with typed identity and lifecycle factories. @since 1.6.0 @category models */
+export type CompleteClient<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  Mode extends AgentCommon.AgentMode,
+  F extends ConfigFields = never,
+> = ClientDefinition<C, Methods, Mode, F> & {
+  readonly client: AgentClient<C, Methods, Mode, F>
+  readonly agentId: Mode extends "ephemeral"
+    ? (
+        input: CallerInput<C>,
+        phantomId: string,
+      ) => Effect.Effect<
+        Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+    : (
+        input: CallerInput<C>,
+        phantomId?: string,
+      ) => Effect.Effect<
+        Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+} & IdentityBinding<RemoteAgent<Methods>>
+
+/** Exact caller definition; name and id are inseparable. @since 1.6.0 @category models */
+export interface ClientDefinition<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  Mode extends AgentCommon.AgentMode,
+  F extends ConfigFields = never,
+> {
+  readonly name: string
+  readonly id: C
+  readonly methods: Methods
+  readonly mode?: Mode
+  readonly config?: AgentMetadata<C, Methods, Mode, F>["config"]
+}
+
+/** Identity-only caller definition with no factories or identity construction. @since 1.6.0 @category models */
+export interface MethodOnlyDefinition<Methods extends Record<string, AnyMethodSpec>> {
+  readonly methods: Methods
+  readonly name?: never
+  readonly id?: never
+  readonly mode?: never
+  readonly config?: never
 }
 
 /** Local identity/contract validation failed before an RPC connection was opened. @since 1.6.0 @category errors */
@@ -387,12 +439,98 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
   }
 }
 
-/** Define a method-only contract that can bind any durable parsed identity. @since 1.6.0 @category constructors */
-export const contract = <Methods extends Record<string, AnyMethodSpec>>(definition: {
-  readonly methods: Methods
-}): Contract<Methods> => {
-  const methods = Object.freeze({ ...definition.methods }) as Methods
-  return Object.freeze({ methods, ...bindingForDefinition({ methods }) })
+/** Define a caller-only client without registering an agent. @since 1.6.0 @category constructors */
+export function defineAgentClient<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  F extends ConfigFields = never,
+>(
+  definition: ClientDefinition<C, Methods, "ephemeral", F> & { readonly mode: "ephemeral" },
+): CompleteClient<C, Methods, "ephemeral", F>
+export function defineAgentClient<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  F extends ConfigFields = never,
+>(definition: ClientDefinition<C, Methods, "durable", F>): CompleteClient<C, Methods, "durable", F>
+export function defineAgentClient<
+  const Definition extends { readonly methods: Record<string, AnyMethodSpec> },
+>(
+  definition: Definition &
+    (Extract<keyof Definition, "name" | "id" | "mode" | "config"> extends never
+      ? MethodOnlyDefinition<Definition["methods"]>
+      : never),
+): MethodOnlyClient<Definition["methods"]>
+export function defineAgentClient(definition: {
+  readonly name?: string
+  readonly id?: MethodParams
+  readonly methods: Record<string, AnyMethodSpec>
+  readonly mode?: AgentCommon.AgentMode
+  readonly config?: AgentMetadata<
+    MethodParams,
+    Record<string, AnyMethodSpec>,
+    AgentCommon.AgentMode,
+    ConfigFields
+  >["config"]
+}): unknown {
+  const has = (field: string) => Object.prototype.hasOwnProperty.call(definition, field)
+  if (
+    definition === null ||
+    typeof definition !== "object" ||
+    !has("methods") ||
+    definition.methods === null ||
+    typeof definition.methods !== "object"
+  )
+    throw new TypeError("Agent client definitions require methods")
+  if (
+    typeof definition.name !== "string" ||
+    definition.id === undefined ||
+    definition.id === null ||
+    typeof definition.id !== "object"
+  ) {
+    if (has("name") || has("id") || has("mode") || has("config"))
+      throw new TypeError(
+        "Agent client definitions require both name and id; method-only definitions may only contain methods",
+      )
+    const methods = Object.freeze({ ...definition.methods })
+    return Object.freeze({ methods, ...bindingForDefinition({ methods }) })
+  }
+  const canonical = Object.freeze({
+    ...definition,
+    id: Object.freeze({ ...definition.id }),
+    methods: Object.freeze({ ...definition.methods }),
+  })
+  const client = clientFor(
+    canonical as AgentMetadata<
+      MethodParams,
+      Record<string, AnyMethodSpec>,
+      AgentCommon.AgentMode,
+      ConfigFields
+    >,
+  )
+  const binding = bindingForDefinition(canonical)
+  let identityCodec: CompiledInputCodec | undefined
+  const agentId = (input: CallerInput<MethodParams>, phantomId?: string) =>
+    Effect.gen(function* () {
+      if (canonical.mode === "ephemeral" && phantomId === undefined)
+        return yield* Effect.fail(
+          new AgentIdentity.AgentIdentityError(
+            new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
+          ),
+        )
+      const codec = (identityCodec ??= yield* compileCallerParamBindings(
+        `${canonical.name} constructor`,
+        canonical.id,
+      ))
+      const constructorValue = yield* codec
+        .encodeAsync(input as MethodInput<MethodParams>)
+        .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
+      return yield* AgentIdentity.make({
+        typeName: canonical.name!,
+        constructorValue,
+        ...(phantomId === undefined ? {} : { phantomId }),
+      })
+    })
+  return Object.freeze({ ...canonical, client, agentId, ...binding })
 }
 
 /** Bind a parsed identity through a caller-owned, exact, or reflected contract. @since 1.6.0 @category constructors */

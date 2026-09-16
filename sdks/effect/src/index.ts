@@ -322,7 +322,7 @@ export * as WitTypes from "./WitTypes.js"
 // ---------------------------------------------------------------------------
 // Flat DSL aliases.
 //
-// The three user-facing constructors that every agent declaration uses are
+// The user-facing constructors that every agent declaration uses are
 // re-exported at the package root. Keeping these flat matches the precedent
 // set by `effect`'s `pipe` / `flow` re-exports (kept un-namespaced because
 // they are the canonical building blocks) — and matches every existing
@@ -339,6 +339,9 @@ export * as WitTypes from "./WitTypes.js"
  * @category dsl
  */
 export { defineAgent } from "./Agent.js"
+
+/** Define a caller-only contract without registering an agent. @since 1.6.0 @category dsl */
+export { defineAgentClient } from "./Client.js"
 
 /**
  * Declare an agent's host-managed configuration. See {@link Config} for the
