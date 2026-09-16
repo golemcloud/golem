@@ -66,8 +66,19 @@ impl Error for RpcError {}
 #[allow(clippy::large_enum_variant)]
 pub enum ToolError<E> {
     Rpc(RpcError),
+    RemoteTool(RemoteToolError),
     Tool(E),
     UnknownCustomError(RawCustomToolError),
+}
+
+/// A structural failure returned by the remote tool implementation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteToolError {
+    InvalidToolName(String),
+    InvalidCommandPath(Vec<String>),
+    InvalidInput(String),
+    ConstraintViolation(String),
+    InvalidResult(String),
 }
 
 /// Generated marker for a tool trait method that is invokable as a command body.
@@ -95,6 +106,7 @@ impl<E: Display> Display for ToolError<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolError::Rpc(error) => error.fmt(f),
+            ToolError::RemoteTool(error) => write!(f, "remote tool error: {error}"),
             ToolError::Tool(error) => error.fmt(f),
             ToolError::UnknownCustomError(error) => {
                 write!(f, "unknown custom tool error `{}`", error.name)
@@ -107,11 +119,30 @@ impl<E: Error + 'static> Error for ToolError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             ToolError::Rpc(error) => Some(error),
+            ToolError::RemoteTool(error) => Some(error),
             ToolError::Tool(error) => Some(error),
             ToolError::UnknownCustomError(_) => None,
         }
     }
 }
+
+impl Display for RemoteToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoteToolError::InvalidToolName(name) => write!(f, "invalid tool name `{name}`"),
+            RemoteToolError::InvalidCommandPath(path) => {
+                write!(f, "invalid command path `{}`", path.join(" "))
+            }
+            RemoteToolError::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            RemoteToolError::ConstraintViolation(message) => {
+                write!(f, "constraint violation: {message}")
+            }
+            RemoteToolError::InvalidResult(message) => write!(f, "invalid result: {message}"),
+        }
+    }
+}
+
+impl Error for RemoteToolError {}
 
 /// Decoded successful result of `tool-rpc.invoke-and-await`.
 #[derive(Clone)]
@@ -400,10 +431,7 @@ fn map_infallible_rpc_error(error: WitRpcError) -> ToolError<Infallible> {
         WitRpcError::RemoteInternalError(message) => {
             ToolError::Rpc(RpcError::RemoteInternal(message))
         }
-        WitRpcError::RemoteToolError(error) => ToolError::Rpc(RpcError::Protocol(format!(
-            "remote tool error: {}",
-            remote_tool_error_label(&error)
-        ))),
+        WitRpcError::RemoteToolError(error) => map_remote_tool_error(error, &|_, _| Ok(None)),
         WitRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled),
         WitRpcError::ResourceExhausted(message) => {
             ToolError::Rpc(RpcError::ResourceExhausted(message))
@@ -637,6 +665,7 @@ impl<T, E> ToolInvocation<T, E> {
             match result.wait().await {
                 Ok(result) => decode(result),
                 Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
+                Err(ToolError::RemoteTool(error)) => Err(ToolError::RemoteTool(error)),
                 Err(ToolError::Tool(error)) => match decode_error(String::new(), error) {
                     Ok(Some(error)) => Err(ToolError::Tool(error)),
                     Ok(None) => Err(protocol_error(
@@ -755,10 +784,21 @@ fn map_remote_tool_error<E>(
             },
             Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
         },
-        error => ToolError::Rpc(RpcError::Protocol(format!(
-            "remote tool error: {}",
-            remote_tool_error_label(&error)
-        ))),
+        host::ToolError::InvalidToolName(name) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
+        }
+        host::ToolError::InvalidCommandPath(path) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
+        }
+        host::ToolError::InvalidInput(message) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
+        }
+        host::ToolError::ConstraintViolation(message) => {
+            ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
+        }
+        host::ToolError::InvalidResult(message) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
+        }
     }
 }
 
@@ -784,21 +824,6 @@ fn format_from_schema_error(error: FromSchemaError) -> String {
 
 fn protocol_error<E>(message: String) -> ToolError<E> {
     ToolError::Rpc(RpcError::Protocol(message))
-}
-
-fn remote_tool_error_label(error: &host::ToolError) -> String {
-    match error {
-        host::ToolError::InvalidToolName(name) => format!("invalid tool name `{name}`"),
-        host::ToolError::InvalidCommandPath(path) => {
-            format!("invalid command path `{}`", path.join(" "))
-        }
-        host::ToolError::InvalidInput(message) => format!("invalid input: {message}"),
-        host::ToolError::ConstraintViolation(message) => {
-            format!("constraint violation: {message}")
-        }
-        host::ToolError::InvalidResult(message) => format!("invalid result: {message}"),
-        host::ToolError::CustomError(_) => "custom error".to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -1072,6 +1097,9 @@ mod tests {
             Err(ToolError::Rpc(error)) => {
                 panic!("expected declared tool error, got RPC error: {error:?}")
             }
+            Err(ToolError::RemoteTool(error)) => {
+                panic!("expected declared tool error, got remote tool error: {error:?}")
+            }
             Err(ToolError::UnknownCustomError(error)) => {
                 panic!("expected declared tool error, got unknown error: {error:?}")
             }
@@ -1080,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    async fn invoke_and_await_maps_framing_errors_to_rpc_errors() {
+    async fn invoke_and_await_distinguishes_rpc_and_remote_tool_errors() {
         let input = ().into_typed_schema_value().unwrap();
 
         match invoke_and_await_payload_error::<CliError, _>(
@@ -1106,18 +1134,66 @@ mod tests {
         )
         .await
         {
-            Err(ToolError::Rpc(RpcError::Protocol(message))) => {
-                assert!(
-                    message.contains("remote tool error: invalid input: bad wire input"),
-                    "unexpected protocol error message: {message}"
-                );
+            Err(ToolError::RemoteTool(RemoteToolError::InvalidInput(message))) => {
+                assert_eq!(message, "bad wire input");
             }
             Err(other) => {
-                panic!("expected remote framing error to map to protocol RPC error, got {other:?}")
+                panic!("expected structural remote tool error, got {other:?}")
             }
-            Ok(_) => {
-                panic!("expected remote framing error to map to protocol RPC error, got success")
-            }
+            Ok(_) => panic!("expected remote tool error, got success"),
+        }
+    }
+
+    #[test]
+    fn all_structural_remote_tool_errors_keep_their_variant() {
+        let cases = [
+            (
+                host::ToolError::InvalidToolName("bad name".to_string()),
+                RemoteToolError::InvalidToolName("bad name".to_string()),
+            ),
+            (
+                host::ToolError::InvalidCommandPath(vec!["bad".to_string()]),
+                RemoteToolError::InvalidCommandPath(vec!["bad".to_string()]),
+            ),
+            (
+                host::ToolError::InvalidInput("input".to_string()),
+                RemoteToolError::InvalidInput("input".to_string()),
+            ),
+            (
+                host::ToolError::ConstraintViolation("constraint".to_string()),
+                RemoteToolError::ConstraintViolation("constraint".to_string()),
+            ),
+            (
+                host::ToolError::InvalidResult("result".to_string()),
+                RemoteToolError::InvalidResult("result".to_string()),
+            ),
+        ];
+        for (wire, expected) in cases {
+            let actual: ToolError<Infallible> =
+                map_infallible_rpc_error(WitRpcError::RemoteToolError(wire));
+            assert_eq!(actual, ToolError::RemoteTool(expected));
+        }
+    }
+
+    #[test]
+    async fn pending_result_observers_preserve_remote_tool_error() {
+        let driver = Rc::new(InvocationResultDriver::new(|| {
+            Box::pin(async {
+                Err(map_rpc_error(
+                    WitRpcError::RemoteToolError(host::ToolError::ConstraintViolation(
+                        "missing flag".to_string(),
+                    )),
+                    &|_, value| Ok(Some(value)),
+                ))
+            })
+        }));
+        let (first, second) = join(Rc::clone(&driver).wait(), Rc::clone(&driver).wait()).await;
+        for outcome in [first, second] {
+            assert!(matches!(
+                outcome,
+                Err(ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message)))
+                    if message == "missing flag"
+            ));
         }
     }
 }
