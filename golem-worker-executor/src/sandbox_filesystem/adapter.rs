@@ -941,8 +941,9 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send;
 
-    /// Consumes exclusive ownership, deletes the runtime filesystem, and verifies its absence.
-    fn delete_and_verify(self) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send
+    /// Deletes the runtime filesystem and verifies its absence. The cleanup owner retains the
+    /// adapter on failure so it can retry without releasing the filesystem's exclusive lease.
+    fn delete_and_verify(&self) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send
     where
         Self: Sized;
 }
@@ -1675,8 +1676,8 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         SandboxFilesystem::install_limits(self, limits)
     }
 
-    async fn delete_and_verify(self) -> Result<(), FilesystemStorageError> {
-        SandboxFilesystem::delete_and_verify(&self).await
+    async fn delete_and_verify(&self) -> Result<(), FilesystemStorageError> {
+        SandboxFilesystem::delete_and_verify(self).await
     }
 }
 
@@ -2800,7 +2801,7 @@ mod scripted {
         }
 
         fn delete_and_verify(
-            self,
+            &self,
         ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
             self.outcome("delete_and_verify()".to_string(), |state| {
                 &mut state.delete_and_verify
@@ -3335,7 +3336,7 @@ mod tests {
             filesystem.install_limits(limits).await.unwrap(),
             InstalledLimits { limits, allocation }
         );
-        <ScriptedSandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <ScriptedSandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
 
@@ -3578,7 +3579,7 @@ mod tests {
             .unwrap();
         assert_eq!(filesystem.name_mode_probe_count(), 1);
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -3602,7 +3603,7 @@ mod tests {
             .unwrap();
         assert_eq!(filesystem.name_mode_probe_count(), 1);
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -3647,7 +3648,7 @@ mod tests {
             .unwrap();
         let root = filesystem.root().to_path_buf();
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
         assert!(!root.exists());
@@ -3870,7 +3871,7 @@ mod tests {
         )
         .await
         .unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
         assert!(!root.exists());
@@ -3967,7 +3968,7 @@ mod tests {
             source_parent,
             destination_parent,
         ));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4019,7 +4020,7 @@ mod tests {
         );
 
         drop((file, base));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4073,7 +4074,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4164,7 +4165,7 @@ mod tests {
             link_time
         );
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4195,7 +4196,7 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         drop((first, second));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4282,7 +4283,7 @@ mod tests {
         }));
 
         drop(probe);
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4344,7 +4345,7 @@ mod tests {
         );
 
         drop(descriptor);
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4372,7 +4373,7 @@ mod tests {
             Some(std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied)
         ));
         assert!(!escaped.exists());
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4403,7 +4404,7 @@ mod tests {
         assert_eq!(second.size, 6);
         assert!(filesystem.root().join("left").is_dir());
         assert!(filesystem.root().join("right").is_dir());
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4435,7 +4436,7 @@ mod tests {
             "second provisioning acquired ownership before verified deletion"
         );
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
         lease_probe.wait_acquired().await;
@@ -4444,7 +4445,7 @@ mod tests {
         let released = directory_for(&released_root, &SandboxPath::at_root(".")).unwrap_err();
         assert_eq!(released.kind(), std::io::ErrorKind::NotConnected);
         assert!(directory_for(&second.root_directory_state(), &SandboxPath::at_root(".")).is_ok());
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(second)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&second)
             .await
             .unwrap();
     }
@@ -4549,7 +4550,7 @@ mod tests {
             }
         );
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4666,7 +4667,7 @@ mod tests {
         drop(descriptor_file);
         drop(final_file_alias);
         drop(final_symlink);
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4694,7 +4695,7 @@ mod tests {
             // Privileged test users may bypass the target directory's mode bits.
             std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::remove_dir(&target).unwrap();
-            <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
                 .await
                 .unwrap();
             return;
@@ -4718,7 +4719,7 @@ mod tests {
 
         drop(resolved);
         drop(renamed);
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4798,7 +4799,7 @@ mod tests {
         assert_eq!(completed.lock_acquisitions, 4);
         assert_eq!(completed.live, 0);
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4859,7 +4860,7 @@ mod tests {
         assert_eq!(counts.allocations, 2);
         assert_eq!(counts.lock_acquisitions, 3);
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4893,7 +4894,7 @@ mod tests {
         assert_eq!(counts.lock_acquisitions, 2);
 
         drop((first_guard, second_guard));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
@@ -4936,7 +4937,7 @@ mod tests {
         assert_eq!(reused_descriptor.live, 1);
         drop(first_guard);
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(&filesystem)
             .await
             .unwrap();
     }
