@@ -23,6 +23,46 @@ mcp:
 
 After `golem app deploy`, the MCP server is available at `http://mcp-demo.localhost:9007/mcp` using the streamable HTTP protocol.
 
+## Exporting native tools
+
+Native Golem tools can be exported alongside agents. Each export must name an actual deployed **owner component** whose component-level tool bindings permit that tool. The owner is not inferred from the tool's implementation component.
+
+```yaml
+mcp:
+  deployments:
+    local:
+      - subdomain: mcp-demo
+        agents:
+          CounterAgent: {}
+        tools:
+          file-tools:
+            ownerComponent: my-app:tool-owner
+            securityScheme: mcp-oauth
+            include:
+              - read-file
+              - list **
+```
+
+Here, `my-app:tool-owner` must already have a resolved component-baseline binding for `file-tools`. Component-level bindings also apply to real agents, with their agent-specific overrides. The MCP deployment must contain at least one agent or tool. All security scheme references in the deployment must agree; that scheme protects the whole domain.
+
+Each call creates a fresh, host-only **ephemeral owner** using that component's configuration, permissions, files, and tool bindings. It does not instantiate the component's primary guest or call its agent constructor. Tool and middleware bodies run through native invocation queueing and permission checks. Accepted execution is not restarted after owner loss. To invoke a tool on an existing real agent, use the native REST API or `golem tool invoke --agent`, not MCP.
+
+### Commands and schemas
+
+Only commands with bodies become MCP tools; a parent with its own body is exported alongside its executable descendants. Names are lowercase, hyphens become underscores, and path segments are joined with underscores: `file-tools read-file` becomes `file_tools_read_file`. Aliases produce additional tools that invoke the same canonical command. Name collisions fail deployment.
+
+Use either `include` or `exclude`, never both. Patterns are space-separated command paths without the tool prefix: `*` matches one segment and `**` matches any depth. Selecting a canonical command includes its aliases; excluding it also removes its aliases.
+
+Inputs use the human-readable JSON shapes advertised by `tools/list`, including defaults and repeated collections. Constraints are enforced before invocation and by native tool dispatch. Host-managed capabilities and nested typed streams cannot be exported. Standard annotations become `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`; these hints do not change permissions or execution semantics.
+
+### Finite stdin and stdout
+
+MCP buffers each byte stream, with a **16 MiB limit per direction**. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout is drained while stdin is being sent, and becomes text, image, audio, or an embedded resource according to its declared MIME type. Structured results are returned as `structuredContent` matching the advertised output schema, with a `value` wrapper when needed to produce a root object.
+
+Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
+
+Listings and calls are tied to a deployment definition. After a deployment changes, an existing session may receive a tool-list-changed notification and must list tools again before calling. Each MCP call has a fresh native idempotency key; repeating a JSON-RPC request ID is not a durable execution retry.
+
 ## Automatic Mapping
 
 Agent methods are automatically mapped to MCP entities based on the agent type and method signature:

@@ -29,6 +29,15 @@ silently create a named real owner. The typed input and success/custom-error res
 materialized scalar schemas and values only: streams cannot be nested recursively in those values.
 The only streaming tool attachments are optional byte `stdin` and byte `stdout` roots.
 
+MCP exports use the same native session path, always with a fresh component-backed ephemeral
+owner. The authenticated compiled MCP definition supplies an expected deployment revision;
+`prepare_external_tool_invocation` compares it with the selected activation before queueing.
+The check also applies to an already accepted activation and scalar scheduling. A stale listing
+cannot select historical activation state or reinterpret its input against a newer deployment.
+MCP authenticates before dispatch and grants only Invoke on the exact fresh owner, not System
+authority. Its finite stream adapter buffers at most 16 MiB per direction while draining stdout
+concurrently with stdin.
+
 `worker/invocation.rs` drives `invoke_native_tool` through a registered `NativeToolTask` under
 the same invocation start, deadline, principal/scope, tail settlement and committed completion as
 methods. Registering the task lets Wasmtime account for pending host I/O rather than reporting an
