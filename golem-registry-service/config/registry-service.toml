@@ -137,7 +137,7 @@ webflow_state_expiry = "5m"
 challenge_bytes = 16384
 document_bytes = 1048576
 request_bytes = 65536
-timeout = "1m"
+timeout = "20s"
 
 [security_scheme]
 strict_issuer_url_validation = true

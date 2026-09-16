@@ -43,6 +43,8 @@ service RegistryService {
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
   rpc GetToolDeploymentState (GetToolDeploymentStateRequest) returns (GetToolDeploymentStateResponse);
   rpc GetToolDeploymentStateAtRevision (GetToolDeploymentStateAtRevisionRequest) returns (GetToolDeploymentStateResponse);
+  rpc GetMcpRuntimeCredential (GetMcpRuntimeCredentialRequest) returns (GetMcpRuntimeCredentialResponse);
+  rpc ReportMcpResourceUnauthorized (ReportMcpResourceUnauthorizedRequest) returns (ReportMcpResourceUnauthorizedResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
 
@@ -327,6 +329,51 @@ message GetToolDeploymentStateResponse {
 
 message GetToolDeploymentStateSuccessResponse {
   optional ToolDeploymentState tool_deployment = 1;
+}
+
+message McpImportSource {
+  golem.common.EnvironmentId environment_id = 1;
+  uint64 deployment_revision = 2;
+  uint32 import_index = 3;
+  string upstream_tool_name = 4;
+}
+
+message GetMcpRuntimeCredentialRequest {
+  McpImportSource source = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message McpRuntimeCredential {
+  oneof credential {
+    string bearer = 1;
+    McpRuntimeBasicCredential basic = 2;
+  }
+  optional golem.common.UUID oauth_grant_generation = 3;
+}
+
+message McpRuntimeBasicCredential {
+  string user = 1;
+  string password = 2;
+}
+
+message GetMcpRuntimeCredentialResponse {
+  oneof result {
+    McpRuntimeCredential success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ReportMcpResourceUnauthorizedRequest {
+  McpImportSource source = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+  optional golem.common.UUID oauth_grant_generation = 3;
+}
+
+message ReportMcpResourceUnauthorizedResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
 }
 
 message ResolveAgentTypeByNamesRequest {

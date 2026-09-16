@@ -29,7 +29,7 @@ impl Default for Limits {
             document_bytes: 1 << 20,
             request_bytes: 64 << 10,
             challenge_bytes: 16 << 10,
-            timeout: Duration::from_secs(60),
+            timeout: Duration::from_secs(20),
         }
     }
 }

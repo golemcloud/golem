@@ -21,6 +21,7 @@ use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::resource_definition::ResourceDefinitionService;
 use applying::Apply;
@@ -71,6 +72,12 @@ use golem_api_grpc::proto::golem::registry::v1::{
     resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
     update_worker_connection_limit_response,
 };
+use golem_api_grpc::proto::golem::registry::v1::{
+    GetMcpRuntimeCredentialRequest, GetMcpRuntimeCredentialResponse, McpRuntimeBasicCredential,
+    McpRuntimeCredential, ReportMcpResourceUnauthorizedRequest,
+    ReportMcpResourceUnauthorizedResponse, get_mcp_runtime_credential_response,
+    mcp_runtime_credential, report_mcp_resource_unauthorized_response,
+};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -85,6 +92,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::AuthCtx;
@@ -116,6 +124,7 @@ pub struct RegistryServiceGrpcApi {
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
     resource_definition_service: Arc<ResourceDefinitionService>,
+    mcp_oauth_service: Arc<McpOAuthService>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -132,6 +141,7 @@ impl RegistryServiceGrpcApi {
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         registry_change_repo: Arc<dyn RegistryChangeRepo>,
         resource_definition_service: Arc<ResourceDefinitionService>,
+        mcp_oauth_service: Arc<McpOAuthService>,
     ) -> Self {
         Self {
             auth_service,
@@ -146,7 +156,71 @@ impl RegistryServiceGrpcApi {
             registry_change_notifier,
             registry_change_repo,
             resource_definition_service,
+            mcp_oauth_service,
         }
+    }
+
+    fn mcp_source(
+        source: Option<golem_api_grpc::proto::golem::registry::v1::McpImportSource>,
+    ) -> Result<McpImportSource, GrpcApiError> {
+        let source = source.ok_or("missing source field")?;
+        Ok(McpImportSource {
+            environment_id: source
+                .environment_id
+                .ok_or("missing environment_id field")?
+                .try_into()?,
+            deployment_revision: source.deployment_revision.try_into()?,
+            import_index: source.import_index,
+            upstream_tool_name: source.upstream_tool_name,
+        })
+    }
+
+    async fn get_mcp_runtime_credential_internal(
+        &self,
+        request: GetMcpRuntimeCredentialRequest,
+    ) -> Result<McpRuntimeCredential, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        let result = self
+            .mcp_oauth_service
+            .runtime_credential(&source, auth)
+            .await?;
+        Ok(McpRuntimeCredential {
+            credential: result.credential.map(|credential| match credential {
+                McpImportCredential::Bearer { token } => {
+                    mcp_runtime_credential::Credential::Bearer(token)
+                }
+                McpImportCredential::Basic { user, password } => {
+                    mcp_runtime_credential::Credential::Basic(McpRuntimeBasicCredential {
+                        user,
+                        password,
+                    })
+                }
+            }),
+            oauth_grant_generation: result.oauth_grant.map(|grant| grant.generation.into()),
+        })
+    }
+
+    async fn report_mcp_resource_unauthorized_internal(
+        &self,
+        request: ReportMcpResourceUnauthorizedRequest,
+    ) -> Result<EmptySuccessResponse, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        self.mcp_oauth_service
+            .report_resource_unauthorized(
+                &source,
+                auth,
+                request.oauth_grant_generation.map(Into::into),
+            )
+            .await?;
+        Ok(EmptySuccessResponse {})
     }
 
     async fn authenticate_token_internal(
@@ -1198,6 +1272,44 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
 
         Ok(Response::new(GetToolDeploymentStateResponse {
             result: Some(response),
+        }))
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        request: Request<GetMcpRuntimeCredentialRequest>,
+    ) -> Result<Response<GetMcpRuntimeCredentialResponse>, Status> {
+        let record = recorded_grpc_api_request!("get_mcp_runtime_credential",);
+        let result = match self
+            .get_mcp_runtime_credential_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => get_mcp_runtime_credential_response::Result::Success(value),
+            Err(error) => get_mcp_runtime_credential_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(GetMcpRuntimeCredentialResponse {
+            result: Some(result),
+        }))
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        request: Request<ReportMcpResourceUnauthorizedRequest>,
+    ) -> Result<Response<ReportMcpResourceUnauthorizedResponse>, Status> {
+        let record = recorded_grpc_api_request!("report_mcp_resource_unauthorized",);
+        let result = match self
+            .report_mcp_resource_unauthorized_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => report_mcp_resource_unauthorized_response::Result::Success(value),
+            Err(error) => report_mcp_resource_unauthorized_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ReportMcpResourceUnauthorizedResponse {
+            result: Some(result),
         }))
     }
 

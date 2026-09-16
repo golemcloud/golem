@@ -13,11 +13,12 @@ use crate::services::registry_change_notifier::SqliteRegistryChangeNotifier;
 use bytes::Bytes;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::{EmptyOwnerPattern, EnvironmentOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     ClassPermissionPattern, EffectiveSurface, EnvironmentSecuritySchemeResourcePattern,
-    EnvironmentSecuritySchemeVerb, PermissionPattern,
+    EnvironmentSecuritySchemeVerb, NetworkResourcePattern, NetworkVerb, PermissionPattern,
+    PortPattern,
 };
 use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -760,6 +761,61 @@ async fn unexpired_credential_is_not_subject_to_refresh_wait_timeout() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn refresh_takeover_uses_remaining_wait_budget() {
+    let fixture = Fixture::new().await;
+    let key = fixture.grant().await;
+    fixture.expire(&key).await;
+    let grant = fixture.service.grants.load(&key).await.unwrap().unwrap();
+    let claim = fixture
+        .service
+        .grants
+        .claim_refresh(&key, grant.generation)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut sender = BlockedToken {
+        entered: Arc::new(tokio::sync::Notify::new()),
+        resume: Arc::new(tokio::sync::Notify::new()),
+        inner: Queue::token(),
+    };
+    let started = tokio::time::Instant::now();
+    let restore = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        // A peer rejected before dispatch can return its unused expired token.
+        assert!(
+            fixture
+                .service
+                .grants
+                .publish_refresh(&key, claim.generation, claim.tokens)
+                .await
+                .unwrap()
+        );
+    };
+    let (result, ()) = tokio::join!(
+        fixture
+            .service
+            .credential(&fixture.source, fixture.owner, &mut sender),
+        restore
+    );
+    assert!(matches!(
+        result,
+        Err(McpOAuthError::Transport(TransportError::Timeout))
+    ));
+    assert!(started.elapsed() < Duration::from_millis(2750));
+    assert_eq!(sender.inner.requests.len(), 1);
+    let mut retry = Queue::empty();
+    assert!(matches!(
+        fixture
+            .service
+            .credential(&fixture.source, fixture.owner, &mut retry)
+            .await,
+        Err(McpOAuthError::AuthorizationRequired(_))
+    ));
+    assert!(retry.requests.is_empty());
+}
+
+#[test]
 #[test_r::timeout("20s")]
 async fn cancelled_refresh_is_not_reused_and_explicit_reauthorization_recovers() {
     let fixture = Fixture::new().await;
@@ -973,4 +1029,133 @@ async fn invalid_oauth_resource_or_protocol_is_rejected_before_probe() {
         ));
         assert!(sender.requests.is_empty());
     }
+}
+
+fn runtime_auth(owner: AccountId, host: &str) -> AuthCtx {
+    let email = AccountEmail::new(format!("{owner}@test.invalid"));
+    let recipient = RecipientPattern::Account {
+        account: email.clone(),
+    };
+    let permission = PermissionPattern::Network(ClassPermissionPattern {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        recipient: recipient.clone(),
+        resource: NetworkResourcePattern::host_port(host, PortPattern::single(443)),
+    });
+    AuthCtx::agent_with_effective_surface(
+        owner,
+        email,
+        EffectiveSurface::from_grants(&[permission], &[], &[], &[], &recipient).unwrap(),
+    )
+}
+
+#[test]
+async fn runtime_credentials_require_resource_permission_and_owner_without_admin_rights() {
+    let fixture = Fixture::new().await;
+    fixture.grant().await;
+    fixture
+        .insert_import(1, 1, None, Some("inline-token"))
+        .await;
+    fixture.insert_import(1, 2, None, None).await;
+    for index in 0..3 {
+        let source = McpImportSource {
+            import_index: index,
+            ..fixture.source.clone()
+        };
+        let credential = fixture
+            .service
+            .runtime_credential(&source, runtime_auth(fixture.owner, "resource.example"))
+            .await
+            .unwrap();
+        assert_eq!(credential.credential.is_some(), index != 2);
+        assert_eq!(credential.oauth_grant.is_some(), index == 0);
+        for denied in [
+            AuthCtx::System,
+            fixture.operator.clone(),
+            runtime_auth(fixture.owner, "other.example"),
+            runtime_auth(AccountId::new(), "resource.example"),
+        ] {
+            assert!(matches!(
+                fixture.service.runtime_credential(&source, denied).await,
+                Err(McpOAuthError::Transport(TransportError::Denied) | McpOAuthError::OwnerMismatch)
+            ));
+        }
+    }
+}
+
+#[test]
+async fn resource_rejection_expires_only_used_generation_and_refresh_keeps_provider_policy() {
+    let fixture = Fixture::new().await;
+    let key = fixture.grant().await;
+    let auth = runtime_auth(fixture.owner, "resource.example");
+    let first = fixture
+        .service
+        .runtime_credential(&fixture.source, auth.clone())
+        .await
+        .unwrap();
+    let used_generation = first.oauth_grant.unwrap().generation;
+    fixture
+        .service
+        .report_resource_unauthorized(&fixture.source, auth.clone(), Some(used_generation))
+        .await
+        .unwrap();
+    let expired = fixture.service.grants.load(&key).await.unwrap().unwrap();
+    assert_ne!(expired.generation, used_generation);
+    assert!(expired.tokens.as_ref().unwrap().refresh_token.is_some());
+    assert!(expired.tokens.unwrap().expires_at.unwrap() <= Utc::now());
+    // Resource access does not implicitly authorize the provider token endpoint.
+    assert!(matches!(
+        fixture
+            .service
+            .runtime_credential(&fixture.source, auth.clone())
+            .await,
+        Err(McpOAuthError::Transport(TransportError::Denied))
+    ));
+    assert_eq!(
+        fixture
+            .service
+            .grants
+            .load(&key)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        McpOAuthGrantStatus::Granted
+    );
+    let mut sender = Queue::token();
+    let refreshed = fixture
+        .service
+        .credential(&fixture.source, fixture.owner, &mut sender)
+        .await
+        .unwrap();
+    assert_eq!(sender.requests.len(), 1);
+    let generation = refreshed.oauth_grant.unwrap().generation;
+    fixture
+        .service
+        .report_resource_unauthorized(&fixture.source, auth.clone(), Some(used_generation))
+        .await
+        .unwrap();
+    let cached = fixture
+        .service
+        .runtime_credential(&fixture.source, auth.clone())
+        .await
+        .unwrap();
+    assert_eq!(cached.oauth_grant.unwrap().generation, generation);
+    fixture
+        .service
+        .disconnect(&fixture.source, &fixture.operator)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .report_resource_unauthorized(&fixture.source, auth.clone(), Some(generation))
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .service
+            .runtime_credential(&fixture.source, auth)
+            .await,
+        Err(McpOAuthError::AuthorizationRequired(_))
+    ));
 }

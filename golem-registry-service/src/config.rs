@@ -611,7 +611,7 @@ mod tests {
                 "document_bytes": 1_048_576,
                 "request_bytes": 65_536,
                 "challenge_bytes": 16_384,
-                "timeout": "1m"
+                "timeout": "20s"
             })
         );
         config.mcp_oauth = serde_json::from_value(json!({

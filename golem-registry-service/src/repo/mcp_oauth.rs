@@ -60,6 +60,12 @@ pub trait McpOAuthGrantRepo: Send + Sync {
 
     async fn fail_exchange(&self, key: &McpOAuthGrantKey, generation: Uuid) -> RepoResult<bool>;
     async fn fail_refresh(&self, key: &McpOAuthGrantKey, generation: Uuid) -> RepoResult<bool>;
+    async fn expire_access_token(
+        &self,
+        key: &McpOAuthGrantKey,
+        expected_generation: Uuid,
+        now: SqlDateTime,
+    ) -> RepoResult<bool>;
     async fn revoke(&self, key: &McpOAuthGrantKey) -> RepoResult<McpOAuthAuthorization>;
 }
 
@@ -302,6 +308,46 @@ impl McpOAuthGrantRepo for DbMcpOAuthGrantRepo<PostgresPool> {
             .await
     }
 
+    async fn expire_access_token(
+        &self,
+        key: &McpOAuthGrantKey,
+        expected_generation: Uuid,
+        now: SqlDateTime,
+    ) -> RepoResult<bool> {
+        let Some(grant) = self.load(key).await? else {
+            return Ok(false);
+        };
+        if grant.generation != expected_generation || grant.status != McpOAuthGrantStatus::Granted {
+            return Ok(false);
+        }
+        let Some(mut tokens) = grant.tokens else {
+            return Ok(false);
+        };
+        tokens.expires_at = Some(now.into_utc());
+        let token_secrets = encode(&tokens)?;
+        let result = self
+            .rw("expire_access_token")
+            .fetch_optional(
+                sqlx::query(indoc! {r#"
+            UPDATE mcp_oauth_grants SET generation = $1, token_secrets = $2
+            WHERE environment_id = $3 AND security_scheme_id = $4 AND security_scheme_revision = $5
+              AND credential_owner_account_id = $6 AND resource_url = $7 AND generation = $8
+              AND status = 'granted'
+            RETURNING generation
+        "#})
+                .bind(Uuid::new_v4())
+                .bind(token_secrets)
+                .bind(key.environment_id)
+                .bind(key.security_scheme_id)
+                .bind(key.security_scheme_revision)
+                .bind(key.credential_owner_account_id)
+                .bind(&key.resource_url)
+                .bind(expected_generation),
+            )
+            .await?;
+        Ok(result.is_some())
+    }
+
     async fn revoke(&self, key: &McpOAuthGrantKey) -> RepoResult<McpOAuthAuthorization> {
         let generation = Uuid::new_v4();
         self.rw("revoke").execute(sqlx::query(indoc! {r#"
@@ -527,8 +573,29 @@ mod tests {
             "access-two"
         );
 
+        let current = repo.load(&key).await.unwrap().unwrap();
+        let refresh_token = current.tokens.as_ref().unwrap().refresh_token.clone();
+        assert!(
+            repo.expire_access_token(&key, current.generation, SqlDateTime::now())
+                .await
+                .unwrap()
+        );
+        let expired = repo.load(&key).await.unwrap().unwrap();
+        assert_ne!(expired.generation, current.generation);
+        assert_eq!(
+            expired.tokens.as_ref().unwrap().refresh_token,
+            refresh_token
+        );
+        assert!(expired.tokens.unwrap().expires_at.unwrap() <= Utc::now());
+        assert!(
+            !repo
+                .expire_access_token(&key, current.generation, SqlDateTime::now())
+                .await
+                .unwrap()
+        );
+
         let refresh = repo
-            .claim_refresh(&key, first_refresh.generation)
+            .claim_refresh(&key, expired.generation)
             .await
             .unwrap()
             .unwrap();

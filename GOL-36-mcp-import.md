@@ -999,7 +999,7 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   the operator callback. Pre-registered security-scheme clients are the supported
   registration path, with Basic, POST-secret, or advertised public authentication.
 - OAuth defaults bound each document to 1 MiB, request body to 64 KiB and challenge
-  headers to 16 KiB, with one 60-second discovery-chain deadline. Token exchanges
+  headers to 16 KiB, with one 20-second discovery-chain deadline. Token exchanges
   also bound response streaming and duration. No redirects, decoding, or retry is
   added. Malformed responses, client configuration failures, and rejected grants
   have distinct diagnostic categories; none permits retrying a claimed exchange.
@@ -1130,8 +1130,33 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   passed; OpenAPI and REST MDX are regenerated. Formatting and diff checks passed.
   The dedicated operator bug-finder run returned **no bugs found**, clean terminal.
   This is not yet an end-to-end provider/agent test or completion of step 4.
-- Remaining step-4 work: runtime policy/internal RPC; resource-401
-  feedback and cache invalidation; provider fixtures and combined validation.
+- Runtime credential and resource-401 feedback RPCs now require the environment
+  owner's Agent context and resource Network authority before exposing even
+  cached/inline credentials. Refresh separately checks provider authority. The
+  private client result redacts credentials; no credential enters an oplog.
+- A 401 report expires only the generation used by that request, preserving its
+  refresh token. Generation/status CAS prevents stale feedback from expiring a
+  newer token or changing a revoked/refreshing grant. Quota failures retain the
+  existing LimitExceeded category; unresolved grants are terminal BadRequest,
+  while network failures, timeouts, 429 and 5xx remain infrastructure errors.
+- Oracle confirmed authority, error categories and the generation fence. Its
+  deadline finding is fixed: OAuth now defaults to 20 seconds, including operator
+  operations, below the executor's 30-second registry request timeout. Wait and
+  token exchange share that budget. Pre-dispatch exhaustion restores unused
+  tokens under CAS; successful publication is not failed by a later timer.
+  Generated registry TOML/env files also carry 20 seconds. Custom deployments
+  must preserve headroom between OAuth and registry-client timeouts; the services
+  cannot validate one another's configuration. The default test reserves >5s.
+  Slow database operations can still exhaust client deadlines. A gRPC disconnect
+  or request timeout after claiming refresh is cancellation and can require
+  explicit reauthorization, just like the previously agreed interrupted refresh.
+- Targeted registry OAuth/API/error tests: **24 passed**, including an in-process
+  production gRPC/client round trip, denied contexts, stale feedback and a peer
+  takeover that cannot restart the refresh budget. Bug-finder run 1 returned
+  **no bugs found**, clean terminal with no checkpoint. Registry binary build and
+  scoped config regeneration passed. Consumer regression validation is ongoing.
+- Remaining step-4 work: discovery/bridge consumption of resource-401 feedback
+  and metadata-cache invalidation; provider fixtures and combined validation.
   The coordinator is an intermediate checkpoint, not completion of step 4 or
   evidence of end-to-end OAuth operation.
 

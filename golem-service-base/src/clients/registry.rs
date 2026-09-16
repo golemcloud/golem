@@ -29,21 +29,23 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
-    GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
-    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
+    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
-    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
-    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
+    RevokeCardRequest, RuntimeCardData, UpdateWorkerConnectionLimitRequest,
+    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, create_runtime_card_response,
+    download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, get_tool_deployment_state_response,
-    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
-    update_worker_connection_limit_response,
+    get_mcp_runtime_credential_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response,
+    get_tool_deployment_state_response, mcp_runtime_credential,
+    report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
+    resolve_component_response, revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -61,6 +63,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
@@ -68,6 +71,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -107,6 +111,18 @@ pub struct ResourceUsageUpdate {
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
     pub metering: ResourceUsageMetering,
+}
+
+#[derive(Clone)]
+pub struct McpRuntimeCredential {
+    pub credential: Option<McpImportCredential>,
+    pub oauth_grant_generation: Option<uuid::Uuid>,
+}
+
+impl Debug for McpRuntimeCredential {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("McpRuntimeCredential { ..redacted.. }")
+    }
 }
 
 #[async_trait]
@@ -240,6 +256,19 @@ pub trait RegistryService: Send + Sync {
             "get_tool_deployment_state_at_revision is not supported by this registry service",
         ))
     }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError>;
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError>;
 
     async fn resolve_agent_type_by_names(
         &self,
@@ -1104,6 +1133,85 @@ impl RegistryService for GrpcRegistryService {
                 .transpose()
                 .map_err(Into::into),
             Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError> {
+        let request = GetMcpRuntimeCredentialRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+        };
+        let response = self
+            .client
+            .call("get_mcp_runtime_credential", move |client| {
+                Box::pin(client.get_mcp_runtime_credential(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_mcp_runtime_credential_response::Result::Success(value)) => {
+                Ok(McpRuntimeCredential {
+                    credential: value.credential.map(|credential| match credential {
+                        mcp_runtime_credential::Credential::Bearer(token) => {
+                            McpImportCredential::Bearer { token }
+                        }
+                        mcp_runtime_credential::Credential::Basic(basic) => {
+                            McpImportCredential::Basic {
+                                user: basic.user,
+                                password: basic.password,
+                            }
+                        }
+                    }),
+                    oauth_grant_generation: value.oauth_grant_generation.map(Into::into),
+                })
+            }
+            Some(get_mcp_runtime_credential_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        let request = ReportMcpResourceUnauthorizedRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            oauth_grant_generation: oauth_grant_generation.map(Into::into),
+        };
+        let response = self
+            .client
+            .call("report_mcp_resource_unauthorized", move |client| {
+                Box::pin(client.report_mcp_resource_unauthorized(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(report_mcp_resource_unauthorized_response::Result::Success(_)) => Ok(()),
+            Some(report_mcp_resource_unauthorized_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+            None => Err(RegistryServiceError::empty_response()),
         }
     }
 

@@ -4,9 +4,20 @@ use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConf
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
+use golem_common::model::card::owner::EmptyOwnerPattern;
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    ClassPermissionPattern, EffectiveSurface, NetworkResourcePattern, NetworkVerb,
+    PermissionPattern, PortPattern,
+};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
-use golem_common::model::mcp_import::McpImportDeployment;
+use golem_common::model::mcp_import::{
+    McpImportAuthInput, McpImportBasicAuth, McpImportDeployment, McpImportSource,
+};
 use golem_common::model::security_scheme::{Provider, SecuritySchemeCreation, SecuritySchemeName};
+use golem_service_base::clients::registry::{
+    GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
+};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -20,7 +31,7 @@ use tokio::task::JoinSet;
 
 #[test]
 #[timeout("120s")]
-async fn operator_routes_authenticate_and_target_exact_import() {
+async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
     let directory = tempfile::tempdir().unwrap();
     let db = DbSqliteConfig {
         database: directory
@@ -179,4 +190,101 @@ async fn operator_routes_authenticate_and_target_exact_import() {
         .object()
         .get("status")
         .assert_string("revoked");
+
+    let port = crate::grpc::start_grpc_server(
+        &crate::config::GrpcApiConfig {
+            port: 0,
+            ..Default::default()
+        },
+        &services,
+        &mut tasks,
+    )
+    .await
+    .unwrap();
+    let client = GrpcRegistryService::new(&GrpcRegistryServiceConfig {
+        host: "127.0.0.1".into(),
+        port,
+        ..Default::default()
+    });
+    let recipient = RecipientPattern::Account {
+        account: root.email.clone(),
+    };
+    let network = PermissionPattern::Network(ClassPermissionPattern {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        recipient: recipient.clone(),
+        resource: NetworkResourcePattern::host_port("resource.invalid", PortPattern::single(443)),
+    });
+    let runtime = AuthCtx::agent_with_effective_surface(
+        root.id,
+        root.email.clone(),
+        EffectiveSurface::from_grants(&[network], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut source = McpImportSource {
+        environment_id: env.id,
+        deployment_revision: 1_u64.try_into().unwrap(),
+        import_index: 3,
+        upstream_tool_name: "tool".into(),
+    };
+    assert!(matches!(
+        client.get_mcp_runtime_credential(&source, &runtime).await,
+        Err(RegistryServiceError::BadRequest(_))
+    ));
+    assert!(matches!(
+        client
+            .get_mcp_runtime_credential(&source, &AuthCtx::System)
+            .await,
+        Err(RegistryServiceError::Unauthorized(_))
+    ));
+    for (offset, auth) in [
+        None,
+        Some(McpImportAuthInput {
+            bearer: Some("private-bearer".into()),
+            basic: None,
+        }),
+        Some(McpImportAuthInput {
+            bearer: None,
+            basic: Some(McpImportBasicAuth {
+                user: "private-user".into(),
+                password: "private-password".into(),
+            }),
+        }),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        source.import_index = offset as u32 + 4;
+        let (import, credential) = McpImportDeployment {
+            url: "https://resource.invalid/mcp".into(),
+            auth,
+            security_scheme: None,
+            prefix: None,
+            include: None,
+            exclude: None,
+            version: None,
+        }
+        .into_parts(env.id)
+        .unwrap();
+        writer.execute(sqlx::query("INSERT INTO deployment_mcp_imports (environment_id,deployment_revision_id,import_index,import_hash,import_config,inline_credential) VALUES ($1,1,$2,$3,$4,$5)")
+            .bind(env.id.0).bind(i64::from(source.import_index)).bind(vec![0_u8;32]).bind(Blob::new(import)).bind(credential.clone().map(Blob::new))).await.unwrap();
+        let received = client
+            .get_mcp_runtime_credential(&source, &runtime)
+            .await
+            .unwrap();
+        assert_eq!(received.credential, credential);
+        assert!(received.oauth_grant_generation.is_none());
+        assert!(!format!("{received:?}").contains("private-"));
+        client
+            .report_mcp_resource_unauthorized(&source, &runtime, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_mcp_runtime_credential(&source, &runtime)
+                .await
+                .unwrap()
+                .credential,
+            credential
+        );
+    }
 }

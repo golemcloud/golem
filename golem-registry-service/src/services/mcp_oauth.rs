@@ -420,6 +420,49 @@ impl McpOAuthService {
         Ok(scheme.name.clone())
     }
 
+    pub async fn runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth: AuthCtx,
+    ) -> Result<McpCredential, McpOAuthError> {
+        let resolved = self.resolve(source).await?;
+        let policy =
+            http_policy::McpHttpPolicy::runtime(auth, &resolved.environment, self.usage.clone())?;
+        let uri = resolved
+            .import
+            .url
+            .parse()
+            .map_err(|_| TransportError::Denied)?;
+        policy.authorize(&uri)?;
+        let owner = resolved.environment.owner_account_id;
+        let mut sender = HttpSender::new(policy)?;
+        self.credential(source, owner, &mut sender).await
+    }
+
+    pub async fn report_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth: AuthCtx,
+        used_generation: Option<uuid::Uuid>,
+    ) -> Result<(), McpOAuthError> {
+        let resolved = self.resolve(source).await?;
+        let policy =
+            http_policy::McpHttpPolicy::runtime(auth, &resolved.environment, self.usage.clone())?;
+        let uri = resolved
+            .import
+            .url
+            .parse()
+            .map_err(|_| TransportError::Denied)?;
+        policy.authorize(&uri)?;
+        let (Ok((_, key)), Some(used_generation)) = (resolved.oauth(), used_generation) else {
+            return Ok(());
+        };
+        self.grants
+            .expire_access_token(&key, used_generation, Utc::now().into())
+            .await?;
+        Ok(())
+    }
+
     /// Trusted runtime path after tool admission, never an administrative token
     /// API. The sender carries the live calling agent's network/quota context.
     pub async fn credential<S: HttpSend<Error = McpOAuthError> + Send>(
@@ -502,8 +545,22 @@ impl McpOAuthService {
                             &session.server.issuer,
                         )?;
                         let issued_at = Utc::now();
+                        // Waiting for a peer and exchanging a token share one
+                        // budget; taking over must not restart the deadline.
+                        let timeout =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if timeout.is_zero() {
+                            return Err(McpOAuthError::RefreshUnresolved(scheme.name.clone()));
+                        }
                         let token = client(&server, scheme, &key.resource_url)?
-                            .refresh(sender, &RefreshToken::new(refresh.clone()), self.limits)
+                            .refresh(
+                                sender,
+                                &RefreshToken::new(refresh.clone()),
+                                oauth::Limits {
+                                    timeout,
+                                    ..self.limits
+                                },
+                            )
                             .await?;
                         let next = tokens(token, issued_at, session.clone(), Some(&claim.tokens))?;
                         if self.resolve(source).await?.oauth()?.1 != key {
@@ -533,8 +590,9 @@ impl McpOAuthService {
                             error,
                             McpOAuthError::Transport(TransportError::Denied)
                                 | McpOAuthError::AccountUsage(_)
+                                | McpOAuthError::RefreshUnresolved(_)
                         ) {
-                            // These errors are raised by admission before dispatch.
+                            // These errors are raised before dispatch.
                             // Restore the unused token under the claim's CAS fence.
                             self.grants
                                 .publish_refresh(&key, claim.generation, claim.tokens)

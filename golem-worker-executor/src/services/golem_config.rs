@@ -2585,6 +2585,18 @@ mod tests {
     }
 
     #[test]
+    fn mcp_oauth_deadline_leaves_time_for_registry_response() {
+        let timeout = GolemConfig::default()
+            .registry_service
+            .client_config
+            .request_timeout
+            .unwrap();
+        assert!(
+            golem_mcp_import::oauth::Limits::default().timeout + Duration::from_secs(5) < timeout
+        );
+    }
+
+    #[test]
     fn invocation_results_config_constructs_configured_membership() {
         let config = InvocationResultsConfig {
             recent_capacity: 2,
