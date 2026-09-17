@@ -138,16 +138,16 @@ async fn acquire(
     .await
 }
 
-async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<DurableStreamHandleV1> {
+async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<DurableStreamHandle> {
     let metadata = worker.get_initial_worker_metadata();
     let index = worker.oplog().current_oplog_index().await.next();
-    let source_invocation = StreamInvocationIdV1 {
+    let source_invocation = StreamInvocationId {
         callee_environment_id: metadata.environment_id,
         callee: metadata.agent_id.clone(),
         callee_fingerprint: metadata.fingerprint,
         idempotency_key: IdempotencyKey::new("stream-session".into()),
     };
-    let handle = DurableStreamHandleV1 {
+    let handle = DurableStreamHandle {
         format_version: 1,
         stream_id: StreamId::derive(
             metadata.environment_id,
@@ -167,16 +167,16 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
             .add_and_commit_oplog(OplogEntry::StreamRegistered {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
-                record: OplogPayload::Inline(Box::new(StreamRegisteredRecordV1 {
+                record: OplogPayload::Inline(Box::new(StreamRegisteredRecord {
                     format_version: 1,
-                    coordinate: StreamRegistrationCoordinateV1::Root {
+                    coordinate: StreamRegistrationCoordinate::Root {
                         invocation_id: source_invocation,
-                        root_kind: StreamRootKindV1::MethodResult,
+                        root_kind: StreamRootKind::MethodResult,
                         recursive_value_path: vec![],
                     },
                     registration_oplog_index: index,
                     handle: handle.clone(),
-                    source_kind: StreamSourceKindV1::InvocationOutput,
+                    source_kind: StreamSourceKind::InvocationOutput,
                     session_mapping: None,
                 })),
             })
@@ -516,13 +516,13 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
 
 async fn prepare_foreign_topology(
     worker: &Worker<TestWorkerCtx>,
-    source: &DurableStreamHandleV1,
-    consumer_invocation: StreamInvocationIdV1,
+    source: &DurableStreamHandle,
+    consumer_invocation: StreamInvocationId,
     transport_stream_id: u64,
-) -> anyhow::Result<(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)> {
+) -> anyhow::Result<(StreamAttachmentKey, StreamSessionMappingRecord)> {
     let metadata = worker.get_initial_worker_metadata();
     let session_key = source.source_invocation.clone();
-    let attachment = StreamAttachmentKeyV1 {
+    let attachment = StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
             session_key.callee_environment_id,
             &session_key.callee,
@@ -539,17 +539,17 @@ async fn prepare_foreign_topology(
         expected_consumer_fingerprint: metadata.fingerprint,
         consumer_invocation,
     };
-    let mapping = StreamSessionMappingRecordV1 {
+    let mapping = StreamSessionMappingRecord {
         transport_stream_id,
         handle: source.clone(),
-        role: SessionStreamRoleV1::Output,
+        role: SessionStreamRole::Output,
     };
     worker
         .add_and_commit_oplog(OplogEntry::StreamSession {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
-            record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::TopologyPrepared(
-                StreamTopologyPreparedRecordV1 {
+            record: OplogPayload::Inline(Box::new(StreamSessionRecord::TopologyPrepared(
+                StreamTopologyPreparedRecord {
                     format_version: 1,
                     session_key,
                     attachment: attachment.clone(),
@@ -563,7 +563,7 @@ async fn prepare_foreign_topology(
 
 async fn session_records(
     worker: &Worker<TestWorkerCtx>,
-) -> anyhow::Result<Vec<StreamSessionRecordV1>> {
+) -> anyhow::Result<Vec<StreamSessionRecord>> {
     let oplog = worker.oplog();
     let entries = oplog
         .read_exact(
@@ -588,7 +588,7 @@ async fn session_records(
 async fn prepare_session(
     worker: &Worker<TestWorkerCtx>,
     completed: bool,
-) -> anyhow::Result<StreamSessionKeyV1> {
+) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
     let pending_index = oplog.current_oplog_index().await.next().next();
     let idempotency_key = IdempotencyKey::new("stream-session".into());
@@ -603,7 +603,7 @@ async fn prepare_session(
     let trace_id = context.trace_id;
     let trace_states = context.trace_states;
     let metadata = worker.get_initial_worker_metadata();
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: metadata.environment_id,
         callee: metadata.agent_id.clone(),
         callee_fingerprint: metadata.fingerprint,
@@ -616,15 +616,15 @@ async fn prepare_session(
     )?;
     let attempt_id = AttemptId::fresh();
     for record in [
-        StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+        StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            attempt: StartAttemptDescriptorV1 {
+            attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
                 attachment_id,
                 expected_callee_fingerprint: metadata.fingerprint,
                 attempt_id,
-                invocation: PersistedStreamInvocationDescriptorV1 {
+                invocation: PersistedStreamInvocationDescriptor {
                     format_version: 1,
                     session_key: session_key.clone(),
                     target_component_revision: metadata.last_known_status.component_revision,
@@ -639,7 +639,7 @@ async fn prepare_session(
             },
             stream_mappings: vec![],
         }),
-        StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.clone(),
             attachment_id,
@@ -648,7 +648,7 @@ async fn prepare_session(
             pending_invocation_oplog_index: pending_index,
         }),
     ] {
-        let prepared = matches!(record, StreamSessionRecordV1::Prepared(_));
+        let prepared = matches!(record, StreamSessionRecord::Prepared(_));
         worker
             .add_and_commit_oplog(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
@@ -744,14 +744,14 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let read = seed
         .rpc()
         .read_durable_stream_segment(
-            AttachedStreamSegmentRequestV1 {
+            DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
                 format_version: 1,
                 attachment: a_attachment.clone(),
                 mapping: a_mapping,
                 after: None,
                 through: None,
                 wait_for_events: false,
-            },
+            })),
             &AuthCtx::System,
         )
         .await;
@@ -762,7 +762,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let before = session_records(&a).await?;
     assert!(!before.iter().any(|record| matches!(
         record,
-        StreamSessionRecordV1::TopologyActivated(_) | StreamSessionRecordV1::Finished(_)
+        StreamSessionRecord::TopologyActivated(_) | StreamSessionRecord::Finished(_)
     )));
     recovery.release();
 
@@ -770,9 +770,9 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
         loop {
             let a_records = session_records(&a).await?;
             let b_records = session_records(&b).await?;
-            let a_activated = a_records.iter().filter(|record| matches!(record, StreamSessionRecordV1::TopologyActivated(record) if record.attachment == a_attachment)).count();
-            let b_activated = b_records.iter().filter(|record| matches!(record, StreamSessionRecordV1::TopologyActivated(record) if record.attachment == b_attachment)).count();
-            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecordV1::Finished(record) if record.session_key == completed_session)).count();
+            let a_activated = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == a_attachment)).count();
+            let b_activated = b_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == b_attachment)).count();
+            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == completed_session)).count();
             if a_activated != 0 && b_activated != 0 && finished != 0 {
                 assert_eq!(a_activated, 1);
                 assert_eq!(b_activated, 1);
