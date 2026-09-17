@@ -70,6 +70,7 @@ fn service_failure_stream(
                     idempotency_key,
                     agent_id,
                     component_revision: None,
+                    worker_error: None,
                 },
             )),
         })

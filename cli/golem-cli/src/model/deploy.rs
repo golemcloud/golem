@@ -16,7 +16,7 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::log::{LogColorize, logln};
-use crate::model::agent::RawAgentId;
+use crate::model::agent::{AgentActionError, RawAgentId};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::component::{
     render_agent_constructor, render_input_schema, render_output_schema,
@@ -576,7 +576,7 @@ pub fn preferred_source_language_for_setup(
 
     match selected {
         Some(GuestLanguage::Rust) => SourceLanguage::Rust,
-        Some(GuestLanguage::TypeScript) => SourceLanguage::TypeScript,
+        Some(GuestLanguage::TypeScript | GuestLanguage::Effect) => SourceLanguage::TypeScript,
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
         None => SourceLanguage::Other(String::new()),
@@ -1586,8 +1586,8 @@ fn mask_sensitive_key_value_for_deploy_diff(
 #[serde(rename_all = "camelCase")]
 pub struct TryUpdateAllWorkersView {
     pub agents: Vec<AgentUpdateMeta>,
-    /// Per-agent update errors, keyed by the (environment-unique) agent id.
-    pub errors: BTreeMap<String, String>,
+    /// The agents that failed to update, with their errors.
+    pub errors: Vec<AgentActionError>,
 }
 
 impl TryUpdateAllWorkersView {

@@ -3521,6 +3521,7 @@ mod tests {
                     updates: Vec::new(),
                     created_at: Timestamp::now_utc(),
                     last_error: None,
+                    last_error_kind: None,
                     component_size: 0,
                     total_linear_memory_size: 0,
                     exported_resource_instances: Vec::new(),

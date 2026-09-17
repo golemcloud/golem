@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogErrorKind, OplogIndex,
 };
 use golem_common::model::{
     IdempotencyKey, NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState,
@@ -1481,7 +1481,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             .await
             .map_err(|err| err.source)?;
         let response = oplog
-            .upload_payload(&HostResponse::Custom(response))
+            .upload_payload_owned(HostResponse::Custom(response))
             .await
             .map_err(|err| anyhow::anyhow!("Failed to store durable function response: {err}"))?;
         worker
@@ -1648,7 +1648,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
                 let persisted_request = oplog
-                    .upload_payload(&request)
+                    .upload_payload_owned(request)
                     .await
                     .map_err(|err| format!("Failed to store durable function request: {err}"))?;
                 Ok::<_, String>(
@@ -1864,6 +1864,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index(),
+            OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
@@ -2379,6 +2380,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
+            OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,

@@ -323,3 +323,38 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+
+    #[test]
+    fn snapshot_rejections_use_persistent_storage_not_status_cache() {
+        let storage = NamespaceRoutedKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(InMemoryKeyValueStorage::new()),
+        );
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "snapshot-rejection".to_string(),
+        };
+        assert!(Arc::ptr_eq(
+            storage.backend_for_namespace(
+                &KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
+                    agent_id: agent_id.clone(),
+                }
+            ),
+            &storage.persistent,
+        ));
+        assert!(Arc::ptr_eq(
+            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
+                agent_id: agent_id.into(),
+            }),
+            &storage.cache,
+        ));
+    }
+}

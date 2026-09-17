@@ -51,7 +51,9 @@ which durable fact makes that safe.
 |---|---|---|
 | After `PendingUpdate`, before the update runs | `prepare_instance` sees the pending update and starts it | `PendingUpdate` hint |
 | Snapshot load fails for an automatic update | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | Old oplog is untouched by snapshotting mode |
-| Snapshot load fails with no pending update | Resident `Worker.snapshot_recovery_disabled` set, `RetryDecision::Immediate`, full replay from the manual baseline | Baseline chosen at instance creation |
+| Automatic snapshot load fails, or its replay suffix diverges, with no pending update | Reject through that index, return `RetryDecision::Immediate`, and recreate the full context from the authoritative manual-update baseline; never replay pre-migration history | Fingerprint-scoped `rejected_periodic_snapshot_through`, persisted only after successful fallback and before readiness |
+| Automatic snapshot payload download fails | Retry while temporarily skipping it for this startup attempt; successful preparation clears the skip | In-memory `unavailable_periodic_snapshot_through`; no persistent rejection |
+| Manual-update snapshot load fails | Resume terminates and reports the load failure with its underlying cause | The authoritative migration baseline cannot be skipped |
 | Replay under the new component diverges | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | `FailedUpdate` |
 | After `SuccessfulUpdate` | New revision loaded on every later reconstruction; automatic snapshots from the old revision fail the revision filter and are ignored | `SuccessfulUpdate`, revision-scoped snapshots |
 | `SnapshotBased` update pending across a crash | Save hook already ran and payload is recorded; the new instance must be live at `prepare_instance`, then `finalize_pending_snapshot_update` loads it | Recorded snapshot payload |

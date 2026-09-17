@@ -699,9 +699,9 @@ pub(crate) enum ReplayAccessStartOutcome<H> {
     ReplayEnded,
 }
 
-pub(crate) enum BegunCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
-    Claimed(DurableCallSession<Pair, P>),
-    ContinueLive(BegunCall<Pair, P>),
+pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy> {
+    Replay(DurableCallSession<Pair, P>),
+    Live(BegunCall<Pair, P>),
 }
 
 /// Releases a just-registered atomic-region lease when the accessor start path is torn (the
@@ -958,16 +958,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-        capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
+        mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
     ) -> Result<(Self, Option<T>), WorkerExecutorError> {
-        let (begun, captured) =
-            Self::begin_with_agent_authority_capture(ctx, function_type, capture).await?;
-        let handle = if begun.is_live() {
-            begun.start_live(ctx, request).await?
-        } else {
-            begun
-                .start_replay_or_continue_incomplete_entity(ctx, request)
-                .await?
+        let (begun, mut captured) =
+            Self::begin_with_agent_authority_capture(ctx, function_type, &mut capture).await?;
+        let handle = match begun.resolve(ctx).await? {
+            ResolvedCall::Live(begun) => {
+                if captured.is_none() {
+                    captured = Some(ctx.with_agent_authority_at_boundary(capture).await?);
+                }
+                begun.start_live(ctx, request).await?
+            }
+            ResolvedCall::Replay(handle) => handle,
         };
         Ok((handle, captured))
     }
@@ -999,12 +1001,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
     ) -> Result<Self, WorkerExecutorError> {
         let begun = Self::begin_inner(ctx, function_type, requires_agent_authority).await?;
-        if begun.is_live() {
-            begun.start_live(ctx, request).await
-        } else {
-            begun
-                .start_replay_or_continue_incomplete_entity(ctx, request)
-                .await
+        match begun.resolve(ctx).await? {
+            ResolvedCall::Live(begun) => begun.start_live(ctx, request).await,
+            ResolvedCall::Replay(handle) => Ok(handle),
         }
     }
 
@@ -2548,7 +2547,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// payload depends on the durable-scope begin index (e.g. an RPC scheduled invocation embeds an
     /// idempotency key derived from it). Such calls cannot use [`Self::start`] because the request
     /// is not yet known when the scope is opened. The common case stays on [`Self::start`], which is
-    /// just `begin` + `start_live`/`start_replay`.
+    /// just `begin` + `resolve`, followed by `start_live` for a fresh call.
     pub(crate) async fn begin<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
@@ -4903,7 +4902,7 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
+    let (mut is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.is_live(),
@@ -4913,12 +4912,43 @@ where
         )
     });
 
+    while !is_live {
+        match replay_state.get_oplog_entry_or_replay_end_owned().await? {
+            crate::durable_host::PositionalRead::Entry(_, entry) => {
+                if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "FinishSpan",
+                        format!("{entry:?}"),
+                    ));
+                }
+                break;
+            }
+            crate::durable_host::PositionalRead::ReplayEnded => {
+                let (transition, primary_runtime) = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    (
+                        ctx.prepare_live_continuation_at_replay_tail(
+                            true,
+                            "FinishSpan".to_string(),
+                        ),
+                        ctx.runtime == OwnerRuntime::Agent,
+                    )
+                });
+                let pending = match transition.await? {
+                    BeginReplayToLive::ReplayResumed => continue,
+                    BeginReplayToLive::Pending(pending) => pending,
+                };
+                finish_prepared_access_to_live(pending, primary_runtime, store, get_ctx)
+                    .await?
+                    .require_live()?;
+                is_live = true;
+            }
+        }
+    }
     if is_live {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
-    } else {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }
 
     store.with(|mut access| {
@@ -4966,8 +4996,7 @@ fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionT
 
 /// The first phase of a two-phase durable call, produced by [`DurableCallSession::begin`]. The durable
 /// scope is already open and the begin index is known; the host-call `Start` has not yet been
-/// written (live) nor claimed (replay). Finalised into a [`DurableCallSession`] with [`Self::start_live`]
-/// (after the request has been built) or [`Self::start_replay`].
+/// written or claimed. Resolve replay before preparing a live request with [`Self::resolve`].
 pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     boundary: DurableCallBoundary,
     execution_scope: BegunCallExecutionScope,
@@ -4980,7 +5009,7 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
-    pub fn is_live(&self) -> bool {
+    fn is_live(&self) -> bool {
         self.retry.durable_execution_state().is_live
     }
 
@@ -5125,42 +5154,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         })
     }
 
-    /// Second phase on the replay path: claim the next host-call `Start` from the oplog and register
-    /// a resolver receiver for it.
-    pub(crate) async fn start_replay<Ctx: WorkerCtx>(
-        self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
-        debug_assert!(!self.is_live(), "start_replay() called on a live handle");
-        let replay = match self.execution_scope.parent_start_index {
-            Some(parent_start_index) => {
-                ctx.state
-                    .replay_state
-                    .claim_owned_concurrent_start(
-                        &Pair::HOST_FUNCTION_NAME,
-                        self.retry.function_type(),
-                        parent_start_index,
-                    )
-                    .await?
-            }
-            None => {
-                ctx.state
-                    .replay_state
-                    .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
-                    .await?
-            }
-        };
-        Ok(self.finish_replay(ctx, replay))
-    }
-
-    pub(crate) async fn start_replay_or_continue_live<Ctx: WorkerCtx>(
+    /// Claims recorded admission or publishes live continuation before live-only preparation.
+    pub(crate) async fn resolve<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<BegunCallReplayOutcome<Pair, P>, WorkerExecutorError> {
-        debug_assert!(
-            !self.is_live(),
-            "replay continuation started from live state"
-        );
+    ) -> Result<ResolvedCall<Pair, P>, WorkerExecutorError> {
+        if self.is_live() {
+            return Ok(ResolvedCall::Live(self));
+        }
         loop {
             let outcome = ctx
                 .state
@@ -5169,43 +5170,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 .await?;
             match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
-                    return Ok(BegunCallReplayOutcome::Claimed(
-                        self.finish_replay(ctx, handle),
-                    ));
+                    return Ok(ResolvedCall::Replay(self.finish_replay(ctx, handle)));
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
                 | ReplayStartClaimOutcome::DeletedRegion) => {
-                    let replaying_incomplete_entity =
-                        ctx.entity_invocation_scope().is_some_and(|scope| {
-                            scope.mode() == InvocationExecutionMode::ReplayingIncomplete
-                        });
-                    let primary_replay_tail = ctx.runtime == OwnerRuntime::Agent
-                        && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
-                    if !replaying_incomplete_entity && !primary_replay_tail {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    if !ctx
+                        .continue_live_at_replay_tail(
+                            matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
                             format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                            format!(
-                                "replay continuation at {} is valid only for an incomplete entity",
-                                ctx.state.replay_state.last_replayed_index()
-                            ),
-                        ));
-                    }
-
-                    tracing::debug!(
-                        function = Pair::FQFN,
-                        replay_ended = matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
-                        primary_replay_tail,
-                        "Durable call continued live after replay"
-                    );
-                    if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                        let pending = match ctx.begin_switch_to_live().await? {
-                            BeginReplayToLive::ReplayResumed => continue,
-                            BeginReplayToLive::Pending(pending) => pending,
-                        };
-                        ctx.finish_switch_to_live(pending).await?.require_live()?;
-                    } else {
-                        let pending = ctx.begin_local_live_continuation().await?;
-                        ctx.finish_switch_to_live(pending).await?.require_live()?;
+                        )
+                        .await?
+                    {
+                        continue;
                     }
                     let previous = self.retry.durable_execution_state();
                     self.retry = InFunctionRetryController::new(
@@ -5226,24 +5202,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                             ));
                         }
                     }
-                    return Ok(BegunCallReplayOutcome::ContinueLive(self));
+                    return Ok(ResolvedCall::Live(self));
                 }
             }
-        }
-    }
-
-    async fn start_replay_or_continue_incomplete_entity<Ctx: WorkerCtx>(
-        self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
-        request: Pair::Req,
-    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
-        debug_assert!(
-            !self.is_live(),
-            "replay continuation started from live state"
-        );
-        match self.start_replay_or_continue_live(ctx).await? {
-            BegunCallReplayOutcome::Claimed(handle) => Ok(handle),
-            BegunCallReplayOutcome::ContinueLive(begun) => begun.start_live(ctx, request).await,
         }
     }
 

@@ -20,8 +20,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
+use golem_common::serialization::deserialize;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -70,9 +70,8 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
-        let action = serialize(action)?;
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
             "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES (?, ?, ?, ?, ?);",
@@ -110,18 +109,14 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         limit: u32,
         lease_ttl: Duration,
     ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
-        if limit == 0 || assignment.shard_ids.is_empty() {
+        if limit == 0 || assignment.is_empty() {
             return Ok(Vec::new());
         }
 
         let now_ms = datetime_to_millis(now);
         let lease_owner = Uuid::now_v7();
         let lease_until_ms = datetime_to_millis(now + lease_ttl);
-        let shard_ids: Vec<i64> = assignment
-            .shard_ids
-            .iter()
-            .map(|shard| shard.value())
-            .collect();
+        let shard_ids: Vec<i64> = assignment.shard_ids().map(|shard| shard.value()).collect();
 
         let mut shard_placeholders = String::with_capacity(shard_ids.len() * 2);
         for i in 0..shard_ids.len() {
@@ -192,12 +187,12 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
-        if assignment.shard_ids.is_empty() {
+        if assignment.is_empty() {
             return Ok(0);
         }
 
-        let mut shard_placeholders = String::with_capacity(assignment.shard_ids.len() * 2);
-        for index in 0..assignment.shard_ids.len() {
+        let mut shard_placeholders = String::with_capacity(assignment.len() * 2);
+        for index in 0..assignment.len() {
             if index > 0 {
                 shard_placeholders.push(',');
             }
@@ -207,7 +202,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             "SELECT COUNT(*) FROM scheduled_actions WHERE shard_id IN ({shard_placeholders}) AND due_at_ms <= ?;"
         );
         let mut query = sqlx::query_as::<_, (i64,)>(&query_sql);
-        for shard_id in &assignment.shard_ids {
+        for shard_id in assignment.shard_ids() {
             query = query.bind(shard_id.value());
         }
         query = query.bind(datetime_to_millis(now));

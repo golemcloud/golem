@@ -647,6 +647,27 @@ impl<
         removed
     }
 
+    /// Synchronous conditional removal for owners releasing their last reference from `Drop`.
+    /// Pending entries are never removed.
+    pub fn remove_if_cached_sync<F>(&self, key: &K, predicate: F) -> bool
+    where
+        F: Fn(&V) -> bool,
+    {
+        let removed = self
+            .state
+            .items
+            .remove_if_sync(key, |item| match item {
+                Item::Cached { value, .. } => predicate(value),
+                Item::Pending { .. } => false,
+            })
+            .is_some();
+        if removed {
+            let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
+            record_cache_size(self.name, count.saturating_sub(1));
+        }
+        removed
+    }
+
     /// Removes the cached value for `key` only if it has not been accessed for
     /// at least `ttl` and satisfies `predicate`. Age and value are checked in
     /// the same atomic map operation, so a completed access or replacement is
@@ -1120,7 +1141,10 @@ mod tests {
             .remove_if_cached(&1, |current| Arc::ptr_eq(current, &v1))
             .await;
         assert!(!removed, "v1-targeted removal must not delete v2");
-        assert_eq!(cache.try_get(&1).await, Some(v2));
+        assert!(!cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v1)));
+        assert_eq!(cache.try_get(&1).await, Some(v2.clone()));
+        assert!(cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v2)));
+        assert_eq!(cache.try_get(&1).await, None);
     }
 
     #[test]

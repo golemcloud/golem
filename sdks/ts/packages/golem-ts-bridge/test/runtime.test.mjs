@@ -10,6 +10,7 @@ import {
   createStreamingRemoteMethod,
   encodeStreamSessionBinaryEnvelope,
   encodeStreamSessionTextFrame,
+  invokeAgent,
   parseStreamSessionTextFrame,
   publicValueCodec,
   schemaType,
@@ -65,6 +66,15 @@ test('strict text codec directly rejects frozen malformed JSON syntax', async ()
   }
 });
 
+test('strict WebSocket JSON parsing retains collection and depth budgets', () => {
+  assert.throws(() => parseStreamSessionTextFrame(`[${'null,'.repeat(100_000)}null]`), {
+    code: 'malformed-message',
+  });
+  assert.throws(() => parseStreamSessionTextFrame(`${'['.repeat(64)}null${']'.repeat(64)}`), {
+    code: 'malformed-message',
+  });
+});
+
 test('AgentStream rejects a second iterator deterministically', async () => {
   const stream = agentStream(
     (async function* () {
@@ -106,6 +116,208 @@ test('REST request JSON preserves exact bigint values', async () => {
     assert.doesNotMatch(body, /"18446744073709551615"/u);
   } finally {
     await new Promise((resolve) => http.close(resolve));
+  }
+});
+
+test('invokeAgent losslessly parses nested 64-bit schema integers', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(`{
+      "agentId": { "agentId": "agent", "componentId": "component" },
+      "idempotencyKey": "key",
+      "componentRevision": 7,
+      "result": {
+        "graph": { "ordinaryInteger": 9007199254740993, "float": 1.25, "literals": [true, false, null] },
+        "value": { "value": { "fields": [
+          { "value": 18446744073709551615, "kind": "u64" },
+          { "kind": "s64", "value": -9223372036854775808 },
+          { "kind": "list", "value": { "elements": [
+            { "value": 42, "kind": "s64" },
+            { "kind": "record", "value": { "fields": [
+              { "kind": "u64", "value": 9 },
+              { "kind": "f64", "value": 3.5 },
+              { "kind": "string", "value": "escaped: {\\\"kind\\\":\\\"u64\\\",\\\"value\\\":18446744073709551615}" }
+            ] } }
+          ] } }
+        ] }, "kind": "record" }
+      }
+    }`);
+
+  try {
+    const response = await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        methodName: 'run',
+        methodParameters: { kind: 'record', value: { fields: [] } },
+        mode: 'await',
+      },
+    );
+    const fields = response.result.value.value.fields;
+    assert.equal(fields[0].value, 18_446_744_073_709_551_615n);
+    assert.equal(fields[1].value, -9_223_372_036_854_775_808n);
+    assert.equal(fields[2].value.elements[0].value, 42n);
+    assert.equal(fields[2].value.elements[1].value.fields[0].value, 9n);
+    assert.equal(fields[2].value.elements[1].value.fields[1].value, 3.5);
+    assert.equal(
+      fields[2].value.elements[1].value.fields[2].value,
+      'escaped: {"kind":"u64","value":18446744073709551615}',
+    );
+    assert.equal(response.componentRevision, 7);
+    assert.equal(response.result.graph.float, 1.25);
+    assert.equal(typeof response.result.graph.ordinaryInteger, 'number');
+    assert.deepEqual(response.result.graph.literals, [true, false, null]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('invokeAgent exactly restores decimal and exponent-form 64-bit integers', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(`{
+      "agentId": { "agentId": "agent", "componentId": "component" },
+      "idempotencyKey": "key",
+      "componentRevision": 1,
+      "result": { "kind": "value", "value": { "kind": "record", "value": { "fields": [
+        { "kind": "u64", "value": 1e3 },
+        { "kind": "s64", "value": -2E2 },
+        { "kind": "u64", "value": 1844674407370955161.5e1 },
+        { "kind": "s64", "value": -922337203685477580.8e1 },
+        { "kind": "u64", "value": 900719925474099300e-2 },
+        { "kind": "f64", "value": -0 }
+      ] } } }
+    }`);
+  try {
+    const response = await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        methodName: 'run',
+        methodParameters: { kind: 'record', value: { fields: [] } },
+        mode: 'await',
+      },
+    );
+    const fields = response.result.value.value.fields;
+    assert.equal(fields[0].value, 1000n);
+    assert.equal(fields[1].value, -200n);
+    assert.equal(fields[2].value, 18_446_744_073_709_551_615n);
+    assert.equal(fields[3].value, -9_223_372_036_854_775_808n);
+    assert.equal(fields[4].value, 9_007_199_254_740_993n);
+    assert.equal(Object.is(fields[5].value, -0), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('invokeAgent rejects nonintegral and out-of-range 64-bit numeric forms', async () => {
+  const originalFetch = globalThis.fetch;
+  const request = {
+    appName: 'app',
+    envName: 'env',
+    agentTypeName: 'agent',
+    parameters: { kind: 'record', value: { fields: [] } },
+    methodName: 'run',
+    methodParameters: { kind: 'record', value: { fields: [] } },
+    mode: 'await',
+  };
+  try {
+    for (const [kind, numericForm, expected] of [
+      ['s64', '1e-1', /not an integer/u],
+      ['u64', '1.5', /not an integer/u],
+      ['s64', '9223372036854775808', /out of range/u],
+      ['u64', '18446744073709551616e0', /out of range/u],
+      ['u64', '1e1000000000000000', /out of range/u],
+      ['s64', '1e-1000000000000000', /not an integer/u],
+    ]) {
+      globalThis.fetch = async () =>
+        new Response(`{
+          "agentId": { "agentId": "agent", "componentId": "component" },
+          "idempotencyKey": "key",
+          "componentRevision": 1,
+          "result": { "kind": "value", "value": { "kind": "${kind}", "value": ${numericForm} } }
+        }`);
+      await assert.rejects(
+        invokeAgent({ type: 'custom', url: 'http://example.test', token: 'test' }, request),
+        expected,
+        `${kind} ${numericForm}`,
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('invokeAgent accepts REST results exceeding WebSocket collection budgets', async () => {
+  const originalFetch = globalThis.fetch;
+  const elements = Array.from({ length: 40_000 }, (_, value) => ({ kind: 'u32', value }));
+  globalThis.fetch = async () =>
+    Response.json({
+      agentId: { agentId: 'agent', componentId: 'component' },
+      idempotencyKey: 'key',
+      componentRevision: 1,
+      result: { kind: 'value', value: { kind: 'list', value: { elements } } },
+    });
+
+  try {
+    const response = await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        methodName: 'run',
+        methodParameters: { kind: 'record', value: { fields: [] } },
+        mode: 'await',
+      },
+    );
+    assert.equal(response.result.value.value.elements.length, 40_000);
+    assert.deepEqual(response.result.value.value.elements.at(-1), {
+      kind: 'u32',
+      value: 39_999,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('invokeAgent accepts REST results exceeding WebSocket depth budgets', async () => {
+  const originalFetch = globalThis.fetch;
+  let graph = null;
+  for (let depth = 0; depth < 70; depth += 1) graph = { nested: graph };
+  globalThis.fetch = async () =>
+    Response.json({
+      agentId: { agentId: 'agent', componentId: 'component' },
+      idempotencyKey: 'key',
+      componentRevision: 1,
+      result: { kind: 'value', value: { kind: 'u32', value: 1 }, graph },
+    });
+
+  try {
+    const response = await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        methodName: 'run',
+        methodParameters: { kind: 'record', value: { fields: [] } },
+        mode: 'await',
+      },
+    );
+    let nested = response.result.graph;
+    for (let depth = 0; depth < 70; depth += 1) nested = nested.nested;
+    assert.equal(nested, null);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

@@ -3731,6 +3731,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "expectrl",
+ "fd-lock",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
@@ -4004,6 +4005,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-native-tool"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "golem-rust-macro",
+ "golem-schema",
+ "golem-tool-metadata",
+ "test-r",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 dependencies = [
@@ -4039,6 +4052,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "heck",
@@ -4092,6 +4106,19 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "golem-rust-macro"
+version = "0.0.0"
+dependencies = [
+ "heck",
+ "humantime",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "test-r",
 ]
 
 [[package]]
@@ -4324,6 +4351,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
+ "test-r",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -4360,6 +4395,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4445,6 +4481,7 @@ dependencies = [
  "chrono",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -11570,9 +11607,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b15c48fc33c7a6ec5b87ea703ff8f19cc17eafc0929cc2caea8805dbc8ecb7"
+checksum = "b7b7f29a189990cbe819e7b44c9af6d2f06d0e16e0c56eeccf63feb85d21b4d6"
 dependencies = [
  "anyhow",
  "camino",

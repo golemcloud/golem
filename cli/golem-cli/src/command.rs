@@ -152,7 +152,6 @@ impl Verbosity {
     }
 }
 
-// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Global options")]
 pub struct GolemCliGlobalFlags {
@@ -1133,10 +1132,19 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct AccountIdOptionalArg {
+    pub struct AccountScopeOptionalArgs {
+        /// Account email
+        #[arg(long, conflicts_with = "account_id")]
+        pub account: Option<String>,
         /// Account ID
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account")]
         pub account_id: Option<AccountId>,
+    }
+
+    impl AccountScopeOptionalArgs {
+        pub fn is_explicit(&self) -> bool {
+            self.account.is_some() || self.account_id.is_some()
+        }
     }
 }
 
@@ -1158,11 +1166,12 @@ pub mod environment {
     pub enum EnvironmentSubcommand {
         /// Reconcile the server-side environment's "deployment options" with
         /// the values declared in the application manifest's
-        /// `environments.<env>.deploymentOptions:` block.
+        /// `environments.<env>.deployment:` block.
         ///
         /// Deployment options are environment-level policy flags applied during
         /// `deploy`. The currently synced fields are:
         ///   - `compatibilityCheck` - enforce backward-compatible component upgrades.
+        ///   - `toolCompatibilityMode` - tool middleware comparison mode for new deployments.
         ///   - `versionCheck` - enforce monotonic component version bumps.
         ///   - `securityOverrides` - environment-level security overrides (e.g. allowed signing keys).
         ///
@@ -1190,7 +1199,10 @@ pub mod tool {
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId;
     use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_middleware::ToolMiddlewareName;
+    use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
 
     #[derive(Debug, Subcommand)]
@@ -1213,6 +1225,101 @@ pub mod tool {
         Grant {
             #[command(subcommand)]
             subcommand: ToolGrantSubcommand,
+        },
+        /// Manage tool middleware in a separate namespace
+        Middleware {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareSubcommand {
+        /// List tool middleware in the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_LIST)]
+        List,
+        /// Get deployed tool middleware by name
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GET)]
+        Get {
+            /// Deployed tool middleware name
+            middleware_name: ToolMiddlewareName,
+        },
+        /// Manage published tool middleware releases
+        Release {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareReleaseSubcommand,
+        },
+        /// Manage tool middleware grants for the selected environment
+        Grant {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareGrantSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareGrantSubcommand {
+        /// Grant a published tool middleware release to the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_CREATE)]
+        Create(ToolMiddlewareGrantCreateArgs),
+        /// List active tool middleware grants in the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_LIST)]
+        List,
+        /// Get an active tool middleware grant
+        Get {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Delete a tool middleware grant
+        Delete {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Restore a deleted tool middleware grant
+        Restore {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
+    pub struct ToolMiddlewareGrantCreateArgs {
+        /// Published tool middleware release ID
+        #[arg(long)]
+        pub release_id: Option<ToolMiddlewareReleaseId>,
+        /// Publisher account email
+        #[arg(long, requires_all = ["name", "version"])]
+        pub account: Option<AccountEmail>,
+        /// Published tool middleware name
+        #[arg(long, requires_all = ["account", "version"])]
+        pub name: Option<ToolMiddlewareName>,
+        /// Published tool middleware version
+        #[arg(long, requires_all = ["account", "name"])]
+        pub version: Option<String>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareReleaseSubcommand {
+        /// List tool middleware releases owned by an account
+        List {
+            /// Account ID; defaults to the authenticated account
+            #[arg(long)]
+            account_id: Option<AccountId>,
+        },
+        /// Get a tool middleware release
+        Get {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Make a release unavailable for new deployments and new grants
+        DePublish {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Restore a de-published tool middleware release
+        Restore {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
         },
     }
 
@@ -1337,64 +1444,6 @@ pub mod component {
             #[command(flatten)]
             component_name: OptionalComponentNames,
         },
-    }
-
-    pub mod plugin {
-        use crate::args::parse_key_val;
-        use crate::command::shared_args::OptionalComponentName;
-        use clap::Subcommand;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ComponentPluginSubcommand {
-            /// Install a plugin for selected component
-            Install {
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// The plugin to install
-                #[arg(long)]
-                plugin_name: String,
-                /// The version of the plugin to install
-                #[arg(long)]
-                plugin_version: String,
-                /// Priority of the plugin - largest priority is applied first
-                #[arg(long)]
-                priority: i32,
-                /// List of parameters (key-value pairs) passed to the plugin
-                #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                param: Vec<(String, String)>,
-            },
-            /// Get the installed plugins of the component
-            Get {
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// The revision of the component
-                revision: Option<u64>,
-            },
-            /// Update component plugin
-            Update {
-                /// The component to update the plugin for
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// Priority of the plugin to update
-                #[arg(long)]
-                plugin_to_update: i32,
-                /// Updated priority of the plugin - largest priority is applied first
-                #[arg(long)]
-                priority: i32,
-                /// Updated list of parameters (key-value pairs) passed to the plugin
-                #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                param: Vec<(String, String)>,
-            },
-            /// Uninstall a plugin for selected component
-            Uninstall {
-                /// The component to uninstall the plugin from
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// Priority of the plugin to update
-                #[arg(long)]
-                plugin_to_update: i32,
-            },
-        }
     }
 }
 
@@ -1715,8 +1764,9 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file is saved in the current directory using
-            /// the guest file basename, or output.bin if no basename is available.
+            /// to. Use `-` to write the raw bytes to stdout. If omitted, the file
+            /// is saved in the current directory using the guest file basename,
+            /// or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },
@@ -2275,6 +2325,7 @@ pub mod retry_policy {
 }
 
 pub mod plugin {
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use crate::model::input::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
@@ -2283,16 +2334,38 @@ pub mod plugin {
     pub enum PluginSubcommand {
         /// List account plugins
         #[command(after_help = crate::command_examples::PLUGIN_LIST)]
-        List,
+        List {
+            #[command(flatten)]
+            account: AccountScopeOptionalArgs,
+        },
         /// Get plugin details
         #[command(after_help = crate::command_examples::PLUGIN_GET)]
         Get {
-            /// Plugin ID
-            plugin_id: Uuid, // TODO: atomic: missing method for looking up by name
+            /// Plugin name. Must be used together with VERSION.
+            #[arg(
+                value_name = "NAME",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
+            name: Option<String>,
+            /// Plugin version. Must be used together with NAME.
+            #[arg(
+                value_name = "VERSION",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
+            version: Option<String>,
+            /// Plugin ID. Conflicts with NAME, VERSION, and account scope.
+            #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
+            id: Option<Uuid>,
+            #[command(flatten)]
+            account: AccountScopeOptionalArgs,
         },
         /// Register a new plugin for the account
         #[command(after_help = crate::command_examples::PLUGIN_REGISTER)]
         Register {
+            #[command(flatten)]
+            account: AccountScopeOptionalArgs,
             #[arg(
                 help = crate::command_glossary::PLUGIN_MANIFEST_SHORT,
                 long_help = crate::command_glossary::PLUGIN_MANIFEST_LONG,
@@ -2303,8 +2376,25 @@ pub mod plugin {
         /// Unregister a plugin
         #[command(after_help = crate::command_examples::PLUGIN_UNREGISTER)]
         Unregister {
-            /// Plugin ID
-            plugin_id: Uuid, // TODO: atomic: missing method for deleting by name
+            /// Plugin name. Must be used together with VERSION.
+            #[arg(
+                value_name = "NAME",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
+            name: Option<String>,
+            /// Plugin version. Must be used together with NAME.
+            #[arg(
+                value_name = "VERSION",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
+            version: Option<String>,
+            /// Plugin ID. Conflicts with NAME, VERSION, and account scope.
+            #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
+            id: Option<Uuid>,
+            #[command(flatten)]
+            account: AccountScopeOptionalArgs,
         },
     }
 }
@@ -2327,7 +2417,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <NAME> for interactive setup
         #[command(after_help = crate::command_examples::PROFILE_NEW)]
         New {
             /// Name of the newly created profile
@@ -2440,7 +2530,7 @@ pub mod api_token {
 }
 
 pub mod account {
-    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use clap::{Args, Subcommand};
     use golem_common::model::account_usage::{
         AccountUsagePeriod, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS,
@@ -2450,18 +2540,20 @@ pub mod account {
     #[derive(Debug, Subcommand)]
     pub enum AccountUsageSubcommand {
         /// Show account usage for the current or selected UTC billing period.
+        #[command(after_help = crate::command_examples::ACCOUNT_USAGE_SHOW)]
         Show {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Billing period in YYYY-MM format.
             #[arg(long)]
             period: Option<AccountUsagePeriod>,
         },
         /// Show sparse account usage for closed UTC billing periods, newest first.
+        #[command(after_help = crate::command_examples::ACCOUNT_USAGE_HISTORY)]
         History {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Number of closed periods to show.
             #[arg(long, default_value_t = DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS)]
@@ -2472,14 +2564,16 @@ pub mod account {
     #[derive(Debug, Subcommand)]
     pub enum AccountLimitsSubcommand {
         /// Show effective storage and memory limits.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SHOW)]
         Show {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
         },
         /// Set one storage or memory limit.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SET)]
         Set {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
             #[arg(
@@ -2502,9 +2596,10 @@ pub mod account {
             monthly_memory_gb_seconds: Option<u64>,
         },
         /// Clear selected overrides. With no flags, clears storage for compatibility.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_UNSET)]
         Unset {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Clear the maximum storage per-agent override.
             #[arg(
@@ -2540,7 +2635,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
         List {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// List permission shares targeting the account instead of owned by the account.
             #[arg(long)]
@@ -2556,7 +2651,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
         GetByName {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Permission share name.
             name: String,
@@ -2565,7 +2660,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
         New {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// Target account email receiving the permissions.
             target_account_email: String,
@@ -2603,7 +2698,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_GET)]
         Get {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
         },
         /// Update some information about the account.
         ///
@@ -2611,7 +2706,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_UPDATE)]
         Update {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
             /// New name to set for the account.
             account_name: String,
         },
@@ -2627,7 +2722,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_DELETE)]
         Delete {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
         },
         /// Show current or historical account usage.
         Usage {
@@ -2648,7 +2743,7 @@ pub mod account {
 }
 
 pub mod card {
-    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use crate::model::agent::RawAgentId;
     use clap::Subcommand;
     use golem_common::model::card::CardId;
@@ -2659,10 +2754,10 @@ pub mod card {
         #[command(after_help = crate::command_examples::CARD_LIST)]
         List {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeOptionalArgs,
 
             /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
-            #[arg(long, conflicts_with = "account_id")]
+            #[arg(long, conflicts_with_all = ["account", "account_id"])]
             agent: Option<RawAgentId>,
 
             /// Include account root cards. If no include flags are set, all account card kinds are included.
@@ -2830,6 +2925,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
+        ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
     }
 }
 
@@ -3203,7 +3299,7 @@ mod test {
                     AccountSubcommand::Usage {
                         subcommand:
                             AccountUsageSubcommand::Show {
-                                account_id: selected_account_id,
+                                account: selected_account_id,
                                 period,
                             },
                     },
@@ -3347,6 +3443,133 @@ mod test {
             GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "not-a-size",])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn account_scopes_accept_email_or_id_and_reject_both() {
+        let account_id = "00000000-0000-0000-0000-000000000001";
+        let commands: &[&[&str]] = &[
+            &["account", "get"],
+            &["account", "update", "new-name"],
+            &["account", "delete"],
+            &["account", "usage", "show"],
+            &["account", "usage", "history"],
+            &["account", "limits", "show"],
+            &["account", "limits", "set", "1024"],
+            &["account", "limits", "unset"],
+            &["account", "permission-share", "list"],
+            &["account", "permission-share", "get-by-name", "share"],
+            &[
+                "account",
+                "permission-share",
+                "new",
+                "target@example.com",
+                "share",
+            ],
+            &["plugin", "list"],
+            &["plugin", "register", "-"],
+            &["card", "list"],
+        ];
+
+        for command in commands {
+            let base = std::iter::once("golem").chain(command.iter().copied());
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    base.clone().chain(["--account", "owner@example.com"])
+                )
+                .is_ok(),
+                "email scope failed for {command:?}"
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(base.clone().chain(["--account-id", account_id]))
+                    .is_ok(),
+                "ID scope failed for {command:?}"
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(base.chain([
+                    "--account",
+                    "owner@example.com",
+                    "--account-id",
+                    account_id
+                ]))
+                .is_err(),
+                "conflicting scope accepted for {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_identity_forms_are_complete_and_exclusive() {
+        let id = "8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+        for action in ["get", "unregister"] {
+            assert!(
+                GolemCliCommand::try_parse_from(["golem", "plugin", action, "name", "1.0.0"])
+                    .is_ok()
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(["golem", "plugin", action, "--id", id]).is_ok()
+            );
+            assert!(GolemCliCommand::try_parse_from(["golem", "plugin", action, "name"]).is_err());
+            assert!(GolemCliCommand::try_parse_from(["golem", "plugin", action, id]).is_err());
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem", "plugin", action, "name", "1.0.0", "--id", id
+                ])
+                .is_err()
+            );
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem",
+                    "plugin",
+                    action,
+                    "--id",
+                    id,
+                    "--account",
+                    "owner@example.com"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn card_agent_conflicts_with_account_scope_and_include_filters() {
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "card",
+                "list",
+                "--agent",
+                "shopping-cart/123"
+            ])
+            .is_ok()
+        );
+        for conflicting in [
+            "--account",
+            "--account-id",
+            "--include-root",
+            "--include-permission-shares",
+            "--include-environment-defaults",
+            "--include-agent-initials",
+        ] {
+            let mut args = vec![
+                "golem",
+                "card",
+                "list",
+                "--agent",
+                "shopping-cart/123",
+                conflicting,
+            ];
+            if conflicting == "--account" {
+                args.push("owner@example.com");
+            } else if conflicting == "--account-id" {
+                args.push("00000000-0000-0000-0000-000000000001");
+            }
+            assert!(
+                GolemCliCommand::try_parse_from(args).is_err(),
+                "accepted --agent with {conflicting}"
+            );
+        }
     }
 
     #[test]

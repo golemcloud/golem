@@ -18,7 +18,7 @@ use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::durable_host::durable_session::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
@@ -41,7 +41,7 @@ use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use tracing::{debug, error};
 
 /// Hash field holding the small part of the cached `AgentStatusRecord`. Always present for a cached
@@ -309,7 +309,11 @@ pub trait WorkerService: Send + Sync {
     ///
     /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
     /// a retry would re-run the oplog delete, so the error is reported instead.
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
+    async fn remove(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
     /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
@@ -317,6 +321,25 @@ pub trait WorkerService: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
+
+    async fn get_rejected_periodic_snapshot_through(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn reject_periodic_snapshots_through(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _oplog_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "snapshot rejection storage is unavailable",
+        ))
+    }
 
     async fn lookup_durable_stream_session(
         &self,
@@ -518,8 +541,53 @@ pub struct DefaultWorkerService {
     oplog_service: Arc<dyn OplogService>,
     component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
+    lifecycle_gates: Arc<AgentLifecycleGates>,
     stream_session_index: Arc<StreamSessionIndexService>,
     invocation_result_index_locks: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+}
+
+#[derive(Default)]
+struct AgentLifecycleGates {
+    gates: StdMutex<HashMap<OwnedAgentId, Weak<RwLock<()>>>>,
+}
+
+struct AgentLifecycleGate {
+    owned_agent_id: OwnedAgentId,
+    gate: Arc<RwLock<()>>,
+    registry: Arc<AgentLifecycleGates>,
+}
+
+impl Drop for AgentLifecycleGate {
+    fn drop(&mut self) {
+        let mut gates = self.registry.gates.lock().unwrap();
+        if Arc::strong_count(&self.gate) == 1
+            && gates
+                .get(&self.owned_agent_id)
+                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.gate)))
+        {
+            gates.remove(&self.owned_agent_id);
+        }
+    }
+}
+
+impl AgentLifecycleGates {
+    fn acquire(self: &Arc<Self>, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
+        let mut gates = self.gates.lock().unwrap();
+        let gate = gates
+            .get(owned_agent_id)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let gate = Arc::new(RwLock::new(()));
+                gates.insert(owned_agent_id.clone(), Arc::downgrade(&gate));
+                gate
+            });
+
+        AgentLifecycleGate {
+            owned_agent_id: owned_agent_id.clone(),
+            gate,
+            registry: self.clone(),
+        }
+    }
 }
 
 struct InvocationResultIndexLock {
@@ -563,6 +631,7 @@ impl DefaultWorkerService {
             oplog_service,
             component_service,
             config,
+            lifecycle_gates: Arc::new(AgentLifecycleGates::default()),
             stream_session_index,
             invocation_result_index_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
@@ -585,6 +654,10 @@ impl DefaultWorkerService {
             owned_agent_id: owned_agent_id.clone(),
             inner,
         }
+    }
+
+    fn lifecycle_gate(&self, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
+        self.lifecycle_gates.acquire(owned_agent_id)
     }
 
     async fn enum_workers_at_key(
@@ -661,6 +734,16 @@ impl DefaultWorkerService {
         KeyValueStorageNamespace::AgentInvocationResultIndex {
             agent_id: agent_id.clone(),
         }
+    }
+
+    fn rejected_periodic_snapshots_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+        KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
+            agent_id: agent_id.clone(),
+        }
+    }
+
+    fn rejected_periodic_snapshots_field(fingerprint: AgentFingerprint) -> String {
+        fingerprint.0.to_string()
     }
 
     /// Key holding only the worker's immutable `AgentMode`, stored separately from the status
@@ -1023,6 +1106,8 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("get");
 
         let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? else {
@@ -1192,7 +1277,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
-            for shard_id in shard_assignment.shard_ids {
+            for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
                 let mut shard_worker = self.enum_workers_at_key(&key).await?;
                 result.append(&mut shard_worker);
@@ -1201,17 +1286,31 @@ impl WorkerService for DefaultWorkerService {
         Ok(result)
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+    async fn remove(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? {
-            self.oplog_service.delete(owned_agent_id, agent_mode).await;
+            self.oplog_service
+                .delete(lifecycle, owned_agent_id, agent_mode)
+                .await;
         }
         self.remove_cached_status(owned_agent_id).await?;
         self.stream_session_index
             .clear(owned_agent_id)
             .await
             .map_err(WorkerExecutorError::runtime)?;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+        )
+        .await?;
 
         let shard_assignment = self
             .shard_service
@@ -1266,6 +1365,67 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker agent mode in the KV storage: {err}"
                 ))
             })
+    }
+
+    async fn get_rejected_periodic_snapshot_through(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        let value: Option<Result<OplogIndex, String>> = self
+            .key_value_storage
+            .with_entity(
+                "worker",
+                "get_rejected_periodic_snapshot_through",
+                "oplog_index",
+            )
+            .get_attempt_deserialize(
+                Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+                &Self::rejected_periodic_snapshots_field(fingerprint),
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        value.transpose().map_err(WorkerExecutorError::runtime)
+    }
+
+    async fn reject_periodic_snapshots_through(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        oplog_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
+        let field = Self::rejected_periodic_snapshots_field(fingerprint);
+        loop {
+            let current = self
+                .key_value_storage
+                .with_entity("worker", "read_rejected_periodic_snapshot", "oplog_index")
+                .get_raw(namespace.clone(), &field)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            if let Some(current) = &current {
+                let current_index: OplogIndex =
+                    deserialize(current).map_err(WorkerExecutorError::runtime)?;
+                if current_index >= oplog_index {
+                    return Ok(());
+                }
+            }
+            let encoded = serialize(&oplog_index).map_err(WorkerExecutorError::runtime)?;
+            let updated = self
+                .key_value_storage
+                .with_entity("worker", "reject_periodic_snapshots_through", "oplog_index")
+                .compare_and_set_many_raw(
+                    namespace.clone(),
+                    &field,
+                    current.as_deref(),
+                    &[(field.as_str(), encoded.as_slice())],
+                )
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            if updated {
+                return Ok(());
+            }
+        }
     }
 
     async fn lookup_durable_stream_session(
@@ -1687,11 +1847,11 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use std::collections::{BTreeMap, HashSet, VecDeque};
+    use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
@@ -1739,6 +1899,10 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
+            unreachable!()
+        }
+
         fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
             self.stream_index.set(index).unwrap();
         }
@@ -1749,6 +1913,7 @@ mod tests {
 
         async fn create(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -1761,6 +1926,7 @@ mod tests {
 
         async fn create_fresh(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -1773,6 +1939,7 @@ mod tests {
 
         async fn open(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
@@ -1795,7 +1962,12 @@ mod tests {
                 .unwrap_or(OplogIndex::NONE)
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            _lifecycle: &mut OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
             unreachable!()
         }
 
@@ -1975,6 +2147,63 @@ mod tests {
         (service, oplog, owned_agent_id)
     }
 
+    #[test]
+    async fn rejected_periodic_snapshot_watermark_is_monotonic_and_incarnation_scoped() {
+        let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+        let first = AgentFingerprint::new();
+        let second = AgentFingerprint::new();
+
+        service
+            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(12))
+            .await
+            .unwrap();
+        service
+            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(7))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(12))
+        );
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, second)
+                .await
+                .unwrap(),
+            None
+        );
+
+        service.remove_cached_status(&owned_agent_id).await.unwrap();
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(12))
+        );
+
+        service
+            .remove_split_status(
+                &owned_agent_id,
+                DefaultWorkerService::rejected_periodic_snapshots_namespace(
+                    &owned_agent_id.agent_id,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
     fn assignment_tracking_test_service() -> (
         DefaultWorkerService,
         Arc<InMemoryKeyValueStorage>,
@@ -1984,7 +2213,12 @@ mod tests {
         let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let number_of_shards = 4;
-        shard_service.register(number_of_shards, &HashSet::new());
+        shard_service.register(
+            number_of_shards,
+            &HashMap::new(),
+            None,
+            ShardLeaseRevision::default(),
+        );
         let service = DefaultWorkerService::new(
             key_value_storage.clone(),
             shard_service,
@@ -2669,6 +2903,10 @@ mod tests {
 
     #[async_trait]
     impl OplogService for FakeOplogService {
+        async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
+            unreachable!()
+        }
+
         fn set_stream_session_index(&self, _index: Arc<StreamSessionIndexService>) {}
 
         fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
@@ -2677,6 +2915,7 @@ mod tests {
 
         async fn create_fresh(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -2689,6 +2928,7 @@ mod tests {
 
         async fn create(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
@@ -2701,6 +2941,7 @@ mod tests {
 
         async fn open(
             &self,
+            _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
@@ -2719,7 +2960,12 @@ mod tests {
             unreachable!()
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            _lifecycle: &mut OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
             unreachable!()
         }
 
@@ -2914,7 +3160,15 @@ mod tests {
             "expected the cached status delete failure to surface"
         );
         assert!(
-            service.remove(&owned_agent_id).await.is_err(),
+            service
+                .remove(
+                    &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                        .lock_lifecycle(&owned_agent_id.agent_id)
+                        .await,
+                    &owned_agent_id
+                )
+                .await
+                .is_err(),
             "expected the delete failure to surface"
         );
     }

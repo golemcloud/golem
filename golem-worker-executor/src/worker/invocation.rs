@@ -314,6 +314,7 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                 store.data().current_atomic_region_had_side_effects();
             Ok(InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: true,
                 error: OplogAgentError::InternalError(format!(
                     "invocation exceeded the configured maximum invocation duration of {:?}",
                     deadline
@@ -519,7 +520,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -569,7 +570,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -592,7 +593,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -614,7 +615,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -655,7 +656,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -692,20 +693,38 @@ async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     err: wasmtime::Error,
-) -> InvokeResult {
+) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
     let in_atomic_region = store.data().current_in_atomic_region();
     let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
-    InvokeResult::from_error::<Ctx>(
+    if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
+        return Err(error);
+    }
+    Ok(InvokeResult::from_error::<Ctx>(
         consumed_fuel,
         &err,
         retry_from,
         in_atomic_region,
         atomic_region_had_side_effects,
         agent_mode,
-    )
+    ))
+}
+
+fn replay_divergence_from_trap(
+    error: &anyhow::Error,
+    is_live: bool,
+) -> Option<WorkerExecutorError> {
+    (!is_live)
+        .then(|| {
+            error
+                .chain()
+                .find_map(|error| error.downcast_ref::<WorkerExecutorError>())
+        })
+        .flatten()
+        .filter(|error| matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. }))
+        .cloned()
 }
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
@@ -730,6 +749,7 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
             })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
+        timed_out: false,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
         in_atomic_region: false,
@@ -849,8 +869,8 @@ pub(crate) struct AgentExportFuncs {
 /// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
 /// name-based lookup and typed signature checks.
 macro_rules! cached_guest_loader {
-    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
-        fn $fn_name<Ctx: WorkerCtx>(
+    ($vis:vis $fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        $vis fn $fn_name<Ctx: WorkerCtx>(
             store: &mut StoreContextMut<'_, Ctx>,
             instance: &wasmtime::component::Instance,
         ) -> Result<$exports::Guest, WorkerExecutorError> {
@@ -897,7 +917,7 @@ cached_guest_loader!(
     "failed to load save-snapshot export"
 );
 cached_guest_loader!(
-    load_load_snapshot_guest,
+    pub(crate) load_load_snapshot_guest,
     load_snapshot_exports,
     load_snapshot,
     "load-snapshot export not available",
@@ -941,6 +961,9 @@ pub enum InvokeResult {
     Failed {
         consumed_fuel: u64,
         error: OplogAgentError,
+        /// Deadline failures share the public internal-error representation but are not evidence
+        /// that a restored snapshot disagrees with recorded execution.
+        timed_out: bool,
         retry_from: OplogIndex,
         /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
         /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
@@ -983,6 +1006,7 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             } => Self::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
                 in_atomic_region,
@@ -1020,6 +1044,7 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
                 in_atomic_region,
@@ -1027,6 +1052,21 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             },
         }
+    }
+
+    pub(crate) fn is_snapshot_replay_divergence(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                timed_out: false,
+                error: OplogAgentError::DeterministicTrap(_)
+                    | OplogAgentError::PermanentError(_)
+                    | OplogAgentError::InternalError(_)
+                    | OplogAgentError::ReadOnlyViolation(_)
+                    | OplogAgentError::StackOverflow,
+                ..
+            }
+        )
     }
 
     pub fn consumed_fuel(&self) -> u64 {
@@ -1486,6 +1526,80 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {
+        for (error, timed_out, expected) in [
+            (
+                OplogAgentError::InternalError("boundary mismatch".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::InternalError("deadline".into()),
+                true,
+                false,
+            ),
+            (
+                OplogAgentError::DeterministicTrap("unreachable".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::ReadOnlyViolation(
+                    golem_common::model::oplog::ReadOnlyViolationError {
+                        method: "load-snapshot".into(),
+                        host_function: "keyvalue.set".into(),
+                    },
+                ),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::TransientError("storage unavailable".into()),
+                false,
+                false,
+            ),
+            (
+                OplogAgentError::Unknown("unclassified host failure".into()),
+                false,
+                false,
+            ),
+            (OplogAgentError::OutOfMemory, false, false),
+            (OplogAgentError::ExceededMemoryLimit, false, false),
+        ] {
+            let result = InvokeResult::Failed {
+                consumed_fuel: 0,
+                error,
+                timed_out,
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+                atomic_region_had_side_effects: false,
+                semantic_trap_retry_override: None,
+            };
+            assert_eq!(
+                result.is_snapshot_replay_divergence(),
+                expected,
+                "{result:?}"
+            );
+        }
+        assert!(
+            !InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::Restart,
+            }
+            .is_snapshot_replay_divergence()
+        );
+    }
+
+    #[test]
+    fn unexpected_oplog_trap_is_propagated_during_replay_only() {
+        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "NoOp");
+        let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
+
+        assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
+        assert_eq!(replay_divergence_from_trap(&error, true), None);
+    }
 
     #[test]
     fn invocation_poll_reuses_production_thread_stack() {

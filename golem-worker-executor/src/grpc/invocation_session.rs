@@ -96,7 +96,10 @@ pub(super) async fn invoke_agent_session<
     );
     tokio::spawn(
         async move {
-            executor.run_agent_session(inbound, responses).await;
+            let scope = crate::worker::tasks::TaskScope::default();
+            scope
+                .run(executor.run_agent_session(inbound, responses, &scope))
+                .await;
         }
         .instrument(span),
     );
@@ -337,6 +340,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         input_encoded_len: Option<usize>,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
+        scope: &crate::worker::tasks::TaskScope,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
@@ -388,14 +392,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ));
             }
             let inv_status = match self.get_or_create_pending_for_lookup(request).await? {
-                Some(worker) => match worker.lookup_invocation_result(&ik).await {
-                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                        InvocationStatus::Unknown
+                Some(worker) => {
+                    scope
+                        .bind(&worker.tasks)
+                        .map_err(WorkerExecutorError::runtime)?;
+                    match worker.lookup_invocation_result(&ik).await {
+                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Err(err)) => return Err(err),
+                        crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                        crate::model::LookupResult::New
+                        | crate::model::LookupResult::Interrupted => InvocationStatus::Unknown,
                     }
-                },
+                }
                 None => InvocationStatus::Unknown,
             };
             publish_acceptance(acceptance_committed, accepted, None)?;
@@ -466,6 +474,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
+                scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime)?;
                 let status = worker.get_last_known_status().await;
                 let queued_manual_update_revision = status
                     .pending_invocations
@@ -659,6 +670,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     freshness_disposition,
                                 )
                                 .await?;
+                            scope
+                                .bind(&worker.tasks)
+                                .map_err(WorkerExecutorError::runtime)?;
                             let target_worker_fingerprint =
                                 worker.get_initial_worker_metadata().fingerprint;
                             ScheduledAction::Invoke {
@@ -691,6 +705,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
+                        scope
+                            .bind(&worker.tasks)
+                            .map_err(WorkerExecutorError::runtime)?;
                         let result = worker.invoke_and_start(invocation).await?;
                         if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result {
                             return Err(err.clone());
@@ -732,6 +749,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
+        scope: &crate::worker::tasks::TaskScope,
     ) {
         let mut state = InvocationSessionState::default();
         let first = match inbound.message().await {
@@ -743,6 +761,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "invocation request transport closed before start".to_string(),
                     None,
                     None,
+                    None,
                 )
                 .await;
                 return;
@@ -752,6 +771,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &outward,
                     InvocationRejectionReason::Protocol,
                     error.to_string(),
+                    None,
                     None,
                     None,
                 )
@@ -766,6 +786,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 error,
                 request_idempotency_key(&first),
                 request_agent_id(&first),
+                None,
             )
             .await;
             return;
@@ -783,7 +804,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut start = match first {
             invocation_request::Request::Start(start) => start,
             invocation_request::Request::ResumeAttach(resume) => {
-                self.run_resumed_agent_session(resume, inbound, outward, state)
+                self.run_resumed_agent_session(resume, inbound, outward, state, scope)
                     .await;
                 return;
             }
@@ -844,6 +865,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             input_encoded_len,
             acceptance_committed_tx,
             accepted_tx,
+            scope,
         );
         tokio::pin!(invocation);
         let (accepted, early_output, mut early_inbound) = match race_invocation_acceptance(
@@ -860,14 +882,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 early_inbound,
             } => (acceptance, early_output, early_inbound),
             AcceptanceRace::InvocationFinished(result) => {
-                let (reason, error) = match result {
+                let (reason, error, worker_error) = match result {
                     Ok(_) => (
                         InvocationRejectionReason::Internal,
                         "invocation completed before acceptance".to_string(),
+                        None,
                     ),
-                    Err(error) => (pre_acceptance_rejection_reason(&error), error.to_string()),
+                    Err(error) => (
+                        pre_acceptance_rejection_reason(&error),
+                        error.to_string(),
+                        Some(error.into()),
+                    ),
                 };
-                send_rejection(&responses, reason, error, &start).await;
+                send_rejection_with_worker_error(&responses, reason, error, worker_error, &start)
+                    .await;
                 return;
             }
             AcceptanceRace::InboundBeforeAcceptance(request) => {
@@ -1142,7 +1170,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
-            let mut output_pump = tokio::task::JoinSet::new();
+            let mut output_pump = durable_streams.producer.tasks().children();
             let output_streams = durable_streams.clone();
             let output_responses = responses.clone();
             output_pump
@@ -1430,6 +1458,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
         mut protocol_state: InvocationSessionState,
+        scope: &crate::worker::tasks::TaskScope,
     ) {
         let rejection_identity = (resume.idempotency_key.clone(), resume.agent_id.clone());
         let result = async {
@@ -1459,6 +1488,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         "NotFound: durable Stream Session worker was not found",
                     )
                 })?;
+            scope
+                .bind(&worker.tasks)
+                .map_err(WorkerExecutorError::runtime)?;
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;
@@ -1473,6 +1505,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -1548,6 +1581,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -1750,7 +1784,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
         {
-            let mut output_pump = tokio::task::JoinSet::new();
+            let mut output_pump = streams.producer.tasks().children();
             let output_streams = streams.clone();
             let output_responses = responses.clone();
             output_pump.spawn(async move {
@@ -2607,6 +2641,7 @@ async fn send_unvalidated_rejection(
     error: String,
     idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
+    worker_error: Option<WorkerExecutionError>,
 ) {
     let _ = responses
         .send(InvocationResponse {
@@ -2617,6 +2652,7 @@ async fn send_unvalidated_rejection(
                     idempotency_key,
                     agent_id,
                     component_revision: None,
+                    worker_error,
                 },
             )),
         })
@@ -2629,12 +2665,23 @@ async fn send_rejection(
     error: String,
     start: &InvocationStart,
 ) {
+    send_rejection_with_worker_error(responses, reason, error, None, start).await;
+}
+
+async fn send_rejection_with_worker_error(
+    responses: &mpsc::Sender<InvocationResponse>,
+    reason: InvocationRejectionReason,
+    error: String,
+    worker_error: Option<WorkerExecutionError>,
+    start: &InvocationStart,
+) {
     send_unvalidated_rejection(
         responses,
         reason,
         error,
         start.idempotency_key.clone(),
         start.agent_id.clone(),
+        worker_error,
     )
     .await;
 }

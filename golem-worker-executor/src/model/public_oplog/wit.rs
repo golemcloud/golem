@@ -30,11 +30,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -350,12 +351,14 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }
             PublicOplogEntry::Error(ErrorParams {
                 timestamp,
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
                 retry_policy_state,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
+                kind: kind.into(),
                 error: error.to_string(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
@@ -364,6 +367,9 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                     internal.into()
                 }),
             }),
+            PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp }) => {
+                Self::RecoverySucceeded(timestamp.into())
+            }
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
                 Self::Jump(oplog::JumpParameters {
@@ -465,6 +471,9 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::Restart(RestartParams { timestamp }) => {
                 Self::Restart(timestamp.into())
+            }
+            PublicOplogEntry::Resumed(ResumedParams { timestamp }) => {
+                Self::Resumed(timestamp.into())
             }
             PublicOplogEntry::ActivatePlugin(ActivatePluginParams { timestamp, plugin }) => {
                 Self::ActivatePlugin(oplog::ActivatePluginParameters {
@@ -722,6 +731,24 @@ impl From<golem_common::model::oplog::HostStreamKind> for oplog::HostStreamKind 
             golem_common::model::oplog::HostStreamKind::P3HttpRequestBody => {
                 Self::P3HttpRequestBody
             }
+        }
+    }
+}
+
+impl From<golem_common::model::oplog::OplogErrorKind> for oplog::OplogErrorKind {
+    fn from(value: golem_common::model::oplog::OplogErrorKind) -> Self {
+        match value {
+            golem_common::model::oplog::OplogErrorKind::Invocation => Self::Invocation,
+            golem_common::model::oplog::OplogErrorKind::Recovery => Self::Recovery,
+        }
+    }
+}
+
+impl From<oplog::OplogErrorKind> for golem_common::model::oplog::OplogErrorKind {
+    fn from(value: oplog::OplogErrorKind) -> Self {
+        match value {
+            oplog::OplogErrorKind::Invocation => Self::Invocation,
+            oplog::OplogErrorKind::Recovery => Self::Recovery,
         }
     }
 }
@@ -1236,6 +1263,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Error(params) => Ok(Self::Error {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
+                kind: params.kind.into(),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
                 inside_atomic_region: params.inside_atomic_region,
@@ -1243,6 +1271,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     let internal: golem_common::model::RetryPolicyState = s.into();
                     internal
                 }),
+            }),
+            oplog::OplogEntry::RecoverySucceeded(ts) => Ok(Self::RecoverySucceeded {
+                timestamp: timestamp_from_datetime(ts.timestamp),
             }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
                 timestamp: timestamp_from_datetime(ts.timestamp),
@@ -1347,6 +1378,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 message: params.message,
             }),
             oplog::OplogEntry::Restart(ts) => Ok(Self::Restart {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Resumed(ts) => Ok(Self::Resumed {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
             oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
@@ -2018,6 +2052,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             M::Suspend { timestamp } => Ok(Self::Suspend(timestamp.into())),
             M::Error {
                 timestamp,
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
@@ -2025,11 +2060,13 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 ..
             } => Ok(Self::Error(oplog::RawErrorParameters {
                 timestamp: timestamp.into(),
+                kind: kind.into(),
                 error: error.into(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| s.into()),
             })),
+            M::RecoverySucceeded { timestamp } => Ok(Self::RecoverySucceeded(timestamp.into())),
             M::NoOp { timestamp, .. } => Ok(Self::NoOp(timestamp.into())),
             M::Jump {
                 timestamp, jump, ..
@@ -2244,6 +2281,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 message,
             })),
             M::Restart { timestamp } => Ok(Self::Restart(timestamp.into())),
+            M::Resumed { timestamp } => Ok(Self::Resumed(timestamp.into())),
             M::ActivatePlugin {
                 timestamp,
                 plugin_grant_id,
