@@ -25,7 +25,9 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    transport retry, atomic-region rollback) share one idempotency key derived from the caller's
    invocation key and the durable call's position (`derive_idempotency_key`: the `Start` index,
    or the outermost atomic region's logical counter); the target persists one invocation and one
-   result. Attempts are not executions.
+   result. Attempts are not executions. This persistence rule applies to RPCs that execute: a
+   settled read-only cache hit or coalesced follower returns the shared cached result without a
+   separate target invocation, result, or alias.
 
 ## Durable versus resident state
 
