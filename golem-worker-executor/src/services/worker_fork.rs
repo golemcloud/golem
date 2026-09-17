@@ -633,6 +633,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 ))),
             )
             .await;
+        let source_oplog = Ctx::wrap_oplog(
+            owned_source_agent_id.clone(),
+            source_oplog,
+            self.extra_deps.clone(),
+        );
 
         // Copy the inclusive prefix. Ordinary calls recover from that prefix, even if their
         // terminal or delivery marker is absent. Atomic and transaction outcomes remain paired.
