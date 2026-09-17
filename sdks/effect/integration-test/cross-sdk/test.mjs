@@ -83,9 +83,15 @@ try {
       )
       const principalFirst = invoke(tsCaller, "principalIdentityRoundTrip")
       const tenant = `principal-ts-${stamp}`
-      assert.ok(principalFirst.includes(Array(4).fill(tenant).join("|")), principalFirst)
+      assert.ok(
+        principalFirst.includes([1, 2, 3, 4].map((count) => `${tenant}:${count}`).join("|")),
+        principalFirst,
+      )
       const principalSecond = invoke(tsCaller, "principalIdentityRoundTrip")
-      assert.ok(principalSecond.includes(Array(4).fill(tenant).join("|")), principalSecond)
+      assert.ok(
+        principalSecond.includes([5, 6, 7, 8].map((count) => `${tenant}:${count}`).join("|")),
+        principalSecond,
+      )
       const config = invoke(tsCaller, "reflectedConfigRoundTrip")
       assert.ok(config.includes("true|true|true|true"), config)
       console.log("Deployed TS reflected agent, principal identity, and config calls passed")

@@ -63,10 +63,11 @@ export const TsPrincipalPeer = defineAgent({
 })
 
 TsPrincipalPeer.implement({
-  init: ({ id }) => ({ tenant: id.tenant }),
+  init: ({ id }) => ({ tenant: id.tenant, count: 0 }),
   methods: {
     value() {
-      return this.tenant
+      this.count += 1
+      return `${this.tenant}:${this.count}`
     },
   },
 })

@@ -72,8 +72,9 @@ values, parsed the host-produced remote ID, rebound the discovered type, and rea
 persisted state through a schema-free dynamic client. The count advanced from `0` to `1` and
 then from `1` to `2`. The same deployed caller also invoked `TsPrincipalPeer`, whose constructor
 declares a host-injected principal. The host-produced ID parsed into exactly one caller-supplied
-tenant field. Complete and reflected clients, including bindings through that ID, returned the
-same tenant on two repeated invocations. Principal identity checks in the other SDKs and negative
+tenant field. Complete and reflected clients, including bindings through that ID, advanced the
+same worker's counter through `1, 2, 3, 4`, then `5, 6, 7, 8` on a second caller invocation.
+Principal identity checks in the other SDKs and negative
 host cases remain pending.
 
 That deployment also created an `EffectFixture` worker from the reflected TypeScript factory with
