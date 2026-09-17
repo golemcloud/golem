@@ -15,8 +15,24 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Automatic schema derivation** - Derives schemas for component-model serialization
 - **Macro-powered autowiring** - Compile-time generation of RPC handlers, WIT types, and metadata
 - **Tool middleware** - Transparent, adapter, and universal middleware with typed wrapped-tool calls
+- **Tool reflection** - Discover caller-visible tools and invoke commands with their deployed schemas
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
+
+## Runtime tool reflection
+
+`golem.reflection.Reflection.getToolType(name)` and `getAllToolTypes()` discover tools visible to
+the calling component. `ToolType.command(path)` resolves aliases to a canonical command path and
+returns the selected arguments, input schema, result schema, and declared errors in an `Either`.
+Use `ToolCommand.invokeJson` for canonical JSON or `invokeValue` for schema-native values. Both
+validate inputs before opening RPC and check declared results after invocation.
+
+`startValue` and `startJson` return pending invocations with stdout, result, `collect`, and
+`cancel`. Use them when a command requires caller-readable stdout. `collect` drains stdout while
+awaiting the result. `triggerValue` and `triggerJson` reject commands with required stdout.
+`DynamicToolClient` accepts a caller-packed `TypedSchemaValue` and a command path when no
+descriptor is available; it does not infer or validate a deployed schema. Reflected and dynamic
+calls return recoverable `ToolError` values, including malformed remote output.
 
 ## Quick Start
 

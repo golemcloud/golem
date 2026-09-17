@@ -17,9 +17,11 @@ import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire._
+import zio.ZIO
 import zio.test._
 
 import scala.collection.immutable.ListMap
+import scala.concurrent.{ExecutionContext, Future}
 
 object ToolReflectionSpec extends ZIOSpecDefault {
   private def sample(): ToolType = {
@@ -80,6 +82,17 @@ object ToolReflectionSpec extends ZIOSpecDefault {
           .toOption
           .exists(_.isInstanceOf[ToolError.MalformedRemoteOutput])
       )
+    },
+    test("stream failures remain recoverable for reflected calls") {
+      val broken = new ToolInputStream {
+        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+      }
+      val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
+      val invocation = ReflectedToolInvocation(Some(broken), terminal, () => ())
+      ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
+        assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
+      }
     }
   )
 }
