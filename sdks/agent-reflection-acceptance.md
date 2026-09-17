@@ -12,7 +12,7 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 | 2. Caller-authored | Complete | Typed | F | F | C | F | F |
 | 2. Caller-authored | Binding-only | Typed | F | F | C | F | F |
 | 3. Reflected | Complete deployed schema | JSON | F | F | C | F | F |
-| 3. Reflected | Complete deployed schema | Native | F | F | C | F | F |
+| 3. Reflected | Complete deployed schema | Native | H+ | F | C | F | F |
 | 4. Dynamic | Binding-only | Native | F | F | C | F | F |
 
 Every other agent level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the complete schema published by the deployed type rather than a caller-authored partial contract; dynamic clients deliberately have no schema to validate canonical JSON.
@@ -68,5 +68,7 @@ invalid calls do not open an RPC.
 | Malformed declared remote outputs; awaited and pending calls | TypeScript, Effect, and Scala focused checks; Rust error surface compiles | Deployed mismatch fixtures across awaited and pending paths, including unexpected unit values |
 | Stream restrictions and Effect scope/interruption cleanup | Existing SDK focused tests, including Effect interruption and scope tests | Deployed stream and interruption scenarios |
 | Canonical record keys, float narrowing, U32, safe 64-bit JSON bounds, Binary, Datetime, Duration, and Quantity | SDK JSON tests in TypeScript, Scala, and MoonBit; Effect schema tests | Cross-SDK serialization and invocation round trips |
+
+The host-backed `ts_reflection_discovers_binds_and_invokes_durable_agent` test discovers a Rust Counter from a TypeScript caller, invokes it twice through reflected native-schema clients, and checks the same persisted value after rebinding by agent ID. `ts_reflected_ephemeral_invocation_returns_final_metadata` verifies a known ephemeral phantom and its final ID and idempotency key. `ts_ephemeral_final_identity_cannot_be_reused` checks recoverable rejection through a complete caller-authored contract; `ephemeral_rpc_invocations_get_distinct_final_identities` checks distinct final IDs through repeated invocation from one durable caller. These tests passed with freshly rebuilt `agent-rpc` and `agent-counters` components. They do not cover host-injected principal fields or the other SDKs' reflected lifecycle calls.
 
 Focused tests and compiler checks do not turn an `F` or `C` cell into a host-backed pass. The available host test for RPC-supplied config targets TS/Rust workers but does not cover reflected callers. The broader documentation/site audit and publication are tracked separately.
