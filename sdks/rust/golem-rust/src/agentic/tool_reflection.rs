@@ -576,15 +576,79 @@ impl DynamicToolClient {
         path: &[String],
         input: &TypedSchemaValue,
     ) -> Result<InvocationResult, ToolError<ReflectedToolCustomError>> {
+        self.invoke_with_stdin(path, input, None).await
+    }
+
+    pub async fn invoke_with_stdin(
+        &self,
+        path: &[String],
+        input: &TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<InvocationResult, ToolError<ReflectedToolCustomError>> {
         let rpc = ToolRpc::create(&self.name).map_err(|error| {
             tool_client::map_rpc_error(error.into(), &|_, _| {
                 Ok::<Option<ReflectedToolCustomError>, String>(None)
             })
         })?;
-        tool_client::invoke_and_await(&rpc, path, input, None, None, |name, payload| {
-            Ok(Some(ReflectedToolCustomError { name, payload }))
-        })
+        tool_client::invoke_and_await(
+            &rpc,
+            path,
+            input,
+            stdin.map(tool_client::pump_tool_stdin),
+            None,
+            |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
+        )
         .await
+    }
+
+    pub fn start(
+        &self,
+        path: &[String],
+        input: &TypedSchemaValue,
+        stdin: Option<InputStream>,
+        attach_stdout: bool,
+    ) -> Result<
+        ToolInvocation<InvocationResult, ReflectedToolCustomError>,
+        ToolError<ReflectedToolCustomError>,
+    > {
+        let rpc = ToolRpc::create(&self.name).map_err(|error| {
+            tool_client::map_rpc_error(error.into(), &|_, _| {
+                Ok::<Option<ReflectedToolCustomError>, String>(None)
+            })
+        })?;
+        tool_client::start_tool_invocation_with_stdout(
+            &rpc,
+            path,
+            input,
+            stdin,
+            attach_stdout,
+            Ok,
+            |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
+        )
+    }
+
+    pub fn trigger(
+        &self,
+        path: &[String],
+        input: &TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<(), ToolError<ReflectedToolCustomError>> {
+        let encoded = crate::encode_typed_schema_value(input).map_err(|error| {
+            ToolError::Rpc(tool_client::RpcError::Protocol(format!(
+                "failed to encode tool input: {error}"
+            )))
+        })?;
+        let rpc = ToolRpc::create(&self.name).map_err(|error| {
+            tool_client::map_rpc_error(error.into(), &|_, _| {
+                Ok::<Option<ReflectedToolCustomError>, String>(None)
+            })
+        })?;
+        rpc.invoke(path, encoded, stdin.map(tool_client::pump_tool_stdin))
+            .map_err(|error| {
+                tool_client::map_rpc_error(error.into(), &|name, payload| {
+                    Ok(Some(ReflectedToolCustomError { name, payload }))
+                })
+            })
     }
 }
 
