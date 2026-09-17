@@ -2,10 +2,10 @@ use effect_fixture_guest_client::{
     EffectFixture, Header, Items, TransformInRequest, TransformStreamInRequest,
     TransformStreamInRequestItems, new_transform_stream_in_request_items_stream,
 };
-use golem_rust::agentic::spawn_local;
+use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
 use golem_rust::bindings::golem::permissions::{derive, types};
 use golem_rust::schema::wit::GuestPermissionCardHandle;
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{SchemaValue, TypedSchemaValue, agent_definition, agent_implementation};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -18,6 +18,7 @@ pub trait RustPeer {
     async fn call_effect_stream(&self, tenant: String) -> String;
     async fn nonfinite(&self, kind: String) -> f64;
     async fn permission_card_through_effect(&self, tenant: String) -> String;
+    async fn reflected_ts_tool(&self, label: String) -> String;
 }
 
 struct RustPeerImpl {
@@ -31,6 +32,49 @@ impl RustPeer for RustPeerImpl {
     }
     async fn echo(&self, value: String) -> String {
         format!("rust:{}:{value}", self.name)
+    }
+    async fn reflected_ts_tool(&self, label: String) -> String {
+        let result = async {
+            let tool = get_tool_type("ts-cross-plain")?;
+            let command = tool.command(&[])?;
+            let value = SchemaValue::Record {
+                fields: vec![SchemaValue::String(label.clone())],
+            };
+            let native = command.invoke_value(value).await?;
+            let json = command
+                .invoke_json(&serde_json::json!({ "label": label }))
+                .await?;
+            let invalid = command
+                .invoke_json(&serde_json::json!({ "label": 42 }))
+                .await;
+            let input = TypedSchemaValue::new(
+                command.input_schema().graph().clone(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(label)],
+                },
+            );
+            let dynamic = DynamicToolClient::new("ts-cross-plain")
+                .invoke(&[], &input)
+                .await
+                .map_err(golem_rust::agentic::ToolReflectionError::Tool)?;
+            Ok::<_, golem_rust::agentic::ToolReflectionError>((
+                native,
+                json,
+                invalid.is_err(),
+                dynamic,
+            ))
+        }
+        .await;
+        match result {
+            Ok((Some(SchemaValue::String(native)), Some(json), invalid, dynamic)) => {
+                format!(
+                    "{native}|{json}|{invalid}|{:?}",
+                    dynamic.result.map(|value| value.into_parts().1)
+                )
+            }
+            Ok(_) => "unexpected tool output".to_string(),
+            Err(error) => format!("error:{error}"),
+        }
     }
     async fn call_effect(&self, tenant: String, request_id: String) -> String {
         let client = EffectFixture::get_with_config(tenant, Some("rust-override".into()))

@@ -36,6 +36,7 @@ pub use tool_client::*;
 pub use tool_impl::OutputStream;
 pub use tool_literal::*;
 pub use tool_refinement::*;
+pub use tool_reflection::*;
 pub use tool_registry::{
     ToolInvokeFuture, ToolInvokeFutureFor, ToolInvoker, get_all_tools, get_extended_tool_by_name,
     get_tool_by_name, get_tool_invoker_by_name, register_tool, register_tool_invoker,

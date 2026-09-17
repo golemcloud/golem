@@ -308,7 +308,17 @@ try {
         generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
         generatedEffectTool,
       )
-      console.log("Deployed TS and Effect typed, reflected, and dynamic tool calls passed")
+      const reflectedRustTool = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "reflected_ts_tool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedRustTool.includes(String.raw`ts-plain:reflection|\"ts-plain:reflection\"`),
+        reflectedRustTool,
+      )
+      assert.ok(reflectedRustTool.includes("|true|Some(String("), reflectedRustTool)
+      console.log("Deployed TS, Effect, and Rust typed, reflected, and dynamic tool calls passed")
     }
   }
 } finally {
