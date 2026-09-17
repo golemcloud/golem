@@ -227,6 +227,26 @@ stdout; dropping it while still open selects `Abandoned`. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
+#### Call a tool discovered at runtime
+
+`@reflection.get_tool_type(name)` returns the tool descriptor visible to the caller. Select a
+command with `tool.command(path)`; path segments may use command aliases, and the returned
+`ToolCommand.path` contains their canonical names. Its `arguments`, `input_schema`, and `result`
+describe the selected command. Supply every canonical input field in declaration order. An absent
+optional argument is an option value of `None`, while a defaulted argument carries its default.
+
+Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
+`command.invoke_value(input)` for schema-native values. The command validates inputs locally before
+opening RPC and validates declared results after invocation. `start_value` returns an invocation
+whose `stdout`, `collect`, `get`, and `cancel` methods handle pending and streaming calls. A command
+with required stdout must use `start_value`; `collect` drains stdout while awaiting its result.
+`trigger_value` is available only when the command does not require caller-readable stdout.
+
+`@reflection.DynamicToolClient::new(name)` accepts a caller-packed `TypedSchemaValue` and a
+command path when no descriptor is available. It cannot validate the input or output against a
+deployed schema. Reflected and dynamic calls return `Result` errors, including malformed remote
+output; generated `WeatherClient` methods keep their ordinary typed call behavior.
+
 ### 5. Define a tool middleware component
 
 A **monomorphic middleware** presents one statically declared `#derive.tool` shape. Its generated
