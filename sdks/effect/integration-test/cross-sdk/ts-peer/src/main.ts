@@ -40,6 +40,12 @@ toolDefinition("ts-cross-streaming")
     },
   })
 
+toolDefinition("ts-optional-reflection")
+  .body((body) => body.option("maybe", z.string()).returns(z.string()))
+  .implement({
+    "ts-optional-reflection": ({ maybe }) => ok(maybe ?? "omitted"),
+  })
+
 export const TsEphemeralPeer = defineAgent({
   name: "TsEphemeralPeer",
   mode: "ephemeral",
@@ -104,6 +110,7 @@ export const TsPeer = defineAgent({
     callEffectStream: method({ input: { tenant: z.string() }, returns: z.string() }),
     callEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
     reflectedEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
+    reflectedEffectOptionalTool: method({ input: {}, returns: z.string() }),
     reflectedEffectAgent: method({ input: {}, returns: z.string() }),
     principalIdentityRoundTrip: method({ input: {}, returns: z.string() }),
     reflectedConfigRoundTrip: method({ input: {}, returns: z.string() }),
@@ -247,6 +254,28 @@ TsPeer.implement({
         invalidRejected = error instanceof TypeError
       }
       return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}|${invalidRejected}`
+    },
+    async reflectedEffectOptionalTool() {
+      const tool = reflection.getToolType("effect-optional-reflection")
+      if (!tool) return "missing:effect-optional-reflection"
+      const command = tool.client.command([])
+      let stage = "omitted JSON"
+      try {
+        const omitted = await command.invokeJson({ maybe: null })
+        stage = "supplied JSON"
+        const supplied = await command.invokeJson({ maybe: "supplied" })
+        stage = "omitted native"
+        const omittedNative = await command.invokeValue(
+          command.inputSchema!.packJson({ maybe: null }),
+        )
+        stage = "supplied native"
+        const suppliedNative = await command.invokeValue(
+          command.inputSchema!.packJson({ maybe: "supplied" }),
+        )
+        return `${omitted}|${supplied}|${command.result!.unpackJson(omittedNative!)}|${command.result!.unpackJson(suppliedNative!)}`
+      } catch (error) {
+        return `${stage}: ${JSON.stringify((error as { cause?: unknown }).cause ?? error)}`
+      }
     },
     async reflectedEffectAgent() {
       const agentType = reflection.getAgentType("EffectSnapshotFixture")

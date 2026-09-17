@@ -162,19 +162,7 @@ export class ToolCommand {
         graph,
         t.record(this.arguments.map((argument) => field(argument.name, argument.schema.root))),
       )
-      this.wireGraph = Object.freeze({
-        defs: graph.defs,
-        root: t.record(
-          this.arguments.map((argument) =>
-            field(
-              argument.name,
-              argument.optionalCarrier && argument.schema.root.body.tag === "option"
-                ? argument.schema.root.body.element
-                : argument.schema.root,
-            ),
-          ),
-        ),
-      })
+      this.wireGraph = this.inputSchema.graph
     }
     Object.freeze(this)
   }

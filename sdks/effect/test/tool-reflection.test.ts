@@ -7,6 +7,7 @@ import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
 import { t } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { SchemaRef } from "../src/SchemaRef.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -18,6 +19,63 @@ const registered = {
 }
 
 describe("native tool reflection", () => {
+  it("sends optional inputs with a graph that accepts both carriers", async () => {
+    const optionalDefinition = toolDefinition("effect-optional-reflection").body((body) =>
+      body.option("maybe", Schema.String).returns(Schema.String),
+    )
+    const compiled = compileDefinition(optionalDefinition)
+    const optionalRegistered = {
+      ...registered,
+      lookupName: "effect-optional-reflection",
+      definition: compiled.wire,
+    }
+    const codec = Effect.runSync(compile(Schema.String))
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: codec.schemaGraph,
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [optionalRegistered],
+      getTool: () => optionalRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createStdout: vi.fn() as never,
+      rpc: vi.fn() as never,
+    })
+    const command = new ToolType(optionalRegistered).client.command([])
+    expect(new SchemaRef(compiled.bodies.get("")!.input.schemaGraph).toJsonSchema()).toEqual(
+      command.inputSchema?.toJsonSchema(),
+    )
+    for (const maybe of [null, "supplied"]) {
+      await expect(
+        Effect.runPromise(
+          command
+            .invokeJson({ maybe })
+            .pipe(
+              Effect.provideService(ToolTransport, transport),
+              Effect.provideService(ToolClient, host),
+            ),
+        ),
+      ).resolves.toBe("ok")
+      const value = sent.at(-1)!
+      const wire = new SchemaRef(value.graph)
+      expect(wire.validateValue(value.value).success).toBe(true)
+      expect(wire.toJsonSchema()).toEqual(command.inputSchema?.toJsonSchema())
+    }
+    expect(sent).toHaveLength(2)
+  })
+
   it("decodes a discovered command with a selected schema root", () => {
     const tool = new ToolType(registered)
     const command = tool.client.command([])

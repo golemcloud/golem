@@ -57,6 +57,13 @@ The TS and Effect reflected callers also attempted an invalid declared string ar
 deployed fixture and reported local input rejection. Focused mock-host tests assert that these
 invalid calls do not open an RPC.
 
+The same deployed `RUN_TOOL_REFLECTION_ONLY=1` path invoked optional, no-default tool options
+in both directions: a TS reflected caller used the Effect provider, and an Effect reflected
+caller used the TS provider. Each invoked omitted (`null`) and supplied (`"supplied"`) values
+through canonical JSON and schema-native inputs. All eight calls returned the expected
+`omitted` or `supplied` result. Focused model tests also cover both carrier values and the
+host's conversion of optional options and positionals into command arguments.
+
 The deployed cross-SDK fixture's `RUN_AGENT_REFLECTION_ONLY=1` path invoked `TsPeer` twice from
 the same durable Effect caller, parsed the host-produced remote ID, resolved its deployed type,
 and invoked it again through a schema-free dynamic client bound to that ID.

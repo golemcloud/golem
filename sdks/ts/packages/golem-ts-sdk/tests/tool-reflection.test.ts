@@ -9,7 +9,7 @@ import { encodeTool } from '../src/internal/tool';
 import { compileSchema } from '../src/schema/adapter';
 import { ToolRemoteOutputError, ToolType } from '../src/toolReflection';
 import type { ToolClientRuntime } from '../src/bridge/tool';
-import { v } from '../src/internal/schema-model';
+import { schemaShapesMatch, v } from '../src/internal/schema-model';
 
 function fixture(result: { readonly malformed?: boolean } = {}) {
   const definition = toolDefinition('reflect-demo').body((body) =>
@@ -42,8 +42,13 @@ describe('native tool reflection', () => {
     expect(command.validateJson({ value: 'hello', maybe: null }).success).toBe(true);
     expect(command.validateJson({ value: 'hello' }).success).toBe(false);
     expect(start).not.toHaveBeenCalled();
-    await expect(command.invokeJson({ value: 'hello', maybe: null })).resolves.toBe('ok');
-    expect(start).toHaveBeenCalledTimes(1);
+    for (const maybe of [null, 'supplied']) {
+      await expect(command.invokeJson({ value: 'hello', maybe })).resolves.toBe('ok');
+      const sent = start.mock.calls.at(-1)![1];
+      expect(schemaShapesMatch(command.inputSchema!.graph, sent.graph)).toBe(true);
+      expect(command.inputSchema!.validateValue(sent.value).success).toBe(true);
+    }
+    expect(start).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a missing declared remote result', async () => {

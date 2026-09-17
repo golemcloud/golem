@@ -266,6 +266,19 @@ try {
         ),
         reflectedTsTool,
       )
+      const reflectedEffectOptional = invoke(`TsPeer("ts-${stamp}")`, "reflectedEffectOptionalTool")
+      assert.ok(
+        reflectedEffectOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedEffectOptional,
+      )
+      const reflectedTsOptional = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "reflectedTsOptionalTool",
+      )
+      assert.ok(
+        reflectedTsOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedTsOptional,
+      )
       const generatedTsTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"typed"')
       assert.ok(
         generatedTsTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:TYPED`),

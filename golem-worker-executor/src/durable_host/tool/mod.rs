@@ -677,6 +677,17 @@ fn option_args(
     option: &OptionSpec,
     value: &SchemaValue,
 ) -> Result<Vec<String>, String> {
+    let value = if !option.required && option.default.is_none() {
+        match value {
+            SchemaValue::Option { inner } => match inner.as_deref() {
+                Some(value) => value,
+                None => return Ok(Vec::new()),
+            },
+            _ => value,
+        }
+    } else {
+        value
+    };
     let prefix = format!("--{}=", option.long);
     match &option.shape {
         OptionShape::Scalar(type_) | OptionShape::OptionalScalar(type_) => Ok(vec![format!(
@@ -1083,10 +1094,23 @@ fn resolve_tool_command(
                 )
                 .map_err(SerializableToolError::InvalidInput)?,
             ),
-            CanonicalSurfaceRef::BodyPositional { index } => args.push(
-                render_tool_value(tool, &body.positionals.fixed[index].type_, &field.value)
-                    .map_err(SerializableToolError::InvalidInput)?,
-            ),
+            CanonicalSurfaceRef::BodyPositional { index } => {
+                let positional = &body.positionals.fixed[index];
+                let value = if !positional.required && positional.default.is_none() {
+                    match &field.value {
+                        SchemaValue::Option { inner } => inner.as_deref(),
+                        value => Some(value),
+                    }
+                } else {
+                    Some(&field.value)
+                };
+                if let Some(value) = value {
+                    args.push(
+                        render_tool_value(tool, &positional.type_, value)
+                            .map_err(SerializableToolError::InvalidInput)?,
+                    );
+                }
+            }
             CanonicalSurfaceRef::BodyTail => {
                 let tail = body
                     .positionals
@@ -4944,7 +4968,7 @@ mod tests {
     use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
         CommandBody, CommandNode, CommandTree, Constraint, DiscoveredTool, Doc, Globals,
-        Positional, Positionals, Ref, Tool,
+        OptionShape, OptionSpec, Positional, Positionals, Ref, Tool,
     };
     use golem_common::schema::{
         IntoTypedSchemaValue, MetadataEnvelope, SchemaGraph, SchemaType, SchemaTypeDef,
@@ -5828,6 +5852,55 @@ mod tests {
             resolve_tool_command(&constrained, &[], &input),
             Err(SerializableToolError::ConstraintViolation(_))
         ));
+    }
+
+    #[test]
+    fn command_resolution_omits_optional_values_and_renders_supplied_values() {
+        let (mut registered, _) = registered_tool();
+        let body = registered.definition.commands.nodes[0]
+            .body
+            .as_mut()
+            .unwrap();
+        body.positionals.fixed[0].required = false;
+        body.options.push(OptionSpec {
+            long: "mode".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+        let graph = registered
+            .definition
+            .canonical_input_record_schema(0)
+            .unwrap();
+        for (fields, expected) in [
+            (
+                vec![
+                    SchemaValue::Option { inner: None },
+                    SchemaValue::Option { inner: None },
+                ],
+                Vec::<String>::new(),
+            ),
+            (
+                vec![
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("needle".to_string()))),
+                    },
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("fast".to_string()))),
+                    },
+                ],
+                vec!["\"needle\"".to_string(), "--mode=\"fast\"".to_string()],
+            ),
+        ] {
+            let input = TypedSchemaValue::new(graph.clone(), SchemaValue::Record { fields });
+            let resolved = resolve_tool_command(&registered.definition, &[], &input).unwrap();
+            assert_eq!(resolved.args, expected);
+        }
     }
 
     #[test]

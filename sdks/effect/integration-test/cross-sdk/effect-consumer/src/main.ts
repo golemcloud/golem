@@ -69,6 +69,7 @@ defineAgent({
     callTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
     toolRoundTrip: method({ input: { payload: Schema.String }, success: Schema.String }),
     reflectedTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
+    reflectedTsOptionalTool: method({ input: {}, success: Schema.String }),
     quotaThroughTs: method({ input: {}, success: Schema.String }),
   },
 }).implement({
@@ -273,6 +274,31 @@ defineAgent({
           return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}|${invalidRejected}`
         }),
       ).pipe(Effect.orDie),
+    reflectedTsOptionalTool: () => {
+      let stage = "omitted JSON"
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const tool = yield* Reflection.getToolType("ts-optional-reflection")
+          if (!tool) return "missing:ts-optional-reflection"
+          const command = tool.client.command([])
+          const omitted = yield* command.invokeJson({ maybe: null })
+          stage = "supplied JSON"
+          const supplied = yield* command.invokeJson({ maybe: "supplied" })
+          stage = "omitted native"
+          const omittedNative = yield* command.invokeValue(
+            command.inputSchema!.packJson({ maybe: null }),
+          )
+          stage = "supplied native"
+          const suppliedNative = yield* command.invokeValue(
+            command.inputSchema!.packJson({ maybe: "supplied" }),
+          )
+          return `${omitted}|${supplied}|${command.result!.unpackJson(omittedNative!)}|${command.result!.unpackJson(suppliedNative!)}`
+        }),
+      ).pipe(
+        Effect.catch((error) => Effect.succeed(`${stage}: ${JSON.stringify(error)}`)),
+        Effect.orDie,
+      )
+    },
     quotaThroughTs: () =>
       Effect.scoped(
         Effect.gen(function* () {

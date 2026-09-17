@@ -479,6 +479,14 @@ export function compileDefinition(
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
+  const inputSchema = (argument: ArgumentSpec): Schema.Top => {
+    const optional =
+      (argument.kind === "option" || argument.kind === "positional") &&
+      !(argument.options.required ?? argument.kind === "positional") &&
+      argument.options.default === undefined &&
+      !argument.repeatable
+    return optional ? Schema.NullOr(argument.schema) : argument.schema
+  }
   const collect = (
     m: CommandModel,
     path: readonly string[],
@@ -489,7 +497,7 @@ export function compileDefinition(
       const args = ordered([...inherited, ...m.body.args])
       inputCodecs.set(
         path.join("/"),
-        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, a.schema])))),
+        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, inputSchema(a)])))),
       )
       for (const argument of args) compileOnce(argument.wireSchema)
       if (m.body.output) compileOnce(m.body.output)

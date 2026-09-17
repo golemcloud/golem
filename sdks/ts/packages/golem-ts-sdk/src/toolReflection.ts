@@ -177,21 +177,7 @@ export class ToolCommand {
           t.record(this.arguments.map((arg) => field(arg.name, arg.schema.root))),
         )
       : undefined;
-    this.wireInputGraph = body
-      ? freezeSchemaGraph({
-          defs: graph.defs,
-          root: t.record(
-            this.arguments.map((arg) =>
-              field(
-                arg.name,
-                arg.optionalCarrier && arg.schema.root.body.tag === 'option'
-                  ? arg.schema.root.body.element
-                  : arg.schema.root,
-              ),
-            ),
-          ),
-        })
-      : undefined;
+    this.wireInputGraph = this.inputSchema?.graph;
     Object.freeze(this);
   }
 
