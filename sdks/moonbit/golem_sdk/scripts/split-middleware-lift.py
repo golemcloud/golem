@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 EXPECTED_INVOKE_LIFT_SHA256 = (
-    "77f083be11d119d9c2127b56f8642968c1971636e3413cffe610d16a406f49d7"
+    "0fa6709353a45af0ff2a14c0307b28b33ab7dce47dcaba929bb344ea169ac57f"
 )
 
 

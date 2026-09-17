@@ -286,7 +286,7 @@ pub fn RawInvocationResult::take_for_final(
       }
     None => None
   }
-  let stdout = self.state.val.stdout
+  let stdout = self.state.val.stdout.map(stream => stream.transfer())
   self.state.val.result = None
   self.state.val.stdout = None
   self.state.val.ownership = TransferredFinal
@@ -316,6 +316,7 @@ pub struct RawToolInvocation {
   priv command_path : Array[String]
   priv input : RawTypedSchemaValue
   priv stdin : MiddlewareStdin?
+  priv mut stdout : @toolStreams.ToolStdoutWriter?
   priv principal : @agentCommon.Principal
 }
 
@@ -328,7 +329,10 @@ pub fn RawToolInvocation::from_wit(
   parameters : @model.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?,
+  stdout : @toolStreams.ToolStdoutWriter?,
   principal : @agentCommon.Principal,
 ) -> RawToolInvocation {
   {
@@ -338,7 +342,8 @@ pub fn RawToolInvocation::from_wit(
     parameters,
     command_path,
     input: context.own_raw_typed_schema_value(input),
-    stdin: stdin.map(stream => context.own_stdin(stream)),
+    stdin: stdin.map(stream => context.own_wire_stdin(stream)),
+    stdout,
     principal,
   }
 }
@@ -396,6 +401,16 @@ pub fn RawToolInvocation::input(
 ///|
 pub fn RawToolInvocation::stdin(self : RawToolInvocation) -> MiddlewareStdin? {
   self.stdin
+}
+
+///|
+#doc(hidden)
+pub fn RawToolInvocation::take_host_stdout(
+  self : RawToolInvocation,
+) -> @toolStreams.ToolStdoutWriter? {
+  let stdout = self.stdout
+  self.stdout = None
+  stdout
 }
 
 ///|
@@ -533,6 +548,9 @@ pub fn[E] RawToolInvocation::encode_handler_error(
     InvalidInput(message) => InvalidInput(message)
     ConstraintViolation(message) => ConstraintViolation(message)
     InvalidResult(message) => InvalidResult(message)
+    ProtocolError(message) => ProtocolError(message)
+    Denied(message) => Denied(message)
+    InternalError(message) => InternalError(message)
     Tool(error) => {
       let (name, typed) = match encode_custom_error(error) {
         Ok(named) => named
@@ -582,9 +600,11 @@ pub async fn UnderlyingTool::invoke_raw(
       }
     None => None
   }
-  match (self.invoke)(command_path.copy(), wire_input, wire_stdin) {
+  let observer = (self.invoke)(command_path.copy(), wire_input, wire_stdin)
+  defer (observer.drop)()
+  match (observer.get)() {
     Ok(result) => Ok(self.ownership.own_raw_invocation_result(result))
-    Err(error) =>
+    Err(@underlying.UnderlyingError::ToolError(error)) =>
       Err(
         match error {
           @toolCommon.ToolError::InvalidToolName(name) => InvalidToolName(name)
@@ -598,6 +618,131 @@ pub async fn UnderlyingTool::invoke_raw(
           @toolCommon.ToolError::CustomError(error) => UnknownToolError(error)
         },
       )
+    Err(@underlying.UnderlyingError::ProtocolError(message)) =>
+      Err(ProtocolError(message))
+    Err(@underlying.UnderlyingError::Denied(message)) => Err(Denied(message))
+    Err(@underlying.UnderlyingError::InternalError(message)) =>
+      Err(InternalError(message))
+    Err(@underlying.UnderlyingError::Cancelled) =>
+      Err(ConstraintViolation("underlying invocation was cancelled"))
+    Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
+      Err(
+        ConstraintViolation(
+          "underlying invocation exhausted resources: \{message}",
+        ),
+      )
+  }
+}
+
+///|
+/// Starts a raw underlying invocation without waiting for completion. Stdout is
+/// available from the returned observer immediately after admission.
+pub async fn UnderlyingTool::start_raw(
+  self : UnderlyingTool,
+  command_path : Array[String],
+  input : RawTypedSchemaValue,
+  stdin : MiddlewareStdin?,
+) -> Result[
+  UnderlyingInvocation[RawInvocationResult, RawTypedSchemaValue],
+  ToolInvokeError[RawTypedSchemaValue],
+] {
+  match self.ownership.begin_call() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let fail = fn(error) {
+    self.ownership.finish_call()
+    Err(error)
+  }
+  match stdin {
+    Some(stdin) =>
+      match stdin.check_for_underlying(self.ownership) {
+        Ok(_) => ()
+        Err(error) => return fail(InvalidInput(error))
+      }
+    None => ()
+  }
+  let wire_input = match input.take_for_underlying(self.ownership) {
+    Ok(value) => value
+    Err(error) => return fail(InvalidInput(error))
+  }
+  let wire_stdin = match stdin {
+    Some(stdin) =>
+      match stdin.take_for_underlying() {
+        Ok(stream) => Some(stream)
+        Err(error) => return fail(InvalidInput(error))
+      }
+    None => None
+  }
+  let observer = (self.invoke)(command_path.copy(), wire_input, wire_stdin)
+  let state = Ref({ open: true, get_in_flight: false, raw_dropped: false, })
+  let finish_close = fn() {
+    if !state.val.raw_dropped {
+      state.val.raw_dropped = true
+      (observer.drop)()
+      self.ownership.finish_call()
+    }
+  }
+  let close = fn() {
+    if state.val.open {
+      state.val.open = false
+      if !state.val.get_in_flight {
+        finish_close()
+      }
+    }
+  }
+  Ok({
+    stdout_stream: observer.stdout,
+    cancel_call: observer.cancel,
+    drop_observer: close,
+    state,
+    get_result: async fn() {
+      if !state.val.open || state.val.get_in_flight {
+        return Err(
+          InvalidInput("underlying invocation observer is no longer available"),
+        )
+      }
+      state.val.get_in_flight = true
+      defer {
+        state.val.get_in_flight = false
+        state.val.open = false
+        finish_close()
+      }
+      match (observer.get)() {
+        Ok(result) => Ok(self.ownership.own_raw_invocation_result(result))
+        Err(@underlying.UnderlyingError::ToolError(error)) =>
+          Err(decode_raw_tool_error(error))
+        Err(@underlying.UnderlyingError::ProtocolError(message)) =>
+          Err(ProtocolError(message))
+        Err(@underlying.UnderlyingError::Denied(message)) =>
+          Err(Denied(message))
+        Err(@underlying.UnderlyingError::InternalError(message)) =>
+          Err(InternalError(message))
+        Err(@underlying.UnderlyingError::Cancelled) =>
+          Err(ConstraintViolation("underlying invocation was cancelled"))
+        Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
+          Err(
+            ConstraintViolation(
+              "underlying invocation exhausted resources: \{message}",
+            ),
+          )
+      }
+    },
+  })
+}
+
+///|
+fn decode_raw_tool_error(
+  error : @toolCommon.ToolError,
+) -> ToolInvokeError[RawTypedSchemaValue] {
+  match error {
+    @toolCommon.ToolError::InvalidToolName(name) => InvalidToolName(name)
+    @toolCommon.ToolError::InvalidCommandPath(path) => InvalidCommandPath(path)
+    @toolCommon.ToolError::InvalidInput(message) => InvalidInput(message)
+    @toolCommon.ToolError::ConstraintViolation(message) =>
+      ConstraintViolation(message)
+    @toolCommon.ToolError::InvalidResult(message) => InvalidResult(message)
+    @toolCommon.ToolError::CustomError(error) => UnknownToolError(error)
   }
 }
 
@@ -614,6 +759,11 @@ pub fn encode_raw_tool_error(
     ConstraintViolation(message) =>
       @toolCommon.ToolError::ConstraintViolation(message)
     InvalidResult(message) => @toolCommon.ToolError::InvalidResult(message)
+    ProtocolError(message) =>
+      @toolCommon.ToolError::InvalidResult("protocol error: \{message}")
+    Denied(message) => @toolCommon.ToolError::ConstraintViolation(message)
+    InternalError(message) =>
+      @toolCommon.ToolError::InvalidResult("internal error: \{message}")
     Tool(value) =>
       match value.take_for_final(context) {
         Ok(value) =>

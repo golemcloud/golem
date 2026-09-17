@@ -19,8 +19,9 @@ import type {
   ToolError,
   ToolMiddleware,
   TypedSchemaValue,
-  UnderlyingTool,
 } from 'golem:tool/common@0.1.0';
+import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
+import type { ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import type { Principal } from '../../principal';
 import type { UniversalToolMiddlewareInvoke } from '../../tool';
 import type { ExtendedToolRuntime, ExtendedToolType } from '../tool';
@@ -62,6 +63,7 @@ export interface RawToolMiddlewareInvocation {
   readonly commandPath: readonly string[];
   readonly input: TypedSchemaValue;
   readonly stdin: AsyncIterable<number> | undefined;
+  readonly stdout: ToolStdoutWriter | undefined;
   readonly principal: Principal;
   readonly wrapped: Pick<UnderlyingTool, 'invoke'>;
 }

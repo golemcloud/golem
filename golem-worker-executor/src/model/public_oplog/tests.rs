@@ -263,10 +263,14 @@ fn test_entity_request(
             agent_id: owner.agent_id.clone(),
         }),
         plan: EntityInvocationPlanReference::Root { plan },
+        assume_idempotence: true,
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
         input,
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
+            "entity-stream-session".to_string(),
+        ),
     }
     .into()
 }
@@ -438,7 +442,12 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: vec!["files".to_string(), "lookup".to_string()],
-            args: vec!["configured-secret-rendering".to_string()],
+            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
+                &[],
+                &["configured-secret-rendering"],
+            )
+            .unwrap()
+            .args,
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
@@ -1211,6 +1220,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_request: HostRequest = HostRequestEntityInvocation {
         metadata: vec![1, 2, 3],
         input: entity_input.clone(),
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
+            "entity-stream-session".to_string(),
+        ),
     }
     .into();
     let entity_response: HostResponse = HostResponseEntityInvocation {

@@ -396,7 +396,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       assert_true(
         result is Err(@toolCommon.ToolError::InvalidResult("abandoned stdout")),
       )
-      assert_eq(abandoned_drops.val, 0)
+      assert_eq(abandoned_drops.val, 1)
     })
     assert_eq(abandoned_drops.val, 1)
 

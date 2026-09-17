@@ -322,6 +322,9 @@ oplog_payload! {
             input: TypedSchemaValue,
             has_stdin: bool,
         },
+        GolemToolObserveResults {
+            entity_starts: Vec<OplogIndex>,
+        },
         GolemApiGetAgents {
             component_id: ComponentId,
         },
@@ -336,6 +339,7 @@ oplog_payload! {
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
+            stream_session_idempotency_key: IdempotencyKey,
         },
         GolemToolInvocationRejected {
             attempt_ordinal: u64,
@@ -659,6 +663,9 @@ oplog_payload! {
         GolemToolInvokeResult {
             result: Result<SerializableToolInvocationResult, SerializableToolRpcError>
         },
+        GolemToolObservedResults {
+            results: Vec<Result<SerializableToolInvocationResult, SerializableToolRpcError>>,
+        },
         GolemToolUnitOrFailure {
             result: Result<(), SerializableToolRpcError>
         },
@@ -910,6 +917,7 @@ pub mod host_functions {
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
+        (GolemToolObserveResults => "golem::tool::internal", "observe-results", GolemToolObserveResults, GolemToolObservedResults),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),

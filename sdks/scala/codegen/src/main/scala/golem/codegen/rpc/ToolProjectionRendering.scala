@@ -83,7 +83,15 @@ object ToolProjectionRendering {
     val error =
       if (policy.useProjectedTypes) codec.projectedErrType.getOrElse("_root_.scala.Nothing")
       else codec.errType.getOrElse("_root_.scala.Nothing")
-    s"_root_.scala.concurrent.Future[_root_.scala.Either[${policy.errorType}[$error], ${successType(codec, policy)}]]"
+    if (policy == InvocationUnderlying)
+      s"_root_.golem.tool.ToolUnderlyingInvocation[$error, ${successType(codec, policy)}]"
+    else
+      s"_root_.scala.concurrent.Future[_root_.scala.Either[${policy.errorType}[$error], ${successType(codec, policy)}]]"
+  }
+
+  def middlewareHandlerReturnType(codec: LeafReturn): String = {
+    val error = codec.projectedErrType.getOrElse("_root_.scala.Nothing")
+    s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[$error], ${successType(codec, InvocationUnderlying)}]]"
   }
 
   def valueEntry(projected: ProjectedParam, policy: Policy): String = {

@@ -30,13 +30,13 @@ pub struct CondVar {
 /// Create a new condition variable.
 #alias(new, deprecated)
 pub fn CondVar::CondVar() -> CondVar {
-  { waiters: Deque([]) }
+  { waiters: Deque([]), }
 }
 
 ///|
 /// Wait until the condition variable is signaled.
 pub async fn CondVar::wait(self : CondVar) -> Unit {
-  let waiter = { woken: false, coro: Some(current_coroutine()) }
+  let waiter = { woken: false, coro: Some(current_coroutine()), }
   self.waiters.push_back(waiter)
   suspend() catch {
     _ if waiter.woken => ()

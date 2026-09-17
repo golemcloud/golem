@@ -52,12 +52,9 @@ object ToolInvokeErrorSpec extends ZIOSpecDefault {
       )
     },
     test("underlying misuse remains outside the wire error algebra") {
-      val overlapping = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.OverlappingInvocation)
-      val revoked     = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked)
+      val revoked = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked)
 
       assertTrue(
-        overlapping.reason == ToolUnderlyingMisuse.OverlappingInvocation,
-        overlapping.getMessage.contains("already in flight"),
         revoked.reason == ToolUnderlyingMisuse.Revoked,
         revoked.getMessage.contains("no longer available")
       )

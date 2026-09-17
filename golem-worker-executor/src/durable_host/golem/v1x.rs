@@ -785,36 +785,52 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         begin_index
                     );
 
-                    let pending = match self.begin_switch_to_live().await? {
-                        BeginReplayToLive::ReplayResumed => {
-                            return Err(WorkerExecutorError::runtime(
-                                "replay target grew while an atomic operation was settling",
+                    if self.entity_parent_start_index().is_some() {
+                        let pending = match self
+                            .prepare_live_continuation_at_replay_tail(
+                                false,
+                                "entity-local atomic rollback".to_string(),
                             )
-                            .into());
-                        }
-                        BeginReplayToLive::Pending(pending) => pending,
-                    };
+                            .await?
+                        {
+                            BeginReplayToLive::ReplayResumed => {
+                                return Err(WorkerExecutorError::runtime(
+                                    "replay target grew while an atomic operation was settling",
+                                )
+                                .into());
+                            }
+                            BeginReplayToLive::Pending(pending) => pending,
+                        };
+                        self.finish_switch_to_live(pending).await?.require_live()?;
+                    } else {
+                        let pending = match self.begin_switch_to_live().await? {
+                            BeginReplayToLive::ReplayResumed => {
+                                return Err(WorkerExecutorError::runtime(
+                                    "replay target grew while an atomic operation was settling",
+                                )
+                                .into());
+                            }
+                            BeginReplayToLive::Pending(pending) => pending,
+                        };
 
-                    // But this is not enough, because if the retried transactional block succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                        end: pending.replay_target().next(), // skipping the Jump entry too
-                    };
+                        // But this is not enough, because if the retried transactional block succeeds,
+                        // and later we replay it, we need to skip the first attempt and only replay the second.
+                        // Se we add a Jump entry to the oplog that registers a deleted region.
+                        let deleted_region = OplogRegion {
+                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                            end: pending.replay_target().next(), // skipping the Jump entry too
+                        };
 
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(
-                            self.entity_parent_start_index(),
-                            deleted_region,
-                        ))
-                        .await;
+                        self.public_state
+                            .worker()
+                            .add_and_commit_oplog(OplogEntry::jump(None, deleted_region))
+                            .await;
 
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
+                        // TODO: this recomputation should not be necessary.
+                        self.public_state.worker().reattach_worker_status().await;
 
-                    self.finish_switch_to_live(pending).await?.require_live()?;
+                        self.finish_switch_to_live(pending).await?.require_live()?;
+                    }
                 }
             }
 
@@ -948,11 +964,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // derived key depends on the oplog index. `begin_index()` is the durable-scope index of this
         // call; reusing it (rather than reading the live oplog index again) keeps the derived key
         // stable across an incomplete-replay re-execution, since the `Start` is reused.
-        let oplog_index = handle.begin_index();
+        // Reserve the logical position on replay too, even when the recorded result is returned.
+        let key = self.derive_idempotency_key(handle.begin_index());
 
         let result = handle
-            .run(self, async |ctx| {
-                let key = ctx.derive_idempotency_key(oplog_index);
+            .run(self, async |_| {
                 let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
                 Ok::<_, anyhow::Error>(HostResponseGolemApiIdempotencyKey { uuid })
             })

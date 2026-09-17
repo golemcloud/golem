@@ -420,11 +420,11 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
   }
 
   private object UnderlyingTestSupport {
-    extension [E](call: Future[Either[ToolInvokeError[E], ToolMiddlewareResult]])
+    extension [E](call: ToolUnderlyingInvocation[E, ToolMiddlewareResult])
       def flatMapResult[A](
         decode: ToolMiddlewareResult => Either[ToolError[Nothing], A]
       ): Future[Either[ToolInvokeError[E], A]] =
-        ToolUnderlyingRuntime.complete(call)(decode)
+        ToolUnderlyingRuntime.complete(call)(decode).toMiddlewareResult
 
     def runInfallible(
       raw: RawToolUnderlying,
@@ -432,7 +432,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       path: List[String],
       params: List[(String, SchemaValue)],
       stdin: Option[ToolMiddlewareInputHandle]
-    ): Future[Either[ToolInvokeError[Nothing], ToolMiddlewareResult]] =
+    ): ToolUnderlyingInvocation[Nothing, ToolMiddlewareResult] =
       ToolUnderlyingRuntime.runInfallible(raw, descriptor, path, encode(descriptor, path, params), stdin)
 
     def run[E](
@@ -442,7 +442,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       params: List[(String, SchemaValue)],
       stdin: Option[ToolMiddlewareInputHandle],
       decodeError: NamedToolError => Either[String, E]
-    ): Future[Either[ToolInvokeError[E], ToolMiddlewareResult]] =
+    ): ToolUnderlyingInvocation[E, ToolMiddlewareResult] =
       ToolUnderlyingRuntime.run(raw, descriptor, path, encode(descriptor, path, params), stdin, decodeError)
 
     private def encode(

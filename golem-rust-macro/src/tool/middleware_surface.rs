@@ -71,7 +71,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_principal unused_underlying]
             );
         }
 
@@ -90,7 +90,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names_for_trait)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_principal unused_underlying]
             );
 
             #[doc(hidden)]
@@ -122,6 +122,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 __golem_middleware_command_path: ::std::vec::Vec<::std::string::String>,
                 __golem_middleware_input: golem_rust::TypedSchemaValue,
                 __golem_middleware_stdin: ::std::option::Option<golem_rust::tool::InputStream>,
+                __golem_middleware_stdout: ::std::option::Option<golem_rust::tool::OutputStream>,
                 __golem_middleware_principal: golem_rust::tool::Principal,
                 __golem_middleware_underlying: golem_rust::tool::UnderlyingTool,
             ) -> golem_rust::tool::ToolMiddlewareInvokeFutureFor<'a>
@@ -160,6 +161,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                             __golem_middleware_command_index
                             __golem_middleware_input
                             __golem_middleware_stdin
+                            __golem_middleware_stdout
                             __golem_middleware_principal
                             __golem_middleware_underlying
                         ]
@@ -205,7 +207,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
                 [],
                 [];
                 $($omitted)*
@@ -239,6 +241,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                     $command_index:ident
                     $input:ident
                     $stdin:ident
+                    $stdout:ident
                     $principal:ident
                     $underlying:ident
                 ]
@@ -294,19 +297,27 @@ fn projected_command_params(
     inherited_root_params(ir, command, tool_name)
         .into_iter()
         .chain(command.params.iter().cloned())
-        .filter_map(
+        .map(
             |mut param| match crate::tool::helpers::stream_type(&param.ty) {
-                Some((crate::tool::helpers::StreamKind::Output, _)) => None,
+                Some((crate::tool::helpers::StreamKind::Output, true)) => {
+                    param.ty = syn::parse_quote!(golem_rust::tool::OutputStream);
+                    param
+                }
+                Some((crate::tool::helpers::StreamKind::Output, false)) => {
+                    param.ty =
+                        syn::parse_quote!(::std::option::Option<golem_rust::tool::OutputStream>);
+                    param
+                }
                 Some((crate::tool::helpers::StreamKind::Input, true)) => {
                     param.ty = syn::parse_quote!(golem_rust::tool::InputStream);
-                    Some(param)
+                    param
                 }
                 Some((crate::tool::helpers::StreamKind::Input, false)) => {
                     param.ty =
                         syn::parse_quote!(::std::option::Option<golem_rust::tool::InputStream>);
-                    Some(param)
+                    param
                 }
-                None => Some(param),
+                None => param,
             },
         )
         .collect()
@@ -341,7 +352,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
             [$($args)* (#ident: #ty => #canonical_name)],
             [$($new_omitted)* #(#markers_for_keep)*];
             $($omitted)*
@@ -359,7 +370,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
             [$($args)*],
             [$($new_omitted)*];
             $($omitted)*
@@ -382,6 +393,7 @@ fn projection_param_arms(
             $command_index:ident
             $input:ident
             $stdin:ident
+            $stdout:ident
             $principal:ident
             $underlying:ident
         ],
@@ -417,7 +429,7 @@ fn projection_param_arms(
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
                 [$($args)*],
                 [$($new_omitted)*];
                 $($all)*
@@ -465,6 +477,7 @@ fn projection_done_arm(
             $command_index:ident
             $input:ident
             $stdin:ident
+            $stdout:ident
             $principal:ident
             $underlying:ident
         ],
@@ -486,7 +499,7 @@ fn projection_done_arm(
                     [$($ancestor)* $($args)*],
                     [$($omitted)* $($new_omitted)*],
                     [$($direct)*],
-                    [$instance $tool $command_index $input $stdin $principal $underlying]
+                    [$instance $tool $command_index $input $stdin $stdout $principal $underlying]
                 );
             };
         }
@@ -511,6 +524,7 @@ fn projection_done_arm(
                     command_index: $command_index,
                     input: $input,
                     stdin: $stdin,
+                    stdout_writer: $stdout,
                     principal: $principal,
                     underlying: $underlying
                 }
@@ -562,6 +576,7 @@ struct LeafInput {
     command_index: Ident,
     input: Ident,
     stdin: Ident,
+    stdout_writer: Ident,
     principal: Ident,
     underlying: Ident,
 }
@@ -615,6 +630,9 @@ impl Parse for LeafInput {
         parse_key(input, "stdin")?;
         let stdin = input.parse()?;
         input.parse::<Token![,]>()?;
+        parse_key(input, "stdout_writer")?;
+        let stdout_writer = input.parse()?;
+        input.parse::<Token![,]>()?;
         parse_key(input, "principal")?;
         let principal = input.parse()?;
         input.parse::<Token![,]>()?;
@@ -637,6 +655,7 @@ impl Parse for LeafInput {
             command_index,
             input: invocation_input,
             stdin,
+            stdout_writer,
             principal,
             underlying,
         })
@@ -698,7 +717,7 @@ pub fn emit_tool_middleware_leaf(input: TokenStream) -> syn::Result<TokenStream>
         let ty = &param.ty;
         quote! { #ident: #ty }
     });
-    let result_ty = middleware_result_type(&input.output, input.stdout, &input.sdk);
+    let author_result_ty = middleware_result_type(&input.output, false, &input.sdk);
 
     match input.mode.to_string().as_str() {
         "middleware" => Ok(quote! {
@@ -706,9 +725,12 @@ pub fn emit_tool_middleware_leaf(input: TokenStream) -> syn::Result<TokenStream>
                 &self,
                 #underlying_ident: &U
                 #(, #args)*
-            ) -> #result_ty;
+            ) -> #author_result_ty;
         }),
-        "underlying" => emit_underlying_method(input, method_ident, result_ty),
+        "underlying" => {
+            let result_ty = middleware_result_type(&input.output, input.stdout, &input.sdk);
+            emit_underlying_method(input, method_ident, result_ty)
+        }
         "dispatch" => emit_dispatch_block(input, method_ident),
         _ => Err(syn::Error::new(
             input.mode.span(),
@@ -733,15 +755,24 @@ fn emit_underlying_method(
     let model_ident = fresh_projected_ident(&input.params, "__model");
     let input_ident = fresh_projected_ident(&input.params, "__input");
     let result_ident = fresh_projected_ident(&input.params, "__result");
+    let invocation_ident = fresh_projected_ident(&input.params, "__invocation");
+    let start_method_ident = format_ident!("start_{}", method_ident.unraw());
     let args = input
         .params
         .iter()
-        .filter(|param| !is_principal_type_for_sdk(&param.ty, sdk))
+        .filter(|param| {
+            !is_principal_type_for_sdk(&param.ty, sdk)
+                && !matches!(
+                    crate::tool::helpers::stream_type(&param.ty),
+                    Some((crate::tool::helpers::StreamKind::Output, _))
+                )
+        })
         .map(|param| {
             let ident = &param.ident;
             let ty = &param.ty;
             quote! { #ident: #ty }
-        });
+        })
+        .collect::<Vec<_>>();
     let values = input
         .params
         .iter()
@@ -772,23 +803,61 @@ fn emit_underlying_method(
             }
         })
         .unwrap_or_else(|| quote! { ::std::option::Option::None });
-    let invoke = underlying_invoke(&input.output, stdin, &command_path_ident, &input_ident, sdk);
+    let invoke = underlying_invoke(
+        &input.output,
+        stdin.clone(),
+        &command_path_ident,
+        &input_ident,
+        sdk,
+    );
     let decode = decode_underlying_result(&input.output, input.stdout, &result_ident, sdk);
+    let (ok, error) = split_result(&input.output);
+    let ok_ty = ok.map(|ty| quote! { #ty }).unwrap_or_else(|| quote! { () });
+    let error_ty = error
+        .map(|ty| quote! { #ty })
+        .unwrap_or_else(|| quote! { ::std::convert::Infallible });
+    let decode_started = match ok {
+        Some(ok) => quote! { #sdk::tool::decode_result_value::<#ok, #error_ty> },
+        None => quote! { #sdk::tool::decode_result_empty::<#error_ty> },
+    };
+    let decode_error = match error {
+        Some(error) => {
+            quote! { <#error as #sdk::agentic::ToolErrorSchema>::from_error_payload_value }
+        }
+        None => quote! { |_, _| ::std::result::Result::Ok(::std::option::Option::None) },
+    };
+
+    let setup = quote! {
+        let mut #param_values_ident: ::std::vec::Vec<(&'static str, #sdk::SchemaValue)> =
+            ::std::vec::Vec::new();
+        #(#values)*
+        let #command_path_ident = ::std::vec![#(#command_path.to_string()),*];
+        let #descriptor_ident = #descriptor(&mut #sdk::agentic::ToolBuildCtx::new())
+            .map_err(|error| #sdk::tool::ToolInvokeError::InvalidInput(error.to_string()))?;
+        let #command_index_ident = #descriptor_ident.command_index_by_path(&#command_path_ident)
+            .ok_or_else(|| #sdk::tool::ToolInvokeError::InvalidCommandPath(#command_path_ident.clone()))?;
+        let #model_ident = #descriptor_ident.canonical_input_model(#command_index_ident)
+            .map_err(|error| #sdk::tool::ToolInvokeError::InvalidInput(error.to_string()))?;
+        let #input_ident = #sdk::agentic::build_canonical_input(&#model_ident, #param_values_ident)
+            .map_err(#sdk::tool::ToolInvokeError::InvalidInput)?;
+    };
 
     Ok(quote! {
+        pub async fn #start_method_ident(&self #(, #args)*) -> ::std::result::Result<
+            #sdk::tool::TypedUnderlyingInvocation<#ok_ty, #error_ty>,
+            #sdk::tool::ToolInvokeError<#error_ty>
+        > {
+            #setup
+            let #invocation_ident = self.underlying.start_with::<#error_ty>(#command_path_ident, #input_ident, #stdin).await?;
+            ::std::result::Result::Ok(#sdk::tool::TypedUnderlyingInvocation::new(
+                #invocation_ident,
+                #decode_started,
+                #decode_error,
+            ))
+        }
+
         pub async fn #method_ident(&self #(, #args)*) -> #result_ty {
-            let mut #param_values_ident: ::std::vec::Vec<(&'static str, #sdk::SchemaValue)> =
-                ::std::vec::Vec::new();
-            #(#values)*
-            let #command_path_ident = ::std::vec![#(#command_path.to_string()),*];
-            let #descriptor_ident = #descriptor(&mut #sdk::agentic::ToolBuildCtx::new())
-                .map_err(|error| #sdk::tool::ToolInvokeError::InvalidInput(error.to_string()))?;
-            let #command_index_ident = #descriptor_ident.command_index_by_path(&#command_path_ident)
-                .ok_or_else(|| #sdk::tool::ToolInvokeError::InvalidCommandPath(#command_path_ident.clone()))?;
-            let #model_ident = #descriptor_ident.canonical_input_model(#command_index_ident)
-                .map_err(|error| #sdk::tool::ToolInvokeError::InvalidInput(error.to_string()))?;
-            let #input_ident = #sdk::agentic::build_canonical_input(&#model_ident, #param_values_ident)
-                .map_err(#sdk::tool::ToolInvokeError::InvalidInput)?;
+            #setup
             let #result_ident = #invoke?;
             #decode
         }
@@ -803,6 +872,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let invocation_command_index = &input.command_index;
     let invocation_input = &input.input;
     let invocation_stdin = &input.stdin;
+    let invocation_stdout = &input.stdout_writer;
     let invocation_principal = &input.principal;
     let invocation_underlying = &input.underlying;
     let command_path = input.command_path;
@@ -810,6 +880,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let input_value_ident = fresh_projected_ident(&input.params, "__golem_dispatch_input_value");
     let input_fields_ident = fresh_projected_ident(&input.params, "__golem_dispatch_input_fields");
     let stdin_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdin");
+    let stdout_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdout");
     let principal_ident = fresh_projected_ident(&input.params, "__golem_dispatch_principal");
     let underlying_ident = fresh_projected_ident(&input.params, "__golem_dispatch_underlying");
     let field_index_ident = fresh_projected_ident(&input.params, "__golem_dispatch_field_index");
@@ -844,7 +915,16 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 Some((crate::tool::helpers::StreamKind::Input, false)) => quote! {
                     let #ident = #stdin_ident.take();
                 },
-                Some((crate::tool::helpers::StreamKind::Output, _)) => unreachable!(),
+                Some((crate::tool::helpers::StreamKind::Output, true)) => quote! {
+                    let #ident = #stdout_ident.take().ok_or_else(|| {
+                        #sdk::tool::ToolInvokeError::InvalidInput(
+                            "tool invocation did not contain declared stdout stream".to_string()
+                        )
+                    })?;
+                },
+                Some((crate::tool::helpers::StreamKind::Output, false)) => quote! {
+                    let #ident = #stdout_ident.take();
+                },
                 None => quote! {
                     let #ident = {
                         let #field_index_ident = #input_fields_ident
@@ -865,14 +945,33 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
             }
         }
     });
-    let args = input.params.iter().map(|param| &param.ident);
-    let encode = encode_dispatch_result(
-        &input.output,
-        input.stdout,
-        &result_ident,
-        &input.params,
-        sdk,
-    );
+    let has_stdout = input.stdout;
+    let finish_stdout = input.params.iter().find_map(|param| {
+        let ident = &param.ident;
+        match crate::tool::helpers::stream_type(&param.ty) {
+            Some((crate::tool::helpers::StreamKind::Output, true)) => Some(quote! {
+                let _ = #ident.finish().await;
+            }),
+            Some((crate::tool::helpers::StreamKind::Output, false)) => Some(quote! {
+                if let ::std::option::Option::Some(__golem_stdout_writer) = #ident {
+                    let _ = __golem_stdout_writer.finish().await;
+                }
+            }),
+            _ => None,
+        }
+    });
+    let call_args = input.params.iter().map(|param| {
+        let ident = &param.ident;
+        if matches!(
+            crate::tool::helpers::stream_type(&param.ty),
+            Some((crate::tool::helpers::StreamKind::Output, _))
+        ) {
+            quote! { #ident.clone() }
+        } else {
+            quote! { #ident }
+        }
+    });
+    let encode = encode_dispatch_result(&input.output, false, &result_ident, &input.params, sdk);
 
     Ok(quote! {
         let #path_ident = ::std::vec![#(#command_path.to_string()),*];
@@ -889,6 +988,14 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                     #sdk::tool::ToolInvokeError::InvalidInput(error.to_string())
                 })?;
             let mut #stdin_ident = #invocation_stdin;
+            let mut #stdout_ident = #invocation_stdout;
+            if #stdout_ident.is_some() && !#has_stdout {
+                return ::std::result::Result::Err(
+                    #sdk::tool::ToolInvokeError::InvalidInput(
+                        "tool invocation contained an unexpected stdout stream".to_string()
+                    )
+                );
+            }
             #principal_setup
             let #underlying_ident =
                 <#target as #sdk::tool::ToolUnderlying>::__golem_from_underlying(
@@ -910,8 +1017,9 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 );
             }
             let #result_ident = #instance
-                .#method_ident(&#underlying_ident, #(#args),*)
+                .#method_ident(&#underlying_ident, #(#call_args),*)
                 .await;
+            #finish_stdout
             #encode
         }
     })
@@ -1153,6 +1261,7 @@ mod tests {
             command_index: command_index,
             input: input,
             stdin: stdin,
+            stdout_writer: stdout,
             principal: invocation_principal,
             underlying: underlying
         })
@@ -1185,6 +1294,7 @@ mod tests {
             command_index: command_index,
             input: input,
             stdin: stdin,
+            stdout_writer: stdout,
             principal: principal,
             underlying: underlying
         })
@@ -1213,6 +1323,7 @@ mod tests {
             command_index: command_index,
             input: input,
             stdin: stdin,
+            stdout_writer: stdout,
             principal: principal,
             underlying: underlying
         })

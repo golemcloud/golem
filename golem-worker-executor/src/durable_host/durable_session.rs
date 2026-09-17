@@ -60,7 +60,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
-use golem_schema::schema::{SchemaValue, SchemaValueStream};
+use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::any::{Any, TypeId};
@@ -3059,6 +3059,30 @@ impl DurableSessionStreams {
                     .await
                     .map(|_| ())
                     .map_err(|error| error.to_string()),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => self
+                        .producer
+                        .cancel(
+                            handle.stream_id,
+                            event.offset,
+                            StreamCancelRoleV1::System,
+                            StreamCancelReasonV1::SourceUnavailable,
+                            Some(message),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                    HostFailureKind::Transient => self
+                        .producer
+                        .end(
+                            handle.stream_id,
+                            event.offset,
+                            StreamEndResultV1::ErrorContext(message.into_bytes()),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                },
             };
             if let Err(error) = result {
                 let _ = self
@@ -4350,23 +4374,18 @@ impl AttachedDurableCatchUpReader {
     }
 }
 
-type DurableReceiveFuture = Pin<
-    Box<
-        dyn Future<
-                Output = Result<
-                    (
-                        Option<DurableStreamReader>,
-                        Option<CommittedProducerStreamEventV1>,
-                        HashMap<u64, DurableInputEndpoint>,
-                        bool,
-                        VecDeque<CommittedProducerStreamEventV1>,
-                    ),
-                    String,
-                >,
-            > + Send
-            + 'static,
-    >,
+type DurableReceiveResult = Result<
+    (
+        Option<DurableStreamReader>,
+        Option<CommittedProducerStreamEventV1>,
+        HashMap<u64, DurableInputEndpoint>,
+        bool,
+        VecDeque<CommittedProducerStreamEventV1>,
+    ),
+    String,
 >;
+
+type DurableReceiveFuture = Pin<Box<dyn Future<Output = DurableReceiveResult> + Send + 'static>>;
 
 pub(crate) struct DurableInputProducer {
     reader: Option<DurableStreamReader>,
@@ -4381,6 +4400,13 @@ pub(crate) struct DurableInputProducer {
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub(crate) enum DurableInputEvent {
+    Item(SchemaValue),
+    End,
+    Cancelled,
 }
 
 pub struct DroppedDurableInput {
@@ -4721,6 +4747,91 @@ impl DurableInputProducer {
             Ok((reader, event, endpoints, journaled, queued_events))
         }));
     }
+
+    fn finish_receive(
+        &mut self,
+        result: DurableReceiveResult,
+    ) -> anyhow::Result<DurableInputEvent> {
+        self.pending = None;
+        let (reader, event, mut endpoints, _journaled, queued_events) =
+            result.map_err(anyhow::Error::msg)?;
+        self.reader = reader;
+        self.journal.extend(queued_events);
+        let event = event.ok_or_else(|| {
+            anyhow::anyhow!("durable input stream source closed without a terminal event")
+        })?;
+        self.consumer_read_ordinal += 1;
+        match event.payload {
+            CommittedProducerStreamEventPayloadV1::Value(bytes) => {
+                let value = ProtoSchemaValue::decode(bytes.as_slice())
+                    .map_err(|error| anyhow::anyhow!("invalid durable stream value: {error}"))?;
+                decode_recursive_stream_value(value, |stream_id, _| {
+                    endpoints
+                        .remove(&stream_id)
+                        .map(SchemaValueStream::from_host_endpoint)
+                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
+                })
+                .map(DurableInputEvent::Item)
+                .map_err(anyhow::Error::msg)
+            }
+            CommittedProducerStreamEventPayloadV1::PackedU8(byte) => {
+                Ok(DurableInputEvent::Item(SchemaValue::U8(byte)))
+            }
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok) => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::ErrorContext(error)) => {
+                Err(anyhow::anyhow!(
+                    "durable stream ended with error context: {error:?}"
+                ))
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputProducer | StreamCancelRoleV1::OutputProducer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputConsumer | StreamCancelRoleV1::OutputConsumer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::Cancelled)
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: role @ StreamCancelRoleV1::System,
+                reason,
+                details,
+            } => Err(durable_stream_cancel_error(role, reason, details)),
+        }
+    }
+
+    /// Receives a host-side value through the same consumer-journal path used by the guest ABI.
+    /// The returned item and all recursively nested endpoints have already been committed to the
+    /// consumer journal. Cancelling this future leaves the in-progress receive owned by `self`.
+    pub(crate) async fn receive_value(&mut self) -> anyhow::Result<DurableInputEvent> {
+        if self.finished {
+            return Ok(DurableInputEvent::End);
+        }
+        if self.pending.is_none() {
+            self.begin_receive_with_registration(None);
+        }
+        let result = std::future::poll_fn(|cx| {
+            self.pending
+                .as_mut()
+                .expect("durable receive is missing")
+                .as_mut()
+                .poll(cx)
+        })
+        .await;
+        let result = self.finish_receive(result);
+        if result.is_err() {
+            self.finished = true;
+        }
+        result
+    }
 }
 
 impl Drop for DurableInputProducer {
@@ -4811,84 +4922,17 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             });
             self.begin_receive_with_registration(source_wait);
         }
-        let (reader, event, mut endpoints, _journaled, queued_events) =
-            match self.pending.as_mut().unwrap().as_mut().poll(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(result)) => result,
-                Poll::Ready(Err(error)) => {
-                    self.finished = true;
-                    return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                }
-            };
-        self.pending = None;
-        self.reader = reader;
-        self.journal.extend(queued_events);
-        let Some(event) = event else {
-            self.finished = true;
-            return Poll::Ready(Err(wasmtime::Error::msg(
-                "durable input stream source closed without a terminal event",
-            )));
+        let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(result) => result,
         };
-        self.consumer_read_ordinal += 1;
-
-        let value = match event.payload {
-            CommittedProducerStreamEventPayloadV1::Value(bytes) => {
-                let value = match ProtoSchemaValue::decode(bytes.as_slice()) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                            "invalid durable stream value: {error}"
-                        ))));
-                    }
-                };
-                match decode_recursive_stream_value(value, |stream_id, _| {
-                    endpoints
-                        .remove(&stream_id)
-                        .map(SchemaValueStream::from_host_endpoint)
-                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
-                }) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                    }
-                }
-            }
-            CommittedProducerStreamEventPayloadV1::PackedU8(byte) => SchemaValue::U8(byte),
-            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok) => {
+        let value = match self.finish_receive(receive_result) {
+            Ok(DurableInputEvent::Item(value)) => value,
+            Ok(DurableInputEvent::End) => return Poll::Ready(Ok(StreamResult::Dropped)),
+            Ok(DurableInputEvent::Cancelled) => return Poll::Ready(Ok(StreamResult::Cancelled)),
+            Err(error) => {
                 self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
-            }
-            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::ErrorContext(error)) => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "durable stream ended with error context: {error:?}"
-                ))));
-            }
-            CommittedProducerStreamEventPayloadV1::Cancel {
-                role: StreamCancelRoleV1::InputProducer | StreamCancelRoleV1::OutputProducer,
-                ..
-            } => {
-                self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
-            }
-            CommittedProducerStreamEventPayloadV1::Cancel {
-                role: StreamCancelRoleV1::InputConsumer | StreamCancelRoleV1::OutputConsumer,
-                ..
-            } => {
-                self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Cancelled));
-            }
-            CommittedProducerStreamEventPayloadV1::Cancel {
-                role: role @ StreamCancelRoleV1::System,
-                reason,
-                details,
-            } => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::from_anyhow(
-                    durable_stream_cancel_error(role, reason, details),
-                )));
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
         };
         let encoded = {
@@ -4997,6 +5041,10 @@ fn stream_element_schema<'a>(
     }
 }
 
+pub(crate) fn strip_typed_streams(value: &TypedSchemaValue) -> TypedSchemaValue {
+    TypedSchemaValue::new(value.graph().clone(), strip_streams(value.value().clone()))
+}
+
 pub(crate) fn strip_streams(value: SchemaValue) -> SchemaValue {
     match value {
         SchemaValue::Stream(_) => SchemaValue::Tuple {
@@ -5084,6 +5132,8 @@ mod tests {
     use crate::durable_host::durable_stream::tests::{
         TestIdentity, TestOplog, identity, registration,
     };
+    use crate::durable_host::schema_value_stream::ExecutorProjectionStreams;
+    use crate::durable_host::stream_bus::LiveStreamEventPayload;
     use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
     use crate::services::oplog::CommitLevel;
     use crate::services::rpc::{RpcDemand, RpcError};
@@ -5105,8 +5155,12 @@ mod tests {
     use golem_common::model::worker::AgentConfigEntryDto;
     use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
     use golem_schema::schema::schema_value::UnionValuePayload;
+    use golem_schema::schema::tool::compatibility::{
+        ProjectionNode, ProjectionPlan, ProjectionStreamHandler, RecordFieldProjection,
+    };
     use golem_schema::schema::{
-        DiscriminatorRule, FieldDiscriminator, NamedFieldType, UnionBranch, UnionSpec,
+        DiscriminatorRule, FieldDiscriminator, MetadataEnvelope, NamedFieldType, UnionBranch,
+        UnionSpec,
     };
     use test_r::test;
     use uuid::Uuid;
@@ -6266,9 +6320,11 @@ mod tests {
                 handle.stream_id,
                 0,
                 StreamItemsPayloadV1::Values(vec![
-                    ProtoSchemaValue::try_from(SchemaValue::U32(42))
-                        .unwrap()
-                        .encode_to_vec(),
+                    ProtoSchemaValue::try_from(SchemaValue::Record {
+                        fields: vec![SchemaValue::U64(7), SchemaValue::String("seven".into())],
+                    })
+                    .unwrap()
+                    .encode_to_vec(),
                 ]),
             )
             .await
@@ -6285,28 +6341,95 @@ mod tests {
             oplog,
             commits: commits.clone(),
         }));
-        let mut first = DurableInputProducer::new(
-            streams
-                .endpoint(handle.clone(), 0, SessionStreamRoleV1::Input)
-                .await
-                .unwrap(),
-        );
-        first.begin_receive();
-        let (_, event, _, journaled, _) = first.pending.take().unwrap().await.unwrap();
-        assert!(!journaled);
-        assert!(event.is_some());
+        let plan = ProjectionPlan {
+            source_schema: SchemaGraph::anonymous(SchemaType::record(vec![
+                NamedFieldType {
+                    name: "a".into(),
+                    body: SchemaType::u64(),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "b".into(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                },
+            ])),
+            target_schema: SchemaGraph::anonymous(SchemaType::record(vec![
+                NamedFieldType {
+                    name: "b".into(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "a".into(),
+                    body: SchemaType::u64(),
+                    metadata: MetadataEnvelope::default(),
+                },
+            ])),
+            nodes: vec![
+                ProjectionNode::Record {
+                    fields: vec![
+                        RecordFieldProjection {
+                            target_name: "b".into(),
+                            source_index: Some(1),
+                            plan: Some(1),
+                            default: None,
+                        },
+                        RecordFieldProjection {
+                            target_name: "a".into(),
+                            source_index: Some(0),
+                            plan: Some(1),
+                            default: None,
+                        },
+                    ],
+                    discard: vec![],
+                },
+                ProjectionNode::Identity,
+            ],
+            root: 0,
+        };
+        let (drop_event_sink, _) = mpsc::unbounded_channel();
+        let mut projection = ExecutorProjectionStreams {
+            capacity: 2,
+            runtime_teardown: Arc::new(|| false),
+            drop_event_sink,
+        };
+        let first = projection
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(
+                    streams
+                        .endpoint(handle.clone(), 0, SessionStreamRoleV1::Input)
+                        .await
+                        .unwrap(),
+                ),
+                Some(plan.clone()),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let mut first = first.activate();
+        assert!(matches!(first.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::Record { fields })
+                if fields == vec![SchemaValue::String("seven".into()), SchemaValue::U64(7)]));
         assert_eq!(commits.load(Ordering::Relaxed), 1);
 
-        let mut replay = DurableInputProducer::new(
-            streams
-                .endpoint(handle, 0, SessionStreamRoleV1::Input)
-                .await
-                .unwrap(),
-        );
-        replay.begin_receive();
-        let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
-        assert!(journaled);
-        assert!(event.is_some());
+        let replay = projection
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(
+                    streams
+                        .endpoint(handle, 0, SessionStreamRoleV1::Input)
+                        .await
+                        .unwrap(),
+                ),
+                Some(plan),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let mut replay = replay.activate();
+        assert!(matches!(replay.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::Record { fields })
+                if fields == vec![SchemaValue::String("seven".into()), SchemaValue::U64(7)]));
         assert_eq!(commits.load(Ordering::Relaxed), 1);
     }
 
@@ -7225,7 +7348,7 @@ mod tests {
     }
 
     #[test]
-    async fn source_unavailable_overlay_replays_without_reopening_the_source() {
+    async fn mapped_source_unavailable_replays_as_permanent_without_cancelling_source() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = DurableStreamProducer::load(
@@ -7275,18 +7398,267 @@ mod tests {
             .await
             .unwrap();
         assert!(endpoint.reader.is_none());
-        let mut replay = DurableInputProducer::new(endpoint);
-        replay.begin_receive();
-        let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
-        assert!(journaled);
+        let (drop_event_sink, mut drop_events) = mpsc::unbounded_channel();
+        let mut projection = ExecutorProjectionStreams {
+            capacity: 2,
+            runtime_teardown: Arc::new(|| false),
+            drop_event_sink,
+        };
+        let mapped = projection
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(endpoint),
+                Some(ProjectionPlan {
+                    source_schema: SchemaGraph::anonymous(SchemaType::u32()),
+                    target_schema: SchemaGraph::anonymous(SchemaType::u32()),
+                    nodes: vec![ProjectionNode::Identity],
+                    root: 0,
+                }),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let mut mapped = mapped.activate();
+        let event = mapped.recv().await.unwrap();
         assert!(matches!(
-            event.unwrap().payload,
+            event.payload,
+            LiveStreamEventPayload::ClassifiedError {
+                kind: HostFailureKind::Permanent,
+                ref message,
+            } if message == "durable stream cancelled (System, SourceUnavailable): "
+        ));
+        tokio::task::yield_now().await;
+        assert!(
+            drop_events.try_recv().is_err(),
+            "a system-authored terminal must not schedule consumer cancellation"
+        );
+    }
+
+    #[test]
+    async fn projected_durable_output_rematerializes_system_cancellation_as_permanent() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let source = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let output = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation,
+            [
+                (1, source.clone(), SessionStreamRoleV1::Input),
+                (2, output.clone(), SessionStreamRoleV1::Output),
+            ],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+        streams
+            .append_record(StreamSessionRecordV1::SourceUnavailable(
+                golem_common::base_model::durable_stream::StreamSourceUnavailableRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    key: streams.attachment_key(&source, 1).unwrap(),
+                    source_offset: golem_common::model::durable_stream::StreamOffsetV1::new(
+                        OplogIndex::INITIAL,
+                        0,
+                    ),
+                    consumer_read_ordinal: 0,
+                },
+            ))
+            .await;
+
+        let source_schema = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "value".into(),
+            body: SchemaType::u32(),
+            metadata: MetadataEnvelope::default(),
+        }]));
+        let target_schema = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "renamed".into(),
+            body: SchemaType::u32(),
+            metadata: MetadataEnvelope::default(),
+        }]));
+        let plan = ProjectionPlan {
+            source_schema: source_schema.clone(),
+            target_schema: target_schema.clone(),
+            nodes: vec![
+                ProjectionNode::Record {
+                    fields: vec![RecordFieldProjection {
+                        target_name: "renamed".into(),
+                        source_index: Some(0),
+                        plan: Some(1),
+                        default: None,
+                    }],
+                    discard: vec![],
+                },
+                ProjectionNode::Identity,
+            ],
+            root: 0,
+        };
+        let (drop_event_sink, _) = mpsc::unbounded_channel();
+        let mut projection = ExecutorProjectionStreams {
+            capacity: 2,
+            runtime_teardown: Arc::new(|| false),
+            drop_event_sink,
+        };
+        let projected = projection
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(
+                    streams
+                        .endpoint(source, 0, SessionStreamRoleV1::Input)
+                        .await
+                        .unwrap(),
+                ),
+                Some(plan),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
+        streams
+            .drain_output(
+                PendingOwnedStreamDrain {
+                    handle: output.clone(),
+                    endpoint: projected,
+                    element_type: target_schema.root.clone(),
+                    role: SessionStreamRoleV1::Output,
+                },
+                Arc::new(target_schema),
+                nested_tx,
+            )
+            .await
+            .unwrap();
+
+        let mut committed = producer.catch_up(output.clone(), None).await.unwrap();
+        let terminal = committed.next().await.unwrap().unwrap();
+        assert!(matches!(
+            terminal.payload,
             CommittedProducerStreamEventPayloadV1::Cancel {
                 role: StreamCancelRoleV1::System,
                 reason: StreamCancelReasonV1::SourceUnavailable,
-                details: None,
-            }
+                ref details,
+            } if details.as_deref()
+                == Some("durable stream cancelled (System, SourceUnavailable): ")
         ));
+
+        let rematerialized = streams
+            .endpoint(output, 0, SessionStreamRoleV1::Output)
+            .await
+            .unwrap();
+        let error = DurableInputProducer::new(rematerialized)
+            .receive_value()
+            .await
+            .unwrap_err();
+        let classified = error
+            .downcast_ref::<ClassifiedHostError>()
+            .unwrap_or_else(|| panic!("durable output terminal lost classification: {error:?}"));
+        assert_eq!(classified.kind, HostFailureKind::Permanent);
+        assert!(classified.message.contains("SourceUnavailable"));
+    }
+
+    #[test]
+    async fn mapped_durable_target_drop_cancels_once_and_teardown_suppresses_cancel() {
+        for teardown in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let handle = producer
+                .register(registration(
+                    &identity,
+                    StreamRegistrationCoordinateV1::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKindV1::MethodInput,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKindV1::AgentHostedInput,
+                ))
+                .await
+                .unwrap()
+                .value;
+            let streams = DurableSessionStreams::new(
+                producer,
+                oplog,
+                identity.invocation,
+                [(1, handle.clone(), SessionStreamRoleV1::Input)],
+            );
+            let (drop_event_sink, mut drop_events) = mpsc::unbounded_channel();
+            let mut projection = ExecutorProjectionStreams {
+                capacity: 2,
+                runtime_teardown: Arc::new(move || teardown),
+                drop_event_sink,
+            };
+            let target = projection
+                .project_stream(
+                    SchemaValueStream::from_host_endpoint(
+                        streams
+                            .endpoint(handle, 0, SessionStreamRoleV1::Input)
+                            .await
+                            .unwrap(),
+                    ),
+                    Some(ProjectionPlan {
+                        source_schema: SchemaGraph::anonymous(SchemaType::u32()),
+                        target_schema: SchemaGraph::anonymous(SchemaType::u32()),
+                        nodes: vec![ProjectionNode::Identity],
+                        root: 0,
+                    }),
+                )
+                .unwrap()
+                .take_host_endpoint::<LiveStreamEndpoint>()
+                .unwrap();
+            drop(target);
+            if teardown {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(20), drop_events.recv())
+                        .await
+                        .is_err()
+                );
+            } else {
+                assert!(matches!(
+                    tokio::time::timeout(Duration::from_secs(1), drop_events.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    DropEvent::CancelDroppedDurableInput { .. }
+                ));
+                assert!(drop_events.try_recv().is_err());
+            }
+        }
     }
 
     #[test]

@@ -23,6 +23,8 @@ use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
+use crate::durable_host::durable_session::strip_typed_streams;
+use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
 use crate::worker::owner_lane::OwnerInvocationId;
@@ -122,6 +124,64 @@ pub struct EntityInvocationDurability {
     historical_reconstruction: Option<HistoricalReconstruction>,
 }
 
+/// Caller identity captured in guest admission order, before asynchronous dispatch or replay claims.
+#[derive(Clone)]
+pub(crate) struct EntityInvocationKeyContext {
+    caller_key: golem_common::model::IdempotencyKey,
+    logical_position: Option<OplogIndex>,
+    assume_idempotence: bool,
+    stream_session_idempotency_key: golem_common::model::IdempotencyKey,
+}
+
+impl EntityInvocationKeyContext {
+    pub(crate) fn capture<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        attempt_ordinal: u64,
+    ) -> Result<Self, WorkerExecutorError> {
+        let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
+            WorkerExecutorError::runtime("entity invocation requires an active caller key")
+        })?;
+        let logical_position = ctx
+            .state
+            .current_atomic_region_idempotency_key_oplog_index()
+            .map(|_| {
+                ctx.state
+                    .current_idempotency_key_oplog_index(OplogIndex::NONE)
+            });
+        let stream_parent_key = ctx
+            .entity_invocation_scope()
+            .map(|scope| scope.stream_session_idempotency_key().clone())
+            .unwrap_or_else(|| caller_key.clone());
+        let stream_session_idempotency_key =
+            derive_entity_stream_session_key(&stream_parent_key, logical_position, attempt_ordinal);
+        Ok(Self {
+            caller_key,
+            logical_position,
+            assume_idempotence: ctx.state.assume_idempotence,
+            stream_session_idempotency_key,
+        })
+    }
+}
+
+fn derive_entity_stream_session_key(
+    parent: &golem_common::model::IdempotencyKey,
+    logical_position: Option<OplogIndex>,
+    attempt_ordinal: u64,
+) -> golem_common::model::IdempotencyKey {
+    let mut stream_name = b"golem:entity-stream-session:v1\0".to_vec();
+    match logical_position {
+        Some(position) => {
+            stream_name.extend_from_slice(b"logical\0");
+            stream_name.extend_from_slice(&position.as_u64().to_be_bytes());
+        }
+        None => {
+            stream_name.extend_from_slice(b"attempt-ordinal\0");
+            stream_name.extend_from_slice(&attempt_ordinal.to_be_bytes());
+        }
+    }
+    golem_common::model::IdempotencyKey::derived_from_bytes(parent, &stream_name)
+}
+
 #[derive(Clone)]
 pub struct ResolvedEntityInvocationPosition {
     plan: Arc<EntityInvocationPlan>,
@@ -159,10 +219,11 @@ impl ResolvedEntityInvocationPosition {
 }
 
 impl EntityInvocationDurability {
-    pub async fn start_live_access<T, D, Ctx>(
+    pub(crate) async fn start_live_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
         calling_principal: Principal,
         principal: Principal,
@@ -189,6 +250,7 @@ impl EntityInvocationDurability {
             operation,
             principal,
             plan,
+            assume_idempotence: key_context.assume_idempotence,
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -197,7 +259,8 @@ impl EntityInvocationDurability {
         })?;
         let request = HostRequestEntityInvocation {
             metadata: encoded_metadata,
-            input,
+            input: strip_typed_streams(&input),
+            stream_session_idempotency_key: key_context.stream_session_idempotency_key.clone(),
         };
         let started_input = request.input.clone();
         let handle =
@@ -216,7 +279,17 @@ impl EntityInvocationDurability {
                 async move |_| Ok(request),
             )
             .await?;
-        Self::from_started_request(store, get_ctx, parent, handle, metadata, started_input).await
+        Self::from_started_request(
+            store,
+            get_ctx,
+            parent,
+            key_context,
+            key_context.stream_session_idempotency_key.clone(),
+            handle,
+            metadata,
+            started_input,
+        )
+        .await
     }
 
     pub async fn replay_access<T, D, Ctx>(
@@ -230,6 +303,9 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        let key_context = store.with(|mut access| {
+            EntityInvocationKeyContext::capture(get_ctx(access.data_mut()), 0)
+        })?;
         let parent_start_index = parent.start_index();
         let handle = match DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::claim_replay_access_with_options(
                 store,
@@ -261,15 +337,25 @@ impl EntityInvocationDurability {
                     "failed to decode recorded entity invocation metadata: {error}"
                 ))
             })?;
-        Self::from_started_request(store, get_ctx, parent, handle, metadata, request.input)
-            .await
-            .map(Some)
+        Self::from_started_request(
+            store,
+            get_ctx,
+            parent,
+            &key_context,
+            request.stream_session_idempotency_key,
+            handle,
+            metadata,
+            request.input,
+        )
+        .await
+        .map(Some)
     }
 
-    pub async fn replay_tool_access<T, D, Ctx>(
+    pub(crate) async fn replay_tool_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
         identity: ToolInvocationClaimIdentity,
     ) -> Result<ToolInvocationReplayOutcome, WorkerExecutorError>
     where
@@ -317,6 +403,8 @@ impl EntityInvocationDurability {
                         store,
                         get_ctx,
                         parent,
+                        key_context,
+                        request.stream_session_idempotency_key,
                         handle,
                         metadata,
                         request.input,
@@ -364,6 +452,8 @@ impl EntityInvocationDurability {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey,
         mut handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
         metadata: EntityInvocationRequest,
         input: TypedSchemaValue,
@@ -376,6 +466,11 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let owner =
             store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let idempotency_key = golem_common::model::IdempotencyKey::derived(
+            &key_context.caller_key,
+            key_context.logical_position.unwrap_or(handle.start_index()),
+        );
+        let logical_key_positions = key_context.logical_position.is_some();
         let operation = metadata.operation;
         let resolved_position = resolve_recorded_plan(
             store,
@@ -412,6 +507,25 @@ impl EntityInvocationDurability {
             if replay.has_visible_terminal(handle.start_index()).await {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
+                // Install abandoned atomic history before any body or descendant can claim a
+                // completion from it. Surviving calls then use ordinary incomplete replay.
+                let regions = replay
+                    .entity_atomic_rollback_regions(handle.start_index())
+                    .await;
+                if !regions.is_empty() {
+                    let worker =
+                        store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
+                    for region in &regions {
+                        worker
+                            .add_and_commit_oplog(OplogEntry::jump(
+                                Some(handle.start_index()),
+                                region.clone(),
+                            ))
+                            .await;
+                    }
+                    replay.register_entity_atomic_rollback(regions).await?;
+                    worker.reattach_worker_status().await;
+                }
                 InvocationExecutionMode::ReplayingIncomplete
             }
         };
@@ -421,6 +535,10 @@ impl EntityInvocationDurability {
             activation,
             metadata.calling_principal,
             execution_mode,
+            idempotency_key,
+            metadata.assume_idempotence,
+            logical_key_positions,
+            stream_session_idempotency_key,
         )
         .map_err(WorkerExecutorError::runtime)?;
         Ok(Self {
@@ -526,6 +644,10 @@ impl EntityInvocationDurability {
             scope.activation().clone(),
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
+            scope.idempotency_key().clone(),
+            scope.assume_idempotence(),
+            scope.logical_key_positions(),
+            scope.stream_session_idempotency_key().clone(),
         )
         .map_err(WorkerExecutorError::runtime)?;
 
@@ -1117,13 +1239,14 @@ pub async fn record_tool_rejection_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     parent: OwnerInvocationId,
-    request: HostRequestGolemToolInvocationRejected,
+    mut request: HostRequestGolemToolInvocationRejected,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    request.input = request.input.as_ref().map(strip_typed_streams);
     let response = skipped_tool_terminal(request.error.clone()).await?;
     let handle = DurableCallSession::<GolemToolInvocationRejected, LeaveIncompleteOnDrop>::start_access_with_options(
         store,
@@ -1720,6 +1843,7 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             plan,
+            assume_idempotence: true,
         })
         .unwrap()
     }

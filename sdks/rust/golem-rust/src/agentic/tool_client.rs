@@ -327,7 +327,8 @@ async fn invoke_and_await_with_error_decoder<E, R: ToolRpcClient>(
     stdout: Option<R::Stdout>,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
         .invoke_and_await_tool(command_path, input, stdin, stdout)
@@ -345,7 +346,8 @@ pub async fn invoke_and_await_infallible<R: ToolRpcClient>(
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
 ) -> Result<InvocationResult, ToolError<Infallible>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
         .invoke_and_await_tool(command_path, input, stdin, stdout)
@@ -692,14 +694,14 @@ fn decode_wire_invocation_result<E>(
         ));
     }
     let result = result
-        .map(|value| crate::decode_typed_schema_value(&value))
+        .map(crate::decode_typed_schema_value_owned)
         .transpose()
         .map_err(|error| protocol_error(format!("failed to decode tool result: {error}")))?;
     Ok(InvocationResult { result })
 }
 
 /// Starts a stdout-bearing invocation with a generated structured-result decoder.
-pub fn start_tool_invocation<T: 'static, E: 'static>(
+pub async fn start_tool_invocation<T: 'static, E: 'static>(
     rpc: &impl StartedToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
@@ -707,7 +709,8 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
     decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
 ) -> Result<ToolInvocation<T, E>, ToolError<E>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let stdin = stdin.map(pump_tool_stdin);
     let (stdout_target, stdout) = agentic_host_api::create_stdout();
@@ -743,18 +746,19 @@ fn map_remote_tool_error<E>(
     decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
     match error {
-        host::ToolError::CustomError(error) => match decode_custom_tool_error_value(&error.payload)
-        {
-            Ok(value) => match decode_error(error.name.clone(), value.clone()) {
-                Ok(Some(error)) => ToolError::Tool(error),
-                Ok(None) => ToolError::UnknownCustomError(RawCustomToolError {
-                    name: error.name,
-                    payload: value,
-                }),
+        host::ToolError::CustomError(error) => {
+            match decode_custom_tool_error_value(error.payload) {
+                Ok(value) => match decode_error(error.name.clone(), value.clone()) {
+                    Ok(Some(error)) => ToolError::Tool(error),
+                    Ok(None) => ToolError::UnknownCustomError(RawCustomToolError {
+                        name: error.name,
+                        payload: value,
+                    }),
+                    Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
+                },
                 Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
-            },
-            Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
-        },
+            }
+        }
         error => ToolError::Rpc(RpcError::Protocol(format!(
             "remote tool error: {}",
             remote_tool_error_label(&error)
@@ -772,9 +776,9 @@ fn decode_custom_tool_error<E: FromSchema>(
 }
 
 fn decode_custom_tool_error_value(
-    value: &crate::schema::wit::wire::TypedSchemaValue,
+    value: crate::schema::wit::wire::TypedSchemaValue,
 ) -> Result<TypedSchemaValue, String> {
-    crate::decode_typed_schema_value(value)
+    crate::decode_typed_schema_value_owned(value)
         .map_err(|error| format!("failed to decode remote tool error: {error}"))
 }
 

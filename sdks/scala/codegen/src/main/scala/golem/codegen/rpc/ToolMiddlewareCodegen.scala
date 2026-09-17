@@ -98,7 +98,19 @@ object ToolMiddlewareCodegen {
       indent: String
     ): String = {
       val declarations = underlyingType.toList.map(tpe => s"underlying: $tpe") ++ params.map(paramDecl)
-      s"${indent}def ${leaf.name}(${declarations.mkString(", ")}): ${ToolProjectionRendering.returnType(leaf.codec, InvocationUnderlying)}"
+      val returnType   = ToolProjectionRendering.returnType(leaf.codec, InvocationUnderlying)
+      s"${indent}def ${leaf.name}(${declarations.mkString(", ")}): $returnType"
+    }
+
+    private def handlerMethodSignature(
+      leaf: FlattenedLeaf,
+      params: List[ProjectedParam],
+      underlyingType: String,
+      indent: String
+    ): String = {
+      val declarations = s"underlying: $underlyingType" :: params.map(paramDecl)
+      val returnType   = ToolProjectionRendering.middlewareHandlerReturnType(leaf.codec)
+      s"${indent}def ${leaf.name}(${declarations.mkString(", ")}): $returnType"
     }
 
     private def listExpr(entries: List[String], indent: String): String =
@@ -206,7 +218,7 @@ object ToolMiddlewareCodegen {
       sb.append(s"""  val __golemPresentedToolType: _root_.scala.Predef.String = "${tool.fqn}"\n\n""")
       sb.append("  trait Adapter[U] {\n")
       tool.flattenedLeaves.foreach { leaf =>
-        sb.append(methodSignature(leaf, leaf.params, Some("U"), "    ")).append("\n")
+        sb.append(handlerMethodSignature(leaf, leaf.params, "U", "    ")).append("\n")
       }
       sb.append("  }\n\n")
       sb.append(s"  trait WithParameters[P] extends AdapterWithParameters[$underlyingName, P]\n\n")
@@ -216,9 +228,8 @@ object ToolMiddlewareCodegen {
           ("@_root_.golem.runtime.annotations.internalToolMiddlewareParameters parameters: P" :: leaf.params.map(
             paramDecl
           ))
-        sb.append(
-          s"    def ${leaf.name}(${declarations.mkString(", ")}): ${ToolProjectionRendering.returnType(leaf.codec, InvocationUnderlying)}"
-        ).append("\n")
+        val returnType = ToolProjectionRendering.middlewareHandlerReturnType(leaf.codec)
+        sb.append(s"    def ${leaf.name}(${declarations.mkString(", ")}): $returnType").append("\n")
       }
       sb.append("  }\n")
       sb.append("}\n")

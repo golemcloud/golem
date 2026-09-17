@@ -405,14 +405,4 @@ interface common {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
   }
-
-  /// Invocation-scoped access to exactly the next inner layer in a tool
-  /// middleware chain. The runtime creates this resource; guests cannot.
-  resource underlying-tool {
-    invoke: async func(
-      command-path: list<string>,
-      input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
-    ) -> result<invocation-result, tool-error>;
-  }
 }

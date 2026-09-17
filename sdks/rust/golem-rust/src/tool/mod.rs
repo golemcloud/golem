@@ -17,18 +17,29 @@
     feature = "export_golem_tool_middleware"
 )))]
 pub use crate::bindings::golem::agent::common::Principal;
+#[cfg(not(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+)))]
+pub use crate::bindings::golem::tool::streams::ToolStdoutWriter;
 #[cfg(any(
     feature = "export_golem_agentic",
     feature = "export_golem_tool_middleware"
 ))]
 pub use crate::golem_agentic::golem::agent::common::Principal;
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
 pub use crate::schema::tool::Tool;
 pub use crate::schema::tool::{
     MonomorphicToolMiddlewareScope, ToolMiddleware, ToolMiddlewareScope,
 };
 pub use tool_middleware::{
-    InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, UnderlyingTool,
-    decode_result_empty, decode_result_stdout_only, decode_result_value, decode_result_with_stdout,
+    InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, TypedUnderlyingInvocation,
+    UnderlyingInvocation, UnderlyingTool, decode_result_empty, decode_result_stdout_only,
+    decode_result_value, decode_result_with_stdout,
 };
 
 #[doc(hidden)]
@@ -52,6 +63,7 @@ where
     T::from_value(parameters.value())
         .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))
 }
+pub use tool_middleware::OutputStream;
 #[doc(hidden)]
 pub use tool_middleware::{ToolMiddlewareInvokeFuture, ToolMiddlewareInvokeFutureFor};
 #[doc(hidden)]
@@ -60,6 +72,11 @@ pub use tool_middleware_registry::{
     get_tool_middleware_invoker_by_name, register_tool_middleware,
 };
 
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub(crate) use crate::schema::tool::wit::wire;
 
 mod tool_middleware;

@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  InvocationResult,
-  Tool,
-  ToolError,
-  TypedSchemaValue,
-  UnderlyingTool,
-} from 'golem:tool/common@0.1.0';
+import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import { compileSchema } from '../src/schema/adapter';
@@ -37,8 +31,12 @@ import {
   type MonomorphicToolMiddlewareInvocation,
 } from '../src/internal/tool/middlewareRuntime';
 import { typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import {
+  adaptLegacyRawUnderlying,
+  type LegacyRawUnderlyingTool,
+} from './tool-middleware-test-support';
 
-type RawUnderlyingTool = Pick<UnderlyingTool, 'invoke'>;
+type RawUnderlyingTool = LegacyRawUnderlyingTool;
 
 beforeEach(() => {
   ToolMiddlewareRegistry.clearForTests();
@@ -89,7 +87,7 @@ function invoke(
       parameters: wireValue(z.object({}), {}),
       ...options,
     },
-    raw,
+    adaptLegacyRawUnderlying(raw),
   );
 }
 

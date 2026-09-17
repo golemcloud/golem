@@ -480,6 +480,9 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostRequestEntityInvocation {
             metadata: vec![1, 2, 3],
             input: empty_value(),
+            stream_session_idempotency_key: IdempotencyKey::new(
+                "entity-stream-session".to_string(),
+            ),
         },
         HostResponseEntityInvocation {
             result: Ok(empty_value()),

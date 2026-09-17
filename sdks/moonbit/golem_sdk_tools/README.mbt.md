@@ -213,9 +213,12 @@ pub async fn MessagePolicy::send(
 
 The generated `<ExpectedTool>Underlying` has no public constructor. It wraps the capability minted
 for this invocation and exposes async typed methods projected from the expected shape. Handlers may
-short-circuit with zero calls, forward once, or retry with multiple sequential calls. Overlapping
-calls and use after the handler returns are rejected; this is runtime enforcement, not a MoonBit
-affine type guarantee.
+short-circuit with zero calls, forward once, or retry with multiple awaited calls. Overlapping calls
+use the generated `start_<command>` methods. Each returns an independent `UnderlyingInvocation`
+with `get()`, `stdout()`, `cancel()`, and `drop()`, so results and stdout can be observed in either
+order. `drop()` releases only the observer; it does not cancel the call. After the handler returns,
+new admissions are rejected, but admitted calls are not implicitly cancelled. This is runtime
+enforcement, not a MoonBit affine type guarantee.
 
 For nested commands, handler and underlying method names flatten the full canonical path with
 `__`, such as `admin__run`. Generation rejects flattened-name collisions.
@@ -280,6 +283,11 @@ Pass-through forwards those carriers directly; do not decode and rebuild them th
 the host, and generated teardown drops abandoned resources. Every middleware is registered by the
 generated `fn init` when the component loads. Registration order does not determine placement or
 chain order; those belong to runtime/application-manifest configuration.
+
+For commands declaring stdout, the guest receives a host stdout writer. Generated dispatch copies
+the selected final readable stdout into it while awaiting the structured result, finishes it after
+clean EOF, and fails it on forwarding errors. Middleware authors return/select the readable stream;
+they do not write to or finish the host writer directly.
 
 ## Usage with `golem.yaml`
 

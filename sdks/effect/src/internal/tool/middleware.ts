@@ -1,10 +1,13 @@
 import type * as Common from "golem:tool/common@0.1.0"
+import type * as UnderlyingWit from "golem:tool/underlying@0.1.0"
+import type * as StreamsWit from "golem:tool/streams@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
 import {
   type BodyModel,
+  type CompiledBody,
   type CommandError,
   type CommandInput,
   type CommandBuilder,
@@ -18,15 +21,31 @@ import {
 } from "./model.js"
 
 /** Middleware invocation error. @since 1.6.0 @category errors */
+type MiddlewareErrorCause =
+  | Common.ToolError
+  | Exclude<UnderlyingWit.UnderlyingError, { tag: "tool-error" }>
+
 export class MiddlewareError extends Error {
   readonly _tag = "MiddlewareError"
-  constructor(readonly cause: Common.ToolError) {
+  constructor(readonly cause: MiddlewareErrorCause) {
     super(`Tool middleware failed: ${cause.tag}`)
   }
 }
 
+/** A started underlying call whose terminal and stdout can be observed independently. @since 1.6.0 @category models */
+export interface StartedInvocation {
+  readonly get: Effect.Effect<Common.InvocationResult, MiddlewareError>
+  readonly cancel: Effect.Effect<void>
+  readonly stdout?: Stream.Stream<Uint8Array, MiddlewareError>
+}
+
 /** Runtime-provided affine access to the next chain layer. @since 1.6.0 @category models */
 export interface Underlying {
+  readonly start: (
+    path: readonly string[],
+    input: Common.TypedSchemaValue,
+    stdin?: Stream.Stream<Uint8Array, MiddlewareError>,
+  ) => Effect.Effect<StartedInvocation, MiddlewareError, Scope.Scope>
   readonly invoke: (
     path: readonly string[],
     input: Common.TypedSchemaValue,
@@ -45,14 +64,30 @@ export interface TypedStreams<R = never> {
 type TypedUnderlyingNode<M extends CommandModel> = (M extends {
   readonly body: infer B extends BodyModel
 }
-  ? <R = never>(
+  ? (<R = never>(
       input: CommandInput<B>,
       streams?: TypedStreams<R>,
-    ) => Effect.Effect<CommandOutput<B>, MiddlewareError | CommandError<B>, R>
+    ) => Effect.Effect<CommandOutput<B>, MiddlewareError | CommandError<B>, R>) & {
+      readonly start: (
+        input: CommandInput<B>,
+        stdin?: Stream.Stream<Uint8Array, MiddlewareError>,
+      ) => Effect.Effect<
+        TypedStartedInvocation<CommandOutput<B>, CommandError<B>>,
+        MiddlewareError,
+        Scope.Scope
+      >
+    }
   : object) & {
   readonly [K in keyof M["children"] as CamelCase<string & K>]: TypedUnderlyingNode<
     M["children"][K]
   >
+}
+
+/** A definition-derived started underlying call. @since 1.6.0 @category models */
+export interface TypedStartedInvocation<Output, Error> {
+  readonly get: Effect.Effect<Output, MiddlewareError | Error>
+  readonly cancel: Effect.Effect<void>
+  readonly stdout?: Stream.Stream<Uint8Array, MiddlewareError>
 }
 type CamelCase<S extends string> = S extends `${infer H}-${infer T}`
   ? `${H}${Capitalize<CamelCase<T>>}`
@@ -411,82 +446,80 @@ const buildUnderlying = (compiled: ReturnType<typeof compileDefinition>, raw: Un
   const build = (model: CommandModel, path: readonly string[]): any => {
     const body = compiled.bodies.get(path.join("/"))
     const node: any = body
-      ? (input: Record<string, unknown>, streams?: TypedStreams) =>
-          Effect.gen(function* () {
-            if (!body.model.stdin && streams?.stdin)
-              return yield* Effect.fail(
-                new MiddlewareError({ tag: "invalid-input", val: "undeclared stdin stream" }),
-              )
-            if (body.model.stdin?.required && !streams?.stdin)
-              return yield* Effect.fail(
-                new MiddlewareError({
-                  tag: "invalid-input",
-                  val: "required stdin stream is missing",
-                }),
-              )
-            const value = yield* body.input
-              .encodeAsync(input)
-              .pipe(
-                Effect.mapError(
-                  (cause) => new MiddlewareError({ tag: "invalid-input", val: String(cause) }),
-                ),
-              )
-            const invocation = yield* raw
-              .invoke(path, { graph: body.input.schemaGraph, value }, streams?.stdin)
-              .pipe(
-                Effect.catchTag("MiddlewareError", (error) => {
-                  const custom = customToolError(error.cause)
-                  if (!custom) return Effect.fail(error)
-                  return Effect.gen(function* () {
-                    const declared = body.errors.find(
-                      (entry) => entry.spec.name === custom.val.name,
-                    )
-                    if (!declared) return yield* Effect.fail(error)
-                    if (!sameWireGraph(declared.codec.schemaGraph, custom.val.payload.graph))
-                      return yield* Effect.fail(error)
-                    const decoded = yield* declared.codec.decode(custom.val.payload.value)
-                    return yield* Effect.fail(err(declared.spec.name, decoded))
-                  }).pipe(
-                    Effect.mapError((cause) =>
-                      cause instanceof MiddlewareError || isFailure(cause)
-                        ? cause
-                        : new MiddlewareError({ tag: "invalid-result", val: String(cause) }),
+      ? Object.assign(
+          (input: Record<string, unknown>, streams?: TypedStreams) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const started = yield* node.start(input, streams?.stdin)
+                const consume = started.stdout
+                  ? streams?.stdout
+                    ? streams.stdout(started.stdout)
+                    : Stream.runDrain(started.stdout)
+                  : Effect.void
+                const [result] = yield* Effect.all([started.get, consume], {
+                  concurrency: "unbounded",
+                })
+                return result
+              }),
+            ),
+          {
+            start: (
+              input: Record<string, unknown>,
+              stdin?: Stream.Stream<Uint8Array, MiddlewareError>,
+            ) =>
+              Effect.gen(function* () {
+                if (!body.model.stdin && stdin)
+                  return yield* Effect.fail(
+                    new MiddlewareError({ tag: "invalid-input", val: "undeclared stdin stream" }),
+                  )
+                if (body.model.stdin?.required && !stdin)
+                  return yield* Effect.fail(
+                    new MiddlewareError({
+                      tag: "invalid-input",
+                      val: "required stdin stream is missing",
+                    }),
+                  )
+                const value = yield* body.input
+                  .encodeAsync(input)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) => new MiddlewareError({ tag: "invalid-input", val: String(cause) }),
                     ),
                   )
-                }),
-              )
-            if (isFailure(invocation)) return invocation
-            const success = invocation as Common.InvocationResult
-            if (body.model.stdout?.required && !success.stdout)
-              return yield* Effect.fail(
-                new MiddlewareError({
-                  tag: "invalid-result",
-                  val: "required stdout stream is missing",
-                }),
-              )
-            if (success.stdout) {
-              const stdout = inputStream(success.stdout)!
-              yield* (streams?.stdout ? streams.stdout(stdout) : Stream.runDrain(stdout)).pipe(
-                Effect.mapError((cause) =>
-                  cause instanceof MiddlewareError
-                    ? cause
-                    : new MiddlewareError({ tag: "invalid-result", val: String(cause) }),
-                ),
-              )
-            }
-            if (!body.output) return undefined
-            if (!success.result)
-              return yield* Effect.fail(
-                new MiddlewareError({ tag: "invalid-result", val: "missing result" }),
-              )
-            return yield* body.output
-              .decode(success.result.value)
-              .pipe(
-                Effect.mapError(
-                  (cause) => new MiddlewareError({ tag: "invalid-result", val: String(cause) }),
-                ),
-              )
-          })
+                const invocation = yield* raw.start(
+                  path,
+                  { graph: body.input.schemaGraph, value },
+                  stdin,
+                )
+                if (body.model.stdout?.required && !invocation.stdout)
+                  return yield* Effect.fail(
+                    new MiddlewareError({
+                      tag: "invalid-result",
+                      val: "required stdout stream is missing",
+                    }),
+                  )
+                const get = invocation.get.pipe(
+                  Effect.catchTag("MiddlewareError", (error) => decodeUnderlyingError(body, error)),
+                  Effect.flatMap((success) => {
+                    if (!body.output) return Effect.succeed(undefined)
+                    if (!success.result)
+                      return Effect.fail(
+                        new MiddlewareError({ tag: "invalid-result", val: "missing result" }),
+                      )
+                    return body.output
+                      .decode(success.result.value)
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new MiddlewareError({ tag: "invalid-result", val: String(cause) }),
+                        ),
+                      )
+                  }),
+                )
+                return { get, cancel: invocation.cancel, stdout: invocation.stdout }
+              }),
+          },
+        )
       : {}
     for (const child of Object.values(model.children))
       node[camelCase(child.name)] = build(child, [...path, child.name])
@@ -495,8 +528,22 @@ const buildUnderlying = (compiled: ReturnType<typeof compileDefinition>, raw: Un
   return build(compiled.definition.model, [])
 }
 
+const decodeUnderlyingError = (body: CompiledBody, error: MiddlewareError) => {
+  const custom = customToolError(error.cause)
+  if (!custom) return Effect.fail(error)
+  const declared = body.errors.find((entry) => entry.spec.name === custom.val.name)
+  if (!declared || !sameWireGraph(declared.codec.schemaGraph, custom.val.payload.graph))
+    return Effect.fail(error)
+  return declared.codec.decode(custom.val.payload.value).pipe(
+    Effect.flatMap((decoded) => Effect.fail(err(declared.spec.name, decoded))),
+    Effect.mapError((cause) =>
+      isFailure(cause) ? cause : new MiddlewareError({ tag: "invalid-result", val: String(cause) }),
+    ),
+  )
+}
+
 const customToolError = (
-  cause: Common.ToolError,
+  cause: MiddlewareErrorCause,
 ): Extract<Common.ToolError, { tag: "custom-error" }> | undefined => {
   const tagged = cause as Common.ToolError | { tag: "remote-tool-error"; val: Common.ToolError }
   const error = tagged.tag === "remote-tool-error" ? tagged.val : tagged
@@ -589,51 +636,80 @@ export const toolMiddlewareGuest = {
     parameters: Common.TypedSchemaValue,
     commandPath: string[],
     input: Common.TypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
+    stdin: AsyncIterable<StreamsWit.ByteStreamItem> | undefined,
+    stdout: StreamsWit.ToolStdoutWriter | undefined,
     principal: Agent.Principal,
-    wrapped: Common.UnderlyingTool,
+    wrapped: UnderlyingWit.UnderlyingTool,
   ): Promise<Common.InvocationResult> => {
     const entry = entries.get(middlewareName)
     if (!entry) throw { tag: "invalid-tool-name", val: middlewareName } satisfies Common.ToolError
     const ownership = new InvocationOwnership()
-    const managedStdin = stdin ? ownership.own(stdin) : undefined
+    const managedStdin = stdin ? ownership.own(decodeByteStream(stdin)) : undefined
     const middlewareStdin = inputStream(managedStdin)
     const invocationScope = await Effect.runPromise(Scope.make())
     let active = true
-    let busy = false
+    const admitted = new Set<Promise<unknown>>()
+    const observers = new Set<ObserverLease>()
+    const releaseObserver = (lease: ObserverLease) => {
+      if (observers.delete(lease)) lease.release()
+    }
     const underlying: Underlying = {
-      invoke: (path, value, source) =>
+      start: (path, value, source) =>
         Effect.gen(function* () {
-          if (!active || busy) {
+          if (!active) {
             return yield* Effect.fail(
               new MiddlewareError({
                 tag: "invalid-input",
-                val: "underlying tool used concurrently or after invocation",
+                val: "underlying tool used after invocation",
               }),
             )
           }
-          busy = true
           const iterable = source
             ? ownership.own(outputStreamWith(source, yield* Effect.context<never>()))
             : undefined
-          const invocation = Promise.resolve()
-            .then(() => wrapped.invoke([...path], value, iterable))
-            .then((result) =>
-              result.stdout ? { ...result, stdout: ownership.own(result.stdout) } : result,
+          const admission = Promise.resolve()
+            .then(() =>
+              wrapped.invoke([...path], value, iterable ? encodeByteStream(iterable) : undefined),
             )
-          void invocation.then(
-            () => {
-              busy = false
-            },
-            () => {
-              busy = false
-            },
+            .then(([observer, output]) => {
+              const lease = new ObserverLease(observer)
+              observers.add(lease)
+              return {
+                lease,
+                output: output ? ownership.own(decodeByteStream(output)) : undefined,
+              }
+            })
+          admitted.add(admission)
+          void admission.then(
+            () => admitted.delete(admission),
+            () => admitted.delete(admission),
           )
-          return yield* Effect.tryPromise({
-            try: () => invocation,
-            catch: (cause) => new MiddlewareError(cause as Common.ToolError),
+          const admittedCall = yield* Effect.tryPromise({
+            try: () => admission,
+            catch: underlyingError,
           })
+          const { lease, output } = admittedCall
+          yield* Effect.addFinalizer(() => Effect.sync(() => releaseObserver(lease)))
+          return {
+            get: Effect.tryPromise({
+              try: async () => ({ result: await lease.observe() }),
+              catch: underlyingError,
+            }),
+            cancel: Effect.sync(() => lease.cancel()),
+            stdout: inputStream(output),
+          }
         }),
+      invoke: (path, value, source) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const started = yield* underlying.start(path, value, source)
+            const consume = started.stdout ? Stream.runDrain(started.stdout) : Effect.void
+            const [result] = yield* Effect.all([started.get, consume], {
+              concurrency: "unbounded",
+            })
+            return result
+          }),
+        ),
     }
     const effect = Effect.gen(function* () {
       if (!sameWireGraph(entry.parameters.schemaGraph, parameters.graph))
@@ -666,15 +742,19 @@ export const toolMiddlewareGuest = {
       )
     })
     const closeLayer = () => Effect.runPromise(Scope.close(invocationScope, Exit.void))
-    const cleanup = async (primary?: unknown): Promise<void> => {
-      const ownershipResult = await Promise.allSettled([ownership.dispose()])
-      const layerResult = await Promise.allSettled([closeLayer()])
-      if (primary !== undefined) throw primary
-      const failure = [...ownershipResult, ...layerResult].find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      )
-      if (failure) throw failure.reason
-    }
+    let cleanupPromise: Promise<void> | undefined
+    const cleanup = (primary?: unknown): Promise<void> =>
+      (cleanupPromise ??= (async () => {
+        await Promise.allSettled(admitted)
+        const ownershipResult = await Promise.allSettled([ownership.dispose()])
+        for (const observer of observers) releaseObserver(observer)
+        const layerResult = await Promise.allSettled([closeLayer()])
+        if (primary !== undefined) throw primary
+        const failure = [...ownershipResult, ...layerResult].find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        )
+        if (failure) throw failure.reason
+      })())
     let context = Context.empty()
     try {
       if (entry.layer)
@@ -683,61 +763,149 @@ export const toolMiddlewareGuest = {
         Effect.provide(effect as Effect.Effect<Common.InvocationResult, MiddlewareError>, context),
       )
       active = false
-      if (!result.stdout) {
-        await cleanup()
-        return result
+      const output = result.stdout ? ownership.own(result.stdout) : undefined
+      try {
+        if (output && stdout) {
+          for (;;) {
+            const next = await output.next()
+            if (next.done) break
+            await stdout.write(Uint8Array.of(next.value))
+          }
+        }
+        if (stdout) await stdout.finish()
+      } catch (cause) {
+        if (stdout)
+          await stdout
+            .fail({
+              tag: "failed",
+              val: cause instanceof Error ? cause.message : String(cause),
+            })
+            .catch(() => undefined)
+        throw cause
       }
-      const output = new FinalOutput(result.stdout, ownership.dispose.bind(ownership), closeLayer)
-      return { ...result, stdout: output }
+      await Promise.allSettled(admitted)
+      await cleanup()
+      return { result: result.result }
     } catch (cause) {
       active = false
-      await cleanup(cause instanceof MiddlewareError ? cause.cause : cause)
+      await cleanup(cause instanceof MiddlewareError ? exportMiddlewareError(cause.cause) : cause)
       throw cause
     }
   },
 }
 
-class FinalOutput implements AsyncIterableIterator<number> {
-  private readonly iterator: AsyncIterator<number>
-  private closePromise: Promise<void> | undefined
-
-  constructor(
-    source: AsyncIterable<number>,
-    private readonly unblock: () => Promise<void>,
-    private readonly cleanup: () => Promise<void>,
-  ) {
-    this.iterator = source[Symbol.asyncIterator]()
-  }
-
-  [Symbol.asyncIterator](): AsyncIterableIterator<number> {
-    return this
-  }
-
-  async next(): Promise<IteratorResult<number>> {
-    if (this.closePromise) return { done: true, value: undefined }
-    try {
-      const result = await this.iterator.next()
-      if (result.done) await this.close()
-      return result
-    } catch (error) {
-      await this.close().catch(() => undefined)
-      throw error
-    }
-  }
-
-  return(): Promise<IteratorResult<number>> {
-    return this.close().then(() => ({ done: true, value: undefined }))
-  }
-
-  close(): Promise<void> {
-    return (this.closePromise ??= (async () => {
-      const returned = Promise.resolve().then(() => this.iterator.return?.())
-      const results = await Promise.allSettled([this.unblock(), returned])
-      const layer = await Promise.allSettled([this.cleanup()])
-      const failure = [...results, ...layer].find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
+const underlyingError = (cause: unknown): MiddlewareError => {
+  const error = cause as UnderlyingWit.UnderlyingError
+  switch (error?.tag) {
+    case "tool-error":
+      return new MiddlewareError(error.val)
+    case "protocol-error":
+    case "denied":
+    case "internal-error":
+    case "cancelled":
+    case "resource-exhausted":
+      return new MiddlewareError(error)
+    default:
+      return new MiddlewareError(
+        isToolError(cause)
+          ? cause
+          : {
+              tag: "invalid-result",
+              val: `underlying invocation failed: ${String(cause)}`,
+            },
       )
-      if (failure) throw failure.reason
-    })())
   }
+}
+
+const exportMiddlewareError = (cause: MiddlewareErrorCause): Common.ToolError => {
+  switch (cause.tag) {
+    case "protocol-error":
+    case "internal-error":
+      return { tag: "invalid-result", val: `${cause.tag}: ${cause.val}` }
+    case "denied":
+      return { tag: "constraint-violation", val: cause.val }
+    case "cancelled":
+      return { tag: "constraint-violation", val: "underlying invocation was cancelled" }
+    case "resource-exhausted":
+      return { tag: "constraint-violation", val: cause.val }
+    default:
+      return cause
+  }
+}
+
+const isToolError = (value: unknown): value is Common.ToolError =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as { tag?: unknown }).tag === "string"
+
+class ObserverLease {
+  private result: Promise<Common.TypedSchemaValue | undefined> | undefined
+  private settled = false
+  private released = false
+  private disposed = false
+
+  constructor(private readonly observer: UnderlyingWit.UnderlyingInvokeResult) {}
+
+  observe(): Promise<Common.TypedSchemaValue | undefined> {
+    if (this.result !== undefined) return this.result
+    if (this.released) {
+      return Promise.reject({
+        tag: "protocol-error",
+        val: "underlying invocation observer was released",
+      })
+    }
+    return (this.result ??= this.observer.get().finally(() => {
+      this.settled = true
+      if (this.released) this.dispose()
+    }))
+  }
+
+  cancel(): void {
+    if (!this.released) this.observer.cancel()
+  }
+
+  release(): void {
+    this.released = true
+    if (this.result === undefined || this.settled) this.dispose()
+  }
+
+  private dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    const disposable = this.observer as UnderlyingWit.UnderlyingInvokeResult & {
+      [Symbol.dispose]?: () => void
+    }
+    disposable[Symbol.dispose]?.()
+  }
+}
+
+function decodeByteStream(source: AsyncIterable<StreamsWit.ByteStreamItem>): AsyncIterable<number> {
+  const iterator = source[Symbol.asyncIterator]()
+  let chunk: Iterator<number> | undefined
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<number>> {
+          for (;;) {
+            const byte = chunk?.next()
+            if (byte && !byte.done) return byte
+            const next = await iterator.next()
+            if (next.done) return { done: true, value: undefined }
+            if (next.value.tag === "err") throw next.value.val
+            chunk = next.value.val[Symbol.iterator]()
+          }
+        },
+        async return(): Promise<IteratorResult<number>> {
+          await iterator.return?.()
+          return { done: true, value: undefined }
+        },
+      }
+    },
+  }
+}
+
+async function* encodeByteStream(
+  source: AsyncIterable<number>,
+): AsyncIterable<StreamsWit.ByteStreamItem> {
+  for await (const byte of source) yield { tag: "ok", val: Uint8Array.of(byte) }
 }

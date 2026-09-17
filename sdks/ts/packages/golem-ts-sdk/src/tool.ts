@@ -25,7 +25,7 @@ import type {
   ToolError as WireToolError,
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import {
   mapSettledToolResult,
   resultFromSettledToolResult,
@@ -528,6 +528,18 @@ export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Defi
 
 type UnderlyingStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, AsyncIterable<number>>;
 
+export type ToolUnderlyingInvocation<Result> = {
+  readonly result: Promise<Result>;
+  cancel(): void;
+};
+
+type UnderlyingInvocation<Body> = ToolUnderlyingInvocation<BodySuccess<Body>> &
+  (BodyStdout<Body> extends 'required'
+    ? { readonly stdout: AsyncIterable<number> }
+    : BodyStdout<Body> extends 'optional'
+      ? { readonly stdout?: AsyncIterable<number> }
+      : { readonly stdout?: never });
+
 type UnderlyingResult<Body> =
   BodyStdout<Body> extends 'required'
     ? [BodySuccess<Body>] extends [undefined]
@@ -541,14 +553,20 @@ type UnderlyingResult<Body> =
         ? void
         : BodySuccess<Body>;
 
+export interface ToolUnderlyingMethod<Args, Body, Errors = never> {
+  (args: Simplify<Args>): Promise<UnderlyingResult<Body>>;
+  start(args: Simplify<Args>): Promise<UnderlyingInvocation<Body>>;
+  readonly [TOOL_CLIENT_ERRORS]: Errors;
+}
+
 type UnderlyingMethodFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
     ? Body extends AnyToolBodyModel
-      ? ToolClientMethod<
+      ? ToolUnderlyingMethod<
           GlobalArguments<MergeGlobalArguments<Inherited, Globals>> &
             BodyArgs<Body> &
             UnderlyingStdin<Body>,
-          Promise<UnderlyingResult<Body>>,
+          Body,
           BodyErrors<Body>
         >
       : never
@@ -767,6 +785,11 @@ type AdapterToolMiddlewareOptions<
 
 export interface UniversalToolUnderlying {
   readonly invoke: UniversalToolUnderlyingInvoke;
+  invokeAndAwait(
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: AsyncIterable<number> | undefined,
+  ): Promise<WireInvocationResult>;
 }
 
 export interface UniversalToolUnderlyingInvoke {
@@ -774,7 +797,9 @@ export interface UniversalToolUnderlyingInvoke {
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
     stdin: AsyncIterable<number> | undefined,
-  ): Promise<WireInvocationResult>;
+  ): Promise<
+    ToolUnderlyingInvocation<WireInvocationResult> & { readonly stdout?: AsyncIterable<number> }
+  >;
   readonly [TOOL_CLIENT_ERRORS]: WireTypedSchemaValue;
 }
 
@@ -784,6 +809,7 @@ export interface UniversalToolMiddlewareInvocation {
   readonly commandPath: readonly string[];
   readonly input: WireTypedSchemaValue;
   readonly stdin?: AsyncIterable<number>;
+  readonly stdout?: ToolStdoutWriter;
   readonly principal: Principal;
 }
 
@@ -840,6 +866,11 @@ export type ToolClientFailureMapper = (
 
 export type ToolInvokeErrorCause<Errors> =
   | Exclude<WireToolError, { readonly tag: 'custom-error' }>
+  | { readonly tag: 'protocol-error'; readonly val: string }
+  | { readonly tag: 'denied'; readonly val: string }
+  | { readonly tag: 'internal-error'; readonly val: string }
+  | { readonly tag: 'cancelled' }
+  | { readonly tag: 'resource-exhausted'; readonly val: string }
   | { readonly tag: 'tool'; readonly error: Errors }
   | {
       readonly tag: 'unknown-error';
@@ -1834,12 +1865,13 @@ function decodeToolClientResult(
 }
 
 interface ToolUnderlyingInvocationResult {
-  readonly result?: WireTypedSchemaValue;
+  readonly result: Promise<WireTypedSchemaValue | undefined>;
   readonly stdout?: AsyncIterable<number>;
+  cancel(): void;
 }
 
 interface ToolUnderlyingTransport {
-  invokeAndAwait(
+  invoke(
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
     stdin: AsyncIterable<number> | undefined,
@@ -1904,7 +1936,7 @@ function createToolUnderlyingMethod(
   const inputModel = tool.canonicalInputModel(node);
   const callName = [tool.toolName, ...commandPath].join(' ');
 
-  return async (args: Record<string, unknown>): Promise<unknown> => {
+  const start = async (args: Record<string, unknown>): Promise<any> => {
     let input: WireTypedSchemaValue;
     let stdin: AsyncIterable<number> | undefined;
     try {
@@ -1931,36 +1963,54 @@ function createToolUnderlyingMethod(
 
     let invocation: ToolUnderlyingInvocationResult;
     try {
-      invocation = await transport.invokeAndAwait(commandPath, input, stdin);
+      invocation = await transport.invoke(commandPath, input, stdin);
     } catch (error) {
       throw mapFailure(error, { phase: 'invoke', body, callName });
     }
 
     try {
-      return decodeToolUnderlyingResult(body, invocation, callName);
+      validateToolUnderlyingStdout(body, invocation);
+      let result: Promise<unknown> | undefined;
+      return {
+        ...(invocation.stdout === undefined ? {} : { stdout: invocation.stdout }),
+        cancel: () => invocation.cancel(),
+        get result() {
+          return (result ??= invocation.result.then(
+            (result) => {
+              try {
+                return decodeToolUnderlyingResult(body, result, callName);
+              } catch (error) {
+                throw mapFailure(error, { phase: 'result', body, callName });
+              }
+            },
+            (error) => Promise.reject(mapFailure(error, { phase: 'result', body, callName })),
+          ));
+        },
+      };
     } catch (error) {
       await closeAsyncIterable(invocation.stdout);
       throw mapFailure(error, { phase: 'result', body, callName });
     }
   };
+  const invoke = async (args: Record<string, unknown>): Promise<unknown> => {
+    const invocation = await start(args);
+    const result = await invocation.result;
+    if (!body.stdout) return result;
+    if (!body.result) return invocation.stdout;
+    return invocation.stdout === undefined ? { result } : { result, stdout: invocation.stdout };
+  };
+  Object.defineProperty(invoke, 'start', { value: start });
+  return invoke;
 }
 
-function decodeToolUnderlyingResult(
+function validateToolUnderlyingStdout(
   body: ExtendedCommandBody,
   invocation: ToolUnderlyingInvocationResult,
-  callName: string,
-): unknown {
-  const hasResult = invocation.result !== undefined;
+): void {
   const hasStdout = invocation.stdout !== undefined;
 
   if (hasStdout && !isAsyncIterable(invocation.stdout)) {
     throw new Error('stdout must be an async iterable');
-  }
-  if (!body.result && hasResult) {
-    throw new Error('unit command returned an unexpected result');
-  }
-  if (body.result && !hasResult) {
-    throw new Error('structured command result is missing');
   }
   if (!body.stdout && hasStdout) {
     throw new Error('command returned undeclared stdout');
@@ -1968,15 +2018,20 @@ function decodeToolUnderlyingResult(
   if (body.stdout?.required && !hasStdout) {
     throw new Error('required stdout stream is missing');
   }
+}
 
-  const decodedResult = body.result
-    ? decodeWireValue(body.result.codec, invocation.result!, `${callName} result`)
+function decodeToolUnderlyingResult(
+  body: ExtendedCommandBody,
+  result: WireTypedSchemaValue | undefined,
+  callName: string,
+): unknown {
+  const hasResult = result !== undefined;
+  if (!body.result && hasResult) throw new Error('unit command returned an unexpected result');
+  if (body.result && !hasResult) throw new Error('structured command result is missing');
+
+  return body.result
+    ? decodeWireValue(body.result.codec, result!, `${callName} result`)
     : undefined;
-  if (!body.stdout) return decodedResult;
-  if (!body.result) return invocation.stdout;
-  return hasStdout
-    ? { result: decodedResult, stdout: invocation.stdout }
-    : { result: decodedResult };
 }
 
 function isReadableStream(value: unknown): value is ToolInputStream {
@@ -2067,6 +2122,16 @@ function formatToolInvokeError(cause: ToolInvokeErrorCause<unknown>): string {
       return `constraint violation: ${cause.val}`;
     case 'invalid-result':
       return `invalid result: ${cause.val}`;
+    case 'protocol-error':
+      return `protocol error: ${cause.val}`;
+    case 'denied':
+      return `denied: ${cause.val}`;
+    case 'internal-error':
+      return `internal error: ${cause.val}`;
+    case 'cancelled':
+      return 'underlying invocation was cancelled';
+    case 'resource-exhausted':
+      return `underlying resource exhausted: ${cause.val}`;
     case 'tool': {
       const name = isImplementationObject(cause.error) ? cause.error.name : undefined;
       return typeof name === 'string'

@@ -424,6 +424,7 @@ fn expand_tool_middleware(
             command_path: ::std::vec::Vec<::std::string::String>,
             input: #golem_rust::TypedSchemaValue,
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
+            stdout: ::std::option::Option<#golem_rust::tool::OutputStream>,
             principal: #golem_rust::tool::Principal,
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
@@ -435,6 +436,7 @@ fn expand_tool_middleware(
                     command_path,
                     input,
                     stdin,
+                    stdout,
                     principal,
                     underlying,
                 )
@@ -548,7 +550,7 @@ fn expand_universal_tool_middleware(
         ));
     };
     validate_universal_function(&item_fn)?;
-    let expected_parameter_count = if args.parameters.is_some() { 8 } else { 7 };
+    let expected_parameter_count = if args.parameters.is_some() { 9 } else { 8 };
     if item_fn.sig.inputs.len() != expected_parameter_count {
         return Err(Error::new_spanned(
             &item_fn.sig.inputs,
@@ -611,6 +613,7 @@ fn expand_universal_tool_middleware(
             command_path: ::std::vec::Vec<::std::string::String>,
             input: #golem_rust::TypedSchemaValue,
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
+            stdout: ::std::option::Option<#golem_rust::tool::OutputStream>,
             principal: #golem_rust::tool::Principal,
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
@@ -623,6 +626,7 @@ fn expand_universal_tool_middleware(
                     command_path,
                     input,
                     stdin,
+                    stdout,
                     principal,
                     underlying,
                 ).await
@@ -683,11 +687,11 @@ fn validate_universal_function(item_fn: &ItemFn) -> syn::Result<()> {
             Ok(argument.ty.as_ref())
         })
         .collect::<syn::Result<Vec<_>>>()?;
-    let has_parameters = inputs.len() == 8;
-    if inputs.len() != 7 && !has_parameters {
+    let has_parameters = inputs.len() == 9;
+    if inputs.len() != 8 && !has_parameters {
         return Err(Error::new_spanned(
             &signature.inputs,
-            "universal tool middleware functions require seven parameters, or eight when `parameters` is declared",
+            "universal tool middleware functions require eight parameters, or nine when `parameters` is declared",
         ));
     }
     let offset = usize::from(has_parameters);
@@ -701,8 +705,11 @@ fn validate_universal_function(item_fn: &ItemFn) -> syn::Result<()> {
         type_is_container(inputs[offset + 4], "Option", |inner| {
             type_is_ident(inner, "InputStream")
         }),
-        type_is_ident(inputs[offset + 5], "Principal"),
-        type_is_ident(inputs[offset + 6], "UnderlyingTool"),
+        type_is_container(inputs[offset + 5], "Option", |inner| {
+            type_is_ident(inner, "OutputStream")
+        }),
+        type_is_ident(inputs[offset + 6], "Principal"),
+        type_is_ident(inputs[offset + 7], "UnderlyingTool"),
     ];
     if let Some((index, _)) = expected.iter().enumerate().find(|(_, valid)| !**valid) {
         return Err(Error::new_spanned(
@@ -873,6 +880,7 @@ mod tests {
                     command_path: Vec<String>,
                     input: golem_rust::TypedSchemaValue,
                     stdin: Option<golem_rust::tool::InputStream>,
+                    _stdout: Option<golem_rust::tool::OutputStream>,
                     _principal: golem_rust::tool::Principal,
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
@@ -1021,6 +1029,7 @@ mod tests {
                     command_path: Vec<String>,
                     input: golem_rust::TypedSchemaValue,
                     stdin: Option<golem_rust::tool::InputStream>,
+                    stdout: Option<golem_rust::tool::OutputStream>,
                     principal: golem_rust::tool::Principal,
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
@@ -1074,7 +1083,7 @@ mod tests {
                 })
                 .next()
                 .expect("expansion should contain an invoker adapter");
-            assert_eq!(invoker.sig.inputs.len(), 8);
+            assert_eq!(invoker.sig.inputs.len(), 9);
             let text = expansion.to_string();
             assert!(text.contains("sdk_alias :: tool :: register_tool_middleware"));
         }
@@ -1154,6 +1163,7 @@ mod tests {
                 command_path: Vec<String>,
                 input: TypedSchemaValue,
                 stdin: Option<InputStream>,
+                stdout: Option<OutputStream>,
                 principal: Principal,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {

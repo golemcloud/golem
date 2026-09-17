@@ -2,19 +2,19 @@
 test "provider stdout maps every typed failure to the host terminal" {
   assert_eq(
     tool_stream_failure(@toolCore.ToolStreamError::Cancelled),
-    @toolHost.ByteStreamFailure::Cancelled,
+    @toolStreams.ByteStreamFailure::Cancelled,
   )
   assert_eq(
     tool_stream_failure(@toolCore.ToolStreamError::Abandoned),
-    @toolHost.ByteStreamFailure::Abandoned,
+    @toolStreams.ByteStreamFailure::Abandoned,
   )
   assert_eq(
     tool_stream_failure(@toolCore.ToolStreamError::ResourceExhausted),
-    @toolHost.ByteStreamFailure::ResourceExhausted,
+    @toolStreams.ByteStreamFailure::ResourceExhausted,
   )
   assert_eq(
     tool_stream_failure(@toolCore.ToolStreamError::Failed("provider failed")),
-    @toolHost.ByteStreamFailure::Failed("provider failed"),
+    @toolStreams.ByteStreamFailure::Failed("provider failed"),
   )
 }
 
@@ -43,7 +43,7 @@ test "provider stdout writes, finishes, and drops exactly once" {
   run_provider_async(async fn() {
     let writes : Ref[Array[FixedArray[Byte]]] = Ref([])
     let finishes = Ref(0)
-    let failures : Ref[Array[@toolHost.ByteStreamFailure]] = Ref([])
+    let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
     let drops = Ref(0)
     let stdout = provider_stdout_from_callbacks(
       async fn(bytes) {
@@ -105,7 +105,7 @@ test "provider stdout skips empty writes before calling the host" {
 test "provider stdout dispatches one typed failure terminal" {
   run_provider_async(async fn() {
     let finishes = Ref(0)
-    let failures : Ref[Array[@toolHost.ByteStreamFailure]] = Ref([])
+    let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
     let drops = Ref(0)
     let stdout = provider_stdout_from_callbacks(
       _ => Ok(()),
@@ -124,7 +124,7 @@ test "provider stdout dispatches one typed failure terminal" {
     stdout.finish()
     assert_true(!stdout.is_open())
     assert_eq(failures.val, [
-      @toolHost.ByteStreamFailure::Failed("provider failed"),
+      @toolStreams.ByteStreamFailure::Failed("provider failed"),
     ])
     assert_eq(finishes.val, 0)
     stdout.drop()
@@ -140,8 +140,8 @@ test "provider stdout closes when the host writer is already closed" {
     let stdout = provider_stdout_from_callbacks(
       _ => {
         Err(
-          @toolHost.StreamWriteError::Closed(
-            @toolHost.ByteStreamCloseCause::ConsumerCancelled,
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
           ),
         )
       },
@@ -150,8 +150,8 @@ test "provider stdout closes when the host writer is already closed" {
       fn() { drops.val += 1 },
     )
     try stdout.write([1]) catch {
-      @toolHost.StreamWriteError::Closed(
-        @toolHost.ByteStreamCloseCause::ConsumerCancelled
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::ConsumerCancelled
       ) => ()
       _ => fail("unexpected provider stdout write error")
     } noraise {
@@ -165,8 +165,8 @@ test "provider stdout closes when the host writer is already closed" {
       _ => Ok(()),
       () => {
         Err(
-          @toolHost.StreamWriteError::Closed(
-            @toolHost.ByteStreamCloseCause::Finished,
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::Finished,
           ),
         )
       },
@@ -174,8 +174,8 @@ test "provider stdout closes when the host writer is already closed" {
       fn() { drops.val += 1 },
     )
     try finish_stdout.finish() catch {
-      @toolHost.StreamWriteError::Closed(
-        @toolHost.ByteStreamCloseCause::Finished
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::Finished
       ) => ()
       _ => fail("unexpected finish close cause")
     } noraise {
@@ -189,16 +189,16 @@ test "provider stdout closes when the host writer is already closed" {
       () => Ok(()),
       _ => {
         Err(
-          @toolHost.StreamWriteError::Closed(
-            @toolHost.ByteStreamCloseCause::ConsumerCancelled,
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
           ),
         )
       },
       fn() { drops.val += 1 },
     )
     try fail_stdout.fail(@toolCore.ToolStreamError::Abandoned) catch {
-      @toolHost.StreamWriteError::Closed(
-        @toolHost.ByteStreamCloseCause::ConsumerCancelled
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::ConsumerCancelled
       ) => ()
       _ => fail("unexpected fail close cause")
     } noraise {
@@ -234,7 +234,7 @@ test "provider stdout rejects a concurrent terminal operation" {
       let write = group.spawn(async fn() { stdout.write([1]) })
       started.get()
       try stdout.finish() catch {
-        @toolHost.StreamWriteError::ConcurrentOperation => ()
+        @toolStreams.StreamWriteError::ConcurrentOperation => ()
         _ => fail("unexpected concurrent provider stdout error")
       } noraise {
         _ => fail("concurrent provider stdout finish unexpectedly succeeded")
@@ -264,7 +264,7 @@ test "invocation stdout terminals preserve structured results and original error
         _ => Ok(()),
         () => {
           if mode == "finish-error" {
-            Err(@toolHost.StreamWriteError::ConcurrentOperation)
+            Err(@toolStreams.StreamWriteError::ConcurrentOperation)
           } else {
             terminals.push("finish")
             Ok(())
@@ -273,8 +273,8 @@ test "invocation stdout terminals preserve structured results and original error
         reason => {
           terminals.push(
             match reason {
-              @toolHost.ByteStreamFailure::Cancelled => "cancelled"
-              @toolHost.ByteStreamFailure::ResourceExhausted =>
+              @toolStreams.ByteStreamFailure::Cancelled => "cancelled"
+              @toolStreams.ByteStreamFailure::ResourceExhausted =>
                 "resource-exhausted"
               _ => "failed"
             },
@@ -321,7 +321,7 @@ test "invocation stdout terminals preserve structured results and original error
         }
         "finish-error" => {
           assert_true(
-            result is Err(@toolHost.StreamWriteError::ConcurrentOperation),
+            result is Err(@toolStreams.StreamWriteError::ConcurrentOperation),
           )
           assert_eq(terminals, [])
         }
@@ -466,7 +466,7 @@ test "real task cancellation during invocation and completion releases stdout an
           Ok(())
         },
         reason => {
-          assert_true(reason is @toolHost.ByteStreamFailure::Cancelled)
+          assert_true(reason is @toolStreams.ByteStreamFailure::Cancelled)
           ignore(start_failure.complete(()))
           release_failure.get()
           terminals.push("cancelled")

@@ -23,8 +23,9 @@ use crate::golem_agentic::exports::golem::tool::guest::{
 };
 #[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::tool::host::ToolStdoutWriter;
-use crate::golem_agentic::golem::tool::host::{ByteStreamFailure, StreamWriteError};
+use crate::golem_agentic::golem::tool::streams::{
+    ByteStreamFailure, StreamWriteError, ToolStdoutWriter,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 

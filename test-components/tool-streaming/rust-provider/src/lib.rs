@@ -1,4 +1,6 @@
-use golem_rust::agentic::{InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local};
+use golem_rust::agentic::{
+    AgentStream, InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local,
+};
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, tool_definition, tool_implementation,
@@ -17,7 +19,165 @@ struct MiddlewareProbeImpl;
 #[tool_implementation]
 impl MiddlewareProbe for MiddlewareProbeImpl {
     async fn apply(&self, value: String) -> String {
+        if value.starts_with("early-child(")
+            || value.starts_with("race-cancelled(")
+            || value.starts_with("race-detached(")
+        {
+            let _ = golem_rust::generate_idempotency_key();
+            if value.starts_with("early-child(")
+                && std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok()
+            {
+                wait_at_promise_checkpoint("middleware-early-child").await;
+                return format!("leaf({value})");
+            }
+            let checkpoint = if value.starts_with("early-child(") {
+                "middleware-early-child"
+            } else if value.starts_with("race-cancelled(") {
+                "middleware-race-cancelled"
+            } else {
+                "middleware-race-detached"
+            };
+            wait_at_crash_checkpoint(&value, checkpoint).await;
+        }
+        if value.starts_with("partial-completed(") || value.starts_with("partial-pending(") {
+            announce_middleware_probe_effect(&value).await;
+            if value.starts_with("partial-pending(") {
+                wait_at_crash_checkpoint(&value, "middleware-partial-pending").await;
+            }
+        }
         format!("leaf({value})")
+    }
+}
+
+async fn announce_middleware_probe_effect(value: &str) {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("MIDDLEWARE_PROBE_EFFECT_PORT")
+        .expect("middleware probe effect port is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid effect fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set effect method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set effect scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set effect authority");
+    request
+        .set_path_with_query(Some(&format!("/{value}")))
+        .expect("set effect path");
+    let send = async move { client::send(request).await.expect("send probe effect") };
+    let finish = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish effect trailers");
+        transmit.await.expect("transmit probe effect");
+    };
+    let (response, ()) = (send, finish).join().await;
+    assert_eq!(response.get_status_code(), 204);
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct TypedOutputItem {
+    pub ordinal: u32,
+    pub label: String,
+    pub asymmetric_extra: u64,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait TypedOutputStream {
+    async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem>;
+}
+
+struct TypedOutputStreamImpl;
+
+#[tool_implementation]
+impl TypedOutputStream for TypedOutputStreamImpl {
+    async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(TypedOutputItem {
+                    ordinal: 11,
+                    label: format!("{tag}-first"),
+                    asymmetric_extra: 1_001,
+                })
+                .await
+                .expect("write first typed tool output item");
+            if std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok() {
+                wait_at_promise_checkpoint("typed-output-after-first").await;
+            } else {
+                wait_at_crash_checkpoint(&tag, "typed-output-after-first").await;
+            }
+            writer
+                .write_all([
+                    TypedOutputItem {
+                        ordinal: 29,
+                        label: format!("{tag}-second"),
+                        asymmetric_extra: 2_003,
+                    },
+                    TypedOutputItem {
+                        ordinal: 47,
+                        label: format!("{tag}-third"),
+                        asymmetric_extra: 4_009,
+                    },
+                ])
+                .await
+                .expect("write remaining typed tool output items");
+        });
+        output
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct TypedInputItem {
+    pub label: String,
+    pub ordinal: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct TypedInputEvidence {
+    pub label: String,
+    pub ordinal: u32,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait TypedInputStream {
+    async fn consume(&self, input: AgentStream<TypedInputItem>) -> Vec<TypedInputEvidence>;
+}
+
+struct TypedInputStreamImpl;
+
+#[tool_implementation]
+impl TypedInputStream for TypedInputStreamImpl {
+    async fn consume(&self, mut input: AgentStream<TypedInputItem>) -> Vec<TypedInputEvidence> {
+        let first = input
+            .next()
+            .await
+            .expect("read first typed tool input item")
+            .expect("typed tool input has a first item");
+        wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
+        let mut evidence = vec![TypedInputEvidence {
+            label: first.label,
+            ordinal: first.ordinal,
+        }];
+        while let Some(item) = input
+            .next()
+            .await
+            .expect("read remaining typed tool input item")
+        {
+            evidence.push(TypedInputEvidence {
+                label: item.label,
+                ordinal: item.ordinal,
+            });
+        }
+        evidence
     }
 }
 
@@ -219,6 +379,51 @@ fn launch_retained_crash_child() {
             Some(pump_tool_stdin(nested_input(Vec::new()))),
         )
         .expect("launch retained incapable crash-checkpoint child");
+}
+
+fn launch_atomic_idempotency_child() {
+    ToolRpc::new("streaming")
+        .invoke(
+            &["run".to_string()],
+            raw_run_input("atomic-idempotency-child"),
+            Some(pump_tool_stdin(nested_input(Vec::new()))),
+        )
+        .expect("launch atomic idempotency child");
+}
+
+async fn send_idempotent_effect() {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port =
+        std::env::var("IDEMPOTENCY_EFFECT_PORT").expect("IDEMPOTENCY_EFFECT_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid effect fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set effect method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set effect scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set effect authority");
+    request
+        .set_path_with_query(Some("/effect"))
+        .expect("set effect path");
+    let receive_response =
+        async move { client::send(request).await.expect("send idempotent effect") };
+    let finish_request = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish effect request");
+        transmit.await.expect("transmit effect request");
+    };
+    let (response, ()) = (receive_response, finish_request).join().await;
+    assert_eq!(response.get_status_code(), 200);
 }
 
 fn principal_class(principal: &Principal) -> &'static str {
@@ -504,6 +709,50 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
     .await;
 }
 
+async fn wait_at_promise_checkpoint(name: &str) {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let promise = golem_rust::create_promise();
+    let port = std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT")
+        .expect("provider promise checkpoint port is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set checkpoint method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set checkpoint scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set checkpoint authority");
+    request
+        .set_path_with_query(Some(&format!("/{name}")))
+        .expect("set checkpoint path");
+    let payload = promise.oplog_idx.to_string().into_bytes();
+    let send = async move {
+        client::send(request)
+            .await
+            .expect("send checkpoint request")
+    };
+    let finish = async move {
+        assert!(body_tx.write_all(payload).await.is_empty());
+        drop(body_tx);
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish checkpoint trailers");
+        transmit.await.expect("transmit checkpoint request");
+    };
+    let (response, ()) = (send, finish).join().await;
+    assert_eq!(response.get_status_code(), 204);
+    golem_rust::await_promise(&promise).await;
+}
+
 fn append_owner_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     let (root, _) = wasi::filesystem::preopens::get_directories()
         .into_iter()
@@ -653,6 +902,10 @@ impl Streaming for StreamingImpl {
             "hold-capable-terminal-child" => {
                 let _ = golem_rust::generate_idempotency_key();
                 wait_at_crash_checkpoint(&stdout, "capable-terminal-retained-child").await;
+            }
+            "atomic-idempotency-child" => {
+                let _ = golem_rust::generate_idempotency_key();
+                send_idempotent_effect().await;
             }
             "historical-reconstruction-gate" => {
                 while let Some(item) = stdin.next().await {
@@ -862,6 +1115,12 @@ impl CapableStreaming for CapableStreamingImpl {
             write_owner_file(path, &bytes)
                 .expect("capable terminal checkpoint must share the owner filesystem");
             launch_retained_crash_child();
+            bytes.clone()
+        } else if path == "atomic-idempotency-parent" {
+            golem_rust::atomically_async(|| async {
+                launch_atomic_idempotency_child();
+            })
+            .await;
             bytes.clone()
         } else {
             write_owner_file(&path, &bytes).expect("capable tool must share the owner filesystem");

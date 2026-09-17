@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
@@ -379,6 +380,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                     self.finished = true;
                     self.lifecycle.finish();
                     Poll::Ready(Err(wasmtime::Error::msg(error)))
+                }
+                LiveStreamEventPayload::ClassifiedError { kind, message } => {
+                    self.finished = true;
+                    self.lifecycle.finish();
+                    Poll::Ready(Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                        ClassifiedHostError { kind, message },
+                    ))))
                 }
             },
             Some(Err(LiveStreamReceiveError::Closed)) => {

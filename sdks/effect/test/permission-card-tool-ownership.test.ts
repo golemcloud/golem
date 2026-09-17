@@ -166,7 +166,13 @@ describe("permission-card ownership across tool boundaries", () => {
         const decoded = await Effect.runPromise(codec.decode(input.value))
         const outputCodec = Effect.runSync(compile(Payload))
         const value = await Effect.runPromise(outputCodec.encode(decoded.payload))
-        return { result: { graph: outputCodec.schemaGraph, value } }
+        return [
+          {
+            get: async () => ({ graph: outputCodec.schemaGraph, value }),
+            cancel: vi.fn(),
+          },
+          undefined,
+        ] as const
       }),
     }
 
@@ -178,6 +184,7 @@ describe("permission-card ownership across tool boundaries", () => {
         emptyParameters(),
         [],
         { graph: codec.schemaGraph, value: malformed },
+        undefined,
         undefined,
         { tag: "anonymous" },
         wrapped as never,
@@ -191,6 +198,7 @@ describe("permission-card ownership across tool boundaries", () => {
       emptyParameters(),
       [],
       { graph: codec.schemaGraph, value: malformed },
+      undefined,
       undefined,
       { tag: "anonymous" },
       wrapped as never,

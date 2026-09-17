@@ -24,16 +24,19 @@ pub async fn invoke_tool_middleware(
   parameters : @types.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @streams.ByteStreamFailure],
+  ]?,
+  stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
-  wrapped : @common.UnderlyingTool,
+  wrapped : @underlying.UnderlyingTool,
   background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @common.ToolError] {
   let underlying = @toolMiddleware.UnderlyingTool::from_wit(
     wrapped, background_group,
   )
-  @toolMiddleware.invoke_registered_tool_middleware(
+  @toolMiddleware.invoke_registered_tool_middleware_wire(
     middleware_name, tool_name, tool_metadata, parameters, command_path, input, stdin,
-    principal, underlying,
+    stdout, principal, underlying,
   )
 }

@@ -12,16 +12,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 use super::wire;
+use crate::TypedSchemaValue;
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+use crate::decode_typed_schema_value_owned;
+#[cfg(test)]
+use crate::encode_typed_schema_value_owned;
 use crate::schema::{FromSchema, IntoSchema};
-use crate::{TypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
+#[cfg(test)]
+use std::rc::Rc;
 
 /// Readable byte stream used for tool stdin and stdout.
-pub type InputStream = wit_bindgen::StreamReader<u8>;
+#[cfg(not(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+)))]
+pub type InputStream = wit_bindgen::StreamReader<
+    Result<Vec<u8>, crate::bindings::golem::tool::streams::ByteStreamFailure>,
+>;
+
+/// Writable byte stream supplied to middleware for tool stdout.
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub type OutputStream = crate::agentic::OutputStream;
+#[cfg(not(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+)))]
+#[doc(hidden)]
+pub struct OutputStream;
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub type InputStream = wit_bindgen::StreamReader<
+    Result<Vec<u8>, crate::golem_agentic::golem::tool::streams::ByteStreamFailure>,
+>;
 
 /// Successful result of a tool invocation.
 pub struct InvocationResult {
@@ -55,6 +98,11 @@ pub enum ToolInvokeError<E> {
     InvalidResult(String),
     Tool(E),
     UnknownCustomError(RawCustomToolError),
+    ProtocolError(String),
+    Denied(String),
+    InternalError(String),
+    Cancelled,
+    ResourceExhausted(String),
 }
 
 impl<E> ToolInvokeError<E> {
@@ -71,6 +119,11 @@ impl<E> ToolInvokeError<E> {
             Self::InvalidResult(message) => ToolInvokeError::InvalidResult(message),
             Self::Tool(error) => ToolInvokeError::Tool(transform(error)),
             Self::UnknownCustomError(error) => ToolInvokeError::UnknownCustomError(error),
+            Self::ProtocolError(message) => ToolInvokeError::ProtocolError(message),
+            Self::Denied(message) => ToolInvokeError::Denied(message),
+            Self::InternalError(message) => ToolInvokeError::InternalError(message),
+            Self::Cancelled => ToolInvokeError::Cancelled,
+            Self::ResourceExhausted(message) => ToolInvokeError::ResourceExhausted(message),
         }
     }
 }
@@ -95,6 +148,11 @@ impl<E: Display> Display for ToolInvokeError<E> {
             Self::UnknownCustomError(error) => {
                 write!(f, "unknown custom tool error `{}`", error.name)
             }
+            Self::ProtocolError(message) => write!(f, "protocol error: {message}"),
+            Self::Denied(message) => write!(f, "denied: {message}"),
+            Self::InternalError(message) => write!(f, "internal error: {message}"),
+            Self::Cancelled => write!(f, "underlying tool invocation was cancelled"),
+            Self::ResourceExhausted(message) => write!(f, "resource exhausted: {message}"),
         }
     }
 }
@@ -113,15 +171,212 @@ impl<E: Error + 'static> Error for ToolInvokeError<E> {
 /// The runtime is the only producer of this handle. It is intentionally not
 /// cloneable. Shared invocation permits a middleware to overlap calls to the
 /// same runtime-minted capability.
+#[cfg_attr(
+    not(any(
+        test,
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    )),
+    allow(dead_code)
+)]
 pub struct UnderlyingTool {
     inner: UnderlyingToolInner,
 }
 
+/// One admitted invocation of the next middleware layer.
+///
+/// Dropping this value only stops observing the invocation. Use [`Self::cancel`]
+/// to explicitly request cancellation of this child.
+#[cfg_attr(
+    not(any(
+        test,
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    )),
+    allow(dead_code)
+)]
+pub struct UnderlyingInvocation {
+    result: UnderlyingInvocationResult,
+    pub stdout: Option<InputStream>,
+}
+
+/// Typed view of a started underlying invocation generated for a tool command.
+#[cfg_attr(
+    not(any(
+        test,
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    )),
+    allow(dead_code)
+)]
+pub struct TypedUnderlyingInvocation<T, E> {
+    invocation: UnderlyingInvocation,
+    pub stdout: Option<InputStream>,
+    decode: fn(InvocationResult) -> Result<T, ToolInvokeError<E>>,
+    decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
+}
+
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+impl<T, E> TypedUnderlyingInvocation<T, E> {
+    #[doc(hidden)]
+    pub fn new(
+        mut invocation: UnderlyingInvocation,
+        decode: fn(InvocationResult) -> Result<T, ToolInvokeError<E>>,
+        decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
+    ) -> Self {
+        let stdout = invocation.stdout.take();
+        Self {
+            invocation,
+            stdout,
+            decode,
+            decode_error,
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.invocation.cancel();
+    }
+
+    pub async fn get(&self) -> Result<T, ToolInvokeError<E>> {
+        let result = self.invocation.get_with(self.decode_error).await?;
+        (self.decode)(InvocationResult {
+            result,
+            stdout: None,
+        })
+    }
+
+    /// Waits for the structured result while forwarding the underlying stdout
+    /// to the writer supplied to this middleware invocation.
+    pub async fn get_forwarding_stdout(
+        mut self,
+        stdout: Option<OutputStream>,
+    ) -> Result<T, ToolInvokeError<E>> {
+        let underlying_stdout = self.stdout.take();
+        let forwarded = async move {
+            if underlying_stdout.is_none() {
+                return Err(ToolInvokeError::InvalidResult(
+                    "tool result did not contain declared stdout stream".to_string(),
+                ));
+            }
+            forward_stdout(underlying_stdout, stdout).await
+        };
+        let result = self.get();
+        let (result, forwarded) = join_results(result, forwarded).await;
+        match result {
+            Err(error) => Err(error),
+            Ok(result) => {
+                forwarded?;
+                Ok(result)
+            }
+        }
+    }
+}
+
+enum UnderlyingInvocationResult {
+    #[cfg(any(
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ))]
+    Raw(crate::tool_underlying_bindings::UnderlyingInvokeResult),
+    #[cfg(test)]
+    Fake(FakeInvocationResult),
+}
+
+#[cfg(test)]
+type FakeInvocationResultFuture = Pin<
+    Box<
+        dyn Future<
+            Output = Result<Option<crate::schema::wit::wire::TypedSchemaValue>, wire::ToolError>,
+        >,
+    >,
+>;
+
+#[cfg(test)]
+struct FakeInvocationResult {
+    result: std::cell::RefCell<Option<FakeInvocationResultFuture>>,
+    cancelled: Rc<std::cell::Cell<bool>>,
+}
+
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+impl UnderlyingInvocation {
+    pub fn cancel(&self) {
+        match &self.result {
+            #[cfg(any(
+                feature = "export_golem_agentic",
+                feature = "export_golem_tool_middleware"
+            ))]
+            UnderlyingInvocationResult::Raw(result) => result.cancel(),
+            #[cfg(test)]
+            UnderlyingInvocationResult::Fake(result) => result.cancelled.set(true),
+        }
+    }
+
+    pub async fn get(
+        &self,
+    ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<RawCustomToolError>> {
+        self.get_with(|name, payload| Ok(Some(RawCustomToolError { name, payload })))
+            .await
+    }
+
+    #[doc(hidden)]
+    pub async fn get_with<E>(
+        &self,
+        decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
+    ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<E>> {
+        let result = match &self.result {
+            #[cfg(any(
+                feature = "export_golem_agentic",
+                feature = "export_golem_tool_middleware"
+            ))]
+            UnderlyingInvocationResult::Raw(result) => result
+                .get()
+                .await
+                .map_err(|error| decode_underlying_error(error, decode_custom_error))?,
+            #[cfg(test)]
+            UnderlyingInvocationResult::Fake(result) => {
+                let future = result.result.borrow_mut().take().ok_or_else(|| {
+                    ToolInvokeError::InvalidResult(
+                        "underlying result was already observed".to_string(),
+                    )
+                })?;
+                future
+                    .await
+                    .map_err(|error| decode_wire_error(error, decode_custom_error))?
+            }
+        };
+        result
+            .map(decode_typed_schema_value_owned)
+            .transpose()
+            .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))
+    }
+}
+
 enum UnderlyingToolInner {
-    Raw(wire::UnderlyingTool),
+    #[cfg(any(
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ))]
+    Raw(crate::tool_underlying_bindings::UnderlyingTool),
     #[cfg(test)]
     Fake(FakeInvoke),
 }
+
+#[cfg(test)]
+type FakeRawInvoke = Box<
+    dyn Fn(
+        Vec<String>,
+        crate::schema::wit::wire::TypedSchemaValue,
+        Option<InputStream>,
+    ) -> Pin<Box<dyn Future<Output = Result<wire::InvocationResult, wire::ToolError>>>>,
+>;
 
 #[cfg(test)]
 pub(crate) type FakeInvoke = Box<
@@ -129,21 +384,61 @@ pub(crate) type FakeInvoke = Box<
         Vec<String>,
         crate::schema::wit::wire::TypedSchemaValue,
         Option<InputStream>,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<wire::InvocationResult, wire::ToolError>> + 'static>,
-    >,
+    ) -> (
+        Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            Option<crate::schema::wit::wire::TypedSchemaValue>,
+                            wire::ToolError,
+                        >,
+                    > + 'static,
+            >,
+        >,
+        Option<InputStream>,
+        Rc<std::cell::Cell<bool>>,
+    ),
 >;
 
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 impl UnderlyingTool {
+    #[cfg(any(
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ))]
     #[allow(dead_code)]
-    pub(crate) fn from_raw(raw: wire::UnderlyingTool) -> Self {
+    pub(crate) fn from_raw(raw: crate::tool_underlying_bindings::UnderlyingTool) -> Self {
         Self {
             inner: UnderlyingToolInner::Raw(raw),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn from_fake(invoke: FakeInvoke) -> Self {
+    pub(crate) fn from_fake(invoke: FakeRawInvoke) -> Self {
+        let invoke = Box::new(move |path, input, stdin| {
+            let result = invoke(path, input, stdin);
+            let result = Box::pin(async move {
+                let result = result.await?;
+                if result.stdout.is_some() {
+                    return Err(wire::ToolError::InvalidResult(
+                        "fake invocation must provide stdout when it is started".to_string(),
+                    ));
+                }
+                Ok(result.result)
+            });
+            (result as _, None, Rc::new(std::cell::Cell::new(false)))
+        });
+        Self {
+            inner: UnderlyingToolInner::Fake(invoke),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_fake_started(invoke: FakeInvoke) -> Self {
         Self {
             inner: UnderlyingToolInner::Fake(invoke),
         }
@@ -161,40 +456,217 @@ impl UnderlyingTool {
         .await
     }
 
+    /// Invokes the next layer while forwarding its stdout to the writer
+    /// supplied to this middleware invocation.
+    pub async fn invoke_forwarding_stdout(
+        &self,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+        stdout: Option<OutputStream>,
+    ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+        let mut invocation = self.start(command_path, input, stdin).await?;
+        let forwarded = forward_stdout(invocation.stdout.take(), stdout);
+        let result = invocation.get();
+        let (result, forwarded) = join_results(result, forwarded).await;
+        match result {
+            Err(error) => Err(error),
+            Ok(result) => {
+                forwarded?;
+                Ok(InvocationResult {
+                    result,
+                    stdout: None,
+                })
+            }
+        }
+    }
+
+    /// Admits a call and returns its independently cancellable result observer
+    /// before waiting for the structured result.
+    pub async fn start(
+        &self,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<UnderlyingInvocation, ToolInvokeError<RawCustomToolError>> {
+        self.start_with(command_path, input, stdin).await
+    }
+
+    #[doc(hidden)]
+    pub async fn start_with<E>(
+        &self,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<UnderlyingInvocation, ToolInvokeError<E>> {
+        let input = crate::encode_typed_schema_value_async(&input)
+            .await
+            .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))?;
+        match &self.inner {
+            #[cfg(any(
+                feature = "export_golem_agentic",
+                feature = "export_golem_tool_middleware"
+            ))]
+            UnderlyingToolInner::Raw(raw) => {
+                let (result, stdout) = raw.invoke(command_path, input, stdin).await;
+                Ok(UnderlyingInvocation {
+                    result: UnderlyingInvocationResult::Raw(result),
+                    stdout,
+                })
+            }
+            #[cfg(test)]
+            UnderlyingToolInner::Fake(invoke) => {
+                let (result, stdout, cancelled) = invoke(command_path, input, stdin);
+                Ok(UnderlyingInvocation {
+                    result: UnderlyingInvocationResult::Fake(FakeInvocationResult {
+                        result: std::cell::RefCell::new(Some(result)),
+                        cancelled,
+                    }),
+                    stdout,
+                })
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub async fn invoke_with<E>(
         &self,
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-        decode_custom_error: impl FnOnce(String, TypedSchemaValue) -> Result<Option<E>, String>,
+        decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
     ) -> Result<InvocationResult, ToolInvokeError<E>> {
-        let input = encode_typed_schema_value_owned(input)
-            .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))?;
-        let result = match &self.inner {
-            UnderlyingToolInner::Raw(raw) => raw.invoke(command_path, input, stdin).await,
-            #[cfg(test)]
-            UnderlyingToolInner::Fake(invoke) => invoke(command_path, input, stdin).await,
-        }
-        .map_err(|error| decode_wire_error(error, decode_custom_error))?;
-        decode_wire_result(result)
+        let mut invocation = self.start_with(command_path, input, stdin).await?;
+        let result = invocation.get_with(decode_custom_error).await?;
+        Ok(InvocationResult {
+            result,
+            stdout: invocation.stdout.take(),
+        })
     }
 }
 
-fn decode_wire_result<E>(
-    result: wire::InvocationResult,
-) -> Result<InvocationResult, ToolInvokeError<E>> {
-    let wire::InvocationResult { result, stdout } = result;
-    let result = result
-        .map(decode_typed_schema_value_owned)
-        .transpose()
-        .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?;
-    Ok(InvocationResult { result, stdout })
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+async fn forward_stdout<E>(
+    stdout: Option<InputStream>,
+    mut output: Option<OutputStream>,
+) -> Result<(), ToolInvokeError<E>> {
+    let Some(mut stdout) = stdout else {
+        return match output {
+            Some(output) => classify_stream_write_result(output.finish().await).map(drop),
+            None => Ok(()),
+        };
+    };
+    while let Some(item) = stdout.next().await {
+        match item {
+            Ok(bytes) => {
+                if let Some(output) = &mut output
+                    && classify_stream_write_result(output.write(bytes).await)?
+                {
+                    return Ok(());
+                }
+            }
+            Err(reason) => {
+                return match output {
+                    Some(output) => {
+                        classify_stream_write_result(output.fail(reason).await).map(drop)
+                    }
+                    None => Ok(()),
+                };
+            }
+        }
+    }
+    match output {
+        Some(output) => classify_stream_write_result(output.finish().await).map(drop),
+        None => Ok(()),
+    }
 }
 
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+fn classify_stream_write_result<E>(
+    result: Result<(), crate::golem_agentic::golem::tool::streams::StreamWriteError>,
+) -> Result<bool, ToolInvokeError<E>> {
+    use crate::golem_agentic::golem::tool::streams::{ByteStreamCloseCause, StreamWriteError};
+    match result {
+        Ok(()) => Ok(false),
+        Err(StreamWriteError::Closed(ByteStreamCloseCause::ConsumerCancelled)) => Ok(true),
+        Err(error) => Err(ToolInvokeError::InvalidResult(format!(
+            "failed to forward underlying stdout: {error:?}"
+        ))),
+    }
+}
+
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+async fn join_results<A, B>(a: A, b: B) -> (A::Output, B::Output)
+where
+    A: Future,
+    B: Future,
+{
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    let mut a_result = None;
+    let mut b_result = None;
+    std::future::poll_fn(|cx| {
+        if a_result.is_none()
+            && let std::task::Poll::Ready(result) = a.as_mut().poll(cx)
+        {
+            a_result = Some(result);
+        }
+        if b_result.is_none()
+            && let std::task::Poll::Ready(result) = b.as_mut().poll(cx)
+        {
+            b_result = Some(result);
+        }
+        match (a_result.take(), b_result.take()) {
+            (Some(a), Some(b)) => std::task::Poll::Ready((a, b)),
+            (a, b) => {
+                a_result = a;
+                b_result = b;
+                std::task::Poll::Pending
+            }
+        }
+    })
+    .await
+}
+
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+fn decode_underlying_error<E>(
+    error: crate::tool_underlying_bindings::UnderlyingError,
+    decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
+) -> ToolInvokeError<E> {
+    use crate::tool_underlying_bindings::UnderlyingError;
+    match error {
+        UnderlyingError::ToolError(error) => decode_wire_error(error, decode_custom_error),
+        UnderlyingError::ProtocolError(message) => ToolInvokeError::ProtocolError(message),
+        UnderlyingError::Denied(message) => ToolInvokeError::Denied(message),
+        UnderlyingError::InternalError(message) => ToolInvokeError::InternalError(message),
+        UnderlyingError::Cancelled => ToolInvokeError::Cancelled,
+        UnderlyingError::ResourceExhausted(message) => ToolInvokeError::ResourceExhausted(message),
+    }
+}
+
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 fn decode_wire_error<E>(
     error: wire::ToolError,
-    decode_custom_error: impl FnOnce(String, TypedSchemaValue) -> Result<Option<E>, String>,
+    decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> ToolInvokeError<E> {
     match error {
         wire::ToolError::InvalidToolName(name) => ToolInvokeError::InvalidToolName(name),
@@ -300,6 +772,31 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn stdout_write_result_classification_only_accepts_consumer_cancellation() {
+        use crate::golem_agentic::golem::tool::streams::{
+            ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
+        };
+
+        assert_eq!(classify_stream_write_result::<()>(Ok(())), Ok(false));
+        assert_eq!(
+            classify_stream_write_result::<()>(Err(StreamWriteError::Closed(
+                ByteStreamCloseCause::ConsumerCancelled
+            ))),
+            Ok(true)
+        );
+        for error in [
+            StreamWriteError::Closed(ByteStreamCloseCause::Finished),
+            StreamWriteError::Closed(ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)),
+            StreamWriteError::ConcurrentOperation,
+        ] {
+            assert!(matches!(
+                classify_stream_write_result::<()>(Err(error)),
+                Err(ToolInvokeError::InvalidResult(_))
+            ));
+        }
+    }
+
+    #[test]
     fn map_tool_preserves_every_protocol_variant() {
         let variants = [
             ToolInvokeError::InvalidToolName("tool".to_string()),
@@ -342,6 +839,13 @@ mod tests {
                 ToolInvokeError::Tool(_) => panic!("protocol error became a custom error"),
                 ToolInvokeError::UnknownCustomError(_) => {
                     panic!("protocol error became an unknown custom error")
+                }
+                ToolInvokeError::ProtocolError(_)
+                | ToolInvokeError::Denied(_)
+                | ToolInvokeError::InternalError(_)
+                | ToolInvokeError::Cancelled
+                | ToolInvokeError::ResourceExhausted(_) => {
+                    panic!("wire protocol error became an underlying lifecycle error")
                 }
             }
         }
@@ -463,16 +967,16 @@ mod tests {
         let mut first_result = None;
         let mut second_result = None;
         let (first, second) = std::future::poll_fn(|cx| {
-            if first_result.is_none() {
-                if let std::task::Poll::Ready(result) = first.as_mut().poll(cx) {
-                    first_result = Some(result);
-                }
+            if first_result.is_none()
+                && let std::task::Poll::Ready(result) = first.as_mut().poll(cx)
+            {
+                first_result = Some(result);
             }
-            if second_result.is_none() {
-                if let std::task::Poll::Ready(result) = second.as_mut().poll(cx) {
-                    assert!(first_result.is_none());
-                    second_result = Some(result);
-                }
+            if second_result.is_none()
+                && let std::task::Poll::Ready(result) = second.as_mut().poll(cx)
+            {
+                assert!(first_result.is_none());
+                second_result = Some(result);
             }
             match (first_result.take(), second_result.take()) {
                 (Some(first), Some(second)) => std::task::Poll::Ready((first, second)),
@@ -493,6 +997,45 @@ mod tests {
             String::from_value(first.unwrap().result.unwrap().value()).unwrap(),
             "first"
         );
+    }
+
+    #[test]
+    async fn result_wait_and_cancel_share_the_same_invocation_borrow() {
+        let underlying = UnderlyingTool::from_fake_started(Box::new(|_, _, _| {
+            let cancelled = Rc::new(Cell::new(false));
+            let observed = Rc::clone(&cancelled);
+            let result = Box::pin(std::future::poll_fn(move |cx| {
+                if observed.get() {
+                    std::task::Poll::Ready(Err(wire::ToolError::ConstraintViolation(
+                        "cancelled".to_string(),
+                    )))
+                } else {
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
+            }));
+            (result as _, None, cancelled)
+        }));
+        let invocation = underlying
+            .start(
+                vec!["run".to_string()],
+                ().into_typed_schema_value().unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        let get = invocation.get();
+        let mut get = std::pin::pin!(get);
+        std::future::poll_fn(|cx| {
+            assert!(get.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        invocation.cancel();
+        assert!(matches!(
+            get.await,
+            Err(ToolInvokeError::ConstraintViolation(message)) if message == "cancelled"
+        ));
     }
 
     #[test]

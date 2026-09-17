@@ -21,6 +21,7 @@ components:
       tools:
       - golem-it:tool-streaming-rust-provider/streaming
       - golem-it:tool-streaming-rust-provider/capable-streaming
+      - golem-it:tool-streaming-rust-provider/typed-output-stream
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
@@ -28,12 +29,14 @@ components:
 tools:
   streaming: {}
   capable-streaming: {}
+  typed-output-stream: {}
 
 agents:
   ToolStreamingCaller:
     tools:
       streaming: {}
       capable-streaming: {}
+      typed-output-stream: {}
 
 bridge:
   rust:
@@ -41,6 +44,7 @@ bridge:
       tools:
       - streaming
       - capable-streaming
+      - typed-output-stream
 
 environments:
   local:

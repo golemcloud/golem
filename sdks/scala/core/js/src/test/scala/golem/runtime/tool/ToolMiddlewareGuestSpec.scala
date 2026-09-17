@@ -20,6 +20,7 @@ import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool._
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.runtime.guest.ToolMiddlewareGuest
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema.{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
@@ -38,10 +39,23 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
   private val universalName      = "guest-middleware-universal"
   private val typedUniversalName = "guest-middleware-typed-universal"
   private val monomorphicName    = "guest-middleware-monomorphic"
+  private val typedStdoutName    = "guest-middleware-typed-stdout"
   private val universalTool      = richTool("guest-middleware-tool")
   private val monomorphicTool    = echoTool("guest-middleware-echo")
-  private val anonymous          = js.Dynamic.literal("tag" -> "anonymous")
-  private val noStdin: js.Any    = js.undefined.asInstanceOf[js.Any]
+  private val typedStdoutTool    = {
+    val tool = echoTool("guest-middleware-stdout")
+    tool.copy(commands =
+      tool.commands.map(command =>
+        command.copy(body =
+          command.body.map(body =>
+            body.copy(stdout = Some(StreamSpec(Doc.empty, List("application/octet-stream"), required = true)))
+          )
+        )
+      )
+    )
+  }
+  private val anonymous       = js.Dynamic.literal("tag" -> "anonymous")
+  private val noStdin: js.Any = js.undefined.asInstanceOf[js.Any]
 
   private final case class NestedParameters(label: String, nested: NestedParameter) derives Schema
   private final case class NestedParameter(values: List[Int]) derives Schema
@@ -93,7 +107,25 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     invoke: (js.Array[String], JsTypedSchemaValue, js.Any) => js.Promise[JsInvocationResult]
   ): JsUnderlyingTool =
     js.Dynamic
-      .literal("invoke" -> js.Any.fromFunction3(invoke))
+      .literal(
+        "invoke" -> js.Any.fromFunction3((path: js.Array[String], input: JsTypedSchemaValue, stdin: js.Any) =>
+          FutureInterop.toPromise(
+            FutureInterop
+              .fromPromise(invoke(path, input, stdin))
+              .map(result =>
+                js.Tuple2(
+                  js.Dynamic
+                    .literal(
+                      "get"    -> js.Any.fromFunction0(() => js.Promise.resolve(result.result)),
+                      "cancel" -> js.Any.fromFunction0(() => ())
+                    )
+                    .asInstanceOf[JsUnderlyingInvokeResult],
+                  result.stdout.asInstanceOf[js.UndefOr[JsWasiOutputStream]]
+                )
+              )(ToolInvokerRuntime.executionContext)
+          )
+        )
+      )
       .asInstanceOf[JsUnderlyingTool]
 
   private def invoke(
@@ -104,7 +136,8 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     invocationInput: JsTypedSchemaValue,
     stdin: js.Any,
     underlying: JsUnderlyingTool,
-    principal: js.Dynamic = anonymous
+    principal: js.Dynamic = anonymous,
+    stdout: js.UndefOr[ToolHostApi.RawToolStdoutWriter] = js.undefined
   ): js.Promise[JsInvocationResult] =
     invokeWithParameters(
       middlewareName,
@@ -115,7 +148,8 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
       invocationInput,
       stdin,
       underlying,
-      principal
+      principal,
+      stdout
     )
 
   private def invokeWithParameters(
@@ -127,7 +161,8 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     invocationInput: JsTypedSchemaValue,
     stdin: js.Any,
     underlying: JsUnderlyingTool,
-    principal: js.Dynamic = anonymous
+    principal: js.Dynamic = anonymous,
+    stdout: js.UndefOr[ToolHostApi.RawToolStdoutWriter] = js.undefined
   ): js.Promise[JsInvocationResult] =
     guest
       .invokeToolMiddleware(
@@ -138,6 +173,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
         commandPath,
         invocationInput,
         stdin,
+        stdout,
         principal,
         underlying
       )
@@ -195,6 +231,16 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
       underlying: UniversalToolUnderlying
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
       Future.successful(Right(ToolMiddlewareResult(None, Some(stdout))))
+  }
+
+  private final class StartAndReturn extends UniversalToolMiddleware {
+    def invoke(
+      invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
+      underlying: UniversalToolUnderlying
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
+      underlying.start(invocation.commandPath, invocation.input, invocation.stdin)
+      Future.successful(Right(ToolMiddlewareResult(None, None)))
+    }
   }
 
   private lazy val registered: Unit = {
@@ -259,6 +305,43 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
       List(binding)
     )
     ToolMiddlewareImplementationRuntime.registerMonomorphic(monomorphicHandle)
+
+    val stdoutWire   = typedStdoutTool.tryToTool.toOption.get
+    val stdoutSchema = typedStdoutTool.canonicalInputRecordSchema(0).toOption.get
+    ToolMiddlewareImplementationRuntime.registerMonomorphic(
+      MonomorphicToolMiddlewareHandle(
+        _ =>
+          Right(
+            ToolMiddlewareDescriptor(
+              typedStdoutName,
+              Nil,
+              Doc.empty,
+              ToolMiddlewareScope.Monomorphic(stdoutWire, Some(stdoutWire)),
+              ToolMiddleware.noParametersSchema
+            )
+          ),
+        _ => Right(typedStdoutTool),
+        _ => Right(typedStdoutTool),
+        () => (),
+        List(
+          ToolMiddlewareMethodBinding(
+            "invoke",
+            Nil,
+            expectsStdin = false,
+            (_, underlying, context) =>
+              ToolUnderlyingRuntime
+                .runInfallible(
+                  underlying,
+                  Right(typedStdoutTool),
+                  Nil,
+                  Right(TypedSchemaValue(stdoutSchema, SchemaValue.RecordValue(context.fields.map(_.value)))),
+                  None
+                )
+                .toMiddlewareResult
+          )
+        )
+      )
+    )
   }
 
   override def spec: Spec[TestEnvironment, Any] =
@@ -502,6 +585,135 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           stdoutResult eq stdout,
           first.value == 17,
           second.value == 23
+        )
+      },
+      test("monomorphic typed projection validates stdout carried by JS admission") {
+        registered
+        val stdout = js.Dynamic.global
+          .eval("(async function* () { yield 41; })()")
+          .asInstanceOf[JsWasiOutputStream]
+        val underlying = wrapped((_, _, _) => resolved(JsInvocationResult(js.undefined, stdout)))
+        fromPromise(
+          invoke(
+            typedStdoutName,
+            typedStdoutTool.toolName,
+            toolToJs(typedStdoutTool),
+            js.Array[String](),
+            monomorphicInput,
+            noStdin,
+            underlying
+          )
+        ).map(result => assertTrue(stdoutOf(result) eq stdout))
+      },
+      test("dropping a pending observer defers disposal until get settles") {
+        registered
+        val middlewareName = "guest-middleware-drop-pending"
+        ToolMiddlewareImplementationRuntime.registerUniversal(
+          UniversalToolMiddlewareHandle(
+            ToolMiddlewareDescriptor(
+              middlewareName,
+              Nil,
+              Doc.empty,
+              ToolMiddlewareScope.Universal,
+              ToolMiddleware.noParametersSchema
+            ),
+            _ => Right(ToolMiddleware.NoParameters()),
+            () => new StartAndReturn
+          )
+        )
+        var pending              = true
+        var disposals            = 0
+        var cancellations        = 0
+        var complete: () => Unit = null
+        val getPromise           =
+          new js.Promise[js.UndefOr[JsTypedSchemaValue]]((resolve, _) => complete = () => resolve(js.undefined))
+        val observer = js.Dynamic.literal(
+          "get"    -> js.Any.fromFunction0(() => getPromise),
+          "cancel" -> js.Any.fromFunction0(() => cancellations += 1)
+        )
+        js.Dynamic.global.Reflect.applyDynamic("set")(
+          observer,
+          js.Dynamic.global.Symbol.selectDynamic("dispose"),
+          js.Any.fromFunction0 { () =>
+            if (pending) throw new RuntimeException("observer disposed while get was outstanding")
+            disposals += 1
+          }
+        )
+        val underlying = js.Dynamic
+          .literal(
+            "invoke" -> js.Any.fromFunction3((_: js.Array[String], _: JsTypedSchemaValue, _: js.Any) =>
+              js.Promise.resolve(js.Tuple2(observer.asInstanceOf[JsUnderlyingInvokeResult], js.undefined))
+            )
+          )
+          .asInstanceOf[JsUnderlyingTool]
+        for {
+          _ <- fromPromise(
+                 invoke(
+                   middlewareName,
+                   universalTool.toolName,
+                   toolToJs(universalTool),
+                   js.Array("run"),
+                   input("payload"),
+                   noStdin,
+                   underlying
+                 )
+               )
+          before = disposals
+          _      = {
+            pending = false
+            complete()
+          }
+          _ <- ZIO.fromFuture(_ => FutureInterop.fromPromise(js.Promise.resolve(())))
+        } yield assertTrue(before == 0, disposals == 1, cancellations == 0)
+      },
+      test("wrapped stdout is pumped through the host writer with backpressure") {
+        registered
+        val stdout = js.Dynamic.global
+          .eval(
+            "(async function* () { yield { tag: 'ok', val: new Uint8Array(70000) }; yield { tag: 'ok', val: new Uint8Array(70000) }; })()"
+          )
+          .asInstanceOf[JsWasiOutputStream]
+        val underlying = wrapped((_, _, _) => resolved(JsInvocationResult(js.undefined, stdout)))
+        var writes     = 0
+        var active     = 0
+        var maxActive  = 0
+        var bytes      = 0
+        var finishes   = 0
+        val writer     = js.Dynamic
+          .literal(
+            "write" -> js.Any.fromFunction1 { (chunk: js.typedarray.Uint8Array) =>
+              writes += 1
+              active += 1
+              maxActive = math.max(maxActive, active)
+              bytes += chunk.length
+              js.Promise.resolve(()).`then`[Unit](_ => active -= 1)
+            },
+            "finish" -> js.Any.fromFunction0 { () =>
+              finishes += 1
+              js.Promise.resolve(())
+            },
+            "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.reject(new RuntimeException("unexpected failure")))
+          )
+          .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+        fromPromise(
+          invoke(
+            universalName,
+            universalTool.toolName,
+            toolToJs(universalTool),
+            js.Array("run"),
+            input("payload"),
+            noStdin,
+            underlying,
+            stdout = writer
+          )
+        ).map(result =>
+          assertTrue(
+            js.isUndefined(result.asInstanceOf[js.Dynamic].selectDynamic("stdout")),
+            writes == 2,
+            bytes == 140000,
+            maxActive == 1,
+            finishes == 1
+          )
         )
       },
       test("invalid final stdout is rejected and closed") {

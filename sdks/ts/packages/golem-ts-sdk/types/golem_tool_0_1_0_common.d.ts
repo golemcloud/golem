@@ -77,12 +77,6 @@
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  export class UnderlyingTool {
-    /**
-     * @throws ToolError
-     */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
-  }
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
@@ -477,5 +471,4 @@ declare module 'golem:tool/common@0.1.0' {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
   };
-  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

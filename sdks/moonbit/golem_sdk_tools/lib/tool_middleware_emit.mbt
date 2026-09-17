@@ -175,6 +175,7 @@ fn emit_expected_underlying_method(
   buf : StringBuilder,
   expected : ToolInfo,
   surface : ToolMiddlewareCommandInfo,
+  start : Bool,
 ) -> Unit {
   let wrapper = expected.source_name + "Underlying"
   let params = surface.params
@@ -184,12 +185,23 @@ fn emit_expected_underlying_method(
     "///|\npub async fn " +
     wrapper +
     "::" +
-    surface.handler_name +
+    (if start { "start_" + surface.handler_name } else { surface.handler_name }) +
     "(self : " +
     wrapper +
     (if params.is_empty() { "" } else { ", " + params }) +
     ") -> Result[" +
-    emit_type(surface.success_type) +
+    (if start {
+      "@toolMiddleware.UnderlyingInvocation[" +
+      (match middleware_value_type(surface) {
+        Some(type_) => emit_type(type_)
+        None => "Unit"
+      }) +
+      ", " +
+      emit_type(surface.error_type) +
+      "]"
+    } else {
+      emit_type(surface.success_type)
+    }) +
     ", @toolMiddleware.ToolInvokeError[" +
     emit_type(surface.error_type) +
     "]] {\n  let __golem_command_path = " +
@@ -218,7 +230,13 @@ fn emit_expected_underlying_method(
   } else {
     "fn(__golem_name, __golem_error) { @tool.decode_named_tool_error(__golem_name, __golem_error) }"
   }
-  let decode_result = if surface.has_stdout {
+  let decode_result = if start {
+    if middleware_value_type(surface) is Some(_) {
+      "decode_result_value"
+    } else {
+      "decode_result_empty"
+    }
+  } else if surface.has_stdout {
     if middleware_value_type(surface) is Some(_) {
       "decode_result_with_stdout"
     } else {
@@ -230,13 +248,21 @@ fn emit_expected_underlying_method(
     "decode_result_empty"
   }
   buf.write_string(
-    "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error))) }\n  let __golem_result = match self.underlying.invoke_with(\n    __golem_command_path,\n    __golem_input,\n    " +
+    "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error))) }\n  let __golem_result = match self.underlying." +
+    (if start { "start_with" } else { "invoke_with" }) +
+    "(\n    __golem_command_path,\n    __golem_input,\n    " +
     stdin +
     ",\n    " +
     decode_custom_error +
-    ",\n  ) {\n    Ok(__golem_result) => __golem_result\n    Err(__golem_error) => return Err(__golem_error)\n  }\n  @toolMiddleware." +
-    decode_result +
-    "(__golem_result)\n}\n\n",
+    ",\n    " +
+    (if start { "@toolMiddleware." + decode_result + ",\n" } else { "" }) +
+    "  ) {\n    Ok(__golem_result) => __golem_result\n    Err(__golem_error) => return Err(__golem_error)\n  }\n" +
+    (if start {
+      "  Ok(__golem_result)\n"
+    } else {
+      "  @toolMiddleware." + decode_result + "(__golem_result)\n"
+    }) +
+    "}\n\n",
   )
 }
 
@@ -253,7 +279,8 @@ fn emit_expected_underlying(
     " { priv underlying : @toolMiddleware.UnderlyingTool }\n\n",
   )
   for surface in surfaces {
-    emit_expected_underlying_method(buf, expected, surface)
+    emit_expected_underlying_method(buf, expected, surface, false)
+    emit_expected_underlying_method(buf, expected, surface, true)
   }
 }
 

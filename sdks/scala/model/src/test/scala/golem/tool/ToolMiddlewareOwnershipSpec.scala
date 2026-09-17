@@ -97,30 +97,28 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
             })
           )
       },
-      test("rejects overlapping calls as SDK misuse") {
-        val response                             = Promise[Outcome]()
-        val raw                                  = new FunctionRaw((_, _, _) => response.future)
-        var reason: Option[ToolUnderlyingMisuse] = None
-        val result                               = withUnderlying(raw) { underlying =>
-          val first = underlying.invoke(List("first"), unitInput, None)
-          underlying
-            .invoke(List("overlap"), unitInput, None)
-            .recover { case error: ToolUnderlyingMisuseException =>
-              reason = Some(error.reason)
-              Left(ToolInvokeError.InvalidResult("overlap rejected"))
-            }(ToolInvokerRuntime.executionContext)
-            .flatMap { _ =>
-              response.success(Right(empty))
-              first.map(_ => Right(empty))(ToolInvokerRuntime.executionContext)
-            }(ToolInvokerRuntime.executionContext)
+      test("allows overlapping calls to complete in reverse order") {
+        val firstResponse  = Promise[Outcome]()
+        val secondResponse = Promise[Outcome]()
+        val raw            =
+          new FunctionRaw((path, _, _) => if (path == List("first")) firstResponse.future else secondResponse.future)
+        val result = withUnderlying(raw) { underlying =>
+          val first  = underlying.invoke(List("first"), unitInput, None)
+          val second = underlying.invoke(List("second"), unitInput, None)
+          second.flatMap { _ =>
+            firstResponse.success(Right(empty))
+            first.map(_ => Right(empty))(ToolInvokerRuntime.executionContext)
+          }(ToolInvokerRuntime.executionContext)
         }
+        val bothAdmitted = raw.calls.size == 2
+        secondResponse.success(Right(empty))
         ZIO
           .fromFuture(_ => result)
           .map(outcome =>
             assertTrue(
               outcome == Right(empty),
-              reason.contains(ToolUnderlyingMisuse.OverlappingInvocation),
-              raw.calls.size == 1
+              bothAdmitted,
+              raw.calls.map(_._1).toList == List(List("first"), List("second"))
             )
           )
       },
@@ -141,7 +139,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
           raw.calls.isEmpty
         )
       },
-      test("revocation waits for an already-started invocation") {
+      test("revocation does not wait for a consumer-dependent underlying terminal") {
         val response              = Promise[Outcome]()
         val raw                   = new FunctionRaw((_, _, _) => response.future)
         var call: Future[Outcome] = null
@@ -149,11 +147,9 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
           call = underlying.invoke(Nil, unitInput, None)
           Future.successful(Right(empty))
         }
-        val pending = result.value.isEmpty
-        response.success(Right(empty))
         ZIO
           .fromFuture(_ => result)
-          .map(outcome => assertTrue(pending, call.isCompleted, outcome == Right(empty), raw.calls.size == 1))
+          .map(outcome => assertTrue(!call.isCompleted, outcome == Right(empty), raw.calls.size == 1))
       },
       test("closes unforwarded stdin on short-circuit and failed callback paths") {
         val shortInput  = new ClosableInput

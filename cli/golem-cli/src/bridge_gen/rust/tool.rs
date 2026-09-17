@@ -385,13 +385,9 @@ impl RustToolBridgeGenerator {
         } else {
             self.result_decode(body)?
         };
-        let asyncness = if has_stdout {
-            quote! {}
-        } else {
-            quote! { async }
-        };
+        let asyncness = quote! { async };
         let completion = if has_stdout {
-            quote! { #invoke }
+            quote! { #invoke.await }
         } else {
             quote! {
                 let __result = #invoke?;

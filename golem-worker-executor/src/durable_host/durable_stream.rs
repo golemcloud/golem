@@ -4445,6 +4445,21 @@ impl DurableStreamProducer {
         Ok(())
     }
 
+    pub(crate) async fn cancel(
+        &self,
+        stream_id: StreamId,
+        sequence: u64,
+        role: StreamCancelRoleV1,
+        reason: StreamCancelReasonV1,
+        details: Option<String>,
+    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
+        let index = self.index_for_terminal([], stream_id).await?;
+        let pending = self
+            .commit_cancel_locked(index, stream_id, sequence, role, reason, details)
+            .await?;
+        self.publish_committed_cancellation(pending).await
+    }
+
     pub(crate) fn register_source_cancellation(
         &self,
         stream_id: StreamId,

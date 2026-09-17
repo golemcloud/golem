@@ -217,7 +217,6 @@ impl ToolActivationSnapshot {
     }
 
     /// Materializes the deployment-selected chain into a self-contained durable runtime plan.
-    /// This does not enable middleware dispatch; callers still apply the fail-closed gate.
     pub fn runtime_plan(&self) -> Result<EntityInvocationPlan, ToolDiscoveryError> {
         let mut layers = Vec::new();
         if let Some(chain) = &self.middleware_chain {
@@ -230,7 +229,7 @@ impl ToolActivationSnapshot {
                 let filesystem =
                     filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
                 let activation = EntityActivation::new(
-                    ExecutableTarget::new(component_id.clone(), *component_revision),
+                    ExecutableTarget::new(*component_id, *component_revision),
                     occurrence.middleware.deployment_revision,
                     EntityActivationPolicy::ToolMiddleware {
                         middleware_name: ToolMiddlewareName::try_from(
@@ -261,7 +260,7 @@ impl ToolActivationSnapshot {
                 component_revision,
                 ..
             } => EntityActivation::new(
-                ExecutableTarget::new(component_id.clone(), *component_revision),
+                ExecutableTarget::new(*component_id, *component_revision),
                 self.registered_tool.deployment_revision,
                 EntityActivationPolicy::Tool {
                     provision: self.registered_tool.provision.clone(),

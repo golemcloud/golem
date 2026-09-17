@@ -263,10 +263,6 @@ pub(all) enum ToolMiddlewareScope {
   Universal
 } derive(Eq, @debug.Debug)
 
-pub(all) struct UnderlyingTool(Int) derive(Eq, @debug.Debug)
-pub fn UnderlyingTool::drop(Self) -> Unit
-pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[InvocationResult, ToolError]
-
 pub(all) struct ValueIsRef {
   name : String
   value : @types.SchemaValueTree

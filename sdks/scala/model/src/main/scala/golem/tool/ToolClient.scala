@@ -209,6 +209,9 @@ object ToolClientRuntime {
       case ToolInvokeError.InvalidInput(message)        => s"invalid input: $message"
       case ToolInvokeError.ConstraintViolation(message) => s"constraint violation: $message"
       case ToolInvokeError.InvalidResult(message)       => s"invalid result: $message"
+      case ToolInvokeError.ProtocolError(message)       => s"protocol error: $message"
+      case ToolInvokeError.Denied(message)              => s"denied: $message"
+      case ToolInvokeError.InternalError(message)       => s"internal error: $message"
       case ToolInvokeError.Tool(_)                      => "custom error"
       case ToolInvokeError.UnknownToolError(name, _)    => s"custom error `$name`"
     }

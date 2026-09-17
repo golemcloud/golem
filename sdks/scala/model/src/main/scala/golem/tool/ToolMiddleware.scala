@@ -92,7 +92,63 @@ trait RawToolUnderlying {
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle]
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
+
+  def start(
+    commandPath: List[String],
+    input: TypedSchemaValue,
+    stdin: Option[ToolMiddlewareInputHandle]
+  ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+    ToolUnderlyingInvocation(
+      Future.successful(
+        ToolUnderlyingAdmission(
+          None,
+          invoke(commandPath, input, stdin)
+            .map(_.left.map(ToolUnderlyingError.Tool(_)))(ToolInvokerRuntime.executionContext),
+          () => (),
+          () => ()
+        )
+      )
+    )
 }
+
+sealed trait ToolUnderlyingError[+E] extends Product with Serializable
+object ToolUnderlyingError {
+  final case class Tool[E](error: ToolInvokeError[E]) extends ToolUnderlyingError[E]
+  final case class ProtocolError(message: String)     extends ToolUnderlyingError[Nothing]
+  final case class Denied(message: String)            extends ToolUnderlyingError[Nothing]
+  final case class InternalError(message: String)     extends ToolUnderlyingError[Nothing]
+  case object Cancelled                               extends ToolUnderlyingError[Nothing]
+  final case class ResourceExhausted(message: String) extends ToolUnderlyingError[Nothing]
+}
+
+/**
+ * One independently observable invocation of the next middleware-chain layer.
+ */
+final case class ToolUnderlyingInvocation[+E, +A](
+  admission: Future[ToolUnderlyingAdmission[E, A]]
+) {
+  def toMiddlewareResult: Future[Either[ToolInvokeError[E], A]] =
+    admission
+      .flatMap(_.result)(ToolInvokerRuntime.executionContext)
+      .map {
+        case Right(value)                                     => Right(value)
+        case Left(ToolUnderlyingError.Tool(error))            => Left(error)
+        case Left(ToolUnderlyingError.ProtocolError(message)) => Left(ToolInvokeError.ProtocolError(message))
+        case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
+        case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
+        case Left(ToolUnderlyingError.Cancelled)              =>
+          Left(ToolInvokeError.ConstraintViolation("underlying invocation was cancelled"))
+        case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
+          Left(ToolInvokeError.ConstraintViolation(s"underlying invocation exhausted resources: $message"))
+      }(ToolInvokerRuntime.executionContext)
+}
+
+final case class ToolUnderlyingAdmission[+E, +A](
+  stdout: Option[ToolMiddlewareOutputHandle],
+  result: Future[Either[ToolUnderlyingError[E], A]],
+  cancel: () => Unit,
+  drop: () => Unit
+)
 
 final class ToolMiddlewareInvocationContext(
   val fields: List[CanonicalInputValue],
@@ -243,6 +299,9 @@ object ToolMiddlewareInvokerRuntime {
       case Left(protocol: ToolInvokeError.InvalidInput)        => Left(protocol)
       case Left(protocol: ToolInvokeError.ConstraintViolation) => Left(protocol)
       case Left(protocol: ToolInvokeError.InvalidResult)       => Left(protocol)
+      case Left(protocol: ToolInvokeError.ProtocolError)       => Left(protocol)
+      case Left(protocol: ToolInvokeError.Denied)              => Left(protocol)
+      case Left(protocol: ToolInvokeError.InternalError)       => Left(protocol)
     }
 
   def validateRawInput(
@@ -273,6 +332,9 @@ object ToolMiddlewareInvokerRuntime {
       case Left(protocol: ToolInvokeError.InvalidInput)        => Left(protocol)
       case Left(protocol: ToolInvokeError.ConstraintViolation) => Left(protocol)
       case Left(protocol: ToolInvokeError.InvalidResult)       => Left(protocol)
+      case Left(protocol: ToolInvokeError.ProtocolError)       => Left(protocol)
+      case Left(protocol: ToolInvokeError.Denied)              => Left(protocol)
+      case Left(protocol: ToolInvokeError.InternalError)       => Left(protocol)
     }
 
   private def validateSuccess(
@@ -373,6 +435,9 @@ object ToolMiddlewareInvokerRuntime {
       case protocol: ToolInvokeError.InvalidInput        => protocol
       case protocol: ToolInvokeError.ConstraintViolation => protocol
       case protocol: ToolInvokeError.InvalidResult       => protocol
+      case protocol: ToolInvokeError.ProtocolError       => protocol
+      case protocol: ToolInvokeError.Denied              => protocol
+      case protocol: ToolInvokeError.InternalError       => protocol
     }
 
   def encodeInfallibleError(error: ToolInvokeError[Nothing]): ToolInvokeError[TypedSchemaValue] =
@@ -383,6 +448,9 @@ object ToolMiddlewareInvokerRuntime {
       case protocol: ToolInvokeError.InvalidInput        => protocol
       case protocol: ToolInvokeError.ConstraintViolation => protocol
       case protocol: ToolInvokeError.InvalidResult       => protocol
+      case protocol: ToolInvokeError.ProtocolError       => protocol
+      case protocol: ToolInvokeError.Denied              => protocol
+      case protocol: ToolInvokeError.InternalError       => protocol
     }
 
   def encodeUnit: Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
@@ -448,36 +516,62 @@ object ToolUnderlyingRuntime {
     input: Either[ToolInvokeError[Nothing], TypedSchemaValue],
     stdin: Option[ToolMiddlewareInputHandle],
     decodeError: NamedToolError => Either[String, E]
-  ): Future[Either[ToolInvokeError[E], ToolMiddlewareResult]] =
+  ): ToolUnderlyingInvocation[E, ToolMiddlewareResult] =
     (descriptor, input) match {
       case (Left(error), _) =>
-        Future.successful(Left(ToolInvokeError.InvalidResult(s"tool descriptor build failed: ${error.message}")))
-      case (Right(_), Left(error))     => Future.successful(Left(error))
+        completed(Left(ToolInvokeError.InvalidResult(s"tool descriptor build failed: ${error.message}")))
+      case (Right(_), Left(error))     => completed(Left(error))
       case (Right(tool), Right(value)) =>
         val commandIndex = tool.commandIndexByPath(commandPath)
         if (commandIndex.isEmpty)
-          return Future.successful(Left(ToolInvokeError.InvalidCommandPath(commandPath)))
-        underlying
-          .invoke(commandPath, value, stdin)
-          .map { case outcome =>
-            ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, outcome)
-          }
-          .map {
-            case Right(result)                                         => Right(result)
-            case Left(ToolInvokeError.UnknownToolError(name, payload)) =>
-              decodeError(NamedToolError(name, payload)) match {
-                case Right(error) => Left(ToolInvokeError.Tool(error))
-                case Left(_)      => Left(ToolInvokeError.UnknownToolError(name, payload))
+          return completed(Left(ToolInvokeError.InvalidCommandPath(commandPath)))
+        val started = underlying.start(commandPath, value, stdin)
+        ToolUnderlyingInvocation(started.admission.map { admission =>
+          admission.copy(result = admission.result.map {
+            case Left(ToolUnderlyingError.Tool(error)) =>
+              Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+            case Left(error: ToolUnderlyingError.ProtocolError)     => Left(error)
+            case Left(error: ToolUnderlyingError.Denied)            => Left(error)
+            case Left(error: ToolUnderlyingError.InternalError)     => Left(error)
+            case Left(ToolUnderlyingError.Cancelled)                => Left(ToolUnderlyingError.Cancelled)
+            case Left(error: ToolUnderlyingError.ResourceExhausted) => Left(error)
+            case Right(result)                                      =>
+              ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, Right(result)) match {
+                case Right(valid) => Right(valid)
+                case Left(error)  => Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
               }
-            case Left(ToolInvokeError.Tool(_)) =>
-              Left(ToolInvokeError.InvalidResult("underlying custom error was missing its declared case name"))
-            case Left(error: ToolInvokeError.InvalidToolName)     => Left(error)
-            case Left(error: ToolInvokeError.InvalidCommandPath)  => Left(error)
-            case Left(error: ToolInvokeError.InvalidInput)        => Left(error)
-            case Left(error: ToolInvokeError.ConstraintViolation) => Left(error)
-            case Left(error: ToolInvokeError.InvalidResult)       => Left(error)
-          }
+          })
+        })
     }
+
+  private def mapDeclared[E](
+    error: ToolInvokeError[TypedSchemaValue],
+    decodeError: NamedToolError => Either[String, E]
+  ): ToolInvokeError[E] =
+    error match {
+      case ToolInvokeError.UnknownToolError(name, payload) =>
+        decodeError(NamedToolError(name, payload)) match {
+          case Right(value) => ToolInvokeError.Tool(value)
+          case Left(_)      => ToolInvokeError.UnknownToolError(name, payload)
+        }
+      case ToolInvokeError.Tool(_) =>
+        ToolInvokeError.InvalidResult("underlying custom error was missing its declared case name")
+      case other => other.asInstanceOf[ToolInvokeError[E]]
+    }
+
+  private def completed[E](
+    value: Either[ToolInvokeError[E], ToolMiddlewareResult]
+  ): ToolUnderlyingInvocation[E, ToolMiddlewareResult] =
+    ToolUnderlyingInvocation(
+      Future.successful(
+        ToolUnderlyingAdmission(
+          None,
+          Future.successful(value.left.map(ToolUnderlyingError.Tool(_))),
+          () => (),
+          () => ()
+        )
+      )
+    )
 
   def runInfallible(
     underlying: RawToolUnderlying,
@@ -485,7 +579,7 @@ object ToolUnderlyingRuntime {
     commandPath: List[String],
     input: Either[ToolInvokeError[Nothing], TypedSchemaValue],
     stdin: Option[ToolMiddlewareInputHandle]
-  ): Future[Either[ToolInvokeError[Nothing], ToolMiddlewareResult]] =
+  ): ToolUnderlyingInvocation[Nothing, ToolMiddlewareResult] =
     run[Nothing](
       underlying,
       descriptor,
@@ -495,10 +589,18 @@ object ToolUnderlyingRuntime {
       _ => Left("an infallible tool returned a custom error")
     )
 
-  def complete[E, T](
-    call: Future[Either[ToolInvokeError[E], ToolMiddlewareResult]]
-  )(decode: ToolMiddlewareResult => Either[ToolError[Nothing], T]): Future[Either[ToolInvokeError[E], T]] =
-    call.map(_.flatMap(result => decode(result).left.map(resultError)))
+  def complete[E, T](call: ToolUnderlyingInvocation[E, ToolMiddlewareResult])(
+    decode: ToolMiddlewareResult => Either[ToolError[Nothing], T]
+  ): ToolUnderlyingInvocation[E, T] =
+    ToolUnderlyingInvocation(
+      call.admission.map(admission =>
+        admission.copy(result =
+          admission.result.map(
+            _.flatMap(result => decode(result).left.map(error => ToolUnderlyingError.Tool(resultError(error))))
+          )
+        )
+      )
+    )
 
   def decodeUnitResult(result: ToolMiddlewareResult): Either[ToolError[Nothing], Unit] =
     requireNoValue(result)
@@ -666,6 +768,13 @@ object UniversalToolMiddlewareInvokerRuntime {
                   stdin: Option[ToolMiddlewareInputHandle]
                 ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
                   scoped.invoke(commandPath, input, stdin)
+
+                override def start(
+                  commandPath: List[String],
+                  input: TypedSchemaValue,
+                  stdin: Option[ToolMiddlewareInputHandle]
+                ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+                  scoped.start(commandPath, input, stdin)
               }
               instance
                 .invokeAny(
@@ -728,7 +837,8 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
           }
         case failure => Success(failure)
       }
-      cleanup(scoped.revoke())
+      scoped.revokeAdmission()
+      cleanup(scoped.drain())
         .flatMap(_ => cleanup(ownership.dispose()))
         .flatMap(_ => Future.fromTry(result))
     }
@@ -761,58 +871,90 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     raw: RawToolUnderlying,
     ownership: InvocationOwnership
   ) extends RawToolUnderlying {
-    private type Outcome = Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
+    private type Admission = ToolUnderlyingAdmission[TypedSchemaValue, ToolMiddlewareResult]
 
-    private var revoked                                    = false
-    private var inFlight                                   = false
-    private var activeInvocation: Option[Promise[Outcome]] = None
+    private var revoked           = false
+    private val activeInvocations = mutable.ListBuffer.empty[Promise[Admission]]
 
     def invoke(
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolMiddlewareInputHandle]
-    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+      start(commandPath, input, stdin).admission.flatMap { admission =>
+        admission.result.map {
+          case Right(value)                                     => Right(value)
+          case Left(ToolUnderlyingError.Tool(error))            => Left(error)
+          case Left(ToolUnderlyingError.ProtocolError(message)) => Left(ToolInvokeError.ProtocolError(message))
+          case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
+          case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
+          case Left(ToolUnderlyingError.Cancelled)              =>
+            Left(ToolInvokeError.ConstraintViolation("underlying invocation was cancelled"))
+          case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
+            Left(ToolInvokeError.ConstraintViolation(s"underlying invocation exhausted resources: $message"))
+        }
+      }
+
+    override def start(
+      commandPath: List[String],
+      input: TypedSchemaValue,
+      stdin: Option[ToolMiddlewareInputHandle]
+    ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] = {
       val completion = {
         if (revoked)
-          return Future.failed(new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked))
-        if (inFlight)
-          return Future.failed(new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.OverlappingInvocation))
-        inFlight = true
-        val result = Promise[Outcome]()
-        activeInvocation = Some(result)
+          return ToolUnderlyingInvocation(
+            Future.failed(new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked))
+          )
+        val result = Promise[Admission]()
+        activeInvocations += result
         result
       }
 
-      val invocation =
+      val invocation: Future[Admission] =
         ToolMiddlewareInvokerRuntime.validateRawInput(input) match {
-          case Left(error) => Future.successful(Left(error))
-          case Right(_)    =>
+          case Left(error) =>
+            Future.successful(
+              ToolUnderlyingAdmission(
+                None,
+                Future.successful(Left(ToolUnderlyingError.Tool(error))),
+                () => (),
+                () => ()
+              )
+            )
+          case Right(_) =>
             try {
               ownership.forwardStdin(stdin)
-              raw.invoke(commandPath, input, stdin).map(ownership.trackAndValidate)
+              val started = raw.start(commandPath, input, stdin)
+              started.admission.map { admission =>
+                val trackedStdout = admission.stdout.map(ownership.trackStdout)
+                admission.copy(
+                  stdout = trackedStdout,
+                  result = admission.result.map {
+                    case Right(value) =>
+                      val merged = value.copy(stdout = trackedStdout.orElse(value.stdout))
+                      ownership.trackAndValidate(Right(merged)).left.map(ToolUnderlyingError.Tool(_))
+                    case Left(error) => Left(error)
+                  }
+                )
+              }
             } catch {
               case error: Throwable => Future.failed(error)
             }
         }
       invocation.onComplete { result =>
         completion.tryComplete(result)
-        if (activeInvocation.exists(_ eq completion)) {
-          activeInvocation = None
-          inFlight = false
-        }
       }
-      completion.future
+      ToolUnderlyingInvocation(completion.future)
     }
 
-    def revoke(): Future[Unit] = {
-      val active = {
-        revoked = true
-        activeInvocation
-      }
-      active
-        .map(_.future.map(_ => ()).recover { case _ => () })
-        .getOrElse(Future.successful(()))
-    }
+    def revokeAdmission(): Unit = revoked = true
+
+    def drain(): Future[Unit] =
+      Future
+        .sequence(activeInvocations.toList.map(_.future.map { admission =>
+          admission.drop()
+        }.recover { case _ => () }))
+        .map(_ => ())
 
     def trackFinal(
       outcome: Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
@@ -920,10 +1062,6 @@ sealed trait ToolUnderlyingMisuse extends Product with Serializable {
 }
 
 object ToolUnderlyingMisuse {
-  case object OverlappingInvocation extends ToolUnderlyingMisuse {
-    val message: String = "an underlying tool invocation is already in flight"
-  }
-
   case object Revoked extends ToolUnderlyingMisuse {
     val message: String = "the underlying tool is no longer available"
   }

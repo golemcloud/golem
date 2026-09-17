@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    InputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture, ToolMiddlewareScope,
-    UnderlyingTool,
+    InputStream, OutputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
+    ToolMiddlewareScope, UnderlyingTool,
 };
 use crate::TypedSchemaValue;
 use crate::schema::tool::validation::validate_tool;
@@ -30,6 +30,7 @@ pub type ToolMiddlewareInvoker = fn(
     Vec<String>,
     TypedSchemaValue,
     Option<InputStream>,
+    Option<OutputStream>,
     Principal,
     UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture;
@@ -176,6 +177,7 @@ mod tests {
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
+        _stdout: Option<OutputStream>,
         _principal: Principal,
         _underlying: UnderlyingTool,
     ) -> ToolMiddlewareInvokeFuture {
@@ -281,6 +283,7 @@ mod tests {
                     .unwrap(),
                 vec!["echo".to_string()],
                 value,
+                None,
                 None,
                 Principal::Anonymous,
                 underlying(),
@@ -455,12 +458,6 @@ mod tests {
     ))]
     #[test]
     fn guest_discovery_and_lookup_encode_complete_scope_metadata() {
-        assert_eq!(
-            get_tool_middleware_by_name("phase-six-transparent-policy")
-                .unwrap()
-                .version,
-            "1.2.3"
-        );
         let presented = tool("registry-presented");
         let expected = tool("registry-expected");
         register_tool_middleware(
@@ -479,6 +476,8 @@ mod tests {
                         expected: Some(expected.clone()),
                     },
                 )),
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
@@ -493,6 +492,8 @@ mod tests {
                     examples: vec![],
                 },
                 scope: ToolMiddlewareScope::Universal,
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );

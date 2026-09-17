@@ -673,5 +673,11 @@ trait JsUnderlyingTool extends js.Object {
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream]
-  ): js.Promise[JsInvocationResult] = js.native
+  ): js.Promise[js.Tuple2[JsUnderlyingInvokeResult, js.UndefOr[JsWasiOutputStream]]] = js.native
+}
+
+@js.native
+trait JsUnderlyingInvokeResult extends js.Object {
+  def get(): js.Promise[js.UndefOr[JsTypedSchemaValue]] = js.native
+  def cancel(): Unit                                    = js.native
 }

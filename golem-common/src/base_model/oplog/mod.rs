@@ -282,7 +282,7 @@ oplog_entry! {
     /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
     /// ignore all recorded operations in between.
     Jump {
-        hint: false
+        hint: true
         wit_raw_type: "jump-parameters"
         wit_public_type: "jump-parameters"
         raw {

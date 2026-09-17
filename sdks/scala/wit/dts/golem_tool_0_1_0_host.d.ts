@@ -9,6 +9,7 @@
 declare module 'golem:tool/host@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
+  import * as golemTool010Streams from 'golem:tool/streams@0.1.0';
   /**
    * Returns every tool **the calling agent has access to** in
    * the current environment, per the manifest's per-env and
@@ -80,20 +81,6 @@ declare module 'golem:tool/host@0.1.0' {
   }
   export class ToolStdout {
   }
-  export class ToolStdoutWriter {
-    /**
-     * @throws StreamWriteError
-     */
-    write(bytes: Uint8Array): Promise<void>;
-    /**
-     * @throws StreamWriteError
-     */
-    finish(): Promise<void>;
-    /**
-     * @throws StreamWriteError
-     */
-    fail(reason: ByteStreamFailure): Promise<void>;
-  }
   export class ToolRpc {
     constructor(toolName: string);
     /**
@@ -133,6 +120,10 @@ declare module 'golem:tool/host@0.1.0' {
   export type Tool = golemTool010Common.Tool;
   export type ToolError = golemTool010Common.ToolError;
   export type InvocationResult = golemTool010Common.InvocationResult;
+  export type ByteStreamFailure = golemTool010Streams.ByteStreamFailure;
+  export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
+  export type ByteStreamCloseCause = golemTool010Streams.ByteStreamCloseCause;
+  export type StreamWriteError = golemTool010Streams.StreamWriteError;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentId = golemCore200Types.ComponentId;
   /**
@@ -183,48 +174,6 @@ declare module 'golem:tool/host@0.1.0' {
   {
     tag: 'resource-exhausted'
     val: string
-  };
-  /**
-   * Recoverable attachment failures are stream values rather than Component
-   * Model stream errors. A producer emits one final failure item and then
-   * closes the underlying stream. Clean EOF is represented only by closure.
-   */
-  export type ByteStreamFailure =
-  {
-    tag: 'cancelled'
-  } |
-  {
-    tag: 'abandoned'
-  } |
-  {
-    tag: 'resource-exhausted'
-  } |
-  {
-    tag: 'failed'
-    val: string
-  };
-  /**
-   * Every successful item contains a non-empty byte chunk.
-   */
-  export type ByteStreamItem = Result<Uint8Array, ByteStreamFailure>;
-  export type ByteStreamCloseCause =
-  {
-    tag: 'finished'
-  } |
-  {
-    tag: 'failed'
-    val: ByteStreamFailure
-  } |
-  {
-    tag: 'consumer-cancelled'
-  };
-  export type StreamWriteError =
-  {
-    tag: 'closed'
-    val: ByteStreamCloseCause
-  } |
-  {
-    tag: 'concurrent-operation'
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

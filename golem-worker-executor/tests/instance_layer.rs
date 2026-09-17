@@ -496,6 +496,10 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-live-streams".to_string()),
     )
     .unwrap()
 }
@@ -521,6 +525,10 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
+        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-replay-streams".to_string()),
     )
     .unwrap()
 }
@@ -807,8 +815,13 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         activation,
         principal,
         InvocationExecutionMode::ReplayingIncomplete,
+        IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
     )
     .unwrap();
+    let replay_parent_id = parent_id.clone();
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_scope,
@@ -817,6 +830,10 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         move |_instance, store| {
             Box::pin(async move {
                 let ctx = store.data_mut().durable_ctx_mut();
+                ctx.test_install_entity_tool_operation(
+                    replay_parent_id,
+                    EntityCallMode::Synchronous,
+                )?;
                 let recorded = AgentHost::get_config_value(
                     ctx,
                     vec!["unconfigured".to_string()],
@@ -936,6 +953,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("owner-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("owner-entity-streams".to_string()),
     )
     .unwrap();
 
@@ -1028,6 +1049,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("second-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("second-entity-streams".to_string()),
     )
     .unwrap();
     let expected_error = second_hosted
@@ -1066,6 +1091,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("cancelled-entity-streams".to_string()),
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -1146,6 +1175,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("panicking-entity-streams".to_string()),
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();

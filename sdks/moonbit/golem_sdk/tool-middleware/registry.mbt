@@ -156,14 +156,17 @@ pub fn get_registered_tool_middleware(
 
 ///|
 #doc(hidden)
-pub async fn invoke_registered_tool_middleware(
+pub async fn invoke_registered_tool_middleware_wire(
   middleware_name : String,
   tool_name : String,
   tool_metadata : @toolCommon.Tool,
   parameters : @types.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?,
+  stdout : @toolStreams.ToolStdoutWriter?,
   principal : @agentCommon.Principal,
   underlying : UnderlyingTool,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -181,7 +184,7 @@ pub async fn invoke_registered_tool_middleware(
   })
   let invocation = RawToolInvocation::from_wit(
     context, tool_name, tool_metadata, decoded_parameters, command_path, input, stdin,
-    principal,
+    stdout, principal,
   )
   let parameter_schema = match
     tool_middleware_state.descriptors.get(middleware_name) {
@@ -199,14 +202,112 @@ pub async fn invoke_registered_tool_middleware(
     Some(invoker) => invoker
     None => return Err(@toolCommon.ToolError::InvalidToolName(middleware_name))
   }
-  match invoker(invocation, underlying) {
+  let host_stdout = invocation.take_host_stdout()
+  let authored = invoker(invocation, underlying)
+  let final_result = match authored {
     Ok(result) =>
-      match result.take_for_final(context) {
-        Ok(result) => Ok(result)
-        Err(message) => Err(@toolCommon.ToolError::InvalidResult(message))
-      }
+      result
+      .take_for_final(context)
+      .map_err(message => @toolCommon.ToolError::InvalidResult(message))
     Err(error) => Err(encode_raw_tool_error(error, context))
   }
+  match final_result {
+    Err(error) => {
+      match host_stdout {
+        Some(writer) => writer.drop()
+        None => ()
+      }
+      context.revoke()
+      Err(error)
+    }
+    Ok(result) => {
+      match host_stdout {
+        None => ()
+        Some(writer) => pump_final_stdout(result.stdout, writer)
+      }
+      context.revoke()
+      match host_stdout {
+        None => Ok(result)
+        Some(_) => Ok({ result: result.result, stdout: None, })
+      }
+    }
+  }
+}
+
+///|
+async fn pump_final_stdout(
+  source : @async-core.Stream[Byte]?,
+  writer : @toolStreams.ToolStdoutWriter,
+) -> Unit {
+  defer writer.drop()
+  match source {
+    None => ignore(writer.finish())
+    Some(stream) => {
+      defer stream.drop()
+      for ;; {
+        let chunk = stream.read(65536) catch {
+          @toolCore.ToolStreamError::Cancelled => {
+            ignore(writer.fail(@toolStreams.ByteStreamFailure::Cancelled))
+            return
+          }
+          @toolCore.ToolStreamError::Abandoned => {
+            ignore(writer.fail(@toolStreams.ByteStreamFailure::Abandoned))
+            return
+          }
+          @toolCore.ToolStreamError::ResourceExhausted => {
+            ignore(
+              writer.fail(@toolStreams.ByteStreamFailure::ResourceExhausted),
+            )
+            return
+          }
+          error => {
+            ignore(
+              writer.fail(
+                @toolStreams.ByteStreamFailure::Failed(error.to_string()),
+              ),
+            )
+            return
+          }
+        }
+        match chunk {
+          Some(bytes) =>
+            if writer.write(FixedArray::from_array(bytes)) is Err(_) {
+              return
+            }
+          None => {
+            ignore(writer.finish())
+            return
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+async fn invoke_registered_tool_middleware(
+  middleware_name : String,
+  tool_name : String,
+  tool_metadata : @toolCommon.Tool,
+  parameters : @types.TypedSchemaValue,
+  command_path : Array[String],
+  input : @types.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  principal : @agentCommon.Principal,
+  underlying : UnderlyingTool,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  invoke_registered_tool_middleware_wire(
+    middleware_name,
+    tool_name,
+    tool_metadata,
+    parameters,
+    command_path,
+    input,
+    stdin.map(byte_stream_items),
+    None,
+    principal,
+    underlying,
+  )
 }
 
 ///|

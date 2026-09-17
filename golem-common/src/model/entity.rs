@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
-use crate::model::OwnedAgentId;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -21,6 +20,7 @@ use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
 };
+use crate::model::{IdempotencyKey, OwnedAgentId};
 use crate::schema::TypedSchemaValue;
 use crate::schema::tool::Tool;
 use crate::schema::tool::compatibility::CompiledToolCompatibility;
@@ -752,7 +752,7 @@ pub enum EntityInvocationPlanReference {
 pub struct ToolInvocationDescriptor {
     pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
-    pub args: Vec<String>,
+    pub args: Vec<crate::model::card::ToolArgPattern>,
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
@@ -889,6 +889,7 @@ pub struct EntityInvocationRequest {
     pub operation: EntityInvocationDescriptor,
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
+    pub assume_idempotence: bool,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -901,6 +902,10 @@ pub struct EntityInvocationScope {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
+    stream_session_idempotency_key: IdempotencyKey,
 }
 
 impl EntityInvocationScope {
@@ -910,6 +915,10 @@ impl EntityInvocationScope {
         activation: Arc<EntityActivation>,
         calling_principal: CallingAgentPrincipal,
         mode: InvocationExecutionMode,
+        idempotency_key: IdempotencyKey,
+        assume_idempotence: bool,
+        logical_key_positions: bool,
+        stream_session_idempotency_key: IdempotencyKey,
     ) -> Result<Self, String> {
         if parent_start_index == OplogIndex::NONE {
             return Err("Entity invocation parent Start index cannot be zero".to_string());
@@ -939,6 +948,10 @@ impl EntityInvocationScope {
             activation,
             calling_principal,
             mode,
+            idempotency_key,
+            assume_idempotence,
+            logical_key_positions,
+            stream_session_idempotency_key,
         })
     }
 
@@ -965,6 +978,22 @@ impl EntityInvocationScope {
     pub fn mode(&self) -> InvocationExecutionMode {
         self.mode
     }
+
+    pub fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
+    }
+
+    pub fn assume_idempotence(&self) -> bool {
+        self.assume_idempotence
+    }
+
+    pub fn logical_key_positions(&self) -> bool {
+        self.logical_key_positions
+    }
+
+    pub fn stream_session_idempotency_key(&self) -> &IdempotencyKey {
+        &self.stream_session_idempotency_key
+    }
 }
 
 #[derive(Deserialize)]
@@ -975,6 +1004,10 @@ struct EntityInvocationScopeWire {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
+    stream_session_idempotency_key: IdempotencyKey,
 }
 
 impl<'de> Deserialize<'de> for EntityInvocationScope {
@@ -989,6 +1022,10 @@ impl<'de> Deserialize<'de> for EntityInvocationScope {
             wire.activation,
             wire.calling_principal,
             wire.mode,
+            wire.idempotency_key,
+            wire.assume_idempotence,
+            wire.logical_key_positions,
+            wire.stream_session_idempotency_key,
         )
         .map_err(D::Error::custom)
     }
@@ -1377,6 +1414,10 @@ impl From<EntityInvocationScope> for golem_api_grpc::proto::golem::worker::Entit
             calling_principal: Some(value.calling_principal.into()),
             mode: golem_api_grpc::proto::golem::worker::InvocationExecutionMode::from(value.mode)
                 as i32,
+            idempotency_key: Some(value.idempotency_key.into()),
+            assume_idempotence: value.assume_idempotence,
+            logical_key_positions: value.logical_key_positions,
+            stream_session_idempotency_key: Some(value.stream_session_idempotency_key.into()),
         }
     }
 }
@@ -1410,6 +1451,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityInvocationScope>
                 .ok_or("Missing EntityInvocationScope.calling_principal")?
                 .try_into()?,
             mode,
+            value
+                .idempotency_key
+                .ok_or("Missing EntityInvocationScope.idempotency_key")?
+                .into(),
+            value.assume_idempotence,
+            value.logical_key_positions,
+            value
+                .stream_session_idempotency_key
+                .ok_or("Missing EntityInvocationScope.stream_session_idempotency_key")?
+                .into(),
         )
     }
 }
@@ -1602,7 +1653,12 @@ mod tests {
             operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
-                args: vec!["--ignore-case".to_string(), "needle".to_string()],
+                args: crate::model::card::ToolInvocationPattern::from_command_and_args(
+                    &[],
+                    &["--ignore-case", "needle"],
+                )
+                .unwrap()
+                .args,
                 has_stdin: true,
                 has_stdout: true,
                 declares_stdout: true,
@@ -1620,6 +1676,7 @@ mod tests {
                 }])
                 .unwrap(),
             },
+            assume_idempotence: false,
         };
 
         let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -1739,7 +1796,12 @@ mod tests {
             operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
-                args: vec!["--recorded-rendering".to_string()],
+                args: crate::model::card::ToolInvocationPattern::from_command_and_args(
+                    &[],
+                    &["--recorded-rendering"],
+                )
+                .unwrap()
+                .args,
                 has_stdin: true,
                 has_stdout: false,
                 declares_stdout: false,
@@ -1757,6 +1819,7 @@ mod tests {
                 }])
                 .unwrap(),
             },
+            assume_idempotence: true,
         };
         let identity = EntityInvocationRequestIdentity {
             entity: request.entity.clone(),
@@ -1768,7 +1831,12 @@ mod tests {
         };
         let mut differently_pinned = request.clone();
         let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-        descriptor.args = vec!["--new-rendering".to_string()];
+        descriptor.args = crate::model::card::ToolInvocationPattern::from_command_and_args(
+            &[],
+            &["--new-rendering"],
+        )
+        .unwrap()
+        .args;
         descriptor.declares_stdout = true;
 
         assert!(identity.matches(&differently_pinned, &input));
@@ -1835,14 +1903,58 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             InvocationExecutionMode::ReplayingCompleted,
+            IdempotencyKey::new("scope-protobuf-seed".to_string()),
+            false,
+            true,
+            IdempotencyKey::new("scope-stream-seed".to_string()),
         )
         .unwrap();
 
         let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
             scope.clone().into();
         let decoded: EntityInvocationScope = protobuf.try_into().unwrap();
+        let json = serde_json::to_string(&scope).unwrap();
+        let json_decoded: EntityInvocationScope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded, scope);
+        assert_eq!(json_decoded, scope);
+        assert_eq!(scope.idempotency_key().value, "scope-protobuf-seed");
+        assert!(!scope.assume_idempotence());
+        assert!(scope.logical_key_positions());
+    }
+
+    #[test]
+    fn invocation_scope_protobuf_requires_idempotency_key() {
+        let owner = owner();
+        let scope = EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner.clone(),
+                    entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
+                },
+                OplogIndex::from_u64(84),
+            )
+            .unwrap(),
+            OplogIndex::from_u64(81),
+            Arc::new(activation()),
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            InvocationExecutionMode::Live,
+            IdempotencyKey::new("required-protobuf-seed".to_string()),
+            true,
+            false,
+            IdempotencyKey::new("required-stream-seed".to_string()),
+        )
+        .unwrap();
+        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
+            scope.into();
+        protobuf.idempotency_key = None;
+
+        assert_eq!(
+            EntityInvocationScope::try_from(protobuf).unwrap_err(),
+            "Missing EntityInvocationScope.idempotency_key"
+        );
     }
 
     #[test]
@@ -1866,6 +1978,10 @@ mod tests {
                 agent_id: owner.agent_id.clone(),
             }),
             InvocationExecutionMode::ReplayingIncomplete,
+            IdempotencyKey::new("middleware-roundtrip-seed".to_string()),
+            false,
+            true,
+            IdempotencyKey::new("middleware-stream-seed".to_string()),
         )
         .unwrap();
         let request = EntityInvocationRequest {
@@ -1908,6 +2024,7 @@ mod tests {
                 ])
                 .unwrap(),
             },
+            assume_idempotence: false,
         };
 
         let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -1964,7 +2081,10 @@ mod tests {
     #[test]
     fn host_activation_rejects_source_policy_identity_mismatches() {
         let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+        let EntityActivationPolicy::Tool {
+            provision, binding, ..
+        } = activation.policy
+        else {
             unreachable!()
         };
 
@@ -1998,7 +2118,10 @@ mod tests {
     #[test]
     fn host_activation_rejects_invalid_source_contracts() {
         let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+        let EntityActivationPolicy::Tool {
+            provision, binding, ..
+        } = activation.policy
+        else {
             unreachable!()
         };
         let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
@@ -2104,6 +2227,10 @@ mod tests {
                 activation.clone(),
                 principal.clone(),
                 InvocationExecutionMode::Live,
+                IdempotencyKey::new("invalid-parent-scope-seed".to_string()),
+                false,
+                true,
+                IdempotencyKey::new("invalid-parent-stream-seed".to_string()),
             );
 
             assert!(

@@ -18,7 +18,7 @@ use crate::schema::wit::{GuestQuotaTokenHandle, GuestSecretHandle, wire as schem
 use crate::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
 use crate::tool::wire;
 use crate::tool::{
-    InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
+    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError,
     ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use crate::{
@@ -37,7 +37,11 @@ use std::task::{Context, Poll, Waker};
 use test_r::test;
 use wit_bindgen::rt::async_support::StreamVtable;
 
-static TEST_STREAMS: Mutex<BTreeMap<u32, VecDeque<u8>>> = Mutex::new(BTreeMap::new());
+type TestStreamItem = Result<
+    Vec<u8>,
+    crate::golem_agentic::golem::tool::streams::ByteStreamFailure,
+>;
+static TEST_STREAMS: Mutex<BTreeMap<u32, VecDeque<TestStreamItem>>> = Mutex::new(BTreeMap::new());
 static NEXT_TEST_STREAM: AtomicU32 = AtomicU32::new(1);
 static TEST_STREAM_NEW_CALLS: AtomicU32 = AtomicU32::new(0);
 
@@ -48,7 +52,7 @@ fn registry_test_state() -> RegistryTestState {
     RegistryTestState
 }
 
-fn test_streams() -> MutexGuard<'static, BTreeMap<u32, VecDeque<u8>>> {
+fn test_streams() -> MutexGuard<'static, BTreeMap<u32, VecDeque<TestStreamItem>>> {
     TEST_STREAMS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -69,7 +73,11 @@ unsafe extern "C" fn test_stream_new() -> u64 {
     0
 }
 
-unsafe extern "C" fn test_stream_read(handle: u32, destination: *mut u8, amount: usize) -> u32 {
+unsafe extern "C" fn test_stream_read(
+    handle: u32,
+    destination: *mut u8,
+    amount: usize,
+) -> u32 {
     let mut streams = test_streams();
     let Some(stream) = streams.get_mut(&handle) else {
         return 1;
@@ -77,13 +85,20 @@ unsafe extern "C" fn test_stream_read(handle: u32, destination: *mut u8, amount:
     let count = amount.min(stream.len());
     for offset in 0..count {
         unsafe {
-            ptr::write(destination.add(offset), stream.pop_front().unwrap());
+            ptr::write(
+                destination.cast::<TestStreamItem>().add(offset),
+                stream.pop_front().unwrap(),
+            );
         }
     }
     ((count as u32) << 4) | u32::from(stream.is_empty())
 }
 
-unsafe extern "C" fn test_stream_write(_handle: u32, _source: *const u8, _amount: usize) -> u32 {
+unsafe extern "C" fn test_stream_write(
+    _handle: u32,
+    _source: *const u8,
+    _amount: usize,
+) -> u32 {
     1
 }
 
@@ -97,8 +112,8 @@ unsafe extern "C" fn test_stream_drop_readable(handle: u32) {
 
 unsafe extern "C" fn test_stream_drop_writable(_handle: u32) {}
 
-static TEST_STREAM_VTABLE: StreamVtable<u8> = StreamVtable {
-    layout: std::alloc::Layout::new::<u8>(),
+static TEST_STREAM_VTABLE: StreamVtable<TestStreamItem> = StreamVtable {
+    layout: std::alloc::Layout::new::<TestStreamItem>(),
     lower: None,
     dealloc_lists: None,
     lift: None,
@@ -142,7 +157,7 @@ fn readable_stream(bytes: &[u8]) -> InputStream {
     let handle = NEXT_TEST_STREAM.fetch_add(1, Ordering::Relaxed);
     assert!(
         test_streams()
-            .insert(handle, bytes.iter().copied().collect())
+            .insert(handle, [Ok(bytes.to_vec())].into_iter().collect())
             .is_none()
     );
     wit_bindgen::StreamReader::new(handle, &TEST_STREAM_VTABLE)
@@ -168,6 +183,7 @@ async fn invoke(
         command_path,
         input,
         stdin,
+        None,
         principal,
         underlying,
     )
@@ -277,23 +293,25 @@ async fn generated_typed_methods_overlap_on_one_shared_underlying_proxy() {
         })
     }));
     let underlying = AcceptanceEchoUnderlying::__golem_from_underlying(raw);
-    let first = underlying.echo("first".to_string());
-    let second = underlying.echo("second".to_string());
+    let first = underlying.start_echo("first".to_string()).await.unwrap();
+    let second = underlying.start_echo("second".to_string()).await.unwrap();
+    let first = first.get();
+    let second = second.get();
     let mut first = std::pin::pin!(first);
     let mut second = std::pin::pin!(second);
     let mut first_result = None;
     let mut second_result = None;
     let (first, second) = std::future::poll_fn(|cx| {
-        if first_result.is_none() {
-            if let Poll::Ready(result) = first.as_mut().poll(cx) {
-                first_result = Some(result);
-            }
+        if first_result.is_none()
+            && let Poll::Ready(result) = first.as_mut().poll(cx)
+        {
+            first_result = Some(result);
         }
-        if second_result.is_none() {
-            if let Poll::Ready(result) = second.as_mut().poll(cx) {
-                assert!(first_result.is_none());
-                second_result = Some(result);
-            }
+        if second_result.is_none()
+            && let Poll::Ready(result) = second.as_mut().poll(cx)
+        {
+            assert!(first_result.is_none());
+            second_result = Some(result);
         }
         match (first_result.take(), second_result.take()) {
             (Some(first), Some(second)) => Poll::Ready((first, second)),
@@ -420,6 +438,13 @@ fn transparent_dispatch_preserves_all_five_protocol_errors_exactly(
                 ToolInvokeError::Tool(_) => panic!("protocol error became a custom error"),
                 ToolInvokeError::UnknownCustomError(_) => {
                     panic!("protocol error became an unknown custom error")
+                }
+                ToolInvokeError::ProtocolError(_)
+                | ToolInvokeError::Denied(_)
+                | ToolInvokeError::InternalError(_)
+                | ToolInvokeError::Cancelled
+                | ToolInvokeError::ResourceExhausted(_) => {
+                    panic!("protocol error became an underlying lifecycle error")
                 }
             }
         }
@@ -737,6 +762,7 @@ async fn universal_acceptance(
     command_path: Vec<String>,
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
     principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
@@ -750,7 +776,9 @@ async fn universal_acceptance(
             had_stdin: stdin.is_some(),
         });
     });
-    underlying.invoke(command_path, input, stdin).await
+    underlying
+        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .await
 }
 
 #[test]
@@ -817,7 +845,7 @@ trait StreamTool {
     fn copy(
         &self,
         input: crate::agentic::InputStream,
-        output: crate::agentic::OutputStream,
+        output: Option<crate::agentic::OutputStream>,
     ) -> String;
 }
 
@@ -838,27 +866,41 @@ impl StreamToolMiddleware for StreamPolicy {
         &self,
         underlying: &StreamToolUnderlying,
         input: InputStream,
-    ) -> Result<(String, InputStream), ToolInvokeError<Infallible>> {
-        underlying.copy(input).await
+        output: Option<OutputStream>,
+    ) -> Result<String, ToolInvokeError<Infallible>> {
+        underlying
+            .start_copy(input)
+            .await?
+            .get_forwarding_stdout(output)
+            .await
     }
 }
 
 fn stream_underlying(include_stdout: bool) -> UnderlyingTool {
-    UnderlyingTool::from_fake(Box::new(move |path, _input, stdin| {
+    UnderlyingTool::from_fake_started(Box::new(move |path, _input, stdin| {
         assert_eq!(path, ["copy"]);
-        Box::pin(async move {
-            let bytes = stdin.expect("copy receives stdin").collect().await;
+        let result = Box::pin(async move {
+            let bytes = stdin
+                .expect("copy receives stdin")
+                .collect()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .concat();
             assert_eq!(bytes, b"request");
-            Ok(wire::InvocationResult {
-                result: Some(
+            Ok(Some(
                     encode_typed_schema_value_owned(
                         "copied".to_string().into_typed_schema_value().unwrap(),
                     )
                     .unwrap(),
-                ),
-                stdout: include_stdout.then(|| readable_stream(b"response")),
-            })
-        })
+            ))
+        });
+        (
+            result as _,
+            include_stdout.then(|| readable_stream(b"response")),
+            Rc::new(Cell::new(false)),
+        )
     }))
 }
 
@@ -880,7 +922,7 @@ async fn invoke_stream(
 }
 
 #[test]
-fn middleware_transfers_stdin_and_forwards_readable_stdout(
+fn middleware_receives_ordinary_output_writer_parameter(
     _registry_test_state: &RegistryTestState,
 ) {
     TEST_STREAM_NEW_CALLS.store(0, Ordering::Relaxed);
@@ -892,7 +934,7 @@ fn middleware_transfers_stdin_and_forwards_readable_stdout(
             String::from_value(result.result.unwrap().value()).unwrap(),
             "copied"
         );
-        assert_eq!(result.stdout.unwrap().collect().await, b"response");
+        assert!(result.stdout.is_none());
     });
     assert_eq!(TEST_STREAM_NEW_CALLS.load(Ordering::Relaxed), 0);
 }
@@ -901,6 +943,12 @@ fn middleware_transfers_stdin_and_forwards_readable_stdout(
 fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
     _registry_test_state: &RegistryTestState,
 ) {
+    assert_eq!(
+        get_tool_middleware_by_name("phase-six-transparent-policy")
+            .unwrap()
+            .version,
+        "1.2.3"
+    );
     run_acceptance(async {
         let invalid_command = invoke(
             "phase-six-transparent-policy",
@@ -979,12 +1027,12 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
         let unexpected_stdout = invoke_echo(
             "forward",
             None,
-            UnderlyingTool::from_fake(Box::new(|_, _, _| {
-                Box::pin(async {
-                    let mut result = typed_result("value".to_string());
-                    result.stdout = Some(readable_stream(b"unexpected"));
-                    Ok(result)
-                })
+            UnderlyingTool::from_fake_started(Box::new(|_, _, _| {
+                (
+                    Box::pin(async { Ok(typed_result("value".to_string()).result) }),
+                    Some(readable_stream(b"unexpected")),
+                    Rc::new(Cell::new(false)),
+                )
             })),
         )
         .await;

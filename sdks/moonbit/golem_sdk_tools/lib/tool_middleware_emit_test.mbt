@@ -126,7 +126,10 @@ test "monomorphic emitter generates namespaced descriptors wrappers dispatch and
     generated.contains("priv underlying : @toolMiddleware.UnderlyingTool"),
   )
   assert_true(generated.contains("pub async fn EchoUnderlying::echo"))
+  assert_true(generated.contains("pub async fn EchoUnderlying::start_echo"))
+  assert_true(generated.contains("@toolMiddleware.UnderlyingInvocation"))
   assert_true(generated.contains("invoke_with("))
+  assert_true(generated.contains("start_with("))
   assert_false(generated.contains("ToolClient"))
   assert_true(
     generated.contains(

@@ -66,7 +66,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     underlying: MiddlewareFixtureToolUnderlying,
     config: String
   ): Future[Either[ToolInvokeError[Nothing], Unit]] =
-    underlying.middlewareFixture(config)
+    underlying.middlewareFixture(config).toMiddlewareResult
 
   def call(
     underlying: MiddlewareFixtureToolUnderlying,
@@ -74,7 +74,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     value: String,
     principal: Principal
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
-    underlying.call(config, value)
+    underlying.call(config, value).toMiddlewareResult
 
   def inspect(
     underlying: MiddlewareFixtureToolUnderlying,
@@ -82,7 +82,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     prefix: String,
     name: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.inspect(config, prefix, name)
+    underlying.inspect(config, prefix, name).toMiddlewareResult
 }
 
 @toolMiddleware(name = "middleware-fixture-adapter")
@@ -102,6 +102,7 @@ final class MiddlewareFixtureAdapter
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying
       .execute(value)
+      .toMiddlewareResult
       .map {
         case Right(length) => Right(s"$config:$length")
         case Left(error)   =>
@@ -160,5 +161,5 @@ final class MiddlewareFixtureTypedMonomorphic
     parameters: MiddlewareInstallationParameters,
     value: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.call(s"${parameters.prefix}:$value")
+    underlying.call(s"${parameters.prefix}:$value").toMiddlewareResult
 }

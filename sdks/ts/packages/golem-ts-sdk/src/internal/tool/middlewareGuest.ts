@@ -19,14 +19,16 @@ import type {
   ToolError,
   ToolMiddleware,
   TypedSchemaValue,
-  UnderlyingTool,
 } from 'golem:tool/common@0.1.0';
+import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import type { toolMiddlewareGuest as ToolMiddlewareGuest } from 'tool-middleware-guest';
 import { sdkPrincipalFromHost } from '../../principal';
 import {
   middlewareRegistrationError,
   ToolMiddlewareRegistry,
 } from '../registry/toolMiddlewareRegistry';
+import { decodeByteStream } from './middlewareRuntime';
 
 function discoverToolMiddlewares(): ToolMiddleware[] {
   throwRegistrationError();
@@ -47,7 +49,8 @@ async function invokeToolMiddleware(
   parameters: TypedSchemaValue,
   commandPath: string[],
   input: TypedSchemaValue,
-  stdin: AsyncIterable<number> | undefined,
+  stdin: AsyncIterable<ByteStreamItem> | undefined,
+  stdout: ToolStdoutWriter | undefined,
   principal: HostPrincipal,
   wrapped: Pick<UnderlyingTool, 'invoke'>,
 ): Promise<InvocationResult> {
@@ -61,7 +64,8 @@ async function invokeToolMiddleware(
     parameters,
     commandPath,
     input,
-    stdin,
+    stdin: stdin === undefined ? undefined : decodeByteStream(stdin),
+    stdout,
     principal: sdkPrincipalFromHost(principal),
     wrapped,
   });
