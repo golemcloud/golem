@@ -369,7 +369,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "localServer.routerAddr",
   }}>
-    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `0.0.0.0` for binding and `localhost` for connections.
+    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `0.0.0.0` for binding and `localhost` for connections. It only applies to the main API: the HTTP API and MCP listeners (`customRequestPort`, `mcpPort`) always bind all interfaces, and deployment `subdomain` values always expand to `<subdomain>.localhost:<port>`, which resolves only on the machine running the server. To reach local deployments from another machine, use `domain` with a host name that resolves there.
   </Field>
 
   <Field meta={{
@@ -381,13 +381,13 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "localServer.customRequestPort",
   }}>
-    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`. Do not set this to `0` in the manifest; use `--custom-request-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--custom-request-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--custom-request-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{
     path: "localServer.mcpPort",
   }}>
-    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`. Do not set this to `0` in the manifest; use `--mcp-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--mcp-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--mcp-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{

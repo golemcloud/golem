@@ -24,10 +24,12 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogError, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder, downcast_oplog, scan_modes,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog, scan_modes,
 };
+use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
@@ -45,7 +47,7 @@ use nonempty_collections::NEVec;
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -56,13 +58,15 @@ pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
 
 pub(crate) struct TransferFiberState {
-    transfer_fiber: Option<tokio::task::JoinHandle<()>>,
+    transfer_fiber: Option<tokio::task::AbortHandle>,
+    closed: Option<OplogCloseCompletion>,
     cancelled: bool,
 }
 
 pub(crate) fn new_transfer_fiber() -> TransferFiber {
     Arc::new(Mutex::new(TransferFiberState {
         transfer_fiber: None,
+        closed: None,
         cancelled: false,
     }))
 }
@@ -119,6 +123,12 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> OplogIndex;
+
+    /// The meta-namespace whose keys list every agent this archive holds entries for, or `None`
+    /// when the storage cannot list them, as for blob-backed archives.
+    fn scan_namespace(&self, _agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+        None
+    }
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -304,22 +314,34 @@ impl MultiLayerOplogService {
             .and_then(|transfer_fiber| transfer_fiber.upgrade());
 
         if let Some(transfer_fiber) = transfer_fiber {
-            Self::cancel_and_join_transfer(&transfer_fiber).await;
+            Self::cancel_transfer(&transfer_fiber)
+                .await
+                .expect("Oplog transfer cleanup failed");
         }
     }
 
-    /// Cancels a transfer fiber and returns once its task is gone, so it can start no more work.
-    async fn cancel_and_join_transfer(transfer_fiber: &TransferFiber) {
-        let transfer = {
-            let mut transfer_fiber = transfer_fiber.lock().unwrap();
-            transfer_fiber.cancelled = true;
-            transfer_fiber.transfer_fiber.take()
+    pub(crate) async fn cancel_transfer(transfer_fiber: &TransferFiber) -> Result<(), String> {
+        let closed = {
+            let mut state = transfer_fiber.lock().unwrap();
+            state.cancelled = true;
+            if let Some(transfer) = &state.transfer_fiber {
+                transfer.abort();
+            }
+            state.closed.clone()
         };
-
-        if let Some(transfer) = transfer {
-            transfer.abort();
-            let _ = transfer.await;
+        match closed {
+            Some(closed) => closed.await,
+            None => Ok(()),
         }
+    }
+
+    pub(crate) fn transfer_closed(transfer_fiber: &TransferFiber) -> OplogCloseCompletion {
+        transfer_fiber
+            .lock()
+            .unwrap()
+            .closed
+            .clone()
+            .expect("transfer must be constructed")
     }
 
     pub(crate) async fn start_transfer(
@@ -327,19 +349,26 @@ impl MultiLayerOplogService {
         start: Sender<()>,
         transfer: tokio::task::JoinHandle<()>,
     ) {
-        let transfer = {
-            let mut transfer_fiber = transfer_fiber.lock().unwrap();
-            if transfer_fiber.cancelled {
-                Some(transfer)
-            } else {
-                transfer_fiber.transfer_fiber = Some(transfer);
-                None
+        let abort = transfer.abort_handle();
+        let closed = async move {
+            match transfer.await {
+                Ok(()) => Ok(()),
+                Err(error) if error.is_cancelled() => Ok(()),
+                Err(error) => Err(error.to_string()),
             }
+        }
+        .boxed()
+        .shared();
+        let cancelled = {
+            let mut transfer_fiber = transfer_fiber.lock().unwrap();
+            transfer_fiber.transfer_fiber = Some(abort.clone());
+            transfer_fiber.closed = Some(closed.clone());
+            transfer_fiber.cancelled
         };
 
-        if let Some(transfer) = transfer {
-            transfer.abort();
-            let _ = transfer.await;
+        if cancelled {
+            abort.abort();
+            closed.await.expect("Oplog transfer cleanup failed");
         } else {
             let _ = start.send(());
         }
@@ -434,7 +463,11 @@ impl OplogConstructor for CreateOplogConstructor {
         self.shard_epoch
     }
 
-    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
+    async fn create_oplog(
+        self,
+        lifecycle: &mut OplogLifecycleGuard,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog> {
         let agent_mode = self.agent_mode;
         let last_oplog_index = match self.last_oplog_index {
             Some(idx) => idx,
@@ -453,6 +486,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     if self.fresh {
                         self.primary
                             .create_fresh(
+                                lifecycle,
                                 &self.owned_agent_id,
                                 agent_mode,
                                 initial_entry,
@@ -465,6 +499,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     } else {
                         self.primary
                             .create(
+                                lifecycle,
                                 &self.owned_agent_id,
                                 agent_mode,
                                 initial_entry,
@@ -478,6 +513,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 } else {
                     self.primary
                         .open(
+                            lifecycle,
                             &self.owned_agent_id,
                             agent_mode,
                             Some(last_oplog_index),
@@ -553,6 +589,10 @@ impl OplogConstructor for CreateOplogConstructor {
 
 #[async_trait]
 impl OplogService for MultiLayerOplogService {
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        self.primary.lock_lifecycle(agent_id).await
+    }
+
     fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
         self.primary.set_stream_session_index(index);
     }
@@ -563,6 +603,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn create(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -573,6 +614,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -593,6 +635,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn create_fresh(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -603,6 +646,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -623,6 +667,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
@@ -633,6 +678,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -672,9 +718,17 @@ impl OplogService for MultiLayerOplogService {
         result
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+    async fn delete(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) {
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        self.primary.delete(owned_agent_id, agent_mode).await;
+        self.primary
+            .delete(lifecycle, owned_agent_id, agent_mode)
+            .await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
         }
@@ -839,12 +893,13 @@ pub struct MultiLayerOplog {
     agent_mode: AgentMode,
     primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+    retired: AtomicBool,
     multi_layer_oplog_service: MultiLayerOplogService,
     transfer_fiber: TransferFiber,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     last_reported_commit_index: AtomicOplogIndex,
     last_transfer_point: AtomicOplogIndex,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 impl MultiLayerOplog {
@@ -901,12 +956,13 @@ impl MultiLayerOplog {
             agent_mode,
             primary: primary.clone(),
             lower: lower.clone(),
+            retired: AtomicBool::new(false),
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
             transfer_fiber: new_transfer_fiber(),
             transfer: tx,
             last_reported_commit_index,
             last_transfer_point,
-            close_fn: Some(close),
+            close_fn: Mutex::new(Some(close)),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
         multi_layer_oplog_service.register_transfer(
@@ -1048,11 +1104,16 @@ impl MultiLayerOplog {
     /// goes on to drop the primary's prefix, deleting the primary oplog when that empties it, no
     /// matter who has opened the agent's oplog since. The entries it did not move stay in the
     /// primary layer, for the next handle to archive.
+    ///
+    /// Built on the same `retire`/`closed` mechanism the open-oplog cache uses to evict a stale
+    /// handle, rather than a second, competing shutdown path: `retire` unregisters and aborts the
+    /// transfer fiber, and `closed` (`MultiLayerOplogService::transfer_closed`) is its completion.
     pub async fn try_abort_transfer(this: &Arc<dyn Oplog>) {
         let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
             return;
         };
-        MultiLayerOplogService::cancel_and_join_transfer(&this.transfer_fiber).await;
+        this.retire();
+        let _ = this.closed().await;
         // A transfer cancelled while it waited for its `drop_prefix` reply has already handed the
         // job to the primary's actor, which runs it regardless. The actor serves jobs in the order
         // they were sent, so a reply to a job sent after it means that job has finished.
@@ -1117,8 +1178,8 @@ impl MultiLayerOplog {
                 // If there are more layers to transfer from, return true
                 first_non_empty < this.lower.len().get() - 2
             } else {
-                // Fully archived
-                false
+                // Fully archived, and no transfer was enqueued to wait for
+                return false;
             }
         };
 
@@ -1136,7 +1197,7 @@ impl Drop for MultiLayerOplog {
     fn drop(&mut self) {
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
         self.multi_layer_oplog_service
@@ -1154,6 +1215,38 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire) || self.primary.is_retired()
+    }
+
+    fn closed(&self) -> OplogCloseCompletion {
+        MultiLayerOplogService::transfer_closed(&self.transfer_fiber)
+    }
+
+    fn task_owner(&self) -> Option<&super::WorkerTasks> {
+        self.primary.task_owner()
+    }
+
+    async fn stop_and_wait(&self) -> Result<(), String> {
+        let tasks_result = if let Some(tasks) = self.task_owner() {
+            tasks.stop_and_wait().await
+        } else {
+            Ok(())
+        };
+        self.retire();
+        let result = self.closed().await;
+        let primary_result = self.primary.stop_and_wait().await;
+        tasks_result.and(result).and(primary_result)
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         self.primary.enqueue_add(entry)
     }
@@ -1625,16 +1718,9 @@ mod transfer_lifecycle_tests {
     }
 
     async fn cancel_transfer(transfer_fiber: &TransferFiber) {
-        let transfer = {
-            let mut transfer_fiber = transfer_fiber.lock().unwrap();
-            transfer_fiber.cancelled = true;
-            transfer_fiber.transfer_fiber.take()
-        };
-
-        if let Some(transfer) = transfer {
-            transfer.abort();
-            let _ = transfer.await;
-        }
+        MultiLayerOplogService::cancel_transfer(transfer_fiber)
+            .await
+            .unwrap();
     }
 
     proptest! {
@@ -1694,11 +1780,11 @@ mod transfer_lifecycle_tests {
                             transfer_fiber
                                 .lock()
                                 .unwrap()
-                                .transfer_fiber
-                                .take()
+                                .closed
+                                .clone()
                         };
                         if let Some(transfer) = transfer {
-                            let _ = transfer.await;
+                            transfer.await.unwrap();
                         }
                         prop_assert_eq!(started.load(Ordering::SeqCst), 1);
                     }

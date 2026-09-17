@@ -489,7 +489,7 @@ impl<
         key: &K,
         f1: F1,
         f2: F2,
-    ) -> Result<PendingOrFinal<PV, V>, E>
+    ) -> Result<PendingOrFinal<PV, V, E>, E>
     where
         F1: FnOnce() -> PV,
         F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
@@ -550,7 +550,10 @@ impl<
                         });
                     }
 
-                    Ok(PendingOrFinal::Pending(pending_value))
+                    Ok(PendingOrFinal::Pending(PendingValue {
+                        value: pending_value,
+                        completion: tx.subscribe(),
+                    }))
                 }
                 Item::Cached { value, .. } => {
                     record_cache_hit(self.name);
@@ -636,6 +639,27 @@ impl<
                 Item::Pending { .. } => false,
             })
             .await
+            .is_some();
+        if removed {
+            let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
+            record_cache_size(self.name, count.saturating_sub(1));
+        }
+        removed
+    }
+
+    /// Synchronous conditional removal for owners releasing their last reference from `Drop`.
+    /// Pending entries are never removed.
+    pub fn remove_if_cached_sync<F>(&self, key: &K, predicate: F) -> bool
+    where
+        F: Fn(&V) -> bool,
+    {
+        let removed = self
+            .state
+            .items
+            .remove_if_sync(key, |item| match item {
+                Item::Cached { value, .. } => predicate(value),
+                Item::Pending { .. } => false,
+            })
             .is_some();
         if removed {
             let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
@@ -919,8 +943,13 @@ pub enum BackgroundEvictionMode {
     OlderThan { ttl: Duration, period: Duration },
 }
 
-pub enum PendingOrFinal<PV, V> {
-    Pending(PV),
+pub struct PendingValue<PV, V, E> {
+    pub value: PV,
+    pub completion: tokio::sync::watch::Receiver<Option<Result<V, E>>>,
+}
+
+pub enum PendingOrFinal<PV, V, E = ()> {
+    Pending(PendingValue<PV, V, E>),
     Final(V),
 }
 
@@ -1164,7 +1193,10 @@ mod tests {
             .remove_if_cached(&1, |current| Arc::ptr_eq(current, &v1))
             .await;
         assert!(!removed, "v1-targeted removal must not delete v2");
-        assert_eq!(cache.try_get(&1).await, Some(v2));
+        assert!(!cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v1)));
+        assert_eq!(cache.try_get(&1).await, Some(v2.clone()));
+        assert!(cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v2)));
+        assert_eq!(cache.try_get(&1).await, None);
     }
 
     #[test]
@@ -2018,13 +2050,55 @@ mod tests {
             .unwrap();
 
         match result {
-            PendingOrFinal::Pending(pv) => assert_eq!(pv, "loading"),
+            PendingOrFinal::Pending(pending) => assert_eq!(pending.value, "loading"),
             PendingOrFinal::Final(_) => panic!("expected Pending"),
         }
 
         // Wait for background task to complete and cache the value
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(cache.get(&1).await, Some(42));
+    }
+
+    #[test]
+    async fn get_or_insert_pending_retains_completion_for_late_waiter() {
+        let cache: Cache<u64, (), u64, String> = Cache::new(
+            None,
+            FullCacheEvictionMode::None,
+            BackgroundEvictionMode::None,
+            "pending_retained_completion",
+        );
+        let PendingOrFinal::Pending(mut pending) = cache
+            .get_or_insert_pending(&1, || (), |_| Box::pin(async { Ok(42) }))
+            .await
+            .unwrap()
+        else {
+            panic!("expected Pending");
+        };
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let completion = pending.completion.wait_for(Option::is_some).await.unwrap();
+        assert_eq!(completion.as_ref().unwrap(), &Ok(42));
+    }
+
+    #[test]
+    async fn get_or_insert_pending_retains_error_for_late_waiter() {
+        let cache: Cache<u64, (), u64, String> = Cache::new(
+            None,
+            FullCacheEvictionMode::None,
+            BackgroundEvictionMode::None,
+            "pending_retained_error",
+        );
+        let PendingOrFinal::Pending(mut pending) = cache
+            .get_or_insert_pending(&1, || (), |_| Box::pin(async { Err("failed".to_string()) }))
+            .await
+            .unwrap()
+        else {
+            panic!("expected Pending");
+        };
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let completion = pending.completion.wait_for(Option::is_some).await.unwrap();
+        assert_eq!(completion.as_ref().unwrap(), &Err("failed".to_string()));
     }
 
     #[test]

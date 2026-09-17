@@ -19,11 +19,13 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
-use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
+use golem_worker_executor::services::oplog::{
+    OpenOplogs, Oplog, OplogLifecycleGuard, OplogService,
+};
 use golem_worker_executor::services::stream_session_index::StreamSessionIndexService;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -53,6 +55,10 @@ impl Debug for DebugOplogService {
 
 #[async_trait]
 impl OplogService for DebugOplogService {
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        self.inner.lock_lifecycle(agent_id).await
+    }
+
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
         self.inner.set_stream_session_index(index);
     }
@@ -63,6 +69,7 @@ impl OplogService for DebugOplogService {
 
     async fn create(
         &self,
+        _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _initial_entry: OplogEntry,
@@ -76,6 +83,7 @@ impl OplogService for DebugOplogService {
 
     async fn create_fresh(
         &self,
+        _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _initial_entry: OplogEntry,
@@ -89,6 +97,7 @@ impl OplogService for DebugOplogService {
 
     async fn open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
@@ -99,6 +108,7 @@ impl OplogService for DebugOplogService {
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateDebugOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -134,8 +144,15 @@ impl OplogService for DebugOplogService {
         }
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.inner.delete(owned_agent_id, agent_mode).await
+    async fn delete(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) {
+        self.inner
+            .delete(lifecycle, owned_agent_id, agent_mode)
+            .await
     }
 
     async fn read_exact(

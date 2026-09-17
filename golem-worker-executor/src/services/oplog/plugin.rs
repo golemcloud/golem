@@ -17,8 +17,8 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder, downcast_oplog,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -31,6 +31,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
@@ -53,7 +54,9 @@ use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -574,11 +577,16 @@ impl OplogConstructor for CreateOplogConstructor {
         self.shard_epoch
     }
 
-    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
+    async fn create_oplog(
+        self,
+        lifecycle: &mut OplogLifecycleGuard,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             if self.fresh {
                 self.inner
                     .create_fresh(
+                        lifecycle,
                         &self.owned_agent_id,
                         self.agent_mode,
                         initial_entry,
@@ -591,6 +599,7 @@ impl OplogConstructor for CreateOplogConstructor {
             } else {
                 self.inner
                     .create(
+                        lifecycle,
                         &self.owned_agent_id,
                         self.agent_mode,
                         initial_entry,
@@ -604,6 +613,7 @@ impl OplogConstructor for CreateOplogConstructor {
         } else {
             self.inner
                 .open(
+                    lifecycle,
                     &self.owned_agent_id,
                     self.agent_mode,
                     self.last_oplog_index,
@@ -676,6 +686,10 @@ impl Debug for ForwardingOplogService {
 
 #[async_trait]
 impl OplogService for ForwardingOplogService {
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        self.inner.lock_lifecycle(agent_id).await
+    }
+
     fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
         self.inner.set_stream_session_index(index);
     }
@@ -686,6 +700,7 @@ impl OplogService for ForwardingOplogService {
 
     async fn create(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -696,6 +711,7 @@ impl OplogService for ForwardingOplogService {
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -719,6 +735,7 @@ impl OplogService for ForwardingOplogService {
 
     async fn create_fresh(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -729,6 +746,7 @@ impl OplogService for ForwardingOplogService {
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -752,6 +770,7 @@ impl OplogService for ForwardingOplogService {
 
     async fn open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
@@ -762,6 +781,7 @@ impl OplogService for ForwardingOplogService {
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
+                lifecycle,
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
@@ -791,8 +811,15 @@ impl OplogService for ForwardingOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.inner.delete(owned_agent_id, agent_mode).await
+    async fn delete(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) {
+        self.inner
+            .delete(lifecycle, owned_agent_id, agent_mode)
+            .await
     }
 
     async fn read_exact(
@@ -877,18 +904,22 @@ impl OplogService for ForwardingOplogService {
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
     jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
-    /// `Mutex`-guarded (not owned outright) so [`try_join_background_work`] can take both
-    /// handles out through a shared reference and await them, the same way `Drop` aborts them
-    /// through a shared method (`JoinHandle::abort` only needs `&self`). Never held across an
-    /// `.await`.
-    actor: std::sync::Mutex<Option<JoinHandle<()>>>,
-    timer: std::sync::Mutex<Option<JoinHandle<()>>>,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    /// Completion of the actor task; also used by [`try_join_background_work`] to wait for a
+    /// cooperative shutdown without needing to take the `JoinHandle` out of a shared reference.
+    closed: OplogCloseCompletion,
+    retired: AtomicBool,
+    timer: Option<JoinHandle<()>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 /// A request processed by the [`ForwardingOplog`] actor task, which exclusively owns the
 /// [`ForwardingOplogState`].
 enum ForwardingJob {
+    /// Requests a graceful shutdown: sent by `Drop`, `retire`, and `try_join_background_work`.
+    /// Drains no further jobs after this one, so the actor exits once every job already queued
+    /// ahead of it - including a stray `Tick` the timer enqueued in the instant before it was
+    /// stopped - has been processed.
+    Close,
     Add {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<Result<OplogIndex, OplogError>>,
@@ -921,10 +952,6 @@ enum ForwardingJob {
     },
     /// Periodic tick from the timer task: runs locality recovery and a time-based flush.
     Tick,
-    /// Sent only by [`try_join_background_work`]: drains no further jobs after this one, so the
-    /// actor exits once every job already queued ahead of it - including a stray `Tick` the timer
-    /// enqueued in the instant before it was stopped - has been processed.
-    Shutdown,
     #[cfg(test)]
     Inspect {
         done: tokio::sync::oneshot::Sender<ForwardingStateSnapshot>,
@@ -1006,169 +1033,193 @@ impl ForwardingOplog {
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<ForwardingJob>();
         let actor = tokio::spawn(async move {
-            while let Some(job) = job_rx.recv().await {
-                state.debug_assert_invariants();
-                match job {
-                    ForwardingJob::Add { entry, done } => {
-                        let cache_entries = state.cache_is_required();
-                        let cached_entry = cache_entries.then(|| entry.clone());
-                        let result = state.inner.add(entry).await;
-                        // A refused write is recorded nowhere: the inner oplog appended nothing,
-                        // so the index it would have taken has to stay free.
-                        if let Ok(idx) = &result {
-                            if let Some(entry) = cached_entry {
-                                state.record_cached([(*idx, entry)]);
-                            } else {
-                                state.record_uncached([*idx]);
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
-                        let cache_entries = state.cache_is_required();
-                        let result = state.inner.add_durable_stream_batch(make_batch).await;
-                        if let Ok(entries) = &result {
-                            if cache_entries {
-                                state.record_cached(entries.iter().cloned());
-                            } else {
-                                state.record_uncached(entries.iter().map(|(idx, _)| *idx));
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddPair {
-                        start,
-                        make_second,
-                        done,
-                    } => {
-                        // The `Start` will be appended at the next index; this wrapper tracks
-                        // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
-                        // index matches the one the inner oplog assigns.
-                        let first_idx = state.last_oplog_idx.next();
-                        let second = make_second(first_idx);
-                        let cache_entries = state.cache_is_required();
-                        let cached_entries = cache_entries.then(|| (start.clone(), second.clone()));
-                        let result = state.inner.add_pair(start, Box::new(move |_| second)).await;
-                        if let Ok((start_idx, second_idx)) = &result {
-                            if let Some((start, second)) = cached_entries {
-                                state.record_cached([(*start_idx, start), (*second_idx, second)]);
-                            } else {
-                                state.record_uncached([*start_idx, *second_idx]);
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddStart {
-                        serialized_request,
-                        build_start,
-                        done,
-                    } => {
-                        let cache_entries = state.cache_is_required();
-                        // The `Start` entry is built deep in the leaf from the reserved payload
-                        // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
-                        // buffer only after the delegation returns it.
-                        let result = state
-                            .inner
-                            .add_start_with_reserved_raw_payload(serialized_request, build_start)
-                            .await;
-                        if let Ok(ordered) = &result {
-                            if cache_entries {
-                                state.record_cached([(ordered.index, ordered.entry.clone())]);
-                            } else {
-                                state.record_uncached([ordered.index]);
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::AddIndexedStart {
-                        build_request,
-                        done,
-                    } => {
-                        let cache_entries = state.cache_is_required();
-                        let result = state
-                            .inner
-                            .add_start_with_indexed_reserved_raw_payload(build_request)
-                            .await;
-                        if let Ok(ordered) = &result {
-                            if cache_entries {
-                                state.record_cached([(ordered.index, ordered.entry.clone())]);
-                            } else {
-                                state.record_uncached([ordered.index]);
-                            }
-                        }
-                        let _ = done.send(result);
-                    }
-                    ForwardingJob::Commit { level, done } => {
-                        match state.inner.commit(level).await {
-                            Err(error) => {
-                                let _ = done.send(Err(error));
-                            }
-                            Ok(mut result) => {
-                                // Update last_committed_idx from committed entries
-                                if let Some(max_idx) = result.keys().max()
-                                    && *max_idx > state.last_committed_idx
-                                {
-                                    state.last_committed_idx = *max_idx;
+            let result = AssertUnwindSafe(async {
+                while let Some(job) = job_rx.recv().await {
+                    state.debug_assert_invariants();
+                    match job {
+                        ForwardingJob::Close => break,
+                        ForwardingJob::Add { entry, done } => {
+                            let cache_entries = state.cache_is_required();
+                            let cached_entry = cache_entries.then(|| entry.clone());
+                            let result = state.inner.add(entry).await;
+                            // A refused write is recorded nowhere: the inner oplog appended
+                            // nothing, so the index it would have taken has to stay free.
+                            if let Ok(idx) = &result {
+                                if let Some(entry) = cached_entry {
+                                    state.record_cached([(*idx, entry)]);
+                                } else {
+                                    state.record_uncached([*idx]);
                                 }
-                                state.commit_count += 1;
-                                if state.commit_count >= max_commit_count {
-                                    // Spanned inside the threshold check, not around the commit:
-                                    // this arm runs per oplog commit, the flush only every
-                                    // `max_commit_count` of them. The actor has no ambient span,
-                                    // so without this the flush would be untraceable.
-                                    //
-                                    // Named apart from the periodic `oplog_forwarding_flush` so the
-                                    // two triggers stay distinguishable in a trace backend. The link
-                                    // points at the worker's startup rather than at the commit that
-                                    // tripped the threshold: the actor receives commits over a
-                                    // channel, so the committing invocation's context is not
-                                    // available here.
-                                    state
-                                        .try_flush()
-                                        .instrument(related_span!(
-                                            flush_origin,
-                                            tracing::Level::INFO,
-                                            "oplog_forwarding_threshold_flush",
-                                            agent_id = %agent_id
-                                        ))
-                                        .await;
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
+                            let cache_entries = state.cache_is_required();
+                            let result = state.inner.add_durable_stream_batch(make_batch).await;
+                            if let Ok(entries) = &result {
+                                if cache_entries {
+                                    state.record_cached(entries.iter().cloned());
+                                } else {
+                                    state.record_uncached(entries.iter().map(|(idx, _)| *idx));
                                 }
-                                // Merge entries committed directly to inner during flush
-                                // so the Worker folds them into AgentStatusRecord
-                                result.append(&mut state.pending_direct_commits);
-                                let _ = done.send(Ok(result));
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddPair {
+                            start,
+                            make_second,
+                            done,
+                        } => {
+                            // The `Start` will be appended at the next index; this wrapper tracks
+                            // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
+                            // index matches the one the inner oplog assigns.
+                            let first_idx = state.last_oplog_idx.next();
+                            let second = make_second(first_idx);
+                            let cache_entries = state.cache_is_required();
+                            let cached_entries =
+                                cache_entries.then(|| (start.clone(), second.clone()));
+                            let result =
+                                state.inner.add_pair(start, Box::new(move |_| second)).await;
+                            if let Ok((start_idx, second_idx)) = &result {
+                                if let Some((start, second)) = cached_entries {
+                                    state.record_cached([
+                                        (*start_idx, start),
+                                        (*second_idx, second),
+                                    ]);
+                                } else {
+                                    state.record_uncached([*start_idx, *second_idx]);
+                                }
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddStart {
+                            serialized_request,
+                            build_start,
+                            done,
+                        } => {
+                            let cache_entries = state.cache_is_required();
+                            // The `Start` entry is built deep in the leaf from the reserved payload
+                            // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
+                            // buffer only after the delegation returns it.
+                            let result = state
+                                .inner
+                                .add_start_with_reserved_raw_payload(
+                                    serialized_request,
+                                    build_start,
+                                )
+                                .await;
+                            if let Ok(ordered) = &result {
+                                if cache_entries {
+                                    state.record_cached([(ordered.index, ordered.entry.clone())]);
+                                } else {
+                                    state.record_uncached([ordered.index]);
+                                }
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddIndexedStart {
+                            build_request,
+                            done,
+                        } => {
+                            let cache_entries = state.cache_is_required();
+                            let result = state
+                                .inner
+                                .add_start_with_indexed_reserved_raw_payload(build_request)
+                                .await;
+                            if let Ok(ordered) = &result {
+                                if cache_entries {
+                                    state.record_cached([(ordered.index, ordered.entry.clone())]);
+                                } else {
+                                    state.record_uncached([ordered.index]);
+                                }
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::Commit { level, done } => {
+                            match state.inner.commit(level).await {
+                                Err(error) => {
+                                    let _ = done.send(Err(error));
+                                }
+                                Ok(mut result) => {
+                                    // Update last_committed_idx from committed entries
+                                    if let Some(max_idx) = result.keys().max()
+                                        && *max_idx > state.last_committed_idx
+                                    {
+                                        state.last_committed_idx = *max_idx;
+                                    }
+                                    state.commit_count += 1;
+                                    if state.commit_count >= max_commit_count {
+                                        // Spanned inside the threshold check, not around the
+                                        // commit: this arm runs per oplog commit, the flush only
+                                        // every `max_commit_count` of them. The actor has no
+                                        // ambient span, so without this the flush would be
+                                        // untraceable.
+                                        //
+                                        // Named apart from the periodic
+                                        // `oplog_forwarding_flush` so the two triggers stay
+                                        // distinguishable in a trace backend. The link points at
+                                        // the worker's startup rather than at the commit that
+                                        // tripped the threshold: the actor receives commits over
+                                        // a channel, so the committing invocation's context is
+                                        // not available here.
+                                        state
+                                            .try_flush()
+                                            .instrument(related_span!(
+                                                flush_origin,
+                                                tracing::Level::INFO,
+                                                "oplog_forwarding_threshold_flush",
+                                                agent_id = %agent_id
+                                            ))
+                                            .await;
+                                    }
+                                    // Merge entries committed directly to inner during flush
+                                    // so the Worker folds them into AgentStatusRecord
+                                    result.append(&mut state.pending_direct_commits);
+                                    let _ = done.send(Ok(result));
+                                }
                             }
                         }
-                    }
-                    ForwardingJob::SetWorkerEventService { service, done } => {
-                        state.worker_event_service = Some(service);
-                        let _ = done.send(());
-                    }
-                    ForwardingJob::Tick => {
-                        async {
-                            state.try_locality_recovery().await;
-                            state.try_flush().await;
+                        ForwardingJob::SetWorkerEventService { service, done } => {
+                            state.worker_event_service = Some(service);
+                            let _ = done.send(());
                         }
-                        .instrument(related_span!(
-                            flush_origin,
-                            tracing::Level::INFO,
-                            "oplog_forwarding_flush",
-                            agent_id = %agent_id
-                        ))
-                        .await;
+                        ForwardingJob::Tick => {
+                            async {
+                                state.try_locality_recovery().await;
+                                state.try_flush().await;
+                            }
+                            .instrument(related_span!(
+                                flush_origin,
+                                tracing::Level::INFO,
+                                "oplog_forwarding_flush",
+                                agent_id = %agent_id
+                            ))
+                            .await;
+                        }
+                        #[cfg(test)]
+                        ForwardingJob::Inspect { done } => {
+                            let _ = done.send(ForwardingStateSnapshot {
+                                buffer_len: state.buffer.as_ref().map(VecDeque::len),
+                                buffer_start_idx: state.buffer_start_idx,
+                                last_oplog_idx: state.last_oplog_idx,
+                            });
+                        }
                     }
-                    ForwardingJob::Shutdown => break,
-                    #[cfg(test)]
-                    ForwardingJob::Inspect { done } => {
-                        let _ = done.send(ForwardingStateSnapshot {
-                            buffer_len: state.buffer.as_ref().map(VecDeque::len),
-                            buffer_start_idx: state.buffer_start_idx,
-                            last_oplog_idx: state.last_oplog_idx,
-                        });
-                    }
+                    state.debug_assert_invariants();
                 }
-                state.debug_assert_invariants();
+            })
+            .catch_unwind()
+            .await;
+            let mut result = result.map_err(|_| "Forwarding oplog actor panicked".to_string());
+            for monitor in state.monitor_tasks {
+                let joined = AssertUnwindSafe(monitor.cancel()).catch_unwind().await;
+                result = result.and(
+                    joined
+                        .map(|_| ())
+                        .map_err(|_| "Oplog monitor panicked".to_string()),
+                );
             }
+            result
         });
 
         let timer = tokio::spawn({
@@ -1185,9 +1236,12 @@ impl ForwardingOplog {
         Self {
             inner,
             jobs,
-            actor: std::sync::Mutex::new(Some(actor)),
-            timer: std::sync::Mutex::new(Some(timer)),
-            close_fn: Some(close_fn),
+            closed: async move { actor.await.map_err(|error| error.to_string())? }
+                .boxed()
+                .shared(),
+            retired: AtomicBool::new(false),
+            timer: Some(timer),
+            close_fn: Mutex::new(Some(close_fn)),
         }
     }
 
@@ -1217,10 +1271,11 @@ impl ForwardingOplog {
 
     /// Enqueues a job for the actor task and awaits its reply.
     ///
-    /// Panics if the actor task is gone: the actor is aborted only from `Drop`, and stopped
-    /// cooperatively only by `try_join_background_work`, both of which run only once no caller
-    /// can still be in flight - so a missing reply means the actor itself panicked and the
-    /// oplog's state is no longer trustworthy.
+    /// A missing reply means the actor failed, or this handle was used after retirement or after
+    /// `try_join_background_work` stopped it - both cooperative shutdowns that run only once no
+    /// caller can still be in flight, and both drain every job queued before `Close`, so a
+    /// missing reply otherwise means the actor itself panicked and the oplog's state is no
+    /// longer trustworthy.
     async fn run_job<R>(
         &self,
         make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> ForwardingJob,
@@ -1244,21 +1299,18 @@ impl Debug for ForwardingOplog {
 
 impl Drop for ForwardingOplog {
     fn drop(&mut self) {
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
-        if let Some(timer) = self.timer.get_mut().unwrap().take() {
+        if let Some(timer) = self.timer.take() {
             timer.abort();
         }
         // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
-        // job reply anymore and aborting the actor cannot lose an observed operation. Dropping
-        // the actor's state aborts all background monitor tasks (they are
-        // `AbortOnDropJoinHandle`s), preventing them from outliving this oplog and causing
-        // resource contention. A handle that already went through `try_join_background_work` has
-        // taken both out already, so there is nothing left here to abort.
-        if let Some(actor) = self.actor.get_mut().unwrap().take() {
-            actor.abort();
-        }
+        // job reply anymore. Requesting a graceful stop (rather than aborting the actor outright)
+        // lets it drain whatever is already queued ahead of `Close` - including a stray `Tick`
+        // the timer enqueued in the instant before it was aborted - before its background monitor
+        // tasks are joined and it exits.
+        let _ = self.jobs.send(ForwardingJob::Close);
     }
 }
 
@@ -1272,30 +1324,56 @@ impl Drop for ForwardingOplog {
 /// writing), a handle built for a fork target asserts no epoch at all - it is closed and hands off
 /// to the target's real owner before that owner opens its own primary oplog at its own epoch. A
 /// periodic checkpoint commit the actor is still running when the caller moves on would land,
-/// unfenced, into storage the owner may already be writing into. Aborting the timer stops it from
-/// scheduling further ticks; the actor is never aborted, only sent a `Shutdown` job and awaited,
-/// so it drains everything already queued ahead of that job - including a tick the timer sent in
-/// the instant before it was stopped - before exiting.
+/// unfenced, into storage the owner may already be writing into.
+///
+/// Built on the same `retire`/`closed` mechanism the open-oplog cache uses to evict a stale
+/// handle, rather than a second, competing shutdown path: `retire` aborts the timer and sends
+/// `Close`, which drains everything already queued ahead of it - including a tick the timer sent
+/// in the instant before it was stopped - before the actor exits and its monitor tasks are
+/// joined; `closed` is that completion.
 pub(crate) async fn try_join_background_work(this: &Arc<dyn Oplog>) {
     let Some(this) = downcast_oplog::<ForwardingOplog>(this) else {
         return;
     };
-    let timer = this.timer.lock().unwrap().take();
-    if let Some(timer) = timer {
-        timer.abort();
-        let _ = timer.await;
-    }
-    let actor = this.actor.lock().unwrap().take();
-    if let Some(actor) = actor {
-        // Ignored: a send failure means the actor is already gone (panicked), in which case
-        // there is nothing left to drain and awaiting its handle below still completes.
-        let _ = this.jobs.send(ForwardingJob::Shutdown);
-        let _ = actor.await;
-    }
+    this.retire();
+    let _ = this.closed().await;
 }
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
+    fn retire(&self) {
+        if let Some(timer) = &self.timer {
+            timer.abort();
+        }
+        if !self.retired.swap(true, Ordering::AcqRel) {
+            let _ = self.jobs.send(ForwardingJob::Close);
+        }
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire) || self.jobs.is_closed() || self.inner.is_retired()
+    }
+
+    fn closed(&self) -> OplogCloseCompletion {
+        self.closed.clone()
+    }
+
+    fn task_owner(&self) -> Option<&super::WorkerTasks> {
+        self.inner.task_owner()
+    }
+
+    async fn stop_and_wait(&self) -> Result<(), String> {
+        let tasks_result = if let Some(tasks) = self.task_owner() {
+            tasks.stop_and_wait().await
+        } else {
+            Ok(())
+        };
+        self.retire();
+        let result = self.closed().await;
+        let inner_result = self.inner.stop_and_wait().await;
+        tasks_result.and(result).and(inner_result)
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let (done, done_rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(ForwardingJob::Add { entry, done }).is_err() {

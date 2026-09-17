@@ -219,6 +219,7 @@ fn suspended_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
 async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn Oplog> {
     service
         .create_fresh(
+            &mut service.lock_lifecycle(&id.agent_id).await,
             id,
             AgentMode::Durable,
             OplogEntry::NoOp {
@@ -1521,6 +1522,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
 
     let reopened = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -1583,6 +1585,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
 
     let second = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -1868,6 +1871,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     );
     let reopened = reopened_service
         .open(
+            &mut reopened_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -1943,6 +1947,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     drop(oplog);
     let reopened = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,

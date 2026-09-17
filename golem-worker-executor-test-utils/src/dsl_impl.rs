@@ -126,8 +126,16 @@ impl TestWorkerExecutor {
             match response.response {
                 Some(invocation_response::Response::Accepted(_)) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
+                    // The reason is what a caller acts on (the worker service reroutes
+                    // `SHARDING_NOT_READY`), so it is kept alongside the message.
+                    let reason =
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
+                            rejected.reason,
+                        )
+                        .map(|reason| reason.as_str_name())
+                        .unwrap_or("UNKNOWN");
                     terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected: {}",
+                        "Agent invocation rejected ({reason}): {}",
                         rejected.error
                     )));
                 }

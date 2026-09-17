@@ -175,7 +175,7 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
 pub struct LiveCallPermit(Arc<AtomicUsize>);
 
 impl LiveCallPermit {
-    pub(super) fn new(counter: Arc<AtomicUsize>) -> Self {
+    pub(crate) fn new(counter: Arc<AtomicUsize>) -> Self {
         counter.fetch_add(1, Ordering::AcqRel);
         Self(counter)
     }

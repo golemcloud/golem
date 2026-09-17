@@ -267,6 +267,7 @@ pub struct GolemClients {
     pub application: ApplicationClientLive,
     pub card: CardClientLive,
     pub component: ComponentClientLive,
+    pub component_upload: ComponentClientLive,
     pub deployment: DeploymentClientLive,
     pub environment: EnvironmentClientLive,
     pub environment_tool_grants: EnvironmentToolGrantsClientLive,
@@ -297,6 +298,10 @@ impl GolemClients {
             new_reqwest_client(&config.service_http_client_config, &with_service_retry)?;
         let invoke_http_client =
             new_reqwest_client(&config.invoke_http_client_config, &with_invoke_retry)?;
+        let component_upload_http_client = new_reqwest_client(
+            &config.component_upload_http_client_config,
+            &MiddlewareConfig::without_retry(),
+        )?;
 
         let auth = Auth::new(LoginClientLive {
             context: ClientContext {
@@ -321,6 +326,12 @@ impl GolemClients {
         let worker_context = || ClientContext {
             client: service_http_client.clone(),
             base_url: config.worker_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        let component_upload_context = || ClientContext {
+            client: component_upload_http_client.clone(),
+            base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
@@ -376,6 +387,9 @@ impl GolemClients {
             },
             component: ComponentClientLive {
                 context: registry_context(),
+            },
+            component_upload: ComponentClientLive {
+                context: component_upload_context(),
             },
             deployment: DeploymentClientLive {
                 context: registry_context(),
