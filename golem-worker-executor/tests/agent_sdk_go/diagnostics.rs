@@ -323,3 +323,46 @@ async fn diag_sched_trace_replay(
     drop(executor);
     Ok(())
 }
+
+/// Same as `diag_sched_trace`, but with an automatic snapshot every 2nd
+/// invocation: does the save-snapshot hook add goroutine transitions on the
+/// long-lived event-loop goroutine (visible as extra `T g1` events between
+/// invocations)?
+#[test]
+#[ignore = "diagnostic: needs the instrumented go fork"]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn diag_sched_trace_with_snapshots(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use golem_worker_executor_test_utils::start_with_snapshot_policy;
+    let context = TestContext::new(last_unique_id);
+    let executor =
+        start_with_snapshot_policy(deps, &context, SnapshotPolicy::EveryNInvocation { count: 2 }).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapAgent", "go-diag-sched-snap-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    for _ in 0..10 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "bump", data_value!())
+            .await?;
+    }
+    let report = executor
+        .invoke_and_await_agent(&component, &agent_id, "sched-trace", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let run = std::env::var("DIAG_RUN").unwrap_or_default();
+    write_dump(&format!("schedsnap{run}.txt"), &format!("{report}=== oplog ===\n{}", render(&oplog)));
+    drop(executor);
+    Ok(())
+}
