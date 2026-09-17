@@ -284,8 +284,12 @@ recorded result. C's consumer resubscribes; the live
 subscription samples the bus high-water, and `read_segment` fetches P's committed segments after
 C's last `source_offset` `(43,1)`, so `c` at `(44,0)` is delivered exactly once and `a`, `b` are
 never re-delivered.
-Owners: `DurableStreamProducer::write_items`, `DurableLiveStreamBus::{subscribe,
-publish_committed}`, `durable_session.rs::read_segment`, `wasm_rpc/mod.rs::spawn_streaming_invoke_and_await_task`.
+Owners: `DurableStreamStore::write_items`, `DurableLiveStreamBus::{subscribe,
+publish_committed}`, `durable_session/mod.rs::StreamSession`,
+`wasm_rpc/mod.rs::spawn_streaming_invoke_and_await_task`. The store owns the local journal,
+admission, commit and publication path; the per-invocation runtime owns binding-local mappings,
+and pure control/topology projections live in `durable_stream/session_state.rs`. This changes no
+wire or oplog format.
 Test: `tests/rpc.rs::callee_recovery_continues_output_after_committed_item`.
 
 ## 12. Streaming RPC: consumer restart after partial read

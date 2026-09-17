@@ -874,7 +874,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect"]
-description = "Runs the it-cli 'deploy' shard (app modules other than agents and app)"
+description = "Runs the it-cli 'deploy' shard (deploy-tagged app modules without prebuilt test components)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''

@@ -16,7 +16,8 @@ use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    OplogCloseCompletion, OplogLifecycleGuard, OplogService, OrderedOplogStart,
+    ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -182,6 +183,10 @@ impl Oplog for RateLimitedOplog {
         self.inner.is_retired()
     }
 
+    fn closed(&self) -> OplogCloseCompletion {
+        self.inner.closed()
+    }
+
     fn task_owner(&self) -> Option<&super::WorkerTasks> {
         self.inner.task_owner()
     }
@@ -224,7 +229,7 @@ impl Oplog for RateLimitedOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         self.inner
             .raw_durable_stream_session_status(session_key)

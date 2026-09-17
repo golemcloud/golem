@@ -9,5 +9,7 @@ mod agent_mcp_server;
 mod agent_mcp_tool;
 pub mod auth;
 mod invoke;
+#[cfg(test)]
+pub(crate) use invoke::test_support::InvocationHarness;
 mod mcp_capabilities_lookup;
 mod schema;

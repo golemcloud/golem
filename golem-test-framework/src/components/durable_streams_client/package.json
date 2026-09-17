@@ -1,0 +1,9 @@
+{
+  "name": "golem-durable-streams-reference-client-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@durable-streams/client": "0.2.7",
+    "undici": "8.10.2"
+  }
+}

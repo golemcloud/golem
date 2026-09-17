@@ -16,6 +16,7 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
+mod gateway_server;
 pub mod grpcapi;
 pub mod invocation_session_token;
 pub mod mcp;
@@ -241,8 +242,7 @@ impl WorkerService {
 
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                gateway_server::run(acceptor, route)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }

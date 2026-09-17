@@ -20,14 +20,14 @@ use golem_api_grpc::proto::golem::schema::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
-    MAX_STREAM_VALUE_TRAVERSAL_DEPTH, StreamMapSideV1, StreamValuePathStepV1,
+    MAX_STREAM_VALUE_TRAVERSAL_DEPTH, StreamMapSide, StreamValuePathStep,
 };
 use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, SchemaValueStream};
 use prost::Message;
 
 fn push_recursive_path(
-    path: &mut Vec<StreamValuePathStepV1>,
-    step: StreamValuePathStepV1,
+    path: &mut Vec<StreamValuePathStep>,
+    step: StreamValuePathStep,
 ) -> Result<(), String> {
     if path.len() >= MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
         return Err(
@@ -42,7 +42,7 @@ fn push_recursive_path(
 fn union_branch_index(
     graph: &SchemaGraph,
     root: &SchemaType,
-    path: &[StreamValuePathStepV1],
+    path: &[StreamValuePathStep],
     tag: &str,
 ) -> Result<u32, String> {
     let current = schema_type_at_path(graph, root, path)?;
@@ -60,7 +60,7 @@ fn union_branch_index(
 fn schema_type_at_path<'a>(
     graph: &'a SchemaGraph,
     root: &'a SchemaType,
-    path: &[StreamValuePathStepV1],
+    path: &[StreamValuePathStep],
 ) -> Result<&'a SchemaType, String> {
     let mut current = root;
     for step in path {
@@ -68,52 +68,51 @@ fn schema_type_at_path<'a>(
             .resolve_ref(current)
             .map_err(|error| error.to_string())?;
         current = match (step, current) {
-            (StreamValuePathStepV1::RecordField(index), SchemaType::Record { fields, .. }) => {
+            (StreamValuePathStep::RecordField(index), SchemaType::Record { fields, .. }) => {
                 &fields
                     .get(*index as usize)
                     .ok_or_else(|| "stream record path is out of range".to_string())?
                     .body
             }
-            (
-                StreamValuePathStepV1::VariantCasePayload(index),
-                SchemaType::Variant { cases, .. },
-            ) => cases
-                .get(*index as usize)
-                .and_then(|case| case.payload.as_ref())
-                .ok_or_else(|| "stream variant path has no payload".to_string())?,
-            (StreamValuePathStepV1::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
+            (StreamValuePathStep::VariantCasePayload(index), SchemaType::Variant { cases, .. }) => {
+                cases
+                    .get(*index as usize)
+                    .and_then(|case| case.payload.as_ref())
+                    .ok_or_else(|| "stream variant path has no payload".to_string())?
+            }
+            (StreamValuePathStep::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
                 elements
                     .get(*index as usize)
                     .ok_or_else(|| "stream tuple path is out of range".to_string())?
             }
-            (StreamValuePathStepV1::ListElement(_), SchemaType::List { element, .. })
-            | (StreamValuePathStepV1::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
+            (StreamValuePathStep::ListElement(_), SchemaType::List { element, .. })
+            | (StreamValuePathStep::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
                 element
             }
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: StreamMapSideV1::Key,
+                StreamValuePathStep::MapEntry {
+                    side: StreamMapSide::Key,
                     ..
                 },
                 SchemaType::Map { key, .. },
             ) => key,
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: StreamMapSideV1::Value,
+                StreamValuePathStep::MapEntry {
+                    side: StreamMapSide::Value,
                     ..
                 },
                 SchemaType::Map { value, .. },
             ) => value,
-            (StreamValuePathStepV1::OptionSome, SchemaType::Option { inner, .. }) => inner,
-            (StreamValuePathStepV1::ResultOk, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::OptionSome, SchemaType::Option { inner, .. }) => inner,
+            (StreamValuePathStep::ResultOk, SchemaType::Result { spec, .. }) => spec
                 .ok
                 .as_deref()
                 .ok_or_else(|| "stream result ok path has no payload".to_string())?,
-            (StreamValuePathStepV1::ResultErr, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::ResultErr, SchemaType::Result { spec, .. }) => spec
                 .err
                 .as_deref()
                 .ok_or_else(|| "stream result error path has no payload".to_string())?,
-            (StreamValuePathStepV1::UnionBranch(index), SchemaType::Union { spec, .. }) => {
+            (StreamValuePathStep::UnionBranch(index), SchemaType::Union { spec, .. }) => {
                 &spec
                     .branches
                     .get(*index as usize)
@@ -128,18 +127,20 @@ fn schema_type_at_path<'a>(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn decode_recursive_stream_value(
+/// Decodes a transport value while resolving every nested stream reference.
+pub fn decode_recursive_stream_value(
     value: ProtoSchemaValue,
-    mut stream: impl FnMut(u64, &[StreamValuePathStepV1]) -> Result<SchemaValueStream, String>,
+    mut stream: impl FnMut(u64, &[StreamValuePathStep]) -> Result<SchemaValueStream, String>,
 ) -> Result<SchemaValue, String> {
     decode_recursive_stream_value_inner(value, None, &mut stream)
 }
 
-pub(crate) fn decode_recursive_stream_value_with_schema(
+/// Decodes nested stream references and validates their paths against a pinned schema.
+pub fn decode_recursive_stream_value_with_schema(
     value: ProtoSchemaValue,
     graph: &SchemaGraph,
     root: &SchemaType,
-    mut stream: impl FnMut(u64, &[StreamValuePathStepV1]) -> Result<SchemaValueStream, String>,
+    mut stream: impl FnMut(u64, &[StreamValuePathStep]) -> Result<SchemaValueStream, String>,
 ) -> Result<SchemaValue, String> {
     decode_recursive_stream_value_inner(value, Some((graph, root)), &mut stream)
 }
@@ -147,13 +148,13 @@ pub(crate) fn decode_recursive_stream_value_with_schema(
 fn decode_recursive_stream_value_inner(
     value: ProtoSchemaValue,
     schema: Option<(&SchemaGraph, &SchemaType)>,
-    stream: &mut impl FnMut(u64, &[StreamValuePathStepV1]) -> Result<SchemaValueStream, String>,
+    stream: &mut impl FnMut(u64, &[StreamValuePathStep]) -> Result<SchemaValueStream, String>,
 ) -> Result<SchemaValue, String> {
     fn decode(
         value: ProtoSchemaValue,
         schema: Option<(&SchemaGraph, &SchemaType)>,
-        path: &mut Vec<StreamValuePathStepV1>,
-        stream: &mut impl FnMut(u64, &[StreamValuePathStepV1]) -> Result<SchemaValueStream, String>,
+        path: &mut Vec<StreamValuePathStep>,
+        stream: &mut impl FnMut(u64, &[StreamValuePathStep]) -> Result<SchemaValueStream, String>,
     ) -> Result<SchemaValue, String> {
         let value = value
             .value
@@ -168,10 +169,7 @@ fn decode_recursive_stream_value_inner(
                     .into_iter()
                     .enumerate()
                     .map(|(index, field)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::RecordField(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::RecordField(index as u32))?;
                         let result = decode(field, schema, path, stream);
                         path.pop();
                         result
@@ -186,7 +184,7 @@ fn decode_recursive_stream_value_inner(
                         .map(|payload| {
                             push_recursive_path(
                                 path,
-                                StreamValuePathStepV1::VariantCasePayload(value.case),
+                                StreamValuePathStep::VariantCasePayload(value.case),
                             )?;
                             let result = decode(*payload, schema, path, stream).map(Box::new);
                             path.pop();
@@ -201,10 +199,7 @@ fn decode_recursive_stream_value_inner(
                     .into_iter()
                     .enumerate()
                     .map(|(index, element)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::TupleElement(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::TupleElement(index as u32))?;
                         let result = decode(element, schema, path, stream);
                         path.pop();
                         result
@@ -217,10 +212,7 @@ fn decode_recursive_stream_value_inner(
                     .into_iter()
                     .enumerate()
                     .map(|(index, element)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::ListElement(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::ListElement(index as u32))?;
                         let result = decode(element, schema, path, stream);
                         path.pop();
                         result
@@ -235,7 +227,7 @@ fn decode_recursive_stream_value_inner(
                     .map(|(index, element)| {
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::FixedListElement(index as u32),
+                            StreamValuePathStep::FixedListElement(index as u32),
                         )?;
                         let result = decode(element, schema, path, stream);
                         path.pop();
@@ -251,9 +243,9 @@ fn decode_recursive_stream_value_inner(
                     .map(|(index, entry)| {
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::MapEntry {
+                            StreamValuePathStep::MapEntry {
                                 index: index as u32,
-                                side: StreamMapSideV1::Key,
+                                side: StreamMapSide::Key,
                             },
                         )?;
                         let key = decode(
@@ -267,9 +259,9 @@ fn decode_recursive_stream_value_inner(
                         path.pop();
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::MapEntry {
+                            StreamValuePathStep::MapEntry {
                                 index: index as u32,
-                                side: StreamMapSideV1::Value,
+                                side: StreamMapSide::Value,
                             },
                         )?;
                         let value = decode(
@@ -289,7 +281,7 @@ fn decode_recursive_stream_value_inner(
                 inner: value
                     .inner
                     .map(|inner| {
-                        push_recursive_path(path, StreamValuePathStepV1::OptionSome)?;
+                        push_recursive_path(path, StreamValuePathStep::OptionSome)?;
                         let result = decode(*inner, schema, path, stream).map(Box::new);
                         path.pop();
                         result
@@ -302,7 +294,7 @@ fn decode_recursive_stream_value_inner(
                     .ok_or_else(|| "result value has no result arm".to_string())?
                 {
                     proto_result_value::Result::Ok(value) => {
-                        push_recursive_path(path, StreamValuePathStepV1::ResultOk)?;
+                        push_recursive_path(path, StreamValuePathStep::ResultOk)?;
                         let value = decode(*value, schema, path, stream).map(Box::new);
                         path.pop();
                         golem_schema::schema::schema_value::ResultValuePayload::Ok {
@@ -310,7 +302,7 @@ fn decode_recursive_stream_value_inner(
                         }
                     }
                     proto_result_value::Result::Err(value) => {
-                        push_recursive_path(path, StreamValuePathStepV1::ResultErr)?;
+                        push_recursive_path(path, StreamValuePathStep::ResultErr)?;
                         let value = decode(*value, schema, path, stream).map(Box::new);
                         path.pop();
                         golem_schema::schema::schema_value::ResultValuePayload::Err {
@@ -331,7 +323,7 @@ fn decode_recursive_stream_value_inner(
                     Some((graph, root)) => union_branch_index(graph, root, path, &value.tag)?,
                     None => 0,
                 };
-                push_recursive_path(path, StreamValuePathStepV1::UnionBranch(branch_index))?;
+                push_recursive_path(path, StreamValuePathStep::UnionBranch(branch_index))?;
                 let body = decode(
                     *value
                         .body
@@ -355,18 +347,20 @@ fn decode_recursive_stream_value_inner(
     decode(value, schema, &mut Vec::new(), stream)
 }
 
-pub(crate) fn encode_recursive_stream_value(
+/// Encodes a schema value while replacing every nested stream with a transport reference.
+pub fn encode_recursive_stream_value(
     value: &SchemaValue,
-    mut stream: impl FnMut(&SchemaValueStream, &[StreamValuePathStepV1]) -> Result<u64, String>,
+    mut stream: impl FnMut(&SchemaValueStream, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {
     encode_recursive_stream_value_inner(value, None, &mut stream)
 }
 
-pub(crate) fn encode_recursive_stream_value_with_schema(
+/// Encodes nested streams using paths validated against a pinned schema.
+pub fn encode_recursive_stream_value_with_schema(
     value: &SchemaValue,
     graph: &SchemaGraph,
     root: &SchemaType,
-    mut stream: impl FnMut(&SchemaValueStream, &[StreamValuePathStepV1]) -> Result<u64, String>,
+    mut stream: impl FnMut(&SchemaValueStream, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {
     encode_recursive_stream_value_inner(value, Some((graph, root)), &mut stream)
 }
@@ -374,13 +368,13 @@ pub(crate) fn encode_recursive_stream_value_with_schema(
 fn encode_recursive_stream_value_inner(
     value: &SchemaValue,
     schema: Option<(&SchemaGraph, &SchemaType)>,
-    stream: &mut impl FnMut(&SchemaValueStream, &[StreamValuePathStepV1]) -> Result<u64, String>,
+    stream: &mut impl FnMut(&SchemaValueStream, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {
     fn encode(
         value: &SchemaValue,
         schema: Option<(&SchemaGraph, &SchemaType)>,
-        path: &mut Vec<StreamValuePathStepV1>,
-        stream: &mut impl FnMut(&SchemaValueStream, &[StreamValuePathStepV1]) -> Result<u64, String>,
+        path: &mut Vec<StreamValuePathStep>,
+        stream: &mut impl FnMut(&SchemaValueStream, &[StreamValuePathStep]) -> Result<u64, String>,
     ) -> Result<ProtoSchemaValue, String> {
         let value = match value {
             SchemaValue::Stream(value) => {
@@ -393,10 +387,7 @@ fn encode_recursive_stream_value_inner(
                     .iter()
                     .enumerate()
                     .map(|(index, field)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::RecordField(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::RecordField(index as u32))?;
                         let result = encode(field, schema, path, stream);
                         path.pop();
                         result
@@ -410,7 +401,7 @@ fn encode_recursive_stream_value_inner(
                     .map(|payload| {
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::VariantCasePayload(value.case),
+                            StreamValuePathStep::VariantCasePayload(value.case),
                         )?;
                         let result = encode(payload, schema, path, stream).map(Box::new);
                         path.pop();
@@ -427,10 +418,7 @@ fn encode_recursive_stream_value_inner(
                     .iter()
                     .enumerate()
                     .map(|(index, element)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::TupleElement(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::TupleElement(index as u32))?;
                         let result = encode(element, schema, path, stream);
                         path.pop();
                         result
@@ -442,10 +430,7 @@ fn encode_recursive_stream_value_inner(
                     .iter()
                     .enumerate()
                     .map(|(index, element)| {
-                        push_recursive_path(
-                            path,
-                            StreamValuePathStepV1::ListElement(index as u32),
-                        )?;
+                        push_recursive_path(path, StreamValuePathStep::ListElement(index as u32))?;
                         let result = encode(element, schema, path, stream);
                         path.pop();
                         result
@@ -460,7 +445,7 @@ fn encode_recursive_stream_value_inner(
                         .map(|(index, element)| {
                             push_recursive_path(
                                 path,
-                                StreamValuePathStepV1::FixedListElement(index as u32),
+                                StreamValuePathStep::FixedListElement(index as u32),
                             )?;
                             let result = encode(element, schema, path, stream);
                             path.pop();
@@ -476,18 +461,18 @@ fn encode_recursive_stream_value_inner(
                     .map(|(index, (key, value))| {
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::MapEntry {
+                            StreamValuePathStep::MapEntry {
                                 index: index as u32,
-                                side: StreamMapSideV1::Key,
+                                side: StreamMapSide::Key,
                             },
                         )?;
                         let key = encode(key, schema, path, stream)?;
                         path.pop();
                         push_recursive_path(
                             path,
-                            StreamValuePathStepV1::MapEntry {
+                            StreamValuePathStep::MapEntry {
                                 index: index as u32,
-                                side: StreamMapSideV1::Value,
+                                side: StreamMapSide::Value,
                             },
                         )?;
                         let value = encode(value, schema, path, stream)?;
@@ -503,7 +488,7 @@ fn encode_recursive_stream_value_inner(
                 let inner = inner
                     .as_deref()
                     .map(|inner| {
-                        push_recursive_path(path, StreamValuePathStepV1::OptionSome)?;
+                        push_recursive_path(path, StreamValuePathStep::OptionSome)?;
                         let result = encode(inner, schema, path, stream).map(Box::new);
                         path.pop();
                         result
@@ -516,7 +501,7 @@ fn encode_recursive_stream_value_inner(
                     golem_schema::schema::schema_value::ResultValuePayload::Ok { value } => {
                         match value.as_deref() {
                             Some(value) => {
-                                push_recursive_path(path, StreamValuePathStepV1::ResultOk)?;
+                                push_recursive_path(path, StreamValuePathStep::ResultOk)?;
                                 let value = encode(value, schema, path, stream).map(Box::new)?;
                                 path.pop();
                                 proto_result_value::Result::Ok(value)
@@ -527,7 +512,7 @@ fn encode_recursive_stream_value_inner(
                     golem_schema::schema::schema_value::ResultValuePayload::Err { value } => {
                         match value.as_deref() {
                             Some(value) => {
-                                push_recursive_path(path, StreamValuePathStepV1::ResultErr)?;
+                                push_recursive_path(path, StreamValuePathStep::ResultErr)?;
                                 let value = encode(value, schema, path, stream).map(Box::new)?;
                                 path.pop();
                                 proto_result_value::Result::Err(value)
@@ -545,7 +530,7 @@ fn encode_recursive_stream_value_inner(
                     Some((graph, root)) => union_branch_index(graph, root, path, &value.tag)?,
                     None => 0,
                 };
-                push_recursive_path(path, StreamValuePathStepV1::UnionBranch(branch_index))?;
+                push_recursive_path(path, StreamValuePathStep::UnionBranch(branch_index))?;
                 let body = encode(&value.body, schema, path, stream).map(Box::new)?;
                 path.pop();
                 proto_schema_value::Value::UnionValue(Box::new(UnionValue {
@@ -561,9 +546,8 @@ fn encode_recursive_stream_value_inner(
     encode(value, schema, &mut Vec::new(), stream)
 }
 
-pub(crate) fn preflight_recursive_stream_value(
-    value: &SchemaValue,
-) -> Result<ProtoSchemaValue, String> {
+/// Validates recursive stream limits before encoding a schema value.
+pub fn preflight_recursive_stream_value(value: &SchemaValue) -> Result<ProtoSchemaValue, String> {
     let mut stream_count = 0usize;
     let encoded = encode_recursive_stream_value(value, |_, _| {
         let stream_id = u64::try_from(stream_count)
@@ -588,7 +572,8 @@ pub(crate) fn preflight_recursive_stream_value(
     Ok(encoded)
 }
 
-pub(crate) fn preflight_proto_recursive_stream_value(
+/// Validates recursive stream limits in an encoded transport value.
+pub fn preflight_proto_recursive_stream_value(
     value: &ProtoSchemaValue,
 ) -> Result<Vec<u64>, String> {
     if value.encoded_len() > MAX_DURABLE_STREAM_ITEM_SIZE {
@@ -611,9 +596,10 @@ pub(crate) fn preflight_proto_recursive_stream_value(
     Ok(stream_references)
 }
 
-pub(crate) fn remap_recursive_stream_references(
+/// Rewrites every nested stream reference while preserving the surrounding value.
+pub fn remap_recursive_stream_references(
     value: ProtoSchemaValue,
-    mut remap: impl FnMut(u64, &[StreamValuePathStepV1]) -> Result<u64, String>,
+    mut remap: impl FnMut(u64, &[StreamValuePathStep]) -> Result<u64, String>,
 ) -> Result<ProtoSchemaValue, String> {
     let value = decode_recursive_stream_value(value, |stream_id, _| {
         Ok(SchemaValueStream::from_host_endpoint(stream_id))
@@ -681,8 +667,8 @@ mod tests {
             }),
         });
         let expected_path = vec![
-            StreamValuePathStepV1::UnionBranch(1),
-            StreamValuePathStepV1::RecordField(1),
+            StreamValuePathStep::UnionBranch(1),
+            StreamValuePathStep::RecordField(1),
         ];
 
         let encoded =

@@ -68,7 +68,7 @@ which durable fact makes that safe.
 | Awaiter parked on a terminal that never comes | `switch_to_live` wakes it as `Incomplete` (re-execute if allowed) | Replay target index |
 | Recorded delivery cannot be reproduced | `delivery_failure` poisons replay; reconstruction fails loudly instead of diverging | Marker semantics |
 
-## Durable streams (`durable_host/durable_stream.rs`, `durable_session.rs`, `stream_bus.rs`)
+## Durable streams (`durable_host/durable_stream/mod.rs`, `durable_session.rs`, `stream_bus.rs`)
 
 | Crash window | Oplog shape | Reconstruction behaviour | Durable fact |
 |---|---|---|---|

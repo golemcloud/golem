@@ -408,7 +408,7 @@ async fn t5_read_only_bypasses_agent_loading(
     //   `agent_sdk` component. The assertions verify the calibration is still valid —
     //   if the component's module or linear memory grows or shrinks materially, the
     //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 8 * 1024 * 1024;
+    const SYSTEM_MEMORY: u64 = 9 * 1024 * 1024;
     const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -431,9 +431,12 @@ async fn t5_read_only_bypasses_agent_loading(
     // R: the worker whose read-only cache we want to keep alive across eviction.
     let unique_id = context.redis_prefix();
     let r_agent_id = agent_id!(AGENT_TYPE, format!("t5-r-{unique_id}"));
-    let r_worker_id = executor
-        .start_agent(&component.id, r_agent_id.clone())
-        .await?;
+    let r_worker_id = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.start_agent(&component.id, r_agent_id.clone()),
+    )
+    .await
+    .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
     let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
@@ -1756,6 +1759,139 @@ async fn r4_rpc_read_only_method_cannot_make_rpc(
     assert!(
         is_read_only_violation(&err, "bad_rpc"),
         "expected ReadOnlyViolation for `bad_rpc`, got: {err:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn settled_read_only_cache_hit_persists_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-persistence-{}", context.redis_prefix())
+    );
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    wait_for_cache_hit(&executor, &component, &agent_id, &worker_id).await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let before_max_index = executor.oplog_max_index(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(result, 0);
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "a settled cache hit must not persist Store, startup, queue, alias, or follower entries"
+    );
+    assert_eq!(
+        executor.oplog_max_index(&worker_id).await?,
+        before_max_index
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn coalesced_read_only_followers_persist_no_durable_entries(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let control_agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-followers-control-{}", context.redis_prefix())
+    );
+    let control_worker_id = executor
+        .start_agent(&component.id, control_agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &control_worker_id).await?;
+    let control_before = executor.oplog_max_index(&control_worker_id).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &control_agent_id,
+            "slow_read",
+            data_value!(500u64),
+        )
+        .await?;
+    wait_oplog_settled(&executor, &control_worker_id).await?;
+    let control_entries = executor
+        .get_oplog(&control_worker_id, OplogIndex::INITIAL)
+        .await?;
+    let single_invocation_entries = control_entries
+        .iter()
+        .filter(|entry| entry.oplog_index > control_before)
+        .count();
+
+    let agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-followers-{}", context.redis_prefix())
+    );
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+    let before = executor.oplog_max_index(&worker_id).await?;
+
+    let mut calls = Vec::new();
+    for _ in 0..8 {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        calls.push(tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "slow_read", data_value!(500u64))
+                .await
+        }));
+    }
+    for call in calls {
+        assert_eq!(call.await??.into_typed::<u64>()?, 0);
+    }
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let appended = entries
+        .iter()
+        .filter(|entry| entry.oplog_index > before)
+        .count();
+    let (started, finished) = count_agent_invocation_pair_since(&entries, before);
+    assert_eq!((started, finished), (1, 1));
+    assert_eq!(
+        appended, single_invocation_entries,
+        "coalesced followers must not persist durable aliases, keys, or queue entries"
     );
 
     Ok(())

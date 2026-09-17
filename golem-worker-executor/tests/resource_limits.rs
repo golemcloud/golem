@@ -174,6 +174,164 @@ async fn concurrent_agent_limit_not_reached_starts_immediately(
     Ok(())
 }
 
+/// An RPC to a terminating callee must make progress even when the caller
+/// occupies the account's only concurrent-agent slot.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_allows_rpc_progress(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // Run the two-slot control first using the same fixture and RPC method.
+    for limit in [2, 1] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_concurrent_agent_limit(deps, &context, limit).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let caller = agent_id!("Counter", "rpc-permit-caller");
+        let callee = agent_id!("Counter", "rpc-permit-caller-inner");
+
+        // Complete both constructors before exercising the contested RPC path.
+        // Incrementing the callee also verifies its code is independently executable.
+        executor.start_agent(&component.id, callee.clone()).await?;
+        let initial = executor
+            .invoke_and_await_agent(&component, &callee, "increment", data_value!())
+            .await?;
+        assert_eq!(
+            initial.into_return_value(),
+            Some(golem_common::schema::SchemaValue::U32(1))
+        );
+        executor.start_agent(&component.id, caller.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &caller, "increment", data_value!())
+            .await?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            executor.invoke_and_await_agent(
+                &component,
+                &caller,
+                "increment_through_rpc",
+                data_value!(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("RPC did not complete with concurrency limit {limit}"))??;
+        assert_eq!(
+            result.into_return_value(),
+            Some(golem_common::schema::SchemaValue::U32(2))
+        );
+        let count = executor
+            .invoke_and_await_agent(&component, &callee, "increment", data_value!())
+            .await?;
+        assert_eq!(
+            count.into_return_value(),
+            Some(golem_common::schema::SchemaValue::U32(3))
+        );
+        eprintln!(
+            "RPC completed and incremented the callee exactly once with concurrency limit {limit}"
+        );
+    }
+    Ok(())
+}
+
+/// A restarted agent waiting to reacquire its concurrent-agent permit must
+/// still respond to terminal lifecycle requests.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    for delete in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let gate_clone = gate.clone();
+        let polling = Arc::new(tokio::sync::Notify::new());
+        let polling_clone = polling.clone();
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+        let port = listener.local_addr()?.port();
+        let http_server = tokio::spawn(async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || {
+                    let gate = gate_clone.clone();
+                    let polling = polling_clone.clone();
+                    async move {
+                        polling.notify_one();
+                        gate.acquire()
+                            .await
+                            .expect("gate semaphore closed")
+                            .forget();
+                        "done".to_string()
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        });
+        let component = executor
+            .component_dep(&context.default_environment_id, http_tests)
+            .store()
+            .await?;
+        let agent_id = agent_id!("HttpClient2");
+        let mut env = HashMap::new();
+        env.insert("PORT".to_string(), port.to_string());
+        let worker_id = executor
+            .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+            .await?;
+        executor
+            .invoke_agent(&component, &agent_id, "start_polling", data_value!("done"))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(10), polling.notified()).await?;
+
+        let permit_executor = executor.clone();
+        let permit_component_id = component.id;
+        let permit_waiter = tokio::spawn(async move {
+            permit_executor
+                .acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
+                    component_id: permit_component_id,
+                    agent_id: agent_id!("Counter", "restart-waiter-permit-holder").to_string(),
+                })
+                .await
+        });
+        // Let the holder enter the scheduler's FIFO before restart releases the
+        // caller's permit, so the restarted caller is forced to wait behind it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        executor.simulated_crash(&worker_id).await?;
+        let held_permit = tokio::time::timeout(Duration::from_secs(5), permit_waiter)
+            .await
+            .map_err(|_| anyhow::anyhow!("permit holder did not acquire after restart"))??;
+
+        if delete {
+            tokio::time::timeout(Duration::from_secs(5), executor.delete_worker(&worker_id))
+                .await
+                .map_err(|_| anyhow::anyhow!("delete waited for the held permit"))??;
+        } else {
+            tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&worker_id))
+                .await
+                .map_err(|_| anyhow::anyhow!("interrupt waited for the held permit"))??;
+            executor
+                .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
+                .await?;
+        }
+
+        drop(held_permit);
+        http_server.abort();
+    }
+
+    Ok(())
+}
+
 /// When the limit is reached with no idle agents, a new agent waits in
 /// WaitingForPermit until the running agent finishes and its permit is returned.
 ///
@@ -646,6 +804,104 @@ async fn rpc_call_limit_exceeded_traps_invocation(
         err_str.contains("RPC call limit") || err_str.contains("ExceededRpcCallLimit"),
         "expected ExceededRpcCallLimit error, got: {err_str}"
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn prepare_worker_does_not_start_target_and_public_create_waits_for_loading(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+
+    for check_public_create in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let agent_id = golem_common::model::AgentId {
+            component_id: component.id,
+            agent_id: agent_id!("Counter", "cold-prepare-under-permit-pressure").to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+        let held_permit = executor
+            .acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
+                component_id: component.id,
+                agent_id: agent_id!("Counter", "permit-holder").to_string(),
+            })
+            .await;
+        let request = CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(context.account_id.into()),
+            environment_id: Some(context.default_environment_id.into()),
+            env: HashMap::new(),
+            config: Vec::new(),
+            ignore_already_existing: true,
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+            invocation_context: None,
+        };
+
+        let first = tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.client.clone().prepare_worker(request.clone()),
+        )
+        .await??
+        .into_inner();
+        let first_fingerprint = match first.result {
+            Some(create_worker_response::Result::Success(success)) => success.instance_id.unwrap(),
+            other => anyhow::bail!("prepare_worker failed: {other:?}"),
+        };
+        assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+        let second = executor
+            .client
+            .clone()
+            .prepare_worker(request.clone())
+            .await?
+            .into_inner();
+        let second_fingerprint = match second.result {
+            Some(create_worker_response::Result::Success(success)) => success.instance_id.unwrap(),
+            other => anyhow::bail!("repeated prepare_worker failed: {other:?}"),
+        };
+        assert_eq!(second_fingerprint, first_fingerprint);
+        assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+        assert!(!executor.worker_has_pending_startup(&owned_agent_id).await);
+
+        if !check_public_create {
+            drop(held_permit);
+            executor.client.clone().prepare_worker(request).await?;
+            assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+            assert!(!executor.worker_has_pending_startup(&owned_agent_id).await);
+            continue;
+        }
+
+        let mut client = executor.client.clone();
+        let create = tokio::spawn(async move { client.create_worker(request).await });
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            !create.is_finished(),
+            "public create did not wait for loading"
+        );
+
+        drop(held_permit);
+        let created = tokio::time::timeout(Duration::from_secs(10), create).await???;
+        let created_fingerprint = match created.into_inner().result {
+            Some(create_worker_response::Result::Success(success)) => success.instance_id.unwrap(),
+            other => anyhow::bail!("create_worker failed after permit release: {other:?}"),
+        };
+        assert_eq!(created_fingerprint, first_fingerprint);
+        assert!(executor.worker_is_loaded(&owned_agent_id).await);
+    }
 
     Ok(())
 }

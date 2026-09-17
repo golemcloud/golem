@@ -37,7 +37,8 @@ use std::marker::PhantomData;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Accessor, HasData, Resource, StreamReader};
 
-pub(crate) fn contains_stream(value: &SchemaValue) -> bool {
+/// Returns whether a schema value contains a stream at any nesting depth.
+pub fn contains_stream(value: &SchemaValue) -> bool {
     match value {
         SchemaValue::Stream(_) => true,
         SchemaValue::Record { fields } => fields.iter().any(contains_stream),

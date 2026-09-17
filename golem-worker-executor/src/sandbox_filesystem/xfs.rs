@@ -994,7 +994,7 @@ impl ManagedProvisioning {
         &self,
         volume: FilesystemVolume,
         name: SandboxFilesystemName,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         let owner = name.relative_path();
         let lifecycle = acquire_filesystem_lease(&self.root().join(&owner)).await;
         let provisioning = self.clone();
@@ -1015,7 +1015,7 @@ impl ManagedProvisioning {
         volume: FilesystemVolume,
         name: SandboxFilesystemName,
         lifecycle: OwnedMutexGuard<()>,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         let [environment, component, filesystem_name] = name.components();
         let owner = name.relative_path();
         let mut lifecycle = Some(lifecycle);
@@ -1182,7 +1182,7 @@ impl ManagedProvisioning {
         let assignment_result = assign_project(&root_fd, project_id).map_err(|error| {
             FilesystemStorageError::io("assign managed XFS project", &root, error)
         });
-        let created = Arc::new(SandboxFilesystem::new(
+        let created = SandboxFilesystem::new(
             NativeRoot::new(root, root_fd),
             LeaseState {
                 lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
@@ -1203,18 +1203,12 @@ impl ManagedProvisioning {
                 filesystem_block_bytes: self.filesystem_block_bytes,
             },
             NativeNameModeSource::ValidatedManagedXfs(self.validated_name_mode),
-        ));
+        );
         if let Err(error) = assignment_result {
-            return Err(match SandboxFilesystem::delete_and_verify(&created).await {
-                Ok(()) => error,
-                Err(cleanup_error) => cleanup_error,
-            });
+            return Err(rollback_created_filesystem(created, error).await);
         }
         if let Err(error) = verify_fresh_open_directory(created.root()).await {
-            return Err(match SandboxFilesystem::delete_and_verify(&created).await {
-                Ok(()) => error,
-                Err(cleanup_error) => cleanup_error,
-            });
+            return Err(rollback_created_filesystem(created, error).await);
         }
 
         Ok(created)
@@ -1718,7 +1712,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unmanaged.name_mode_probe_count(), 1);
-        SandboxFilesystem::delete_and_verify(&unmanaged)
+        SandboxFilesystem::delete_and_verify(unmanaged)
             .await
             .unwrap();
 
@@ -1913,7 +1907,7 @@ mod tests {
         assert!(after_descriptor_drops.allocated_bytes >= 8192);
 
         let filesystem_root = filesystem.root().to_path_buf();
-        SandboxFilesystem::delete_and_verify(&filesystem)
+        SandboxFilesystem::delete_and_verify(filesystem)
             .await
             .unwrap();
         assert!(!filesystem_root.exists());
@@ -1927,7 +1921,7 @@ mod tests {
             }
         );
         let second_root = second.root().to_path_buf();
-        SandboxFilesystem::delete_and_verify(&second).await.unwrap();
+        SandboxFilesystem::delete_and_verify(second).await.unwrap();
         assert!(!second_root.exists());
         assert_eq!(
             provisioning

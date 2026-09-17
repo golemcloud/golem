@@ -14,6 +14,7 @@
 
 mod deploy_validation_error;
 mod deployment_context;
+mod durable_streams;
 mod http_parameter_conversion;
 mod mcp;
 mod read;

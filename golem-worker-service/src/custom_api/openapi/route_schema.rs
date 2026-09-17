@@ -113,7 +113,7 @@ pub enum ResponseModel {
 
 /// Lower every schema-bearing field of every route into the new schema model.
 pub fn build_document_schema(
-    routes: &[super::super::RichCompiledRoute],
+    routes: &[&super::super::RichCompiledRoute],
 ) -> Result<DocumentSchema, String> {
     let mut per_route = Vec::with_capacity(routes.len());
     // Every per-route compiled schema already carries the full per-agent

@@ -17,16 +17,18 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, AgentStatus};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_customized, start_with_redis_oplog_config,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
+    start_with_redis_oplog_config,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
@@ -528,6 +530,106 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
         }
     }
 
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn interrupt_during_oom_backoff_is_durable_before_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(256 * 1024 * 1024);
+                config.memory.oom_retry_config.min_delay = Duration::from_secs(60);
+                config.memory.oom_retry_config.max_delay = Duration::from_secs(60);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    let agent = agent_id!("LargeDynamicMemoryAgent", "interrupt-during-backoff");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let key = IdempotencyKey::fresh();
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent = agent.clone();
+        let key = key.clone();
+        spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(&component, &agent, &key, "run", data_value!())
+                .await
+        })
+    };
+    executor
+        .wait_for_status(&worker, AgentStatus::Retrying, Duration::from_secs(30))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(executor.worker_is_cached(&owned).await);
+
+    // The interrupt must finish while the OOM retry is still in its 60-second backoff.
+    tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&worker)).await??;
+    executor
+        .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(5))
+        .await?;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), invocation)
+            .await??
+            .is_err()
+    );
+    assert_eq!(
+        executor.search_oplog(&worker, "Interrupted").await?.len(),
+        1
+    );
+
+    drop(executor);
+    let executor = start_customized(
+        deps,
+        &context,
+        Some(1024 * 1024 * 1024),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    executor
+        .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(5))
+        .await?;
+    executor.resume(&worker, false).await?;
+    let result = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "run", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u64>()?, 0);
+    assert_eq!(
+        executor.search_oplog(&worker, "Interrupted").await?.len(),
+        1
+    );
+    assert_eq!(
+        executor
+            .search_oplog(&worker, "AgentInvocationFinished")
+            .await?
+            .len(),
+        2
+    );
     Ok(())
 }
 

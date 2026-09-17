@@ -297,12 +297,42 @@ impl LimitService for NoopLimitService {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
     invocation_output: AgentInvocationOutput,
 }
 
 #[async_trait]
 impl WorkerClient for RecordingWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let _ = (
+            environment_variables,
+            config,
+            ignore_already_existing,
+            account_id,
+            environment_id,
+            auth_ctx,
+            invocation_context,
+            principal,
+        );
+        self.prepared_agent_ids
+            .lock()
+            .unwrap()
+            .push(agent_id.clone());
+        Ok((agent_id.clone(), AgentFingerprint::new()))
+    }
+
     async fn create(
         &self,
         _: &AgentId,
@@ -628,9 +658,11 @@ impl InvocationHarness {
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
+        let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
         let method_params = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
+            prepared_agent_ids,
             method_params: method_params.clone(),
             invocation_output,
         });

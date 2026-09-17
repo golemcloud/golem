@@ -14,8 +14,8 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::durable_stream::{
-    AttachmentId, AttemptId, StreamInvocationIdV1, StreamSessionAttachedRecordV1,
-    StreamSessionRecordV1,
+    AttachmentId, AttemptId, SessionStreamRole, StreamInvocationId, StreamSessionAttachedRecord,
+    StreamSessionCancelRequestedRecord, StreamSessionRecord, StreamSlotTombstonedRecord,
 };
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
@@ -35,6 +35,90 @@ use std::str::FromStr;
 use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
+
+fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
+    StreamInvocationId {
+        callee_environment_id: EnvironmentId::new(),
+        callee: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "agent".to_string(),
+        },
+        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        idempotency_key: IdempotencyKey::new(key.to_string()),
+    }
+}
+
+#[test]
+fn durable_stream_control_records_binary_roundtrip_and_validate() {
+    let session_key = durable_stream_test_session_key("control-roundtrip");
+    let records = [
+        StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
+            format_version: 1,
+            session_key: session_key.clone(),
+            slot: "input".to_string(),
+            role: SessionStreamRole::Input,
+        }),
+        StreamSessionRecord::CancelRequested(StreamSessionCancelRequestedRecord {
+            format_version: 1,
+            session_key,
+        }),
+    ];
+
+    for record in records {
+        assert!(record.has_supported_format());
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        let decoded: StreamSessionRecord = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, record);
+    }
+
+    let invalid = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
+        format_version: 1,
+        session_key: durable_stream_test_session_key("empty-slot"),
+        slot: String::new(),
+        role: SessionStreamRole::Input,
+    });
+    assert!(!invalid.has_supported_format());
+}
+
+#[test]
+fn durable_stream_control_status_folds_after_finished_idempotently() {
+    let session_key = durable_stream_test_session_key("control-fold");
+    let key = session_key.idempotency_key.clone();
+    let mut index = DurableStreamSessionIndex::default();
+    index.insert(
+        key.clone(),
+        DurableStreamSessionStatus {
+            session_key: Some(session_key.clone()),
+            finished: Some(OplogIndex::from_u64(10)),
+            ..Default::default()
+        },
+    );
+    let tombstone = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
+        format_version: 1,
+        session_key: session_key.clone(),
+        slot: "output".to_string(),
+        role: SessionStreamRole::Output,
+    });
+    let cancel = StreamSessionRecord::CancelRequested(StreamSessionCancelRequestedRecord {
+        format_version: 1,
+        session_key,
+    });
+
+    for (index_value, record) in [
+        (11, &tombstone),
+        (12, &cancel),
+        (13, &tombstone),
+        (14, &cancel),
+    ] {
+        index.apply_record(OplogIndex::from_u64(index_value), record);
+    }
+
+    let status = index.get(&key).unwrap();
+    assert_eq!(status.finished, Some(OplogIndex::from_u64(10)));
+    assert_eq!(status.tombstoned_slots.len(), 1);
+    assert!(status.tombstoned_slots.contains("output"));
+    assert!(status.cancellation_requested);
+}
 
 #[test]
 fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished() {
@@ -81,7 +165,7 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
 #[test]
 fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let key = IdempotencyKey::new("invocation".to_string());
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
             component_id: ComponentId::new(),
@@ -108,7 +192,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     status.apply_pending_invocation(pending, &key);
     status.apply_record(
         OplogIndex::from_u64(13),
-        &StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key,
             attachment_id,
@@ -124,7 +208,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
 #[test]
 fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     let key = IdempotencyKey::new("invocation".to_string());
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
             component_id: ComponentId::new(),
@@ -149,7 +233,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     };
     status.apply_record(
         OplogIndex::from_u64(13),
-        &StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key,
             attachment_id,
@@ -183,7 +267,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
                 .idempotency_key
                 .clone(),
         );
-        let mut attached = match StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        let mut attached = match StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: invalid.session_key.clone().unwrap(),
             attachment_id: AttachmentId::primary(
@@ -196,12 +280,12 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
             epoch: 1,
             pending_invocation_oplog_index: pending,
         }) {
-            StreamSessionRecordV1::Attached(value) => value,
+            StreamSessionRecord::Attached(value) => value,
             _ => unreachable!(),
         };
         invalid.apply_record(
             OplogIndex::from_u64(13),
-            &StreamSessionRecordV1::Attached(attached.clone()),
+            &StreamSessionRecord::Attached(attached.clone()),
         );
         assert!(
             invalid.lifecycle_error.is_some(),

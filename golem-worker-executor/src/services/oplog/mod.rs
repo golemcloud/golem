@@ -26,8 +26,8 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -44,7 +44,7 @@ use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
-pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
+pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
@@ -70,6 +70,14 @@ pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, f
 
 #[cfg(test)]
 pub mod tests;
+
+/// Whether an archive step returns once its transfer is queued or once the transfer has finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveWait {
+    Queued,
+    /// Holds the agent's oplog lifecycle lock until the transfer finishes.
+    Finished,
+}
 
 /// A top-level service for managing worker oplogs
 ///
@@ -417,11 +425,11 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
-    Items(Option<OplogIndex>, StreamItemsRecordV1),
-    End(Option<OplogIndex>, StreamEndRecordV1),
-    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
-    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
+    Registered(Option<OplogIndex>, StreamRegisteredRecord),
+    Items(Option<OplogIndex>, StreamItemsRecord),
+    End(Option<OplogIndex>, StreamEndRecord),
+    Cancel(Option<OplogIndex>, StreamCancelRecord),
+    Session(Option<OplogIndex>, Box<StreamSessionRecord>),
     InlineEntry(OplogEntry),
 }
 
@@ -620,7 +628,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// through the returned watermark; storage failures must not be reported as absence.
     async fn raw_durable_stream_session_status(
         &self,
-        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> RawDurableStreamSessionStatus {
         RawDurableStreamSessionStatus {
             watermark: self.current_oplog_index().await,

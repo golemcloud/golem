@@ -34,6 +34,7 @@ jobs:
         with:
           cache-save-if: 'true'
           cache-shared-key: 'release'
+          install-protoc: 'true'
       - name: Building all executables (release)
         env:
           QUIET: true
