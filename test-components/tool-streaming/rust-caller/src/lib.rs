@@ -6,7 +6,7 @@ use golem_rust::agentic::{
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
-    self as tool_host, ByteStreamFailure, RpcError, ToolRpc,
+    self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
@@ -259,7 +259,7 @@ fn closed_raw_stdin() -> tool_host::ToolStdin {
 
 async fn raw_result(
     future: &tool_host::FutureInvokeResult,
-) -> Result<tool_host::InvocationResult, RpcError> {
+) -> Result<tool_host::InvocationResult, ToolRpcError> {
     future.get().await
 }
 
@@ -774,7 +774,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 Some(rejected_target),
             )
             .await;
-        assert!(matches!(rejected, Err(RpcError::ProtocolError(_))));
+        assert!(matches!(rejected, Err(ToolRpcError::ProtocolError(_))));
         assert!(matches!(
             rejected_stdout.next().await,
             Some(Err(ByteStreamFailure::Failed(_)))
@@ -981,7 +981,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         assert_eq!(raw_chunk(&mut cancel_stdout).await, b"marker:");
         cancelled.cancel();
         assert!(
-            matches!(raw_result(&cancelled).await, Err(RpcError::Cancelled)),
+            matches!(raw_result(&cancelled).await, Err(ToolRpcError::Cancelled)),
             "explicit future cancellation must select cancelled"
         );
         assert!(
@@ -1742,7 +1742,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         );
         assert!(matches!(
             raw_result(&result).await,
-            Err(RpcError::ResourceExhausted(_))
+            Err(ToolRpcError::ResourceExhausted(_))
         ));
         assert!(matches!(
             stdout.next().await,
