@@ -86,7 +86,9 @@ try {
       assert.ok(principalFirst.includes(Array(4).fill(tenant).join("|")), principalFirst)
       const principalSecond = invoke(tsCaller, "principalIdentityRoundTrip")
       assert.ok(principalSecond.includes(Array(4).fill(tenant).join("|")), principalSecond)
-      console.log("Deployed TS reflected agent JSON, native, and dynamic calls passed")
+      const config = invoke(tsCaller, "reflectedConfigRoundTrip")
+      assert.ok(config.includes("true|true|true|true"), config)
+      console.log("Deployed TS reflected agent, principal identity, and config calls passed")
     } else if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
       const caller = `EffectConsumer("effect-${stamp}")`
       const first = invoke(caller, "reflectedRoundTrip", '"reflected"')

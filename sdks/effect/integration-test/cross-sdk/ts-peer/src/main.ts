@@ -105,6 +105,7 @@ export const TsPeer = defineAgent({
     reflectedEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
     reflectedEffectAgent: method({ input: {}, returns: z.string() }),
     principalIdentityRoundTrip: method({ input: {}, returns: z.string() }),
+    reflectedConfigRoundTrip: method({ input: {}, returns: z.string() }),
     quotaThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     richCorpusThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     snapshotAdd: method({
@@ -288,6 +289,39 @@ TsPeer.implement({
       const completeById = await identity.client(TsPrincipalPeer).value()
       const reflectedById = await identity.client(discovered).method("value").invokeJson({})
       return `${complete}|${reflected.value}|${completeById}|${reflectedById.value}`
+    },
+    async reflectedConfigRoundTrip() {
+      const agentType = reflection.getAgentType("EffectFixture")
+      if (!agentType) return "missing-config-type"
+      const tenant = `config-${this.name}`
+      const prefix = `initial-${this.name}`
+      const request = {
+        request: {
+          header: { requestId: "config", flags: [true] },
+          items: [{ sku: "CONFIG", quantities: [1] }],
+        },
+      }
+      const first = await agentType.client
+        .get({ tenant }, [{ path: ["prefix"], value: prefix }])
+        .method("transform")
+        .invokeJson(request)
+      const second = await agentType.client
+        .get({ tenant }, [{ path: ["prefix"], value: `changed-${this.name}` }])
+        .method("transform")
+        .invokeJson(request)
+      let unknownRejected = false
+      let invalidRejected = false
+      try {
+        agentType.client.get({ tenant }, [{ path: ["unknown"], value: "value" }])
+      } catch (error) {
+        unknownRejected = error instanceof TypeError
+      }
+      try {
+        agentType.client.get({ tenant }, [{ path: ["prefix"], value: 7 }])
+      } catch (error) {
+        invalidRejected = error instanceof TypeError
+      }
+      return `${JSON.stringify(first.value).includes(prefix)}|${JSON.stringify(second.value).includes(prefix)}|${unknownRejected}|${invalidRejected}`
     },
     async quotaThroughEffect({ tenant }) {
       const token = acquireQuotaToken("cross-sdk-quota", 2n)

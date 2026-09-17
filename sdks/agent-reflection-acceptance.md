@@ -76,13 +76,19 @@ tenant field. Complete and reflected clients, including bindings through that ID
 same tenant on two repeated invocations. Principal identity checks in the other SDKs and negative
 host cases remain pending.
 
+That deployment also created an `EffectFixture` worker from the reflected TypeScript factory with
+a local `prefix` override. A second factory call passed a different override for the same worker;
+both method results retained the initial prefix. Unknown config paths and a number where the
+declared config requires a string were rejected locally. Required config without a default,
+host-provisioned secrets, and the other SDK callers remain pending.
+
 ## Behavior checklist
 
 | Behavior | Local evidence | Host evidence still required |
 | --- | --- | --- |
 | Principal-scoped identity: only caller-supplied constructor fields appear in IDs; host-produced IDs round-trip through complete and reflected bindings | Shared `golem-common` regression, TypeScript and Effect focused checks | TypeScript deployment passed; other SDK callers remain pending |
 | Durable, ephemeral, and known phantom lifecycle | Factory and binding unit checks in TypeScript, Effect, Scala, and MoonBit; Rust SDK and test targets compile | Final ephemeral identity from invocation metadata, one-shot known phantom, durable resume, and duplicate invocation against a deployed target |
-| Required, optional, defaulted, unknown, invalid, and secret config | Local negative/positive tests in TypeScript, Effect, Scala, and MoonBit; Rust config checks compile | Reflected-caller new-worker config, host-provisioned secrets, and missing-required rejection; direct TS/Rust RPC new-worker overrides and persisted existing-worker config passed |
+| Required, optional, defaulted, unknown, invalid, and secret config | Local negative/positive tests in TypeScript, Effect, Scala, and MoonBit; Rust config checks compile | Reflected TS new-worker override, existing-worker persistence, unknown and invalid local rejection passed; host-provisioned secrets, missing-required rejection, and other SDK callers remain pending; direct TS/Rust RPC new-worker overrides and persisted existing-worker config passed |
 | Local rejection before an RPC opens | TypeScript, Effect, Scala, and MoonBit focused checks | Deployed callers with a connection/open counter or equivalent host observation |
 | Malformed declared remote outputs; awaited and pending calls | TypeScript, Effect, and Scala focused checks; Rust error surface compiles | Deployed mismatch fixtures across awaited and pending paths, including unexpected unit values |
 | Stream restrictions and Effect scope/interruption cleanup | Existing SDK focused tests, including Effect interruption and scope tests | Deployed stream and interruption scenarios |
