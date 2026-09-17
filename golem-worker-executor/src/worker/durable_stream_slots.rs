@@ -423,8 +423,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let source = if status.tombstoned_slots.contains(name) {
             SlotSource::Tombstoned
         } else if schema.writable {
+            let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+                descriptor.invocation_value.as_slice(),
+            )
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .value
+            .ok_or_else(|| WorkerExecutorError::runtime("persisted invocation input is missing"))?;
             SlotSource::Stream(
-                schema.extract_handle(&descriptor.invocation_value, &descriptor.stream_handles)?,
+                schema.extract_handle(&input.encode_to_vec(), &descriptor.stream_handles)?,
             )
         } else if let Some(result_index) = status.invocation_result {
             let StreamSessionRecord::InvocationResult(result) =

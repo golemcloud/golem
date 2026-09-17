@@ -469,8 +469,6 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
             live_join_buffer_events: 1,
         },
         stream_mappings: vec![],
-        tool_stdin: None,
-        tool_stdout: None,
     })
 }
 

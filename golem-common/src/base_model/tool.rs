@@ -576,6 +576,68 @@ pub struct SerializableToolInvocationResult {
     pub result: Option<Box<crate::schema::TypedSchemaValue>>,
 }
 
+/// Internal invocation value lowered onto the ordinary durable-stream transport.
+#[derive(Clone, Debug, golem_schema_derive::FromSchema)]
+pub struct ToolInvocationInput {
+    pub arguments: crate::schema::TypedSchemaValue,
+    pub stdin: Option<golem_schema::schema::SchemaValueStream>,
+}
+
+/// Internal result value. The stdout handle can be registered before the outcome is ready.
+#[derive(Clone, Debug, golem_schema_derive::FromSchema)]
+pub struct ToolInvocationOutput {
+    pub outcome: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
+    pub stdout: Option<golem_schema::schema::SchemaValueStream>,
+}
+
+impl crate::schema::conversion::IntoSchema for ToolInvocationInput {
+    fn type_id() -> crate::schema::TypeId {
+        crate::schema::TypeId::new("golem.internal.ToolInvocationInput")
+    }
+
+    fn register_in(builder: &mut crate::schema::SchemaBuilder) -> crate::schema::SchemaType {
+        use crate::schema::{NamedFieldType, SchemaType, TypedSchemaValue};
+        SchemaType::record(vec![
+            NamedFieldType {
+                name: "arguments".into(),
+                body: TypedSchemaValue::register_in(builder),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "stdin".into(),
+                body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))),
+                metadata: Default::default(),
+            },
+        ])
+    }
+
+    fn to_value(&self) -> crate::schema::SchemaValue {
+        crate::schema::SchemaValue::Record {
+            fields: vec![self.arguments.to_value(), self.stdin.to_value()],
+        }
+    }
+}
+
+impl crate::schema::conversion::IntoSchema for ToolInvocationOutput {
+    fn type_id() -> crate::schema::TypeId {
+        crate::schema::TypeId::new("golem.internal.ToolInvocationOutput")
+    }
+
+    fn register_in(builder: &mut crate::schema::SchemaBuilder) -> crate::schema::SchemaType {
+        use crate::schema::{NamedFieldType, SchemaType};
+        SchemaType::record(vec![
+            NamedFieldType { name: "outcome".into(), body: Result::<SerializableToolInvocationResult, SerializableToolRpcError>::register_in(builder), metadata: Default::default() },
+            NamedFieldType { name: "stdout".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
+        ])
+    }
+
+    fn to_value(&self) -> crate::schema::SchemaValue {
+        crate::schema::SchemaValue::Record {
+            fields: vec![self.outcome.to_value(), self.stdout.to_value()],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]

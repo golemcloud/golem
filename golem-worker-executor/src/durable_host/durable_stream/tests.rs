@@ -4865,8 +4865,6 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                                     role: SessionStreamRole::Input,
                                 })
                                 .collect(),
-                            tool_stdin: None,
-                            tool_stdout: None,
                         }
                     },
                 )
@@ -7392,4 +7390,73 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
             .await,
         Err(StreamStoreError::SessionFinished(_))
     ));
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn byte_output_drain_publishes_only_the_live_suffix() {
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::stream_transport::test_output_stream_pair;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let store = producer(oplog.clone(), &identity, None).await;
+    let handle = store
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    store
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![17, 128, 0]),
+        )
+        .await
+        .unwrap();
+    drop(store);
+    let store = producer(oplog.clone(), &identity, None).await;
+    let mut subscription = store
+        .stream_bus(handle.stream_id)
+        .await
+        .unwrap()
+        .subscribe()
+        .await
+        .unwrap();
+    let session = StreamSession::new(store.clone(), oplog.clone(), identity.invocation, []);
+    let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
+    let (_, drained) = tokio::join!(
+        async {
+            for byte in [17, 128, 0, 255] {
+                publisher.publish_item(SchemaValue::U8(byte)).await.unwrap();
+            }
+            publisher.publish_end().await.unwrap();
+        },
+        session.drain_registered_output(
+            handle.clone(),
+            endpoint,
+            Arc::new(SchemaGraph::empty()),
+            SchemaType::u8()
+        ),
+    );
+    drained.unwrap();
+    let first = subscription.recv().await.unwrap();
+    assert_eq!(first.payload.producer_sequence, 3);
+    assert_eq!(
+        first.payload.payload,
+        CommittedProducerStreamEventPayload::PackedU8(255)
+    );
+    let terminal = subscription.recv().await.unwrap();
+    assert_eq!(terminal.payload.producer_sequence, 4);
+    assert_eq!(
+        terminal.payload.payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), subscription.recv())
+            .await
+            .is_err()
+    );
 }

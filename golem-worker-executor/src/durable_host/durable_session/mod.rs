@@ -56,7 +56,7 @@ use golem_common::base_model::durable_stream::{
     StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord, StreamSourceKind,
     StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
 };
-use golem_common::base_model::oplog::{OplogEntry, PublicExternalToolResult};
+use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
@@ -3118,37 +3118,24 @@ impl StreamSession {
         .await
     }
 
-    /// Persists a native-tool result in the same durable session journal as RPC results.
-    pub async fn materialize_tool_result(
+    /// Drains an output whose normal result-leaf mapping was committed during preparation.
+    pub(crate) async fn drain_registered_output(
         &self,
-        response: Result<
-            golem_common::model::oplog::payload::types::SerializableToolInvocationResult,
-            golem_common::model::oplog::payload::types::SerializableToolRpcError,
-        >,
+        handle: DurableStreamHandle,
+        endpoint: LiveStreamEndpoint,
+        graph: Arc<SchemaGraph>,
+        element_type: SchemaType,
     ) -> Result<(), String> {
-        let result: golem_api_grpc::proto::golem::worker::PublicExternalToolResult = match response
-        {
-            Ok(result) => PublicExternalToolResult::Success(result),
-            Err(error) => PublicExternalToolResult::Failure(error),
-        }
-        .try_into()?;
-        let record = StreamSessionInvocationResultRecord {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: self.session_key.clone(),
-            result: result.encode_to_vec(),
-            output_streams: Vec::new(),
-            stream_mappings: Vec::new(),
-        };
-        if let Some(existing) = self.remote_result_record().await? {
-            if existing != record {
-                return Err("native tool result conflicts with its session journal".to_string());
-            }
-        } else {
-            self.append_record(None, StreamSessionRecord::InvocationResult(record))
-                .await;
-            self.commit_consumer_journal().await?;
-        }
-        Ok(())
+        self.drain_materialized_result(
+            vec![PendingOwnedStreamDrain {
+                handle,
+                endpoint,
+                element_type,
+                role: SessionStreamRole::Output,
+            }],
+            graph,
+        )
+        .await
     }
 
     /// Reconstructs a previously persisted remote result without reissuing the RPC.
@@ -3162,29 +3149,6 @@ impl StreamSession {
         self.decode_initial(value, &record.output_streams, SessionStreamRole::Output)
             .await
             .map(Some)
-    }
-
-    /// Reconstructs a native-tool result from the durable session journal.
-    pub async fn persisted_tool_result(
-        &self,
-    ) -> Result<
-        Option<(
-            golem_api_grpc::proto::golem::worker::PublicExternalToolResult,
-            Vec<DurableStreamMapping>,
-        )>,
-        String,
-    > {
-        let Some(result) = self.remote_result_record().await? else {
-            return Ok(None);
-        };
-        let value = golem_api_grpc::proto::golem::worker::PublicExternalToolResult::decode(
-            result.result.as_slice(),
-        )
-        .map_err(|error| format!("invalid persisted native tool result: {error}"))?;
-        if value.result.is_none() {
-            return Err("persisted native tool result has no result".to_string());
-        }
-        Ok(Some((value, Vec::new())))
     }
 
     async fn remote_result_record(
@@ -3204,8 +3168,8 @@ impl StreamSession {
         }
     }
 
-    /// Drains native-tool stdout as bytes while validating any already committed replay prefix.
-    pub(crate) async fn drain_tool_stdout(
+    /// Validates committed bytes and terminals without republishing the historical prefix.
+    async fn drain_byte_output(
         &self,
         handle: DurableStreamHandle,
         endpoint: LiveStreamEndpoint,
@@ -3237,9 +3201,32 @@ impl StreamSession {
         } else {
             None
         };
+        let result: Result<(), String> = async {
         let mut pending = None;
         let mut sequence = 0;
         loop {
+            let recorded = if let Some(reader) = history.as_mut() {
+                let recorded = reader
+                    .next()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "byte output history ended before its high water".to_string())?;
+                if recorded.producer_sequence != sequence {
+                    return Err("byte output history has a non-contiguous sequence".into());
+                }
+                if matches!(
+                    recorded.payload,
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    }
+                ) {
+                    return Ok(());
+                }
+                Some(recorded)
+            } else {
+                None
+            };
             let event = match pending.take() {
                 Some(event) => event,
                 None => tokio::select! {
@@ -3249,19 +3236,19 @@ impl StreamSession {
                     received = source.recv() => match received {
                         Ok(event) => event,
                         Err(LiveStreamReceiveError::Closed) if lifecycle.is_aborted() => return Ok(()),
-                        Err(error) => return Err(format!("tool stdout closed without a terminal: {error:?}")),
+                        Err(error) => return Err(format!("byte output closed without a terminal: {error:?}")),
                     },
                 },
             };
             if event.offset != sequence {
-                return Err("tool stdout producer sequence diverged".into());
+                return Err("byte output producer sequence diverged".into());
             }
             let payload = match event.payload {
                 LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
                     CommittedProducerStreamEventPayload::PackedU8(byte)
                 }
                 LiveStreamEventPayload::Item(_) => {
-                    return Err("tool stdout contains a non-byte value".into());
+                    return Err("byte output contains a non-byte value".into());
                 }
                 LiveStreamEventPayload::End => {
                     CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
@@ -3270,26 +3257,9 @@ impl StreamSession {
                     StreamEndResult::ErrorContext(error.into_bytes()),
                 ),
             };
-            if let Some(reader) = history.as_mut() {
-                let recorded = reader
-                    .next()
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| "tool stdout history ended before its high water".to_string())?;
-                if recorded.producer_sequence != sequence {
-                    return Err("tool stdout history has a non-contiguous sequence".into());
-                }
-                if matches!(
-                    recorded.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::OutputConsumer,
-                        ..
-                    }
-                ) {
-                    return Ok(());
-                }
+            if let Some(recorded) = recorded {
                 if recorded.payload != payload {
-                    return Err("tool stdout differs from its recorded bytes or terminal".into());
+                    return Err("byte output differs from its recorded bytes or terminal".into());
                 }
                 if recorded.is_terminal() {
                     return Ok(());
@@ -3303,7 +3273,8 @@ impl StreamSession {
                 sequence += 1;
                 continue;
             }
-            match payload {
+            let terminal = matches!(payload, CommittedProducerStreamEventPayload::End(_));
+            let written = match payload {
                 CommittedProducerStreamEventPayload::PackedU8(byte) => {
                     let first_sequence = sequence;
                     let mut bytes = vec![byte];
@@ -3316,7 +3287,7 @@ impl StreamSession {
                             Ok(Err(error)) => return Err(format!("{error:?}")),
                         };
                         if next.offset != sequence {
-                            return Err("tool stdout producer sequence diverged".into());
+                            return Err("byte output producer sequence diverged".into());
                         }
                         match next.payload {
                             LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
@@ -3341,18 +3312,41 @@ impl StreamSession {
                             Vec::new(),
                         )
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map(|_| ())
                 }
-                CommittedProducerStreamEventPayload::End(result) => {
-                    self.producer
-                        .end(None, handle.stream_id, sequence, result)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    return Ok(());
-                }
-                _ => unreachable!("native stdout produces only bytes and terminals"),
+                CommittedProducerStreamEventPayload::End(result) => self
+                    .producer
+                    .end(None, handle.stream_id, sequence, result)
+                    .await
+                    .map(|_| ()),
+                _ => unreachable!("byte output produces only bytes and terminals"),
+            };
+            match written {
+                Err(StreamStoreError::FencedByTerminal(
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    },
+                )) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+                Ok(()) if terminal => return Ok(()),
+                Ok(()) => {}
             }
         }
+        }.await;
+        if let Err(error) = &result
+            && history.is_none()
+        {
+            let _ = self
+                .producer
+                .end_open(
+                    None,
+                    handle.stream_id,
+                    StreamEndResult::ErrorContext(error.clone().into_bytes()),
+                )
+                .await;
+        }
+        result
     }
 
     async fn drain_output(
@@ -3367,6 +3361,9 @@ impl StreamSession {
             element_type,
             role,
         } = drain;
+        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
+            return self.drain_byte_output(handle, endpoint).await;
+        }
         // Root drains require admission; children are admitted by their committed parent item.
         // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
@@ -3382,11 +3379,8 @@ impl StreamSession {
             lifecycle: lifecycle.clone(),
         };
         let mut next_sequence = 0;
-        let mut pending_event = None;
         loop {
-            let received = match pending_event.take() {
-                Some(event) => Ok(event),
-                None => tokio::select! {
+            let received = tokio::select! {
                     biased;
                     _ = source_cancelled.cancelled() => {
                         break;
@@ -3395,7 +3389,6 @@ impl StreamSession {
                         break;
                     },
                     received = source.recv() => received,
-                },
             };
             let event = match received {
                 Ok(event) => event,
@@ -3449,48 +3442,6 @@ impl StreamSession {
                             )
                             .await;
                         break;
-                    }
-                    let mut packed_u8 =
-                        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
-                            match &value {
-                                SchemaValue::U8(byte) => Some(vec![*byte]),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-                    if let Some(bytes) = packed_u8.as_mut() {
-                        let flush_deadline =
-                            tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
-                        while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
-                            let next = match tokio::time::timeout_at(flush_deadline, source.recv())
-                                .await
-                            {
-                                Ok(Ok(next)) => next,
-                                Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
-                                Ok(Err(error)) => return Err(format!("{error:?}")),
-                            };
-                            let expected_sequence = event
-                                .offset
-                                .checked_add(bytes.len() as u64)
-                                .ok_or_else(|| "packed-u8 output sequence overflow".to_string())?;
-                            match next.payload {
-                                LiveStreamEventPayload::Item(SchemaValue::U8(byte))
-                                    if next.offset == expected_sequence =>
-                                {
-                                    bytes.push(byte);
-                                    next_sequence = next.offset.saturating_add(1);
-                                }
-                                payload => {
-                                    pending_event =
-                                        Some(crate::durable_host::stream_bus::LiveStreamEvent {
-                                            offset: next.offset,
-                                            payload,
-                                        });
-                                    break;
-                                }
-                            }
-                        }
                     }
                     let mut nested_outputs = Vec::new();
                     let value = match encode_recursive_stream_value_with_schema(
@@ -3566,10 +3517,7 @@ impl StreamSession {
                                 })
                         })
                         .collect();
-                    let payload = match packed_u8 {
-                        Some(bytes) => StreamItemsPayload::PackedU8(bytes),
-                        None => StreamItemsPayload::Values(vec![value.encode_to_vec()]),
-                    };
+                    let payload = StreamItemsPayload::Values(vec![value.encode_to_vec()]);
                     match self
                         .producer
                         .write_items_with_nested_sources(
@@ -3895,10 +3843,11 @@ impl StreamSession {
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
         let root_output_mapping_ids = self.session_root_output_mapping_ids().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             &HashMap::new(),
             &root_output_mapping_ids,
             &[],
+            &Default::default(),
             responses,
         )
         .await
@@ -3921,17 +3870,18 @@ impl StreamSession {
         known_output_mapping_ids: &[u64],
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        self.recover_session_mappings().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             cursors,
             root_output_mapping_ids,
             known_output_mapping_ids,
+            &Default::default(),
             responses,
         )
         .await
     }
 
-    async fn pump_output_streams_from_recovered(
+    /// Early and result-time pumps for one attachment share `seen`, including nested mappings.
+    pub(crate) async fn pump_output_streams_once(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
@@ -3939,17 +3889,13 @@ impl StreamSession {
         >,
         root_output_mapping_ids: &[u64],
         known_output_mapping_ids: &[u64],
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        self.pump_output_stream_trees(cursors, root_output_mapping_ids, &mut seen, responses)
+        self.recover_session_mappings().await?;
+        self.pump_output_stream_trees(cursors, root_output_mapping_ids, seen, responses)
             .await?;
-        let detached = known_output_mapping_ids
-            .iter()
-            .copied()
-            .filter(|transport_stream_id| !seen.contains(transport_stream_id))
-            .collect::<Vec<_>>();
-        self.pump_output_stream_trees(cursors, &detached, &mut seen, responses)
+        self.pump_output_stream_trees(cursors, known_output_mapping_ids, seen, responses)
             .await
     }
 
@@ -3960,13 +3906,13 @@ impl StreamSession {
             Option<golem_common::model::durable_stream::StreamOffset>,
         >,
         output_mapping_ids: &[u64],
-        seen: &mut HashSet<u64>,
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         let mut pending = output_mapping_ids
             .iter()
             .copied()
-            .filter(|transport_stream_id| seen.insert(*transport_stream_id))
+            .filter(|transport_stream_id| seen.lock().unwrap().insert(*transport_stream_id))
             .map(|transport_stream_id| {
                 let mapping = self.mapping(transport_stream_id).ok_or_else(|| {
                     format!("unknown durable output stream {transport_stream_id}")
@@ -3988,7 +3934,7 @@ impl StreamSession {
             pending = nested
                 .into_iter()
                 .flatten()
-                .filter(|mapping| seen.insert(mapping.transport_stream_id))
+                .filter(|mapping| seen.lock().unwrap().insert(mapping.transport_stream_id))
                 .collect();
         }
         Ok(())
@@ -4458,17 +4404,6 @@ impl StreamSession {
                     format!("duplicate or unknown durable input handle index {handle_index}")
                 })
         })
-    }
-
-    /// Opens a prepared native-tool stdin root as a byte stream.
-    pub async fn tool_stdin(
-        &self,
-        handle: DurableStreamHandle,
-    ) -> Result<DurableByteInputProducer, String> {
-        let endpoint = self.endpoint(handle, 0, SessionStreamRole::Input).await?;
-        Ok(DurableByteInputProducer(DurableInputProducer::new(
-            endpoint,
-        )))
     }
 
     async fn endpoint(

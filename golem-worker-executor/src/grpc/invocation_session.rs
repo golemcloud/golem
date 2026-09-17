@@ -55,12 +55,14 @@ use golem_common::model::durable_stream::{
     StreamInvocationId, StreamRegistrationCoordinate, StreamRootKind, StreamSessionMapping,
     StreamSourceKind, StreamValuePathStep,
 };
+use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
     InvocationStatus, ScheduledAction,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
+use golem_common::schema::conversion::{FromSchema, IntoTypedSchemaValue};
 use golem_schema::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValueStream, schema_fingerprint_v1,
 };
@@ -234,25 +236,28 @@ async fn persisted_invocation_result(
     )>,
     String,
 > {
+    let Some(result) = streams.persisted_result().await? else {
+        return Ok(None);
+    };
+    let mappings = result.proto_mappings();
     if native_tool {
-        streams.persisted_tool_result().await.map(|result| {
-            result.map(|(result, mappings)| {
-                (
-                    invocation_session_result::Result::ToolResult(result),
-                    mappings,
-                )
-            })
-        })
+        let value = decode_recursive_stream_value(result.value, |_, _| {
+            Ok(SchemaValueStream::from_host_endpoint(()))
+        })?;
+        let output = ToolInvocationOutput::from_value(&value).map_err(|error| error.to_string())?;
+        let public = match output.outcome {
+            Ok(result) => golem_common::model::oplog::PublicExternalToolResult::Success(result),
+            Err(error) => golem_common::model::oplog::PublicExternalToolResult::Failure(error),
+        };
+        Ok(Some((
+            invocation_session_result::Result::ToolResult(public.try_into()?),
+            Vec::new(),
+        )))
     } else {
-        streams.persisted_result().await.map(|result| {
-            result.map(|result| {
-                let mappings = result.proto_mappings();
-                (
-                    invocation_session_result::Result::MethodResult(result.value),
-                    mappings,
-                )
-            })
-        })
+        Ok(Some((
+            invocation_session_result::Result::MethodResult(result.value),
+            mappings,
+        )))
     }
 }
 
@@ -1088,8 +1093,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         method_name: start.method_name.clone(),
                         tool_name: start.external_tool.as_ref().map(|tool| tool.tool_name.clone()),
                         command_path: start.external_tool.as_ref().map(|tool| tool.command_path.clone()).unwrap_or_default(),
-                        tool_stdin_stream_id: accepted.prepared.as_ref().and_then(|prepared| prepared.tool_stdin),
-                        tool_stdout_stream_id: accepted.prepared.as_ref().and_then(|prepared| prepared.tool_stdout),
                     },
                 )),
             })
@@ -1148,12 +1151,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             let mut completed_output = early_output;
-            let mut native_stdout_pump = tokio::task::JoinSet::new();
-            if let Some(stdout_id) = accepted.prepared.as_ref().and_then(|prepared| prepared.tool_stdout) {
+            let early_output_ids = accepted.prepared.as_ref().map(|prepared| prepared.stream_mappings.iter()
+                .filter(|mapping| mapping.role == SessionStreamRole::Output)
+                .map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>()).unwrap_or_default();
+            let mut output_pump = durable_streams.producer.tasks().children();
+            let pumped_outputs = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+            if !early_output_ids.is_empty() {
                 let streams = durable_streams.clone();
                 let responses = responses.clone();
-                native_stdout_pump.spawn(async move {
-                    streams.pump_output_streams_from(&HashMap::new(), &[stdout_id], &[], &responses).await
+                let ids = early_output_ids.clone();
+                let pumped_outputs = pumped_outputs.clone();
+                output_pump.spawn(async move {
+                    streams.pump_output_streams_once(&HashMap::new(), &ids, &ids, &pumped_outputs, &responses).await
                 });
             }
             let persisted_result = match persisted_invocation_result(durable_streams, native_tool).await {
@@ -1173,6 +1182,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     loop {
                         tokio::select! {
                             biased;
+                            pumped = output_pump.join_next(), if !output_pump.is_empty() => {
+                                let result = pumped.expect("output pump is not empty")
+                                    .map_err(|error| format!("durable output pump task failed: {error}"))
+                                    .and_then(|result| result);
+                                if let Err(error) = result {
+                                    if !is_attachment_termination(&error) {
+                                        send_protocol_failure(&responses, error).await;
+                                    }
+                                    return;
+                                }
+                            },
                             result = &mut result => match result {
                                 Ok(result) => break Some(result),
                                 Err(error) => {
@@ -1221,7 +1241,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         let _ = durable_streams
                                             .pump_input_cancellations(&responses, &high_waters)
                                             .await;
-                                        let _ = durable_streams.pump_output_streams(&responses).await;
+                                        while output_pump.join_next().await.is_some() {}
                                         send_protocol_failure(&responses, details).await;
                                         return;
                                     }
@@ -1266,15 +1286,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await;
                 return;
             };
-            if let Some(result) = native_stdout_pump.join_next().await {
-                let result = result.map_err(|error| format!("native stdout pump task failed: {error}")).and_then(|result| result);
-                if let Err(error) = result
-                    && !is_attachment_termination(&error)
-                {
-                    send_protocol_failure(&responses, error).await;
-                    return;
-                }
-            }
             if responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
@@ -1301,16 +1312,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
-            let mut output_pump = durable_streams.producer.tasks().children();
             let output_streams = durable_streams.clone();
             let output_responses = responses.clone();
-            let native_result_mapping_ids = persisted_result.1.iter().map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>();
+            let result_mapping_ids = persisted_result.1.iter().map(|mapping| mapping.transport_stream_id)
+                .collect::<Vec<_>>();
             output_pump.spawn(async move {
-                if native_tool {
-                    output_streams.pump_output_streams_from(&HashMap::new(), &native_result_mapping_ids, &[], &output_responses).await
-                } else {
-                    output_streams.pump_output_streams(&output_responses).await
-                }
+                output_streams.pump_output_streams_once(&HashMap::new(), &result_mapping_ids, &result_mapping_ids, &pumped_outputs, &output_responses).await
             });
             let mut output_pump_finished = false;
             while completed_output.is_none() || !output_pump_finished {
@@ -1331,9 +1338,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             let _ = durable_streams
                                 .pump_input_cancellations(&responses, &high_waters)
                                 .await;
-                            if !output_pump_finished {
-                                let _ = output_pump.join_next().await;
-                            }
+                            while output_pump.join_next().await.is_some() {}
                             send_worker_failure(&responses, error).await;
                             return;
                         }
@@ -1348,7 +1353,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         };
                         match result {
                             Ok(()) => {
-                                output_pump_finished = true;
+                                output_pump_finished = output_pump.is_empty();
                             },
                             Err(error) if is_attachment_termination(&error) => {
                                 return;
@@ -1364,7 +1369,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 let _ = durable_streams
                                     .pump_input_cancellations(&responses, &high_waters)
                                     .await;
-                                let _ = durable_streams.pump_output_streams(&responses).await;
+                                while output_pump.join_next().await.is_some() {}
                                 send_protocol_failure(&responses, error).await;
                                 return;
                             }
@@ -1387,9 +1392,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 let _ = durable_streams
                                     .pump_input_cancellations(&responses, &high_waters)
                                     .await;
-                                if !output_pump_finished {
-                                    let _ = output_pump.join_next().await;
-                                }
+                                while output_pump.join_next().await.is_some() {}
                                 send_protocol_failure(&responses, details).await;
                                 return;
                             }
@@ -1676,15 +1679,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .attempt
                     .invocation
                     .target_component_revision;
-                let component = self
-                    .component_service()
-                    .get_metadata(
-                        acceptance.prepared.attempt.session_key.callee.component_id,
-                        Some(component_revision),
-                    )
-                    .await?;
                 let (input_schema, input_element_types) =
-                    resumed_input_schema(&acceptance.prepared, &component.metadata)?;
+                    resumed_input_schema(&acceptance.prepared)?;
                 acceptance.streams = acceptance.streams.clone().with_input_schema(
                     Arc::new(input_schema),
                     component_revision,
@@ -1837,8 +1833,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             PersistedInvocationTarget::ExternalTool { command_path, .. } => command_path.clone(),
                             PersistedInvocationTarget::AgentMethod { .. } => Vec::new(),
                         },
-                        tool_stdin_stream_id: acceptance.prepared.tool_stdin,
-                        tool_stdout_stream_id: acceptance.prepared.tool_stdout,
                     },
                 )),
             })
@@ -1869,18 +1863,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             acceptance.prepared.attempt.invocation.target,
             PersistedInvocationTarget::ExternalTool { .. }
         );
-        let native_stdout_id = acceptance.prepared.tool_stdout;
-        let mut native_stdout_pump = tokio::task::JoinSet::new();
-        if let Some(stdout_id) = native_stdout_id {
+        let early_output_ids = acceptance.prepared.stream_mappings.iter()
+            .filter(|mapping| mapping.role == SessionStreamRole::Output)
+            .map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>();
+        let mut output_pump = streams.producer.tasks().children();
+        let pumped_outputs = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        if !early_output_ids.is_empty() {
             let output_streams = streams.clone();
             let output_responses = responses.clone();
             let output_cursors = cursor_map.clone();
-            native_stdout_pump.spawn(async move {
-                output_streams.pump_output_streams_from(&output_cursors, &[stdout_id], &[stdout_id], &output_responses).await
+            let ids = early_output_ids.clone();
+            let pumped_outputs = pumped_outputs.clone();
+            output_pump.spawn(async move {
+                output_streams.pump_output_streams_once(&output_cursors, &ids, &ids, &pumped_outputs, &output_responses).await
             });
         }
 
         let (persisted_result, already_finished) = loop {
+            let changed = streams.producer.session_records_changed().notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let persisted_result = match persisted_invocation_result(&streams, native_tool).await {
                 Ok(result) => result,
                 Err(error) => {
@@ -1898,11 +1900,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if persisted_result.is_some() || already_finished.is_some() {
                 break (persisted_result, already_finished);
             }
-            let changed = streams.producer.session_records_changed().notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
             tokio::select! {
                 () = &mut changed => {}
+                pumped = output_pump.join_next(), if !output_pump.is_empty() => {
+                    let result = pumped.expect("output pump is not empty")
+                        .map_err(|error| format!("durable output pump task failed: {error}"))
+                        .and_then(|result| result);
+                    if let Err(error) = result {
+                        if !is_attachment_termination(&error) {
+                            send_protocol_failure(&responses, error).await;
+                        }
+                        return;
+                    }
+                },
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
@@ -1951,35 +1961,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
-        if let Some(result) = native_stdout_pump.join_next().await {
-            let result = result
-                .map_err(|error| format!("native stdout pump task failed: {error}"))
-                .and_then(|result| result);
-            if let Err(error) = result
-                && !is_attachment_termination(&error)
-            {
-                send_protocol_failure(&responses, error).await;
-                return;
-            }
-        }
-
         let root_output_mapping_ids = match streams.session_root_output_mapping_ids().await {
-            Ok(root_output_mapping_ids) => root_output_mapping_ids.into_iter().filter(|id| Some(*id) != native_stdout_id).collect::<Vec<_>>(),
+            Ok(root_output_mapping_ids) => root_output_mapping_ids,
             Err(error) => {
                 send_protocol_failure(&responses, error).await;
                 return;
             }
         };
         {
-            let mut output_pump = streams.producer.tasks().children();
             let output_streams = streams.clone();
             let output_responses = responses.clone();
             output_pump.spawn(async move {
                 output_streams
-                    .pump_output_streams_from(
+                    .pump_output_streams_once(
                         &cursor_map,
                         &root_output_mapping_ids,
-                        &known_output_mapping_ids.iter().copied().filter(|id| Some(*id) != native_stdout_id).collect::<Vec<_>>(),
+                        &known_output_mapping_ids,
+                        &pumped_outputs,
                         &output_responses,
                     )
                     .await
@@ -2000,7 +1998,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             send_protocol_failure(&responses, error).await;
                             return;
                         }
-                        break;
+                        if output_pump.is_empty() { break; }
                     }
                     request = inbound.message() => match request {
                         Ok(Some(request)) => {
@@ -2148,7 +2146,18 @@ pub(crate) fn build_durable_streaming_request(
         ));
     }
     require_expected_callee_fingerprint(request.expected_callee_fingerprint, callee_fingerprint)?;
-    let (graph, input_root, invocation_input, target, has_stdin, has_stdout) = match &invocation {
+    let tool_input = match &invocation {
+        AgentInvocation::ExternalTool { input, stdin, .. } => Some(
+            ToolInvocationInput {
+                arguments: (**input).clone(),
+                stdin: stdin.then(|| SchemaValueStream::from_host_endpoint(TransportStreamId(0))),
+            }
+            .into_typed_schema_value()
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
+        ),
+        _ => None,
+    };
+    let (graph, input_root, invocation_input, target, has_stdout) = match &invocation {
         AgentInvocation::AgentMethod {
             method_name, input, ..
         } => {
@@ -2183,27 +2192,28 @@ pub(crate) fn build_durable_streaming_request(
                     method_name: method_name.clone(),
                 },
                 false,
-                false,
             )
         }
         AgentInvocation::ExternalTool {
             tool_name,
             command_path,
-            input,
-            stdin,
             stdout,
             ..
-        } => (
-            input.graph(),
-            input.root_type().clone(),
-            input.value(),
-            PersistedInvocationTarget::ExternalTool {
-                tool_name: tool_name.to_string(),
-                command_path: command_path.clone(),
-            },
-            *stdin,
-            *stdout,
-        ),
+        } => {
+            let input = tool_input
+                .as_ref()
+                .expect("tool input envelope was constructed");
+            (
+                input.graph(),
+                input.root_type().clone(),
+                input.value(),
+                PersistedInvocationTarget::ExternalTool {
+                    tool_name: tool_name.to_string(),
+                    command_path: command_path.clone(),
+                },
+                *stdout,
+            )
+        }
         _ => {
             return Err(WorkerExecutorError::invalid_request(
                 "durable session requires a method or external tool invocation",
@@ -2343,78 +2353,73 @@ pub(crate) fn build_durable_streaming_request(
         ));
     }
 
-    let mut next_transport_id = input_element_types.iter().map(|(id, _)| *id).max();
-    let mut tool_stdin = None;
-    let mut tool_stdout = None;
-    for (enabled, root_kind, role, destination) in [
-        (
-            has_stdin,
-            StreamRootKind::ToolStdin,
-            SessionStreamRole::Input,
-            &mut tool_stdin,
-        ),
-        (
-            has_stdout,
-            StreamRootKind::ToolStdout,
-            SessionStreamRole::Output,
-            &mut tool_stdout,
-        ),
-    ] {
-        if !enabled {
-            continue;
+    // Outputs declared before execution use their normal result-leaf coordinates.
+    if has_stdout {
+        let early_output = ToolInvocationOutput {
+            outcome: Ok(
+                golem_common::model::tool::SerializableToolInvocationResult { result: None },
+            ),
+            stdout: Some(SchemaValueStream::from_host_endpoint(())),
         }
-        let id = match next_transport_id {
-            Some(id) => id
-                .checked_add(1)
-                .ok_or_else(|| WorkerExecutorError::invalid_request("tool stream ID overflow"))?,
-            None => 0,
-        };
-        next_transport_id = Some(id);
-        *destination = Some(id);
-        if role == SessionStreamRole::Input {
-            input_element_types.push((id, SchemaType::u8()));
-        }
-        registrations.push((
-            id,
-            ProducerRegistrationRequest {
-                entity_parent_start_index: None,
-                coordinate: StreamRegistrationCoordinate::Root {
-                    invocation_id: session_key.clone(),
-                    root_kind,
-                    recursive_value_path: Vec::new(),
-                },
-                source_kind: if role == SessionStreamRole::Input {
-                    StreamSourceKind::ExternalInlineInput
-                } else {
-                    StreamSourceKind::InvocationOutput
-                },
-                source_invocation: session_key.clone(),
-                component_revision,
-                element_schema_fingerprint: schema_fingerprint_v1(
-                    &SchemaGraph::empty(),
-                    Some(&SchemaType::u8()),
-                )
-                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
-                session_mapping: Some(StreamSessionMapping {
-                    role,
-                    ..session_mapping.clone()
-                }),
+        .into_typed_schema_value()
+        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+        let mut next_transport_id = input_element_types.iter().map(|(id, _)| *id).max();
+        encode_recursive_stream_value_with_schema(
+            early_output.value(),
+            early_output.graph(),
+            early_output.root_type(),
+            |_, path| {
+                let id = match next_transport_id {
+                    Some(id) => id
+                        .checked_add(1)
+                        .ok_or_else(|| "output stream ID overflow".to_string())?,
+                    None => 0,
+                };
+                next_transport_id = Some(id);
+                registrations.push((
+                    id,
+                    ProducerRegistrationRequest {
+                        entity_parent_start_index: None,
+                        coordinate: StreamRegistrationCoordinate::Root {
+                            invocation_id: session_key.clone(),
+                            root_kind: StreamRootKind::MethodResult,
+                            recursive_value_path: path.to_vec(),
+                        },
+                        source_kind: StreamSourceKind::InvocationOutput,
+                        source_invocation: session_key.clone(),
+                        component_revision,
+                        element_schema_fingerprint: schema_fingerprint_v1(
+                            early_output.graph(),
+                            stream_element_schema(
+                                early_output.graph(),
+                                early_output.root_type(),
+                                path,
+                            )?,
+                        )
+                        .map_err(|error| error.to_string())?,
+                        session_mapping: Some(StreamSessionMapping {
+                            role: SessionStreamRole::Output,
+                            ..session_mapping.clone()
+                        }),
+                    },
+                ));
+                Ok(id)
             },
-        ));
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
     }
     if registrations.len() + foreign_mappings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
         return Err(WorkerExecutorError::invalid_request(
             "invocation materializes more than 256 streams",
         ));
     }
-    let invocation_value = match &target {
-        PersistedInvocationTarget::AgentMethod { .. } => canonical_input.encode_to_vec(),
-        PersistedInvocationTarget::ExternalTool { .. } => golem::schema::TypedSchemaValue {
-            graph: Some(graph.clone().into()),
-            value: Some(canonical_input),
-        }
-        .encode_to_vec(),
-    };
+    let mut input_graph = graph.clone();
+    input_graph.root = input_root;
+    let invocation_value = golem::schema::TypedSchemaValue {
+        graph: Some(input_graph.into()),
+        value: Some(canonical_input),
+    }
+    .encode_to_vec();
     let input_schema = Arc::new(graph.clone());
 
     let mut execution = request.clone();
@@ -2445,7 +2450,6 @@ pub(crate) fn build_durable_streaming_request(
     let execution_config = golem_common::serialization::serialize(&(
         execution.encode_to_vec(),
         environment,
-        has_stdin,
         has_stdout,
     ))
     .map_err(WorkerExecutorError::runtime)?;
@@ -2475,8 +2479,6 @@ pub(crate) fn build_durable_streaming_request(
         attempt,
         registrations,
         foreign_mappings,
-        tool_stdin,
-        tool_stdout,
         input_schema,
         input_element_types,
         invocation: replace_streams_for_persistence(invocation),
@@ -2486,74 +2488,24 @@ pub(crate) fn build_durable_streaming_request(
 
 fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
-    component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
-    let (graph, input_root, canonical_input) = match &prepared.attempt.invocation.target {
-        PersistedInvocationTarget::ExternalTool { .. } => {
-            let typed = golem::schema::TypedSchemaValue::decode(
-                prepared.attempt.invocation.invocation_value.as_slice(),
-            )
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-            let graph: SchemaGraph = typed
-                .graph
-                .ok_or_else(|| WorkerExecutorError::runtime("tool session input has no graph"))?
-                .try_into()
-                .map_err(WorkerExecutorError::runtime)?;
-            let value = typed
-                .value
-                .ok_or_else(|| WorkerExecutorError::runtime("tool session input has no value"))?;
-            let root = graph.root.clone();
-            (graph, root, value)
-        }
-        PersistedInvocationTarget::AgentMethod { method_name } => {
-            let parsed_agent_id = ParsedAgentId::parse(
-                &prepared.attempt.session_key.callee.agent_id,
-                component_metadata,
-            )
-            .map_err(WorkerExecutorError::invalid_request)?;
-            let agent_type = component_metadata
-                .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request("resume agent type not found")
-                })?;
-            let method = agent_type
-                .methods
-                .iter()
-                .find(|method| method.name == *method_name)
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request("resume agent method not found")
-                })?;
-            let input_root = SchemaType::record(
-                method
-                    .input_schema
-                    .fields()
-                    .iter()
-                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-                    .map(|field| NamedFieldType {
-                        name: field.name.clone(),
-                        body: field.schema.clone(),
-                        metadata: field.metadata.clone(),
-                    })
-                    .collect(),
-            );
-            let canonical_input = golem::schema::SchemaValue::decode(
-                prepared.attempt.invocation.invocation_value.as_slice(),
-            )
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to decode persisted durable invocation input: {error}"
-                ))
-            })?;
-            (agent_type.schema.clone(), input_root, canonical_input)
-        }
-    };
+    let typed = golem::schema::TypedSchemaValue::decode(
+        prepared.attempt.invocation.invocation_value.as_slice(),
+    )
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    let graph: SchemaGraph = typed
+        .graph
+        .ok_or_else(|| WorkerExecutorError::runtime("session input has no graph"))?
+        .try_into()
+        .map_err(WorkerExecutorError::runtime)?;
+    let canonical_input = typed
+        .value
+        .ok_or_else(|| WorkerExecutorError::runtime("session input has no value"))?;
+    let input_root = graph.root.clone();
     let input_mappings = prepared
         .stream_mappings
         .iter()
-        .filter(|mapping| {
-            mapping.role == SessionStreamRole::Input
-                && Some(mapping.transport_stream_id) != prepared.tool_stdin
-        })
+        .filter(|mapping| mapping.role == SessionStreamRole::Input)
         .collect::<Vec<_>>();
     let mut input_element_types = Vec::with_capacity(input_mappings.len());
     decode_recursive_stream_value_with_schema(
@@ -2581,9 +2533,6 @@ fn resumed_input_schema(
         return Err(WorkerExecutorError::runtime(
             "persisted durable invocation input mappings do not match its schema value",
         ));
-    }
-    if let Some(stdin) = prepared.tool_stdin {
-        input_element_types.push((stdin, SchemaType::u8()));
     }
     Ok((graph, input_element_types))
 }
@@ -3878,8 +3827,12 @@ mod freshness_tests {
                 (55, SchemaType::bool()),
             ]
         );
-        let canonical =
-            ProtoSchemaValue::decode(built.attempt.invocation.invocation_value.as_slice()).unwrap();
+        let canonical = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+            built.attempt.invocation.invocation_value.as_slice(),
+        )
+        .unwrap()
+        .value
+        .unwrap();
         let mut canonical_ids = Vec::new();
         decode_recursive_stream_value(canonical, |stream_id, _| {
             canonical_ids.push(stream_id);

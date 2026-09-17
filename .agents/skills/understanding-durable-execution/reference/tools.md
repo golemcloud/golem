@@ -44,12 +44,13 @@ methods. Registering the task lets Wasmtime account for pending host I/O rather 
 idle-store deadlock. Native dispatch uses the same entity boundary without an outer call-tool
 `Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
 dispatcher again using the activation pinned when the invocation was accepted and reconstructs
-completed bodies before checking the invocation result. `tool_stdin`, `drain_tool_stdout` and
-`materialize_tool_result` use producer-journal bytes/terminals and the consumer session journal as
-the durable facts. Historical stdout is compared byte-for-byte, including its terminal, rather
-than republished. Execution and stdout draining run together with `try_join!`; only after both
-complete is the native structured result materialized in the session journal. Replaying a changed
-structured result is rejected.
+completed bodies before checking the invocation result. Internal input/result envelopes carry
+stdin/stdout as ordinary schema-value streams. The Prepared Output mapping starts generic pumping
+before the result exists; `materialize_result` later binds the same handle, without re-registering
+or starting a second pump. The shared byte drain compares historical bytes and terminals rather
+than republishing them. Execution and draining run together with `try_join!`; only after both
+complete is the structured outcome recorded inside the result envelope in the session journal.
+Replaying changed bytes, terminals or structured results is rejected.
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 

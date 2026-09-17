@@ -369,8 +369,6 @@ pub enum StreamRegistrationCoordinate {
 pub enum StreamRootKind {
     MethodInput,
     MethodResult,
-    ToolStdin,
-    ToolStdout,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -550,8 +548,8 @@ pub struct PersistedStreamInvocationDescriptor {
     pub target_component_revision: ComponentRevision,
     pub target: PersistedInvocationTarget,
     /// Canonical serialization of the complete recursive invocation value after replacing each
-    /// stream leaf with its corresponding durable handle in `stream_handles`. Tool invocations
-    /// store canonical typed-value bytes containing both the schema graph and value.
+    /// stream leaf with its corresponding durable handle in `stream_handles`. The typed-value
+    /// bytes contain both the schema graph and value.
     pub invocation_value: Vec<u8>,
     pub stream_handles: Vec<DurableStreamHandle>,
     /// Canonical execution-mode and configuration bytes that affect the call.
@@ -593,8 +591,6 @@ pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
     pub attempt: StartAttemptDescriptor,
     pub stream_mappings: Vec<StreamSessionMappingRecord>,
-    pub tool_stdin: Option<u64>,
-    pub tool_stdout: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1219,42 +1215,7 @@ impl StreamSessionRecord {
                     .iter()
                     .map(|mapping| (mapping.handle.clone(), mapping.role))
                     .collect::<HashSet<_>>();
-                let target_mappings_are_valid = match &record.attempt.invocation.target {
-                    PersistedInvocationTarget::AgentMethod { .. } => {
-                        record.tool_stdin.is_none()
-                            && record.tool_stdout.is_none()
-                            && record
-                                .stream_mappings
-                                .iter()
-                                .all(|mapping| mapping.role == SessionStreamRole::Input)
-                    }
-                    PersistedInvocationTarget::ExternalTool { .. } => {
-                        !(record.tool_stdin.is_some() && record.tool_stdin == record.tool_stdout)
-                            && record.tool_stdin.is_none_or(|id| {
-                                record.stream_mappings.iter().any(|mapping| {
-                                    mapping.transport_stream_id == id
-                                        && mapping.role == SessionStreamRole::Input
-                                })
-                            })
-                            && record.tool_stdout.is_none_or(|id| {
-                                record.stream_mappings.iter().any(|mapping| {
-                                    mapping.transport_stream_id == id
-                                        && mapping.role == SessionStreamRole::Output
-                                })
-                            })
-                            && record.stream_mappings.iter().all(|mapping| {
-                                if Some(mapping.transport_stream_id) == record.tool_stdin {
-                                    mapping.role == SessionStreamRole::Input
-                                } else if Some(mapping.transport_stream_id) == record.tool_stdout {
-                                    mapping.role == SessionStreamRole::Output
-                                } else {
-                                    mapping.role == SessionStreamRole::Input
-                                }
-                            })
-                    }
-                };
                 supported_attempt(&record.attempt)
-                    && target_mappings_are_valid
                     && record
                         .attempt
                         .invocation
@@ -1271,10 +1232,7 @@ impl StreamSessionRecord {
                     && record
                         .stream_mappings
                         .iter()
-                        .filter(|mapping| {
-                            Some(mapping.transport_stream_id) != record.tool_stdin
-                                && Some(mapping.transport_stream_id) != record.tool_stdout
-                        })
+                        .filter(|mapping| mapping.role == SessionStreamRole::Input)
                         .map(|mapping| &mapping.handle)
                         .eq(record.attempt.invocation.stream_handles.iter())
             }
@@ -1763,8 +1721,6 @@ mod tests {
                 live_join_buffer_events: 32,
             },
             stream_mappings: Vec::new(),
-            tool_stdin: None,
-            tool_stdout: None,
         });
 
         assert!(
@@ -1774,7 +1730,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_tool_record_validates_reserved_stream_roles_and_ids() {
+    fn prepared_record_validates_input_handles_and_allows_early_outputs_for_any_target() {
         let environment_id = EnvironmentId(Uuid::from_u128(1));
         let agent_id = AgentId {
             component_id: ComponentId(Uuid::from_u128(2)),
@@ -1819,7 +1775,7 @@ mod tests {
                         command_path: vec!["/bin/cat".to_string()],
                     },
                     invocation_value: vec![],
-                    stream_handles: vec![argument.clone()],
+                    stream_handles: vec![stdin.clone(), argument.clone()],
                     execution_config: vec![],
                     effective_identity: vec![],
                 },
@@ -1843,8 +1799,6 @@ mod tests {
                     role: SessionStreamRole::Input,
                 },
             ],
-            tool_stdin: Some(10),
-            tool_stdout: Some(11),
         };
 
         assert!(StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
@@ -1852,20 +1806,15 @@ mod tests {
         prepared.stream_mappings[0].role = SessionStreamRole::Output;
         assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
         prepared.stream_mappings[0].role = SessionStreamRole::Input;
-        prepared.tool_stdout = Some(10);
+        prepared.stream_mappings[1].transport_stream_id = 10;
         assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
-        prepared.tool_stdout = Some(99);
-        assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
-        prepared.tool_stdout = Some(11);
+        prepared.stream_mappings[1].transport_stream_id = 11;
         prepared.stream_mappings[2].role = SessionStreamRole::Output;
         assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
         prepared.stream_mappings[2].role = SessionStreamRole::Input;
-        prepared.tool_stdout = None;
-        assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
         prepared.attempt.invocation.target = PersistedInvocationTarget::AgentMethod {
             method_name: "run".to_string(),
         };
-        prepared.tool_stdout = Some(11);
-        assert!(!StreamSessionRecord::Prepared(prepared).has_supported_format());
+        assert!(StreamSessionRecord::Prepared(prepared).has_supported_format());
     }
 }

@@ -2495,8 +2495,6 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
             live_join_buffer_events: 1,
         },
         stream_mappings: Vec::new(),
-        tool_stdin: None,
-        tool_stdout: None,
     });
     let bytes = golem_common::serialization::serialize(&record).unwrap();
     assert!(bytes.len() > 64 * 1024);

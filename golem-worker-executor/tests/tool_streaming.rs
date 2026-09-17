@@ -5646,8 +5646,9 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::{
         ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest,
-        InvocationStart, input_stream_item, invocation_request, invocation_response,
-        invocation_session_completion, invocation_session_result,
+        InvocationStart, ResumeAttach, ResumeOperation, StreamCursor, input_stream_item,
+        invocation_request, invocation_response, invocation_session_completion,
+        invocation_session_result,
     };
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -5717,35 +5718,34 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         },
     );
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
-    sender
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(worker_id.clone().into()),
-                idempotency_key: Some(key.clone().into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
-                environment_id: Some(context.default_environment_id.into()),
-                component_owner_account_id: Some(context.account_id.into()),
-                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                external_tool: Some(ExternalToolInvocation {
-                    tool_name: "streaming".to_string(),
-                    command_path: vec!["run".to_string()],
-                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                    stdin: true,
-                    stdout: true,
-                    fresh_owner: false,
-                    expected_deployment_revision: None,
-                }),
-                ..Default::default()
-            })),
-        })
-        .await?;
+    let start_request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            idempotency_key: Some(key.clone().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: Some(
+                Principal::GolemUser(GolemUserPrincipal {
+                    account_id: context.account_id,
+                })
+                .into(),
+            ),
+            environment_id: Some(context.default_environment_id.into()),
+            component_owner_account_id: Some(context.account_id.into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            external_tool: Some(ExternalToolInvocation {
+                tool_name: "streaming".to_string(),
+                command_path: vec!["run".to_string()],
+                input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                stdin: true,
+                stdout: true,
+                fresh_owner: false,
+                expected_deployment_revision: None,
+            }),
+            ..Default::default()
+        })),
+    };
+    sender.send(start_request.clone()).await?;
     let mut responses = executor
         .client
         .clone()
@@ -5759,8 +5759,22 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response else {
         anyhow::bail!("native session was not accepted: {acceptance:?}");
     };
-    let stdin_id = accepted.tool_stdin_stream_id.expect("stdin role");
-    let stdout_id = accepted.tool_stdout_stream_id.expect("stdout role");
+    let stdin_id = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| {
+            mapping.role() == golem_api_grpc::proto::golem::worker::StreamMappingRole::Input
+        })
+        .expect("stdin role")
+        .transport_stream_id;
+    let stdout_id = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| {
+            mapping.role() == golem_api_grpc::proto::golem::worker::StreamMappingRole::Output
+        })
+        .expect("stdout role")
+        .transport_stream_id;
     assert_ne!(stdin_id, stdout_id);
     let stdin_mapping = accepted
         .stream_mappings
@@ -5769,6 +5783,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .expect("stdin mapping");
     let stdin_stream_id = stdin_mapping.handle.as_ref().unwrap().stream_id;
     let mut output = Vec::new();
+    let mut stdout_cursor = None;
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while output.len() < b"marker:".len() {
             match responses
@@ -5779,6 +5794,10 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             {
                 Some(invocation_response::Response::OutputItem(item)) => {
                     assert_eq!(item.transport_stream_id, stdout_id);
+                    stdout_cursor = Some(StreamCursor {
+                        stream_id: item.durable_stream_id,
+                        last_observed_offset: Some(item.durable_offset),
+                    });
                     output.extend(item.packed_u8);
                 }
                 other => anyhow::bail!("expected stdout before submitting stdin, got {other:?}"),
@@ -5788,6 +5807,77 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     })
     .await??;
     assert_eq!(output, b"marker:");
+    let mut changed = start_request.clone();
+    let Some(invocation_request::Request::Start(start)) = &mut changed.request else {
+        unreachable!()
+    };
+    start.external_tool.as_mut().unwrap().stdout = false;
+    let mut retry = executor
+        .client
+        .clone()
+        .invoke_agent_session(tokio_stream::iter([changed]))
+        .await?
+        .into_inner();
+    let rejected = retry
+        .message()
+        .await?
+        .expect("changed declaration response");
+    assert!(
+        matches!(rejected.response, Some(invocation_response::Response::Rejected(ref error)) if error.reason == golem_api_grpc::proto::golem::worker::InvocationRejectionReason::IdempotencyConflict as i32),
+        "{rejected:?}"
+    );
+
+    // Take over while the result is still blocked on stdin, resuming after the marker.
+    let Some(invocation_request::Request::Start(start)) = start_request.request else {
+        unreachable!()
+    };
+    let (resumed_sender, receiver) = tokio::sync::mpsc::channel(8);
+    resumed_sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                idempotency_key: start.idempotency_key,
+                agent_id: start.agent_id,
+                environment_id: start.environment_id,
+                attachment_id: accepted.attachment_id,
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: start.expected_callee_fingerprint,
+                expected_epoch: accepted.epoch,
+                operation: ResumeOperation::Takeover as i32,
+                cursors: vec![stdout_cursor.unwrap()],
+                auth_ctx: start.auth_ctx,
+                principal: start.principal,
+            })),
+        })
+        .await?;
+    let mut resumed = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let response = resumed.message().await?.expect("takeover acceptance");
+    let Some(invocation_response::Response::Accepted(resumed_accepted)) = response.response else {
+        anyhow::bail!("takeover failed: {response:?}");
+    };
+    assert_eq!(resumed_accepted.epoch, accepted.epoch + 1);
+    assert_eq!(
+        resumed_accepted.stream_mappings.len(),
+        accepted.stream_mappings.len()
+    );
+    for original in &accepted.stream_mappings {
+        let resumed = resumed_accepted
+            .stream_mappings
+            .iter()
+            .find(|mapping| mapping.transport_stream_id == original.transport_stream_id)
+            .unwrap();
+        assert_eq!(resumed.handle, original.handle);
+        assert_eq!(resumed.role, original.role);
+    }
+    drop(responses);
+    drop(sender);
+    let sender = resumed_sender;
+    responses = resumed;
+    let accepted = resumed_accepted;
     let bytes = vec![0, 255, 17, 128, 9];
     sender
         .send(InvocationRequest {

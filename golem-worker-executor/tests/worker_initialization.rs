@@ -640,8 +640,6 @@ async fn prepare_session(
                 live_join_buffer_events: 1,
             },
             stream_mappings: vec![],
-            tool_stdin: None,
-            tool_stdout: None,
         }),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,

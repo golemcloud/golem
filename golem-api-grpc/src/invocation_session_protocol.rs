@@ -70,7 +70,7 @@ struct InputState {
 struct OutputState {
     next_offset: u64,
     resume_first_frame: bool,
-    resume_mapping_announcement_pending: bool,
+    result_mapping_announcement_pending: bool,
     terminal: bool,
     cancellation_requested: Option<u64>,
     durable_stream_id: (u64, u64),
@@ -103,8 +103,6 @@ pub struct InvocationSessionState {
     outputs: HashMap<u64, OutputState>,
     expected_tool: Option<(String, Vec<String>, bool, bool)>,
     allows_no_result: bool,
-    tool_stdin_stream_id: Option<u64>,
-    tool_stdout_stream_id: Option<u64>,
 }
 
 impl Default for InvocationSessionState {
@@ -129,8 +127,6 @@ impl Default for InvocationSessionState {
             outputs: HashMap::new(),
             expected_tool: None,
             allows_no_result: false,
-            tool_stdin_stream_id: None,
-            tool_stdout_stream_id: None,
         }
     }
 }
@@ -469,6 +465,11 @@ impl InvocationSessionState {
                         if tool.tool_name.is_empty() {
                             return Err("external tool name must not be empty".to_string());
                         }
+                        if !self.inputs.is_empty() {
+                            return Err(
+                                "external tool arguments must not contain streams".to_string()
+                            );
+                        }
                         self.expected_tool = Some((
                             tool.tool_name.clone(),
                             tool.command_path.clone(),
@@ -649,10 +650,7 @@ impl InvocationSessionState {
         if !self.resume {
             match (&self.expected_tool, &accepted.tool_name) {
                 (None, None) => {
-                    if !accepted.command_path.is_empty()
-                        || accepted.tool_stdin_stream_id.is_some()
-                        || accepted.tool_stdout_stream_id.is_some()
-                    {
+                    if !accepted.command_path.is_empty() {
                         return Err(
                             "agent-method acceptance contains external-tool fields".to_string()
                         );
@@ -667,36 +665,29 @@ impl InvocationSessionState {
                             "external-tool acceptance target differs from its start".to_string()
                         );
                     }
-                    if accepted.tool_stdin_stream_id.is_some() != *stdin
-                        || accepted.tool_stdout_stream_id.is_some() != *stdout
+                    if accepted
+                        .stream_mappings
+                        .iter()
+                        .filter(|m| m.role() == StreamMappingRole::Input)
+                        .count()
+                        != usize::from(*stdin)
+                        || accepted
+                            .stream_mappings
+                            .iter()
+                            .filter(|m| m.role() == StreamMappingRole::Output)
+                            .count()
+                            != usize::from(*stdout)
                     {
                         return Err(
                             "external-tool acceptance byte streams differ from its start"
                                 .to_string(),
                         );
                     }
-                    let mut special = HashSet::new();
-                    for id in [
-                        accepted.tool_stdin_stream_id,
-                        accepted.tool_stdout_stream_id,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        if !special.insert(id) || self.inputs.contains_key(&id) {
-                            return Err(
-                                "external-tool byte stream ID collides with another stream role"
-                                    .to_string(),
-                            );
+                    for mapping in &accepted.stream_mappings {
+                        if mapping.role() == StreamMappingRole::Input {
+                            self.inputs
+                                .insert(mapping.transport_stream_id, InputState::default());
                         }
-                    }
-                    if let Some(id) = accepted.tool_stdin_stream_id {
-                        self.inputs.insert(id, InputState::default());
-                        self.tool_stdin_stream_id = Some(id);
-                    }
-                    if let Some(id) = accepted.tool_stdout_stream_id {
-                        self.outputs.insert(id, OutputState::default());
-                        self.tool_stdout_stream_id = Some(id);
                     }
                 }
             }
@@ -704,32 +695,20 @@ impl InvocationSessionState {
             self.expected_tool = Some((
                 tool_name.clone(),
                 accepted.command_path.clone(),
-                accepted.tool_stdin_stream_id.is_some(),
-                accepted.tool_stdout_stream_id.is_some(),
+                accepted
+                    .stream_mappings
+                    .iter()
+                    .any(|m| m.role() == StreamMappingRole::Input),
+                accepted
+                    .stream_mappings
+                    .iter()
+                    .any(|m| m.role() == StreamMappingRole::Output),
             ));
-            self.tool_stdin_stream_id = accepted.tool_stdin_stream_id;
-            self.tool_stdout_stream_id = accepted.tool_stdout_stream_id;
-        } else if !accepted.command_path.is_empty()
-            || accepted.tool_stdin_stream_id.is_some()
-            || accepted.tool_stdout_stream_id.is_some()
-        {
+        } else if !accepted.command_path.is_empty() {
             return Err("agent-method acceptance contains external-tool fields".to_string());
         }
         if accepted.tool_name.is_some() && accepted.method_name.is_some() {
             return Err("external-tool acceptance contains an agent method".to_string());
-        }
-        for (id, role) in [
-            (self.tool_stdin_stream_id, StreamMappingRole::Input),
-            (self.tool_stdout_stream_id, StreamMappingRole::Output),
-        ] {
-            if let Some(id) = id
-                && !accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|mapping| mapping.transport_stream_id == id && mapping.role() == role)
-            {
-                return Err("external-tool byte stream has no matching durable mapping".to_string());
-            }
         }
         if self.resume {
             required_uuid(
@@ -821,7 +800,7 @@ impl InvocationSessionState {
                             mapping.transport_stream_id,
                             OutputState {
                                 resume_first_frame: !terminal,
-                                resume_mapping_announcement_pending: true,
+                                result_mapping_announcement_pending: true,
                                 terminal,
                                 durable_stream_id,
                                 last_durable_offset: self
@@ -885,12 +864,7 @@ impl InvocationSessionState {
                 .filter(|mapping| mapping.role() == StreamMappingRole::Input)
                 .map(|mapping| mapping.transport_stream_id)
                 .collect::<HashSet<_>>();
-            if mapped_inputs != expected_inputs
-                || accepted.stream_mappings.iter().any(|mapping| {
-                    mapping.role() == StreamMappingRole::Output
-                        && Some(mapping.transport_stream_id) != self.tool_stdout_stream_id
-                })
-            {
+            if mapped_inputs != expected_inputs {
                 return Err(
                     "fresh invocation acceptance mappings do not match its initial inputs"
                         .to_string(),
@@ -933,16 +907,17 @@ impl InvocationSessionState {
                     state.terminal = terminal;
                 }
             }
-            if let Some(id) = self.tool_stdout_stream_id {
-                let mapping = accepted
-                    .stream_mappings
-                    .iter()
-                    .find(|mapping| mapping.transport_stream_id == id)
-                    .expect("native stdout mapping was validated above");
-                self.outputs
-                    .get_mut(&id)
-                    .expect("native stdout was registered above")
-                    .durable_stream_id = mapping_stream_id(mapping)?;
+            for mapping in &accepted.stream_mappings {
+                if mapping.role() == StreamMappingRole::Output {
+                    self.outputs.insert(
+                        mapping.transport_stream_id,
+                        OutputState {
+                            durable_stream_id: mapping_stream_id(mapping)?,
+                            result_mapping_announcement_pending: true,
+                            ..OutputState::default()
+                        },
+                    );
+                }
             }
         }
         self.accepted_agent_id = Some(agent_id.clone());
@@ -1172,9 +1147,7 @@ impl InvocationSessionState {
             .inputs
             .get(&ack.transport_stream_id)
             .ok_or_else(|| format!("input stream {} is unknown", ack.transport_stream_id))?;
-        if state.durable_stream_id != Some(durable_stream_id)
-            && self.tool_stdin_stream_id != Some(ack.transport_stream_id)
-        {
+        if state.durable_stream_id != Some(durable_stream_id) {
             return Err(format!(
                 "input stream {} acknowledgement identity differs from its announced mapping",
                 ack.transport_stream_id
@@ -1622,19 +1595,19 @@ impl InvocationSessionState {
                 return Err(format!("stream {stream_id} is already registered"));
             }
             if let Some(state) = self.outputs.get(stream_id) {
-                if !state.resume_mapping_announcement_pending {
+                if !state.result_mapping_announcement_pending {
                     return Err(format!("stream {stream_id} is already registered"));
                 }
                 if state.durable_stream_id != *durable_stream_id {
                     return Err(format!(
-                        "resumed output stream {stream_id} durable identity differs from its acceptance mapping"
+                        "output stream {stream_id} durable identity differs from its acceptance mapping"
                     ));
                 }
             }
         }
         for (stream_id, durable_stream_id) in mappings {
             if let Some(state) = self.outputs.get_mut(&stream_id) {
-                state.resume_mapping_announcement_pending = false;
+                state.result_mapping_announcement_pending = false;
             } else {
                 self.outputs.insert(
                     stream_id,
@@ -1707,11 +1680,7 @@ impl InvocationSessionState {
             .get_mut(&transport_stream_id)
             .ok_or_else(|| format!("output stream {transport_stream_id} is unknown"))?;
         let durable_stream_id = (durable_stream_id.high_bits, durable_stream_id.low_bits);
-        if self.tool_stdout_stream_id == Some(transport_stream_id)
-            && state.durable_stream_id == (0, 0)
-        {
-            state.durable_stream_id = durable_stream_id;
-        } else if state.durable_stream_id != durable_stream_id {
+        if state.durable_stream_id != durable_stream_id {
             return Err(format!(
                 "output stream {transport_stream_id} durable stream identity differs from its announced mapping"
             ));
@@ -2744,6 +2713,42 @@ mod tests {
                 .is_err(),
             "the first frame must not select a durable identity different from the result mapping"
         );
+    }
+
+    #[test]
+    fn method_early_output_binds_the_same_handle_without_resetting_offsets() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(record(Vec::new())))
+            .unwrap();
+        let mut acceptance = accepted();
+        let Some(invocation_response::Response::Accepted(accepted)) = &mut acceptance.response
+        else {
+            unreachable!()
+        };
+        accepted
+            .stream_mappings
+            .push(mapping(9, StreamMappingRole::Output));
+        state.validate_response(&acceptance).unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputItem(
+                packed_output_item(9, 0, vec![17, 255]),
+            )))
+            .unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    packed_output_item(9, 0, vec![17, 255]),
+                )))
+                .is_err()
+        );
+        state
+            .validate_response(&response(invocation_response::Response::OutputEnd(
+                output_end(9, 2),
+            )))
+            .unwrap();
+        state.validate_response(&success()).unwrap();
     }
 
     // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
@@ -3839,8 +3844,6 @@ mod tests {
         };
         accepted.tool_name = Some("shell".to_string());
         accepted.command_path = vec!["run".to_string()];
-        accepted.tool_stdin_stream_id = Some(70);
-        accepted.tool_stdout_stream_id = Some(71);
         accepted.stream_mappings = vec![
             mapping(70, StreamMappingRole::Input),
             mapping(71, StreamMappingRole::Output),
@@ -3952,8 +3955,6 @@ mod tests {
             unreachable!()
         };
         accepted.tool_name = Some("shell".to_string());
-        accepted.tool_stdin_stream_id = Some(0);
-        accepted.tool_stdout_stream_id = Some(1);
         state.validate_response(&acceptance).unwrap();
         let mut wrong_kind = InvocationSessionState::default();
         wrong_kind
@@ -3979,10 +3980,10 @@ mod tests {
             .unwrap();
 
         for mappings in [
-            Vec::new(),
+            vec![mapping(0, StreamMappingRole::Unspecified)],
             vec![
                 mapping(0, StreamMappingRole::Output),
-                mapping(1, StreamMappingRole::Input),
+                mapping(0, StreamMappingRole::Input),
             ],
         ] {
             let mut state = InvocationSessionState::default();
@@ -4004,7 +4005,7 @@ mod tests {
         use crate::proto::golem::schema::TypedSchemaValue;
         use crate::proto::golem::worker::ExternalToolInvocation;
 
-        let start = trusted_request(invocation_request::Request::Start(InvocationStart {
+        let mut start = trusted_request(invocation_request::Request::Start(InvocationStart {
             idempotency_key: key(),
             external_tool: Some(ExternalToolInvocation {
                 tool_name: "shell".to_string(),
@@ -4018,13 +4019,25 @@ mod tests {
             ..Default::default()
         }));
         let mut state = InvocationSessionState::default();
+        assert!(state.validate_trusted_request(&start).is_err());
+        let Some(invocation_request::Request::Start(request)) = &mut start.request else {
+            unreachable!()
+        };
+        request
+            .external_tool
+            .as_mut()
+            .unwrap()
+            .input
+            .as_mut()
+            .unwrap()
+            .value = Some(record(Vec::new()));
+        let mut state = InvocationSessionState::default();
         state.validate_trusted_request(&start).unwrap();
         let mut acceptance = accepted_with_inputs(&[7]);
         if let Some(invocation_response::Response::Accepted(accepted)) =
             acceptance.response.as_mut()
         {
             accepted.tool_name = Some("other".to_string());
-            accepted.tool_stdin_stream_id = Some(7);
         }
         assert!(state.validate_response(&acceptance).is_err());
 
@@ -4034,6 +4047,7 @@ mod tests {
             acceptance.response.as_mut()
         {
             accepted.tool_name = Some("shell".to_string());
+            accepted.stream_mappings.clear();
         }
         assert!(state.validate_response(&acceptance).is_err());
     }

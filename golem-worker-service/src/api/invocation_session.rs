@@ -2095,15 +2095,15 @@ fn translate_accepted(
             }),
         )
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
-    if let Some(transport_id) = accepted.tool_stdin_stream_id {
-        state
-            .byte_roles
-            .insert(transport_id, PublicByteStreamRole::Stdin);
-    }
-    if let Some(transport_id) = accepted.tool_stdout_stream_id {
-        state
-            .byte_roles
-            .insert(transport_id, PublicByteStreamRole::Stdout);
+    if accepted.tool_name.is_some() {
+        for mapping in &accepted.stream_mappings {
+            let role = match mapping.role() {
+                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
+                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
+                StreamMappingRole::Unspecified => continue,
+            };
+            state.byte_roles.insert(mapping.transport_stream_id, role);
+        }
     }
     for mapping in accepted.stream_mappings {
         state.add_private_mapping(mapping)?;
@@ -3332,8 +3332,6 @@ mod tests {
                     } else {
                         Vec::new()
                     },
-                    tool_stdin_stream_id: native.then_some(7),
-                    tool_stdout_stream_id: native.then_some(8),
                     stream_mappings: if native {
                         vec![
                             private_mapping(7, StreamMappingRole::Input, fingerprint),

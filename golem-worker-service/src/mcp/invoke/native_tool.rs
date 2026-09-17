@@ -8,7 +8,7 @@ use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest, StreamCancel,
-    StreamCancelReason, StreamCancelRole, input_stream_item, invocation_request,
+    StreamCancelReason, StreamCancelRole, StreamMappingRole, input_stream_item, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::IdempotencyKey;
@@ -163,8 +163,8 @@ async fn collect_session(
     let outcome = async {
         loop {
             let next_input = if !input_done { accepted.as_ref().and_then(|a| {
-                let stream = a.tool_stdin_stream_id?;
-                let mapping = a.stream_mappings.iter().find(|m| m.transport_stream_id == stream)?;
+                let mapping = a.stream_mappings.iter().find(|m| m.role() == StreamMappingRole::Input)?;
+                let stream = mapping.transport_stream_id;
                 let durable_stream_id = mapping.handle.as_ref()?.stream_id;
                 let bytes = stdin.as_ref()?;
                 let request = if input_position == bytes.len() {
@@ -199,7 +199,7 @@ async fn collect_session(
                     state.validate_response(&response).map_err(invalid)?;
                     match response.response {
                         Some(invocation_response::Response::Accepted(a)) => {
-                            if a.tool_stdin_stream_id.is_some() != stdin.is_some() || a.tool_stdout_stream_id.is_some() != stdout_requested {
+                            if a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Input) != stdin.is_some() || a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Output) != stdout_requested {
                                 return Err(invalid("native byte stream mappings differ from the request"));
                             }
                             accepted = Some(a);
@@ -217,7 +217,7 @@ async fn collect_session(
                         Some(invocation_response::Response::OutputEnd(_)) => stdout_done = true,
                         Some(invocation_response::Response::OutputError(error)) => { stdout_done = true; stdout_error = Some(error.details); }
                         Some(invocation_response::Response::StreamCancel(cancel)) => {
-                            if accepted.as_ref().and_then(|a| a.tool_stdin_stream_id) == Some(cancel.transport_stream_id) { input_done = true; }
+                            if accepted.as_ref().is_some_and(|a| a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Input && m.transport_stream_id == cancel.transport_stream_id)) { input_done = true; }
                             else { stdout_done = true; stdout_error = Some("stdout cancelled".to_string()); }
                         }
                         Some(invocation_response::Response::InputAck(_)) => {},
@@ -249,11 +249,19 @@ async fn collect_session(
         let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
             for (stream, role) in [
                 (
-                    accepted.tool_stdin_stream_id.filter(|_| !input_done),
+                    accepted
+                        .stream_mappings
+                        .iter()
+                        .find(|m| m.role() == StreamMappingRole::Input && !input_done)
+                        .map(|m| m.transport_stream_id),
                     StreamCancelRole::InputProducer,
                 ),
                 (
-                    accepted.tool_stdout_stream_id.filter(|_| !stdout_done),
+                    accepted
+                        .stream_mappings
+                        .iter()
+                        .find(|m| m.role() == StreamMappingRole::Output && !stdout_done)
+                        .map(|m| m.transport_stream_id),
                     StreamCancelRole::OutputConsumer,
                 ),
             ] {
@@ -517,8 +525,6 @@ mod tests {
             callee_fingerprint: Some(uuid(4)),
             epoch: 1,
             tool_name: Some("tool".to_string()),
-            tool_stdin_stream_id: stdin.then_some(70),
-            tool_stdout_stream_id: Some(71),
             stream_mappings: mappings,
             ..Default::default()
         };

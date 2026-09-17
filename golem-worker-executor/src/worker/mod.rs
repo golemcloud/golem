@@ -218,8 +218,6 @@ pub struct DurableStreamingInvocationRequest {
     pub attempt: StartAttemptDescriptor,
     pub registrations: Vec<(u64, ProducerRegistrationRequest)>,
     pub foreign_mappings: Vec<StreamSessionMappingRecord>,
-    pub tool_stdin: Option<u64>,
-    pub tool_stdout: Option<u64>,
     pub input_schema: Arc<golem_schema::schema::SchemaGraph>,
     pub input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
     pub invocation: AgentInvocation,
@@ -5400,8 +5398,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(error.clone());
         }
-        let tool_stdin = request.tool_stdin;
-        let tool_stdout = request.tool_stdout;
         let roles = request
             .registrations
             .iter()
@@ -5417,13 +5413,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })
             })
             .collect::<Result<HashMap<_, _>, _>>()?;
-        if let AgentInvocation::ExternalTool { stdin, stdout, .. } = &request.invocation
-            && (*stdin != tool_stdin.is_some() || *stdout != tool_stdout.is_some())
-        {
-            return Err(WorkerExecutorError::invalid_request(
-                "tool byte stream flags disagree with the session mappings",
-            ));
-        }
         let mut invocation = Some(request.invocation);
         let mut acceptance_committed = Some(request.acceptance_committed);
         let mut attached_during_prepare = false;
@@ -5470,7 +5459,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .registrations
                     .iter()
                     .zip(&requested_handles)
-                    .filter(|((id, _), _)| Some(*id) != tool_stdin && Some(*id) != tool_stdout)
+                    .filter(|((id, _), _)| roles[id] == SessionStreamRole::Input)
                     .map(|(_, handle)| handle.clone())
                     .collect()
             } else {
@@ -5531,10 +5520,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     stream_slot_mappings_match(&prepared.stream_mappings, &requested_mappings)
                 }
             };
-            if !mappings_match
-                || prepared.tool_stdin != tool_stdin
-                || prepared.tool_stdout != tool_stdout
-            {
+            if !mappings_match {
                 return Err(WorkerExecutorError::invalid_request(
                     "AttemptConflict: the durable session stream mappings do not exactly match the persisted attempt",
                 ));
@@ -5550,8 +5536,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 format_version: 1,
                 attempt,
                 stream_mappings: foreign_mappings.clone(),
-                tool_stdin,
-                tool_stdout,
             };
             producer
                 .append_session_record(None, StreamSessionRecord::Prepared(prepared.clone()))
@@ -5579,7 +5563,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let mut attempt = attempt;
                         attempt.invocation.stream_handles = bindings
                             .iter()
-                            .filter(|(id, _)| Some(*id) != tool_stdin && Some(*id) != tool_stdout)
+                            .filter(|(id, _)| roles[id] == SessionStreamRole::Input)
                             .map(|(_, handle)| handle.clone())
                             .collect();
                         StreamSessionPreparedRecord {
@@ -5593,8 +5577,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 })
                                 .collect(),
                             attempt,
-                            tool_stdin,
-                            tool_stdout,
                         }
                     },
                 )
@@ -6228,9 +6210,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(prepared) = self.prepared_stream_session(&idempotency_key).await? else {
             return Ok(invocation);
         };
-        if prepared.attempt.invocation.stream_handles.is_empty() {
-            return Ok(invocation);
-        }
         let producer = self.durable_stream_producer().await?;
         let streams = StreamSession::new(
             producer,
@@ -6250,20 +6229,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(WorkerExecutorError::runtime)?;
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
-        let value = match &invocation {
-            AgentInvocation::ExternalTool { .. } => {
-                golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
-                    .map_err(|error| error.to_string())
-                    .and_then(|typed| typed.value.ok_or_else(|| "missing tool input".to_string()))
-            }
-            _ => golem_api_grpc::proto::golem::schema::SchemaValue::decode(encoded)
-                .map_err(|error| error.to_string()),
-        }
-        .map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "failed to decode persisted durable invocation input: {error}"
-            ))
-        })?;
+        let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to decode persisted durable invocation input: {error}"
+                ))
+            })?;
+        let graph = typed
+            .graph
+            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?
+            .try_into()
+            .map_err(WorkerExecutorError::runtime)?;
+        let value = typed
+            .value
+            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input value"))?;
         let input = streams
             .decode_initial(
                 value,
@@ -6272,7 +6251,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        Ok(replace_invocation_input(invocation, input))
+        Ok(replace_invocation_input(
+            invocation,
+            TypedSchemaValue::new(graph, input),
+        ))
     }
 
     /// Persists stream-bearing result mappings and returns the transport value.
@@ -11809,12 +11791,12 @@ fn validate_stream_session_record(record: &StreamSessionRecord) -> Result<(), Wo
 
 fn replace_invocation_input(
     mut invocation: AgentInvocation,
-    replacement: golem_common::schema::SchemaValue,
+    replacement: TypedSchemaValue,
 ) -> AgentInvocation {
     match &mut invocation {
-        AgentInvocation::AgentMethod { input, .. } => *input = replacement,
+        AgentInvocation::AgentMethod { input, .. } => *input = replacement.into_parts().1,
         AgentInvocation::ExternalTool { input, .. } => {
-            **input = TypedSchemaValue::new(input.graph().clone(), replacement);
+            **input = replacement;
         }
         _ => {}
     }

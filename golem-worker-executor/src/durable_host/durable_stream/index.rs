@@ -464,9 +464,7 @@ impl ProducerStreamIndex {
             })?,
             (
                 StreamRegistrationCoordinate::Root {
-                    root_kind:
-                        golem_common::base_model::durable_stream::StreamRootKind::MethodInput
-                        | golem_common::base_model::durable_stream::StreamRootKind::ToolStdin,
+                    root_kind: golem_common::base_model::durable_stream::StreamRootKind::MethodInput,
                     ..
                 },
                 None,
@@ -474,8 +472,7 @@ impl ProducerStreamIndex {
             (
                 StreamRegistrationCoordinate::Root {
                     root_kind:
-                        golem_common::base_model::durable_stream::StreamRootKind::MethodResult
-                        | golem_common::base_model::durable_stream::StreamRootKind::ToolStdout,
+                        golem_common::base_model::durable_stream::StreamRootKind::MethodResult,
                     ..
                 },
                 None,

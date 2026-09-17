@@ -36,6 +36,9 @@ use crate::durable_host::concurrent::{
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durable_session::{
+    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, ForwardedDurableInput,
+};
 use crate::durable_host::entity::{
     EntityInvocationDurability, IncompleteLiveRepairBeforeBody, RecordedEntityTerminal,
     ToolInvocationReplayOutcome, encode_tool_terminal, record_tool_rejection_access,
@@ -78,6 +81,7 @@ use golem_common::model::agent::{AgentPrincipal, Principal, ResolvedOwnerContext
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::component::ComponentName;
+use golem_common::model::durable_stream::SessionStreamRole;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
     EntityInvocationRequestIdentity, InvocationExecutionMode, NamedToolErrorSchema,
@@ -99,7 +103,9 @@ use golem_common::model::oplog::{
     HostResponseEntityInvocation, HostResponseGolemToolResponseSecretHoldAdmission,
     HostResponseGolemToolTool, HostResponseGolemToolTools,
 };
-use golem_common::model::tool::{ToolBindingOwner, ToolName};
+use golem_common::model::tool::{
+    ToolBindingOwner, ToolInvocationInput, ToolInvocationOutput, ToolName,
+};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
@@ -113,6 +119,8 @@ use golem_common::schema::wit::{decode_graph, decode_value_with, encode_graph, e
 use golem_common::schema::{
     FromSchema, SchemaType, SchemaValue, TypedSchemaValue as ModelTypedSchemaValue,
 };
+use golem_common::schema::{IntoTypedSchemaValue, SchemaGraph};
+use golem_schema::schema::SchemaValueStream;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
@@ -3909,50 +3917,50 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             .native_tool_session(&key)
             .await
             .map_err(|error| wasmtime::Error::from_anyhow(error.into()))?;
-        if session
-            .as_ref()
-            .and_then(|(prepared, _)| prepared.tool_stdin)
-            .is_some()
-            != has_stdin
-            || session
-                .as_ref()
-                .and_then(|(prepared, _)| prepared.tool_stdout)
-                .is_some()
-                != has_stdout
-        {
+        let input = if session.is_some() {
+            ToolInvocationInput::from_value(input.value())
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))?
+        } else {
+            ToolInvocationInput {
+                arguments: input,
+                stdin: None,
+            }
+        };
+        let output_handle = session.as_ref().and_then(|(prepared, _)| {
+            prepared
+                .stream_mappings
+                .iter()
+                .find(|mapping| mapping.role == SessionStreamRole::Output)
+                .map(|mapping| mapping.handle.clone())
+        });
+        if input.stdin.is_some() != has_stdin || output_handle.is_some() != has_stdout {
             return Err(wasmtime::Error::msg(
                 "native tool byte streams disagree with its accepted session",
             ));
         }
-        let stdin = if let Some((prepared, streams)) = &session
-            && let Some(id) = prepared.tool_stdin
-        {
-            let handle = prepared
-                .stream_mappings
-                .iter()
-                .find(|mapping| mapping.transport_stream_id == id)
-                .ok_or_else(|| wasmtime::Error::msg("native tool stdin mapping is missing"))?
-                .handle
-                .clone();
-            let producer = streams
-                .tool_stdin(handle)
-                .await
+        let stdin = if let Some(stdin) = input.stdin {
+            let endpoint = stdin
+                .take_host_endpoint::<DurableInputEndpoint>()
                 .map_err(wasmtime::Error::msg)?;
-            let reader = accessor.with(|mut access| StreamReader::new(&mut access, producer))?;
+            let reader = accessor.with(|mut access| {
+                let ctx = access.get();
+                let producer = DurableByteInputProducer(
+                    DurableInputProducer::new(endpoint).with_drop_cleanup(
+                        ctx.state
+                            .dropped_call_event_sender()
+                            .expect("dropped-call event sender is always available"),
+                        ctx.stream_runtime_teardown_probe(),
+                    ),
+                );
+                StreamReader::new(&mut access, producer)
+            })?;
             Some(create_underlying_stdin(accessor, reader).map_err(wasmtime::Error::from_anyhow)?)
         } else {
             None
         };
-        let (stdout, drain) = if let Some((prepared, streams)) = &session
-            && let Some(id) = prepared.tool_stdout
+        let (stdout, drain) = if let Some((_, streams)) = &session
+            && let Some(handle) = &output_handle
         {
-            let handle = prepared
-                .stream_mappings
-                .iter()
-                .find(|mapping| mapping.transport_stream_id == id)
-                .ok_or_else(|| wasmtime::Error::msg("native tool stdout mapping is missing"))?
-                .handle
-                .clone();
             let (stdout, consumer) =
                 create_stdout_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
@@ -3966,7 +3974,10 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     .take_host_endpoint::<LiveStreamEndpoint>()
                     .map_err(wasmtime::Error::msg)
             })?;
-            (Some(stdout), Some((streams.clone(), handle, endpoint)))
+            (
+                Some(stdout),
+                Some((streams.clone(), handle.clone(), endpoint)),
+            )
         } else {
             (None, None)
         };
@@ -3994,7 +4005,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 accessor,
                 ToolInvocationAttempt {
                     rpc,
-                    input: Ok(input),
+                    input: Ok(input.arguments),
                     parent,
                     attempt_ordinal,
                 },
@@ -4025,7 +4036,12 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         let drain = async {
             if let Some((streams, handle, endpoint)) = drain {
                 streams
-                    .drain_tool_stdout(handle, endpoint)
+                    .drain_registered_output(
+                        handle,
+                        endpoint,
+                        Arc::new(SchemaGraph::empty()),
+                        SchemaType::u8(),
+                    )
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
@@ -4036,9 +4052,22 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         let response = admit_tool_response_secret_holds(accessor, response)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
-        if let Some((_, streams)) = &session {
+        if let Some((prepared, streams)) = &session {
+            let value = ToolInvocationOutput {
+                outcome: response.clone(),
+                stdout: output_handle.map(|handle| {
+                    SchemaValueStream::from_host_endpoint(ForwardedDurableInput { handle })
+                }),
+            }
+            .into_typed_schema_value()
+            .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
             streams
-                .materialize_tool_result(response.clone())
+                .materialize_result(
+                    value.value().clone(),
+                    value.graph(),
+                    value.root_type(),
+                    prepared.attempt.invocation.target_component_revision,
+                )
                 .await
                 .map_err(wasmtime::Error::msg)?;
         }

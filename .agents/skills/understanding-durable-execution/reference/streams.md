@@ -46,11 +46,15 @@ never satisfy a claim, so a stream-only change cannot desynchronize `Start`/`End
 
 Native external tools reuse these journals but deliberately expose a narrower shape. Their typed
 input and structured success/custom-error result are fully materialized scalar schema values; they
-cannot contain recursive typed streams. Optional `stdin` and `stdout` are separate root streams of
-bytes. `tool_stdin` reconstructs stdin from committed producer records, while
-`drain_tool_stdout` records live bytes and terminals or compares replayed output against the
-historical sequence. `materialize_tool_result` records or validates the structured terminal result
-in the consumer session journal.
+cannot contain recursive typed streams. Internal envelopes lower the attachments to ordinary
+schema values: `{ arguments, stdin: option<stream<u8>> }` and
+`{ outcome, stdout: option<stream<u8>> }`. Recursive input materialization and reconstruction own
+stdin; only the tool boundary converts its durable consumer to a WIT attachment. Prepared records
+can contain Output mappings at normal result-leaf coordinates, so generic pumping delivers stdout
+before stdin EOF or result readiness. `materialize_result` binds that existing output handle after
+execution and draining join. The shared byte drain compares historical bytes and terminals without
+writes or republication, independent of batching, and appends only the live suffix. Ordinary methods
+still register outputs when returning. Requested output declarations participate in retry identity.
 
 The ownership layers are deliberately local. `DurableStreamStore` is the existing per-worker
 journal/index store; it still owns queue admission, serialized local mutations, durable commit and

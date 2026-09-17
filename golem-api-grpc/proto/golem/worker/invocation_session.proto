@@ -218,8 +218,6 @@ message InvocationAccepted {
   optional string method_name = 10;
   optional string tool_name = 11;
   repeated string command_path = 12;
-  optional uint64 tool_stdin_stream_id = 13;
-  optional uint64 tool_stdout_stream_id = 14;
 }
 
 message InvocationSessionResult {
