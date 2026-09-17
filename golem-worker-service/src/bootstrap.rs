@@ -17,6 +17,7 @@ use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
+use crate::custom_api::durable_streams::DurableStreamsHandler;
 use crate::custom_api::oidc::handler::OidcHandler;
 use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
 use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
@@ -133,6 +134,11 @@ impl Services {
         ));
 
         let call_agent_handler = Arc::new(CallAgentHandler::new(worker_service.clone()));
+        let durable_streams_handler = Arc::new(DurableStreamsHandler::new(
+            worker_service.clone(),
+            call_agent_handler.clone(),
+            &config.durable_streams,
+        ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
 
@@ -177,6 +183,7 @@ impl Services {
         let request_handler = Arc::new(RequestHandler::new(
             route_resolver.clone(),
             call_agent_handler.clone(),
+            durable_streams_handler,
             oidc_handler.clone(),
             webhook_callback_handler.clone(),
         ));

@@ -249,7 +249,7 @@ pub struct CompiledOutputSchema {
     pub output_schema: OutputSchema,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
@@ -337,9 +337,12 @@ pub enum RouteBehaviour {
     OpenApiSpec(OpenApiSpecBehaviour),
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CallAgentBehaviour {
+    pub route_mode: AgentRouteMode,
+    /// Number of captured variables in the declared base path, excluding DS session and slot.
+    pub base_path_variables: u32,
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
@@ -365,6 +368,12 @@ pub struct CallAgentBehaviour {
     /// handle `If-None-Match` revalidation for `GET`/`HEAD` requests.
     #[desert(default)]
     pub read_only: Option<ReadOnlyConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
+pub enum AgentRouteMode {
+    Rest,
+    DurableStreams,
 }
 
 #[derive(Debug, BinaryCodec)]

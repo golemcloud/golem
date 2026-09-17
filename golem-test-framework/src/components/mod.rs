@@ -30,6 +30,7 @@ use url::Url;
 pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
+pub mod durable_streams_client;
 mod dynamic_span;
 pub mod etcd;
 pub mod jaeger;

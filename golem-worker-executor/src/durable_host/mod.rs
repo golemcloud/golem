@@ -23,8 +23,8 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
-pub(crate) mod durable_session;
-pub(crate) mod durable_stream;
+pub mod durable_session;
+pub mod durable_stream;
 pub mod entity;
 pub mod golem;
 pub mod http;
@@ -37,13 +37,13 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
-pub(crate) mod schema_value_stream;
+pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 mod sockets;
-pub(crate) mod stream_bus;
-pub(crate) mod stream_session;
-pub(crate) mod stream_transport;
+pub mod stream_bus;
+pub mod stream_session;
+pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
 pub mod tool;
@@ -4207,7 +4207,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+        let invocation_loops = self
+            .public_state
+            .worker()
+            .active_agents()
+            .invocation_loops();
+        Arc::new(move || {
+            stream_runtime_teardown.load(Ordering::Acquire) || invocation_loops.is_shut_down()
+        })
     }
 
     pub(crate) fn begin_stream_runtime_teardown(&self) {
@@ -6902,10 +6909,11 @@ fn recovered_restart<W>(
 }
 
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
-    matches!(
-        status.status,
-        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
-    ) || status.has_pending_work()
+    status.status != AgentStatus::Interrupted
+        && (matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
+        ) || status.has_pending_work())
 }
 
 fn store_is_live(
@@ -8797,6 +8805,33 @@ mod tests {
         };
 
         assert!(!should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Interrupted,
+            current_idempotency_key: Some(IdempotencyKey::fresh()),
+            ..AgentStatusRecord::default()
+        };
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.pending_invocations.push(PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(IdempotencyKey::fresh()),
+            manual_update_target_revision: None,
+        });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL.next(),
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.status = AgentStatus::Suspended;
+        assert!(should_restart_after_shard_assignment_change(&status));
     }
 
     fn recovered_agent() -> OwnedAgentId {

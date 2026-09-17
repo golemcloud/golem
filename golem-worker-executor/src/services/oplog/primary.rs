@@ -1285,11 +1285,11 @@ enum OplogJob {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
     RawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         done: tokio::sync::oneshot::Sender<RawSessionLookup>,
     },
     CompleteRawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
         status: Result<Option<DurableStreamSessionStatus>, String>,
@@ -2322,7 +2322,7 @@ impl Oplog for PrimaryOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         loop {
             let snapshot = self

@@ -600,6 +600,16 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    pub async fn shutdown_and_wait_for_invocation_loops(&self) -> anyhow::Result<()> {
+        self._run_details.shutdown.cancel();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            self._run_details.invocation_loops.wait_for_exit(),
+        )
+        .await
+        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+    }
+
     pub async fn acquire_account_concurrent_agent_permit(
         &self,
         agent_id: AgentId,
@@ -969,7 +979,13 @@ impl TestWorkerExecutor {
         if self.worker_is_loaded(owned_agent_id).await {
             return Err(anyhow!("worker {owned_agent_id} is still loaded"));
         }
-        active_agents.remove(owned_agent_id).await;
+        if let Some(worker) = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+        {
+            active_agents.remove_worker(&worker, false).await;
+        }
         Ok(())
     }
 
@@ -4307,7 +4323,7 @@ impl Oplog for TestOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> golem_worker_executor::services::oplog::RawDurableStreamSessionStatus {
         self.oplog
             .raw_durable_stream_session_status(session_key)
