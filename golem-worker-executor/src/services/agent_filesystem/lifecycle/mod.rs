@@ -1430,19 +1430,26 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
     spawn_module_task(async move {
         generation.registry.wait_for_drain().await;
         let mut sandbox = generation.sandbox.write().await;
-        let result = match sandbox.as_ref() {
-            Some(adapter) if Arc::strong_count(adapter) == 1 => {
-                Adapter::delete_and_verify(adapter.as_ref()).await
-            }
-            Some(_) => Err(FilesystemStorageError::verification(
-                "take exclusive ownership for agent filesystem deletion",
-                std::path::Path::new("<agent-filesystem>"),
-            )),
+        let result = match sandbox.take() {
+            Some(adapter) => match Arc::try_unwrap(adapter) {
+                Ok(adapter) => match Adapter::delete_and_verify(adapter).await {
+                    Ok(()) => Ok(()),
+                    Err(failure) => {
+                        let (adapter, source) = failure.into_parts();
+                        *sandbox = Some(Arc::new(adapter));
+                        Err(source)
+                    }
+                },
+                Err(adapter) => {
+                    *sandbox = Some(adapter);
+                    Err(FilesystemStorageError::verification(
+                        "take exclusive ownership for agent filesystem deletion",
+                        std::path::Path::new("<agent-filesystem>"),
+                    ))
+                }
+            },
             None => Ok(()),
         };
-        if result.is_ok() {
-            sandbox.take();
-        }
         drop(sandbox);
         let result = result.map_err(|source| DeleteFailure {
             source: Arc::new(source),
