@@ -2,13 +2,14 @@
 package "golemcloud/golem_sdk/reflection"
 
 import {
-  "golemcloud/golem_sdk/interface/golem/agent/common",
-  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
   "golemcloud/golem_sdk/rpc",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
+  "golemcloud/golem_sdk/tool",
+  "golemcloud/golem_sdk/tool-core",
   "moonbitlang/core/debug",
 }
 
@@ -18,6 +19,10 @@ pub fn get_agent_type(String) -> AgentType? raise ReflectError
 pub fn get_agent_type_by_agent_id(ParsedAgentId) -> AgentType? raise ReflectError
 
 pub fn get_all_agent_types() -> Array[AgentType] raise ReflectError
+
+pub fn get_all_tool_types() -> Array[ToolType] raise ReflectError
+
+pub fn get_tool_type(String) -> ToolType raise ReflectError
 
 // Errors
 pub(all) suberror ReflectError {
@@ -73,10 +78,10 @@ pub fn AgentType::new_phantom_json(Self, Json) -> ReflectedAgentClient raise Ref
 pub fn AgentType::new_phantom_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::new_phantom_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::new_phantom_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::pack_config_json(Self, Array[ReflectedConfigJsonValue]) -> Array[@common.TypedAgentConfigValue] raise ReflectError
+pub fn AgentType::pack_config_json(Self, Array[ReflectedConfigJsonValue]) -> Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue] raise ReflectError
 pub fn AgentType::resume_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::resume_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::validate_config_values(Self, Array[ReflectedConfigValue]) -> Array[@common.TypedAgentConfigValue] raise ReflectError
+pub fn AgentType::validate_config_values(Self, Array[ReflectedConfigValue]) -> Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue] raise ReflectError
 
 pub(all) struct CallerCodecClient {
   reusable_identity : ParsedAgentId?
@@ -86,7 +91,7 @@ pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(String, C, phantom_id
 pub fn CallerCodecClient::bind(ParsedAgentId) -> Self raise ReflectError
 pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
 pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::bind_complete_with_config(String, ParsedAgentId, @schema.TypeTag[C], Config) -> Self raise ReflectError
-pub fn CallerCodecClient::bind_with_config(ParsedAgentId, Array[@common.TypedAgentConfigValue]) -> Self raise ReflectError
+pub fn CallerCodecClient::bind_with_config(ParsedAgentId, Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue]) -> Self raise ReflectError
 pub fn CallerCodecClient::drop(Self) -> Unit
 pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral(String, C) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError
@@ -122,6 +127,14 @@ pub fn DynamicAgentClient::new_phantom(String, @schema_model.SchemaValue) -> Cre
 pub fn DynamicAgentClient::resume_phantom(String, @schema_model.SchemaValue, @types.Uuid) -> Self raise ReflectError
 pub fn DynamicAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
 pub fn DynamicAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
+
+pub(all) struct DynamicToolClient {
+  name : String
+} derive(Eq, @debug.Debug)
+pub async fn DynamicToolClient::invoke_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, @tool.ToolError[ReflectedToolCustomError]]
+pub fn DynamicToolClient::new(String) -> Self
+pub fn DynamicToolClient::start_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?, stdout? : Bool) -> Result[@tool.ToolInvocation[ReflectedToolCustomError], @tool.ToolError[ReflectedToolCustomError]]
+pub fn DynamicToolClient::trigger_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]]
 
 pub(all) struct Invocation[T] {
   metadata : InvocationMetadata
@@ -160,7 +173,7 @@ pub fn ReflectedAgentClient::trigger_value(Self, String, @schema_model.SchemaVal
 
 pub(all) struct ReflectedConfigDeclaration {
   path : Array[String]
-  source : @common.AgentConfigSource
+  source : @golemcloud/golem_sdk/interface/golem/agent/common.AgentConfigSource
   schema : SchemaRef
 } derive(Eq, @debug.Debug)
 
@@ -174,9 +187,28 @@ pub(all) struct ReflectedConfigValue {
   value : @schema_model.SchemaValue
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ReflectedToolClient {
+  tool : ToolType
+} derive(Eq, @debug.Debug)
+pub fn ReflectedToolClient::command(Self, Array[String]) -> ToolCommand raise ReflectError
+
+pub(all) struct ReflectedToolCustomError {
+  name : String
+  payload : @schema_model.TypedSchemaValue
+} derive(Eq, @debug.Debug)
+
+pub struct ReflectedToolInvocation {
+  // private fields
+}
+pub fn ReflectedToolInvocation::cancel(Self) -> Unit
+pub async fn ReflectedToolInvocation::collect(Self) -> Result[(@schema_model.SchemaValue?, Bytes?), @tool.ToolError[ReflectedToolCustomError]]
+pub fn ReflectedToolInvocation::drop(Self) -> Unit
+pub async fn ReflectedToolInvocation::get(Self) -> Result[@schema_model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ReflectedToolInvocation::stdout(Self) -> @async-core.Stream[Byte]?
+
 pub(all) struct ScheduledInvocation {
   metadata : InvocationMetadata
-  cancellation_token : @host.CancellationToken
+  cancellation_token : @golemcloud/golem_sdk/interface/golem/agent/host.CancellationToken
 }
 pub fn ScheduledInvocation::cancel(Self) -> Unit
 pub fn ScheduledInvocation::drop(Self) -> Unit
@@ -190,6 +222,42 @@ pub fn SchemaRef::new(@schema_model.SchemaGraph) -> Self
 pub fn SchemaRef::pack_json(Self, Json) -> @schema_model.SchemaValue raise ReflectError
 pub fn SchemaRef::unpack_json(Self, @schema_model.SchemaValue) -> Json raise ReflectError
 pub fn SchemaRef::validate_value(Self, @schema_model.SchemaValue) -> Unit raise ReflectError
+
+pub(all) struct ToolArgument {
+  kind : String
+  name : String
+  aliases : Array[String]
+  short : Char?
+  required : Bool
+  default : @schema_model.SchemaValue?
+  schema : SchemaRef
+  optional_carrier : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolCommand {
+  tool : ToolType
+  path : Array[String]
+  body : @golemcloud/golem_sdk/interface/golem/tool/common.CommandBody
+  arguments : Array[ToolArgument]
+  input_schema : SchemaRef
+  result : SchemaRef?
+  // private fields
+} derive(Eq, @debug.Debug)
+pub async fn ToolCommand::invoke_json(Self, Json, stdin? : @async-core.Stream[Byte]?) -> Result[Json?, @tool.ToolError[ReflectedToolCustomError]]
+pub async fn ToolCommand::invoke_value(Self, @schema_model.SchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[@schema_model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ToolCommand::pack_json(Self, Json) -> Result[@schema_model.SchemaValue, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ToolCommand::start_value(Self, @schema_model.SchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[ReflectedToolInvocation, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ToolCommand::trigger_json(Self, Json, stdin? : @async-core.Stream[Byte]?) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ToolCommand::trigger_value(Self, @schema_model.SchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]]
+
+pub(all) struct ToolType {
+  lookup_name : String
+  definition : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+  implemented_by : @types.ComponentId
+} derive(Eq, @debug.Debug)
+pub fn ToolType::client(Self) -> ReflectedToolClient
+pub fn ToolType::command(Self, Array[String]) -> ToolCommand raise ReflectError
+pub fn ToolType::from_registered(@golemcloud/golem_sdk/interface/golem/tool/host.RegisteredTool) -> Self raise ReflectError
 
 // Type aliases
 

@@ -1,5 +1,8 @@
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/common" @toolCommon,
+  "golemcloud/golem_sdk/interface/golem/tool/host" @toolHost,
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
   "golemcloud/golem_sdk/interface/golem/api/host" @apiHost,
@@ -9,6 +12,7 @@ import {
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "golemcloud/golem_sdk/rpc",
   "golemcloud/golem_sdk/tool-core" @tool_core,
+  "golemcloud/golem_sdk/tool",
   "moonbitlang/core/string",
   "moonbitlang/core/encoding/base64",
 }
