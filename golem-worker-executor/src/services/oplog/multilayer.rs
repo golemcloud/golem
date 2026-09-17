@@ -27,6 +27,7 @@ use crate::services::oplog::{
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogLifecycleGuard, OplogService,
     OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog, scan_modes,
 };
+use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::account::AccountId;
@@ -121,6 +122,12 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> OplogIndex;
+
+    /// The meta-namespace whose keys list every agent this archive holds entries for, or `None`
+    /// when the storage cannot list them, as for blob-backed archives.
+    fn scan_namespace(&self, _agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+        None
+    }
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -1131,8 +1138,8 @@ impl MultiLayerOplog {
                 // If there are more layers to transfer from, return true
                 first_non_empty < this.lower.len().get() - 2
             } else {
-                // Fully archived
-                false
+                // Fully archived, and no transfer was enqueued to wait for
+                return false;
             }
         };
 

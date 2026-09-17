@@ -14,7 +14,7 @@
 
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{ArchiveWait, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
@@ -70,6 +70,9 @@ pub trait SchedulerWorkerAccess {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
+    /// See [`WorkerActivator::worker_is_cached`].
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool;
+
     async fn activate_worker(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -78,6 +81,7 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError>;
 
     // enqueue an invocation to the worker
@@ -102,6 +106,10 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         self.deref().active_worker_fingerprint(owned_agent_id).await
     }
 
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.deref().worker_is_cached(owned_agent_id).await
+    }
+
     async fn activate_worker(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -113,9 +121,10 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
         self.deref()
-            .archive_oplog(owned_agent_id, last_oplog_index)
+            .archive_oplog(owned_agent_id, last_oplog_index, wait)
             .await
     }
 
@@ -522,8 +531,11 @@ impl SchedulerServiceDefault {
                         .with_lease_renewal(
                             schedule_id,
                             lease_owner,
-                            self.worker_access
-                                .archive_oplog(&owned_agent_id, last_oplog_index),
+                            self.worker_access.archive_oplog(
+                                &owned_agent_id,
+                                last_oplog_index,
+                                ArchiveWait::Queued,
+                            ),
                         )
                         .await;
                     match archive_result {
@@ -737,7 +749,7 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::oplog::{OplogService, PrimaryOplogService};
+    use crate::services::oplog::{ArchiveWait, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
@@ -796,6 +808,10 @@ mod tests {
             None
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -807,6 +823,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
@@ -844,6 +861,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -855,6 +876,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
@@ -905,6 +927,10 @@ mod tests {
             panic!("ephemeral schedules must not look up a target fingerprint")
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -916,6 +942,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unreachable!()
         }
@@ -962,6 +989,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -973,6 +1004,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
@@ -1005,6 +1037,10 @@ mod tests {
             None
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1017,6 +1053,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
@@ -1050,6 +1087,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1061,6 +1102,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
         ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }

@@ -438,8 +438,8 @@ impl EphemeralOplog {
             // Return true if there are more movable layers that could still hold data
             source + 1 < last_movable
         } else {
-            // Fully archived
-            false
+            // Fully archived, and no transfer was enqueued to wait for
+            return false;
         };
 
         if let Some(done_rx) = done_rx {

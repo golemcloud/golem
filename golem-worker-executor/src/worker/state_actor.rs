@@ -865,6 +865,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         old_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
+        // Teardown drains an ephemeral oplog, and the oplog sweep archives one stranded by a
+        // crashed pod, so registering an archive per ephemeral invocation would only cost a
+        // scheduler-storage write. With the sweep disabled nothing else covers the crash case, so
+        // the registration still happens. See `OplogSweepConfig::enabled`.
+        if self.agent_mode == AgentMode::Ephemeral && self.deps.config().oplog.sweep.enabled {
+            return;
+        }
+
         if old_status.status != new_status.status
             && matches!(
                 new_status.status,

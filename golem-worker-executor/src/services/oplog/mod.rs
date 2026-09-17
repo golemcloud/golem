@@ -44,7 +44,7 @@ use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
-pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
+pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
@@ -70,6 +70,14 @@ pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, f
 
 #[cfg(test)]
 pub mod tests;
+
+/// Whether an archive step returns once its transfer is queued or once the transfer has finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveWait {
+    Queued,
+    /// Holds the agent's oplog lifecycle lock until the transfer finishes.
+    Finished,
+}
 
 /// A top-level service for managing worker oplogs
 ///
