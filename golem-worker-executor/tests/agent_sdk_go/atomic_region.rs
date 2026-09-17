@@ -48,14 +48,14 @@ inherit_test_dep!(
 /// wasip3 client does. Without the await the guest reaches `MarkEndOperation`
 /// first and the executor refuses to close over the still-open scope.
 ///
-/// IGNORED until CI builds Go components with the sampler-patched toolchain
-/// (tmp/go-runtime-sampler-wasip1.diff): with the stock fork ~1 run in 6 hung
-/// before `send` on a clock read issued by the Go runtime's goroutine-tracking
-/// sampler from inside the scheduler. With the sampler disabled on wasip1 it is
-/// 58/58 here and 25/25 x3 in the full suite; a user-level clock read in the
-/// same place is covered by `go_atomic_region_with_clock_read_and_outgoing_http`.
+/// IGNORED until CI builds Go components with golem's Go toolchain fork
+/// (`tmp/go-runtime-sampler-wasip1.patch`, see `snapshot.rs` for the mechanism):
+/// with the stock fork ~1 run in 6 hung before `send` on a clock read issued by
+/// the Go runtime's goroutine-tracking sampler from inside the scheduler. A
+/// user-level clock read in the same place is covered by
+/// `go_atomic_region_with_clock_read_and_outgoing_http`.
 #[test]
-#[ignore = "passes 100% with the sampler-patched go toolchain (tmp/go-runtime-sampler-wasip1.diff); flaky ~1/6 with the stock fork CI still uses"]
+#[ignore = "needs golem's go toolchain fork (tmp/go-runtime-sampler-wasip1.patch); hangs ~1/6 on the stock fork CI still uses"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_atomic_region_with_outgoing_http(

@@ -43,16 +43,20 @@ inherit_test_dep!(
 /// held in an unexported field, so only reachable through the SDK's Save/Load —
 /// is intact.
 ///
-/// IGNORED until CI builds Go components with the sampler-patched toolchain
-/// (tmp/go-runtime-sampler-wasip1.diff). Root cause: the Go runtime's
-/// goroutine-tracking sampler reads the monotonic clock for a random 1-in-8 of
-/// goroutines, and componentize-go spawns one per export call, so recordings of
-/// an identical workload differ (10–22 clock reads) and replay diverges ~15% on
-/// go1.25.5, ~80% on go1.27.1. With the sampler disabled on wasip1 the reads are
-/// constant and this test is 14/14 (1.25.5), 10/10 and 25/25 x3 (1.27.1).
-/// Measured with `diagnostics.rs`; write-up in `tmp/durability-diagnosis.md`.
+/// IGNORED until CI builds Go components with golem's Go toolchain fork
+/// (`tmp/go-runtime-sampler-wasip1.patch`: goroutine scheduling-latency sampling
+/// disabled on wasip1). Why it is needed: Go's `casgstatus` reads the clock on
+/// every 8th transition of a goroutine, counted over the goroutine's whole life.
+/// Snapshot recovery skips history and the save/load hooks run outside the
+/// recording, so the long-lived event-loop goroutine's counter can never match
+/// the one the recording was made with, and a `monotonic_clock::now` lands in a
+/// different invocation: replay diverges ~15% on go1.25.5, ~80% on go1.27.1. The
+/// sampler feeds two metrics no runtime decision reads; with it off this test is
+/// 20/20 on go1.27.1. The executor half (the skipped bootstrap prefix re-seeding
+/// the runtime's PRNG) is fixed separately (GOL-611). Measured with
+/// `diagnostics.rs`; write-up in `tmp/snapshot-divergence-explainer.html`.
 #[test]
-#[ignore = "passes 100% with the sampler-patched go toolchain (tmp/go-runtime-sampler-wasip1.diff); replay diverges ~15% with the stock fork CI still uses"]
+#[ignore = "needs golem's go toolchain fork (tmp/go-runtime-sampler-wasip1.patch); replay diverges ~80% on the stock go1.27.1 fork CI still uses"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_custom_snapshot_round_trips_unexported_state(
