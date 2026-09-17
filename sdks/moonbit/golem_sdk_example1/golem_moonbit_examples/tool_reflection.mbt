@@ -84,6 +84,9 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
   let first = client.invoke_json("get_value", Json::object({})) catch {
     error => return "first:\{Repr(error)}"
   }
+  let native = client.invoke_value("get_value", @model.SchemaValue::Record([])) catch {
+    error => return "native:\{Repr(error)}"
+  }
   let parts = first.metadata.agent_id.parts() catch {
     error => return "identity:\{Repr(error)}"
   }
@@ -116,6 +119,10 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
     Some(value) => value.stringify()
     None => "unit"
   }
+  let native_value = match native.value {
+    Some(@model.SchemaValue::U64(value)) => "\{value}"
+    _ => "unexpected"
+  }
   let dynamic_value = match third.value {
     Some(@model.SchemaValue::U64(value)) => "\{value}"
     _ => "unexpected"
@@ -124,5 +131,5 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
     Some(value) => value.name
     None => "missing"
   }
-  "\{parts.type_name}|\{discovered_name}|\{first_value}|\{second_value}|\{dynamic_value}"
+  "\{parts.type_name}|\{discovered_name}|\{first_value}|\{native_value}|\{second_value}|\{dynamic_value}"
 }
