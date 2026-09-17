@@ -814,6 +814,9 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         activation,
         principal,
         InvocationExecutionMode::ReplayingIncomplete,
+        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        true,
+        false,
     )
     .unwrap();
     let replay = active_agent.start_entity_invocation(
