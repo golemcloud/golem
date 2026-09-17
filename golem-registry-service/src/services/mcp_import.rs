@@ -580,10 +580,8 @@ impl McpImportResolver {
         } else {
             None
         };
-        if record_demand {
-            if let Some(entry) = cache.entries.get_mut(&key) {
-                entry.last_used = Instant::now();
-            }
+        if record_demand && let Some(entry) = cache.entries.get_mut(&key) {
+            entry.last_used = Instant::now();
         }
         if cache
             .entries

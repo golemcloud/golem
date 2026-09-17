@@ -1679,6 +1679,14 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   name required by main's native-output validation. The focused merge bug-finder
   run returned clean. Common-model tests passed 23/23, and the new fingerprint
   passes with golden-file updates disabled. Broader merge/CI validation is ongoing.
+- The first CI run exposed missing MCP/middleware fields in test constructors
+  plus two Clippy errors. Constructors now supply the intended empty/default
+  values. The existing `CompiledTools` value crosses the repository conversion
+  intact, and the resolver's equivalent nested condition was auto-fixed.
+  Oracle found no blockers and the focused CI-fix bug-finder run returned clean.
+  Local validation passed 30 CLI, 38 common, 27 executor, 1 environment roundtrip,
+  85 MCP, 44 registry MCP/OAuth, and 2 SQLite snapshot/accounting tests (227 total),
+  plus registry library Clippy and scoped formatting. CI rerun remains pending.
 - Registered tool chains remain fail-closed until middleware runtime integration.
   Dynamically discovered MCP tools do not yet receive universal middleware chains;
   step 8 must explicitly construct their dynamic Host leaf plans through GOL-439.

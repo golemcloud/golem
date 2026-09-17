@@ -262,6 +262,7 @@ impl Fixture {
                 EnvironmentCreation {
                     name: EnvironmentName("test".into()),
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -633,6 +634,9 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
                 publish_tools: vec![],
                 remote_tools: vec![],
                 mcp_imports: imports,
+                publish_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                universal_tool_middlewares: vec![],
                 replace_incompatible_agent_secrets: false,
             },
             &AuthCtx::System,

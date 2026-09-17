@@ -71,6 +71,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
             EnvironmentCreation {
                 name: EnvironmentName("test".into()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },

@@ -1159,6 +1159,12 @@ pub struct DeploymentRevisionCreationRecord {
     pub user_account_id: Uuid,
 }
 
+#[derive(Debug)]
+pub struct CompiledTools {
+    pub registered_tools: Vec<RegisteredTool>,
+    pub agent_tool_bindings: Vec<CompiledToolBinding>,
+}
+
 pub struct DeploymentMiddlewareCreationInput {
     pub registered: Vec<RegisteredToolMiddleware>,
     pub chains: Vec<CompiledToolMiddlewareChain>,
@@ -1186,8 +1192,7 @@ impl DeploymentRevisionCreationRecord {
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
-        registered_tools: Vec<RegisteredTool>,
-        agent_tool_bindings: Vec<CompiledToolBinding>,
+        compiled_tools: CompiledTools,
         mcp_imports: Vec<(u32, McpImport, Option<McpImportCredential>)>,
         tool_releases: Vec<ToolReleaseRecord>,
         middleware: DeploymentMiddlewareCreationInput,
@@ -1198,6 +1203,10 @@ impl DeploymentRevisionCreationRecord {
         created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
+        let CompiledTools {
+            registered_tools,
+            agent_tool_bindings,
+        } = compiled_tools;
         let published_tool_names = tool_releases
             .iter()
             .map(|release| release.tool_name.clone())

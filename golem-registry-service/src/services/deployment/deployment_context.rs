@@ -25,6 +25,7 @@ use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
 };
 use crate::model::api_definition::UnboundCompiledRoute;
+use crate::repo::model::deployment::CompiledTools;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
@@ -69,12 +70,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
-
-#[derive(Debug)]
-pub struct CompiledTools {
-    pub registered_tools: Vec<RegisteredTool>,
-    pub agent_tool_bindings: Vec<CompiledToolBinding>,
-}
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {

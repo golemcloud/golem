@@ -694,8 +694,7 @@ impl DeploymentWriteService {
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
                 .collect(),
-            compiled_tools.registered_tools,
-            compiled_tools.agent_tool_bindings,
+            compiled_tools,
             mcp_imports,
             tool_releases,
             crate::repo::model::deployment::DeploymentMiddlewareCreationInput {
