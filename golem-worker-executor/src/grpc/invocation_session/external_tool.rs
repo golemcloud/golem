@@ -100,7 +100,8 @@ where
                     metadata.fingerprint,
                 )?;
             }
-            let worker = Worker::get_exact_existing_suspended(self, &owned, principal).await?;
+            let (worker, _response_lease) =
+                Worker::get_exact_existing_suspended_for_response(self, &owned, principal).await?;
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
             match worker.lookup_invocation_result(&key).await {
@@ -255,7 +256,7 @@ where
             publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
             return Ok(response);
         }
-        let worker = if tool.fresh_owner {
+        if tool.fresh_owner {
             self.active_agents()
                 .get_or_add_ephemeral_external_tool(
                     self,
@@ -265,16 +266,17 @@ where
                     &context,
                     principal.clone(),
                 )
-                .await?
-        } else {
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned, principal.clone()).await?;
+                .await?;
+        }
+        let (worker, _response_lease) =
+            Worker::get_exact_existing_suspended_for_response(self, &owned, principal.clone())
+                .await?;
+        if !tool.fresh_owner {
             require_expected_callee_fingerprint(
                 request.expected_callee_fingerprint,
                 worker.get_initial_worker_metadata().fingerprint,
             )?;
-            worker
-        };
+        }
         let metadata = worker.get_latest_worker_metadata().await;
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);

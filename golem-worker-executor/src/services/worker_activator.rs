@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::HasAll;
+use crate::services::oplog::ArchiveWait;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -38,6 +39,12 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
+    /// Whether `ActiveAgents` holds a constructed worker for the agent, loaded or not. One still
+    /// being created does not count. Unlike [`Self::active_worker_fingerprint`] it leaves the
+    /// entry's last access alone, so asking repeatedly does not keep an unloaded worker from
+    /// expiring.
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool;
+
     /// Makes sure an already existing worker is active in a background task. Returns immediately.
     ///
     /// `Ok(())` means the worker is running, was already running, or no longer exists. `Err` means
@@ -52,6 +59,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError>;
 
     /// Gets or creates a worker in suspended state
@@ -121,6 +129,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
         let activator = self
             .worker_activator
@@ -131,7 +140,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         match activator {
             Some(activator) => {
                 activator
-                    .archive_oplog(owned_agent_id, last_oplog_index)
+                    .archive_oplog(owned_agent_id, last_oplog_index, wait)
                     .await
             }
             None => Err(WorkerExecutorError::runtime(
@@ -157,6 +166,19 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                     .await
             }
             None => None,
+        }
+    }
+
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        let maybe_worker_activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        match maybe_worker_activator {
+            Some(worker_activator) => worker_activator.worker_is_cached(owned_agent_id).await,
+            None => false,
         }
     }
 
@@ -314,6 +336,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
         match self
             .all
@@ -321,7 +344,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             .get_existing(&self.all, owned_agent_id, Principal::anonymous())
             .await
         {
-            Ok(worker) => worker.archive_oplog(last_oplog_index).await,
+            Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,
             Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(None),
             Err(error) => Err(error),
         }
@@ -336,6 +359,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             .try_get(owned_agent_id)
             .await
             .map(|worker| worker.get_initial_worker_metadata().fingerprint)
+    }
+
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.all
+            .active_agents()
+            .contains_cached_agent(owned_agent_id)
+            .await
     }
 
     async fn activate_worker(

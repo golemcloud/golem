@@ -20,12 +20,15 @@ use crate::services::agent_filesystem::{
     SealedFilesystem, drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
+use crate::services::oplog::plugin::ForwardingOplog;
+use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps, downcast_oplog};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
-use crate::services::{HasActiveAgents, HasExtraDeps, HasOplog, HasShardService, HasWorker};
+use crate::services::{
+    HasActiveAgents, HasExtraDeps, HasOplog, HasOplogService, HasShardService, HasWorker,
+};
 use crate::worker::invocation::{
     GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, lower_invocation, run_guest_call_settled,
+    invoke_observed_and_traced, invoke_result_from_trap, lower_invocation, run_guest_call_settled,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -251,6 +254,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 },
             );
 
+        let mut retry_was_live = false;
         'outer: loop {
             self.release_terminal_interrupt().await;
             // ADMISSION: gates the start of a generation, so
@@ -262,7 +266,53 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.stop_unloaded(None).await;
                 break;
             }
-            self.acquire_concurrent_agent_permit().await;
+            if self.permit_state.is_none() {
+                let parent = self.parent.clone();
+                let permit_agent_id = self.owned_agent_id.agent_id().clone();
+                let permit = parent
+                    .registered_concurrent_account
+                    .acquire(permit_agent_id)
+                    .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"));
+                tokio::pin!(permit);
+                loop {
+                    if let Some(interrupt) = self.pending_interrupt().await
+                        && self
+                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .await
+                    {
+                        break 'outer;
+                    }
+                    tokio::select! {
+                        permit = &mut permit => {
+                            self.permit_state.install_tracked(permit);
+                            break;
+                        }
+                        command = self.receiver.recv() => {
+                            let Some(command) = command else {
+                                debug!(%agent_id, "Invocation queue loop command channel closed while awaiting concurrent-agent permit");
+                                self.stop_closed(None, None).await;
+                                break 'outer;
+                            };
+                            if let Some(interrupt) = self.pending_interrupt().await
+                                && self
+                                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                                    .await
+                            {
+                                break 'outer;
+                            }
+                            match command {
+                                WorkerCommand::InternalStatusChanged => {}
+                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                    Self::defer_wakeup(&mut deferred_wakeups, command);
+                                }
+                                WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                    let _ = sender.send(Ok(()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let permit = self
                 .permit_state
                 .take_permit()
@@ -289,7 +339,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             .await;
                         self.stop_unloaded(Some(super::inactive_ephemeral_agent_error()))
                             .await;
-                        self.parent.remove_from_active_agents().await;
                         self.archive_ephemeral_oplog();
                         break;
                     }
@@ -553,7 +602,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = true;
             }
 
-            let retry_was_live = {
+            retry_was_live = {
                 let store = agent.runtime.store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
                 store.data().is_live()
@@ -646,7 +695,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     )
                     .await;
                     if cleanup_ephemeral_worker {
-                        self.parent.remove_from_active_agents().await;
                         self.archive_ephemeral_oplog();
                     }
                     break;
@@ -810,21 +858,73 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .reset_terminal_for_new_generation();
     }
 
-    async fn acquire_concurrent_agent_permit(&mut self) {
-        if self.permit_state.is_none() {
-            let agent_id = self.owned_agent_id.agent_id();
-            let permit = self
-                .parent
-                .registered_concurrent_account
-                .acquire(agent_id)
-                .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"))
-                .await;
-            self.permit_state.install_tracked(permit);
-        }
-    }
-
     fn release_concurrent_agent_permit(&mut self) {
         self.permit_state.release();
+    }
+
+    async fn handle_unloaded_interrupt(
+        &self,
+        interrupt: PendingWorkerInterrupt,
+        retry_was_live: bool,
+    ) -> bool {
+        let kind = interrupt.kind;
+        let decision = interrupt.retry_decision();
+        debug!(
+            ?decision,
+            "Invocation queue loop interrupted while unloaded"
+        );
+        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+            let current_idempotency_key = self
+                .parent
+                .get_non_detached_last_known_status()
+                .await
+                .current_idempotency_key
+                .clone();
+            match kind {
+                InterruptKind::Suspend(_) => {
+                    self.parent
+                        .add_and_commit_oplog(OplogEntry::suspend())
+                        .await;
+                }
+                InterruptKind::Interrupt(_) => {
+                    self.parent
+                        .add_and_commit_oplog(OplogEntry::interrupted())
+                        .await;
+                }
+                InterruptKind::Restart | InterruptKind::Jump => {}
+            }
+            if matches!(kind, InterruptKind::Interrupt(_))
+                && let Some(key) = current_idempotency_key
+            {
+                self.parent
+                    .store_invocation_failure(&key, &TrapType::Interrupt(kind))
+                    .await;
+                self.parent.event_service().emit_invocation_finished(
+                    "interrupted while unloaded",
+                    &key,
+                    retry_was_live,
+                );
+            }
+        }
+        match decision {
+            RetryDecision::Immediate => false,
+            RetryDecision::None => {
+                self.stop_closed(None, None).await;
+                true
+            }
+            RetryDecision::TryStop(timestamp) => {
+                if timestamp < *self.parent.last_resume_request.lock().await {
+                    self.release_terminal_interrupt().await;
+                    false
+                } else {
+                    self.stop_closed(None, None).await;
+                    true
+                }
+            }
+            RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
+                unreachable!("queued interrupts do not delay or reacquire permits")
+            }
+        }
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
@@ -928,9 +1028,53 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     fn archive_ephemeral_oplog(&self) {
-        let oplog = self.parent.oplog.clone();
-        self.parent.tasks.spawn(async move {
-            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+        let worker = self.parent.clone();
+        let shutdown_worker = worker.clone();
+        let invocation_loops = worker.active_agents().invocation_loops();
+        invocation_loops.spawn(async move {
+            let Some(archival) = worker
+                .durable_stream_producer
+                .wait_for_responses_and_fence()
+                .await else { return; };
+            let _lifecycle = worker
+                .oplog_service()
+                .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                .await;
+            let forwarding = downcast_oplog::<ForwardingOplog>(&worker.oplog);
+            let mut cleanup = worker.owner_cleanup.lock().await;
+            if *cleanup != super::OwnerCleanupState::PreRemoval
+                || !worker.is_current_cached_owner().await
+                || worker.deletion_owns_retirement().await
+            {
+                archival.send_replace(Some(Err(
+                    crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired,
+                )));
+                return;
+            }
+            let result: Result<(), WorkerExecutorError> = async {
+                worker
+                    .quiesce_for_owner_retirement(None, forwarding.as_deref())
+                    .await?;
+                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                worker.remove_from_active_agents().await;
+                *cleanup = super::OwnerCleanupState::Retired;
+                Ok(())
+            }
+            .await;
+            archival.send_replace(Some(result.clone().map_err(|error| {
+                crate::durable_host::durable_stream::StreamStoreError::Oplog(error.to_string())
+            })));
+            if let Err(error) = result {
+                tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
+            }
+        }, move || {
+            let retirement = shutdown_worker.durable_stream_producer.shutdown();
+            let agent_id = shutdown_worker.agent_id();
+            Box::pin(async move {
+                if let Err(error) = retirement.await {
+                    tracing::error!(agent_id = %agent_id, error = %error, "Failed to drain ephemeral streams during executor shutdown");
+                }
+            })
         });
     }
 
@@ -2317,11 +2461,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                     .await;
                             }
                             Err(error) => {
+                                let result = invoke_result_from_trap(
+                                    &mut self.store.as_context_mut(),
+                                    consumed_fuel,
+                                    error,
+                                )
+                                .await;
                                 return self
                                     .agent_invocation_failed(
                                         &display_name,
                                         &invocation_idempotency_key,
-                                        Err(WorkerExecutorError::runtime(error.to_string())),
+                                        result,
                                     )
                                     .await;
                             }

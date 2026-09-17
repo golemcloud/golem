@@ -20,8 +20,8 @@ use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
@@ -949,7 +949,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+            record: payload::OplogPayload<StreamRegisteredRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -962,7 +962,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamItemsRecordV1>,
+            record: payload::OplogPayload<StreamItemsRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -975,7 +975,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamEndRecordV1>,
+            record: payload::OplogPayload<StreamEndRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -988,7 +988,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamCancelRecordV1>,
+            record: payload::OplogPayload<StreamCancelRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -1002,7 +1002,7 @@ oplog_entry! {
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamSessionRecordV1>,
+            record: payload::OplogPayload<StreamSessionRecord>,
         }
         public {
             record: TypedSchemaValue,

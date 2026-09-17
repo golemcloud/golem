@@ -85,14 +85,15 @@ use wasmtime::component::Instance;
 
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct RegisteredConcurrentAccount {
+pub struct RegisteredConcurrentAccount {
     scheduler: Arc<ConcurrentAgentsScheduler>,
     account_id: AccountId,
 }
 
 impl RegisteredConcurrentAccount {
-    pub(crate) async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
+    pub async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
         self.scheduler.acquire(self.account_id, agent_id).await
     }
 }
@@ -507,11 +508,10 @@ const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// The worker invocation loops spawned by one executor.
 ///
-/// Every loop is bound to the executor's lifetime: when the executor's shutdown token is
-/// cancelled, the loop task is abandoned at its next await point, which stops the worker from
-/// touching storage exactly as if the executor process had died there. The oplog is designed to
-/// be reopened after such an interruption. Cloning shares the same set of loops; a clone does not
-/// keep any task alive.
+/// Every loop is bound to the executor's lifetime. Shutdown fences producer mutations before
+/// abandoning the loop and drains admitted writes before reporting its exit. The oplog can then
+/// be reopened without racing writes from the old owner. Cloning shares the same set of loops;
+/// a clone does not keep any task alive.
 #[derive(Clone, Debug)]
 pub struct InvocationLoops {
     shutdown_token: CancellationToken,
@@ -529,6 +529,7 @@ impl InvocationLoops {
     pub(crate) fn spawn(
         &self,
         invocation_loop: impl Future<Output = ()> + Send + 'static,
+        on_shutdown: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
     ) -> JoinHandle<()> {
         let shutdown_token = self.shutdown_token.clone();
         self.tracker.spawn(async move {
@@ -536,9 +537,11 @@ impl InvocationLoops {
             tokio::select! {
                 biased;
                 _ = shutdown_token.cancelled() => {
+                    let drain = on_shutdown();
                     // Suspended Wasmtime calls form a deeply nested future tree whose destructor
                     // can exhaust Tokio's default worker-thread stack.
                     stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
+                    drain.await;
                 }
                 _ = crate::worker::invocation::with_invocation_stack(&mut invocation_loop) => {}
             }
@@ -629,6 +632,21 @@ type ComponentChargeKey = (ComponentId, ComponentRevision);
 pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateChargeSource>;
 
 impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
+    #[doc(hidden)]
+    pub async fn worker_is_loaded_for_test(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        match self.try_get(owned_agent_id).await {
+            Some(worker) => worker.is_loaded().await,
+            None => false,
+        }
+    }
+
+    #[doc(hidden)]
+    pub async fn worker_has_pending_startup_for_test(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.try_get(owned_agent_id)
+            .await
+            .is_some_and(|worker| worker.pending_startup_attempt().is_some())
+    }
+
     pub fn new(
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
@@ -997,11 +1015,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
     /// Removes only the cache generation owned by `expected`. Bookkeeping is cleared only when
     /// that exact generation was still authoritative at the point of removal.
-    pub(crate) async fn remove_worker(
-        &self,
-        expected: &Arc<Worker<Ctx>>,
-        deletion_owner: bool,
-    ) -> bool {
+    pub async fn remove_worker(&self, expected: &Arc<Worker<Ctx>>, deletion_owner: bool) -> bool {
         let owned_agent_id = expected.owned_agent_id().clone();
         let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
             return false;
@@ -1110,14 +1124,16 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// running workers stop promptly.
     pub async fn unload_environment(&self, environment_id: EnvironmentId) {
         for (_agent_id, worker) in self.snapshot().await {
-            if worker.get_initial_worker_metadata().environment_id == environment_id {
-                if let Some(mut await_interrupted) = worker
-                    .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+            if worker.get_initial_worker_metadata().environment_id == environment_id
+                && let Err(error) = worker
+                    .interrupt_and_retire(InterruptKind::Interrupt(Timestamp::now_utc()))
                     .await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
-                self.remove(worker.owned_agent_id()).await;
+            {
+                tracing::error!(
+                    agent_id = %worker.owned_agent_id(),
+                    error = %error,
+                    "Failed to retire worker from deleted environment"
+                );
             }
         }
     }
@@ -1216,7 +1232,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     ///
     /// Must be called (from `Worker::new`) before any concurrent-agent permit
     /// acquire for the account. Idempotent — safe to call multiple times.
-    pub(crate) async fn register_account_concurrency(
+    #[doc(hidden)]
+    pub async fn register_account_concurrency(
         &self,
         account_id: AccountId,
         resource_entry: Arc<AtomicResourceEntry>,
@@ -1264,16 +1281,24 @@ async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
             .clear_agent_interest_if(
                 &owned_agent_id,
                 agents.remove_if_cached_older_than(&owned_agent_id, ttl, |current| {
-                    Arc::ptr_eq(current, &active_agent)
-                        // `entries_older_than` owns the only reference besides the cache.
-                        && Arc::strong_count(current) == 2
-                        // The cached ActiveAgent must be the Worker's only strong owner.
-                        && current
+                    if !Arc::ptr_eq(current, &active_agent)
+                        || Arc::strong_count(current) != 2
+                        || !current
                             .resolved_primary()
                             .is_some_and(|worker| Arc::strong_count(&worker) == 3)
-                        // Fence entity work only after all final removal checks pass while
-                        // concurrent cache lookups are excluded by the cache entry lock.
-                        && current.try_fence_idle_entity_bodies().is_some()
+                    {
+                        return false;
+                    }
+                    let Some(reopen_generation) = current.try_fence_idle_entity_bodies() else {
+                        return false;
+                    };
+                    if worker.try_retire_durable_stream_producer() {
+                        return true;
+                    }
+                    if let Some(generation) = reopen_generation {
+                        current.reopen_entity_admission_if_generation(generation);
+                    }
+                    false
                 }),
             )
             .await;

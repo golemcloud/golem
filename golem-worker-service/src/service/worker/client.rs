@@ -36,10 +36,12 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest,
-    DurableStreamAttachmentControlRequest, DurableStreamSegmentReadRequest, ForkWorkerRequest,
-    InterruptWorkerRequest, ProcessOplogEntriesRequest, ResolveRevertLastInvocationsRequest,
-    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    CreateStreamSessionSuccess, CreateWorkerRequest, DeactivatePluginRequest,
+    DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
+    DurableStreamSegmentReadRequest, ExportStreamControlResult, ForkWorkerRequest,
+    InterruptWorkerRequest, ProcessOplogEntriesRequest, ReadStreamSlotRequest,
+    ReadStreamSlotSuccess, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -310,6 +312,19 @@ where
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -527,6 +542,46 @@ pub trait WorkerClient: Send + Sync {
         ))
     }
 
+    async fn create_stream_session(
+        &self,
+        _agent_id: &AgentId,
+        _request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        Err(WorkerServiceError::Internal(
+            "durable stream sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream slot reads are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn append_to_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+        Err(WorkerServiceError::Internal(
+            "durable stream appends are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_export_stream(
+        &self,
+        _agent_id: &AgentId,
+        _request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        Err(WorkerServiceError::Internal(
+            "export stream control is not supported by this worker client".to_string(),
+        ))
+    }
+
     async fn control_durable_stream_attachment(
         &self,
         _producer_agent_id: &AgentId,
@@ -546,9 +601,9 @@ pub trait WorkerClient: Send + Sync {
         &self,
         _producer_agent_id: &AgentId,
         _producer_environment_id: EnvironmentId,
-        _consumer_agent_id: &AgentId,
-        _consumer_environment_id: EnvironmentId,
-        _expected_consumer_fingerprint: AgentFingerprint,
+        _consumer_agent_id: Option<&AgentId>,
+        _consumer_environment_id: Option<EnvironmentId>,
+        _expected_consumer_fingerprint: Option<AgentFingerprint>,
         _payload: Vec<u8>,
         _auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
@@ -556,6 +611,7 @@ pub trait WorkerClient: Send + Sync {
             "durable stream segment reads are not supported by this worker client".to_string(),
         ))
     }
+
     async fn deliver_card_transfer(
         &self,
         target_agent_id: &AgentId,
@@ -743,6 +799,56 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 
 #[async_trait]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let agent_id_clone = agent_id.clone();
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "prepare_worker",
+                move |client| {
+                    Box::pin(client.prepare_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        env: environment_variables.clone(),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(id),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint(id.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(error)),
+                    } => Err(error.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok((agent_id.clone(), fingerprint))
+    }
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -1746,6 +1852,83 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         Ok(canceled)
     }
 
+    async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "create_stream_session",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.create_stream_session(request.clone()))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Success(
+                            success,
+                        ),
+                    ),
+                } => Ok(success),
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Failure(error),
+                    ),
+                } => Err(error.into()),
+                workerexecutor::v1::CreateStreamSessionResponse { .. } => {
+                    Err("Empty create stream session response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "read_stream_slot",
+            move |worker_executor_client| {
+                let request = request.clone();
+                Box::pin(async move {
+                    let mut responses = worker_executor_client
+                        .read_stream_slot(request)
+                        .await?
+                        .into_inner();
+                    responses
+                        .message()
+                        .await?
+                        .ok_or_else(|| Status::internal("Empty read stream slot response stream"))
+                })
+            },
+            |response| match response {
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Success(
+                        success,
+                    )),
+                } => Ok(Some(success)),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(
+                        error,
+                    )),
+                } => Err(error.into()),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)),
+                } => Ok(None),
+                workerexecutor::v1::ReadStreamSlotResponse { .. } => {
+                    Err("Empty read stream slot response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -1919,6 +2102,73 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         .await
     }
 
+    async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        use workerexecutor::v1::durable_stream_attachment_control_response::Result;
+        self.call_worker_executor(
+            agent_id.clone(),
+            "control_export_stream",
+            move |client| Box::pin(client.control_durable_stream_attachment(request.clone())),
+            |response| match response.into_inner().result {
+                Some(Result::ExportResult(result)) => ExportStreamControlResult::try_from(result)
+                    .map_err(|_| "Invalid export stream control result".into()),
+                Some(Result::Failure(error)) => Err(error.into()),
+                _ => Err("Invalid export stream control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(|error| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                )
+            })?;
+        let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+            WorkerServiceError::InternalCallError(CallWorkerExecutorError::FailedToConnectToPod(
+                Status::unavailable(format!("no active shard for agent {agent_id}")),
+            ))
+        })?;
+        // A plain append has no retry identity. Let the HTTP producer decide whether
+        // to retry an ambiguous response, rather than silently appending twice.
+        let response = self
+            .worker_executor_clients
+            .call_without_retry(
+                "append_to_stream_slot",
+                pod.uri(self.worker_executor_clients.uses_tls()),
+                move |client| Box::pin(client.append_to_stream_slot(request.clone())),
+            )
+            .await
+            .map_err(|status| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(status),
+                )
+            })?;
+        match response.into_inner().result {
+            Some(workerexecutor::v1::append_to_stream_slot_response::Result::Failure(error)) => {
+                let error: WorkerExecutorError =
+                    error.try_into().map_err(WorkerServiceError::Internal)?;
+                Err(WorkerServiceError::GolemError(error))
+            }
+            Some(result) => Ok(result),
+            None => Err(WorkerServiceError::Internal(
+                "Empty append stream response".into(),
+            )),
+        }
+    }
     async fn control_durable_stream_attachment(
         &self,
         producer_agent_id: &AgentId,
@@ -1942,10 +2192,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         payload: payload.clone(),
                         consumer_agent_id: Some(consumer_agent_id.clone().into()),
                         consumer_environment_id: Some(consumer_environment_id.into()),
-                        expected_consumer_fingerprint: Some(
-                            expected_consumer_fingerprint.0.into(),
-                        ),
+                        expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
+                        export_control: None,
                     },
                 ))
             },
@@ -1975,14 +2224,14 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
         let producer_agent_id = producer_agent_id.clone();
-        let consumer_agent_id = consumer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.cloned();
         self.call_worker_executor(
             producer_agent_id.clone(),
             "read_durable_stream_segment",
@@ -1992,11 +2241,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         producer_agent_id: Some(producer_agent_id.clone().into()),
                         producer_environment_id: Some(producer_environment_id.into()),
                         payload: payload.clone(),
-                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
-                        consumer_environment_id: Some(consumer_environment_id.into()),
-                        expected_consumer_fingerprint: Some(
-                            expected_consumer_fingerprint.0.into(),
-                        ),
+                        consumer_agent_id: consumer_agent_id.clone().map(Into::into),
+                        consumer_environment_id: consumer_environment_id.map(Into::into),
+                        expected_consumer_fingerprint: expected_consumer_fingerprint
+                            .map(|fingerprint| fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -2778,7 +3026,25 @@ mod rejection_mapping_tests {
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
 
+        type ReadStreamSlotStream = Pin<Box<dyn Stream<Item = Result<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotResponse, Status>> + Send>>;
+        unimplemented_unary!(
+            read_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotRequest,
+            Self::ReadStreamSlotStream
+        );
+        unimplemented_unary!(
+            append_to_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse
+        );
+        unimplemented_unary!(
+            create_stream_session,
+            golem_api_grpc::proto::golem::worker::InvocationStart,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
+        );
+
         unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
         unimplemented_unary!(
             complete_promise,

@@ -95,11 +95,11 @@ enum EphemeralJob {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
     RawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         done: tokio::sync::oneshot::Sender<RawSessionLookup>,
     },
     CompleteRawDurableStreamSessionStatus {
-        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
         status: Result<Option<DurableStreamSessionStatus>, String>,
@@ -438,8 +438,8 @@ impl EphemeralOplog {
             // Return true if there are more movable layers that could still hold data
             source + 1 < last_movable
         } else {
-            // Fully archived
-            false
+            // Fully archived, and no transfer was enqueued to wait for
+            return false;
         };
 
         if let Some(done_rx) = done_rx {
@@ -758,7 +758,7 @@ impl Oplog for EphemeralOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         loop {
             let snapshot = self

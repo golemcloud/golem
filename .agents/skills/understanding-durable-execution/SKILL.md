@@ -39,10 +39,10 @@ and entity bodies) and `retries.md` (in-function versus trap-based retries).
    Owner: `worker/invocation_loop.rs::run` (outer loop: create instance → recover → run →
    suspend/retry) and `durable_host/mod.rs::prepare_instance`.
 
-3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** The caller may
-   attempt a dispatch many times (replay, transport retry, atomic-region rollback), but every
-   attempt carries the same durable idempotency key, the target persists one invocation, and one
-   durable result exists. Attempts are not executions. Owner: `durable_host/wasm_rpc/mod.rs`
+3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** Dispatch attempts
+   (replay, transport retry, atomic rollback) share a durable key. An executing target persists one
+   invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
+   `durable_host/wasm_rpc/mod.rs`
    (`derive_idempotency_key(begin_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
 
@@ -117,7 +117,7 @@ path. This is status reconstruction, not replay tolerance.
 | RPC | `durable_host/wasm_rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Cut points | `worker/cut_point.rs` | Rejects revert/fork cuts that split a paired durable construct |
-| Durable streams | `durable_host/{durable_stream.rs,durable_session.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
+| Durable streams | `durable_host/{durable_stream/mod.rs,durable_session.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
 | Tool invocations | `durable_host/tool/{mod.rs,operation.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Discovery/authorization, owner-oplog boundary for entity bodies, shared replay cursor, lane serialization, attachment memory admission |
 
 ## Worker lifecycle and reconstruction
@@ -151,6 +151,39 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Explicit interruption retires the cached owner and fences its replacement startup. Automatic
+shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
+updates; an executor restart or shard move is not a request to resume them. If the worker
+has already unloaded (for example during OOM backoff), the retiring owner must commit an unclaimed
+terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
+terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
+or failed invocation is not overwritten. Test:
+`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
+
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
+Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
+The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
+If normal archival already fenced the owner, lookup joins archival through cache removal, then
+resolves an observation-only owner from storage. Archive failure or cancellation rejects the lookup;
+it never grants access to the old poisoned producer or restarts the ephemeral invocation.
+
+Normal archival and explicit interruption share `Worker::quiesce_for_owner_retirement` under
+the owner-cleanup lock: stop execution, drain stream retirement and lifecycle/forwarding work,
+commit, then stop status writers. Only explicit interruption records a pending terminal interrupt.
+Archival moves the oplog before removing the cached worker. The open oplog generation and its
+forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
+task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
+drains the resident stream producer before running maintenance on a private producer. Failed
+maintenance is drained before a retry; only deletion closes the oplog generation permanently.
+
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data
 privately; failure drains and joins attempt-owned work before returning to `Unresolved`, without
@@ -182,8 +215,9 @@ unverified metering settlement, including `ObserverLost` during startup rollback
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
 target construction and rollback are not atomic and are not protected across executor ownership
-changes. Archival is routed through the existing worker owner. No lifecycle lock is taken for
-individual stream items, oplog reads, or replay steps.
+changes. Archival is routed through the existing worker owner. A scheduled archive releases the
+guard once its transfer is queued, while the oplog sweep holds it until the transfer finishes. No
+lifecycle lock is taken for individual stream items, oplog reads, or replay steps.
 
 `Oplog::stop_and_wait` closes admission and joins work associated with the actual open oplog
 generation, including tasks belonging to older worker shells removed from the active cache.
@@ -215,15 +249,6 @@ success marker. Structured metadata reports the underlying `Failed`/`Retrying` s
 `last_error_kind: Recovery`; the human CLI table labels terminal recovery failures `Unavailable`.
 A queued update still starts a terminally failed worker but does not cosmetically change that
 durable health status until recovery succeeds.
-
-`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
-turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
-remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
-restart does not fail the invocation waiter or append `Interrupted`.
-
-Environment and application deletion invalidate component metadata, environment state and agent
-type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
-of admitting requests against a retiring cached owner.
 
 Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
 `Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
@@ -370,7 +395,6 @@ cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 without re-executing.
 
 ## Invocation queue and results
-
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
 (anything other than `LookupResult::New` returns without appending), then append
 `PendingAgentInvocation` and commit before the caller learns the invocation was accepted. The
@@ -385,6 +409,8 @@ result and commits with `CommitLevel::Always` *before* waiters are notified; fai
 `Finished`: `invocation_loop.rs::agent_invocation_finished` completes the streaming session
 (protocol terminals, `StreamSession { Finished }`) after `on_agent_invocation_success`.
 
+This execution-needing path acquires no capacity during preparation; cancellation cannot split its
+durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
 Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
 executor restart, an old key returns the recorded result without re-running the guest.
 
@@ -420,10 +446,11 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
    never random.
 
-Exactly-once describes the *target's logical execution and effect*. It does not describe caller
-attempts, packets, or replay spans. Tests: `tests/rpc.rs::counter_resource_test_2_with_restart`
-(counter continues 1 → 2 across a caller restart, so the recorded call is not re-executed),
-`failed_ephemeral_invocation_retry_does_not_reexecute`,
+### Pending RPC waits and proactive suspension
+Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
+this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
+`tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
 `reacquire_permits_restart_preserves_accepted_queued_live_invocation`, and
 `tests/api.rs::lost_card_transfer_response_converges_after_source_and_target_restart` (a wrapped
@@ -500,8 +527,8 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
-Spawned store tasks that outlive an invocation are safe only while parked at a guest-driven wait
-(`tail_work.rs` "safe park points"); pending durable work must finish before `AgentInvocationFinished`.
+Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
+Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
 
 ## Streaming invocations
 
@@ -509,7 +536,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two journals are authoritative, nothing else.** The producer's oplog holds
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` (`durable_stream.rs`), committed
+  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` (`durable_stream/mod.rs`), committed
   *before* publication to `DurableLiveStreamBus` (a bounded live-tail optimization). The
   consumer's `StreamSession` journal (`durable_session.rs`) holds attempts, offset mappings,
   terminals and `Finished`. All are hints. Buses, readers, sockets and attachments are recreated.
@@ -563,18 +590,17 @@ Tests: `tests/tool_streaming.rs::deterministic_stream_crash_checkpoint_matrix` a
 
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
-exactly-once (each `StreamOffsetV1` consumed once per consumer session, owned by
-`durable_stream.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
+exactly-once (each `StreamOffset` consumed once per consumer session, owned by
+`durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
 ## Wrong model → right model
-
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
 | "HashMap iteration / poll order makes the guest nondeterministic, so replay must tolerate different calls." | Guest inputs are recorded; same inputs ⇒ same calls. Different calls = executor bug. | `no matching Start` / `unexpected_oplog_entry` errors in replay tests |
 | "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
-| "Suspension needs a feature-specific safety gate proving the guest is parked." | Arbitrary unload is the baseline; every obligation must be durable or reconstructible. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
+| "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Atomic rollback should generate a fresh RPC key." | Logical counter is owned by the outermost atomic region; keys survive `Jump`. | `tests/transactions.rs`, `tests/revert.rs` |
@@ -583,7 +609,7 @@ satisfies one does not imply the others.
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
-| "A stream reference stays valid as long as the target agent id exists." | Liveness is bound to the durable `AgentFingerprint`; a recreated agent is a different producer. | Fingerprint-mismatch unit tests in `durable_session.rs` / `durable_stream.rs` |
+| "A stream reference stays valid as long as the target agent id exists." | Liveness is bound to the durable `AgentFingerprint`; a recreated agent is a different producer. | Fingerprint-mismatch unit tests in `durable_session.rs` / `durable_stream/mod.rs` |
 | "A completed tool replay either skips the body entirely, or must redo its external effects." | The body's guest export is re-executed; its durable host calls replay from the owner oplog; the recorded terminal is validated and released. No repeated external effect. | `completed_tool_replay_bypasses_current_attachment_memory_pressure`, `deterministic_stream_crash_checkpoint_matrix` |
 | "An entity body has its own oplog and cursor." | Bodies record into the owner oplog under `parent_start_index` and share the owner's cursor. | `concurrent_tool_attempt_identity_survives_reordered_admission_and_replay` |
 | "`AttemptId::fresh()` in a replay-sensitive path breaks determinism." | Randomness is fine when appended and committed before observation and read back on replay. | Consumer-journal replay in `durable_session.rs` |

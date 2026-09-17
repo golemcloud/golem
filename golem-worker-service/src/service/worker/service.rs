@@ -35,6 +35,10 @@ use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
@@ -733,6 +737,48 @@ impl WorkerService {
             AgentResourcePattern::Method(AgentMethodName(method_name)),
         )
         .await
+    }
+
+    pub async fn prepare_for_invocation(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(agent_id.component_id)
+            .await?;
+
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName(method_name)),
+        )?;
+
+        let (_, fingerprint) = self
+            .worker_client
+            .prepare(
+                agent_id,
+                environment_variables,
+                config,
+                ignore_already_existing,
+                component.account_id,
+                component.environment_id,
+                auth_ctx,
+                invocation_context,
+                principal,
+            )
+            .await?;
+
+        Ok((component.revision, fingerprint))
     }
 
     // Like create, but skip fetching the component.
@@ -1552,23 +1598,35 @@ impl WorkerService {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
-        let component = self
-            .component_service
-            .get_current_by_id_uncached(producer_agent_id.component_id)
-            .await?;
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            producer_agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-        )?;
+        let read: golem_common::model::durable_stream::DurableStreamReadRequest =
+            golem_common::serialization::deserialize(&payload)
+                .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+        match read {
+            golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(_) => {
+                let component = self
+                    .component_service
+                    .get_current_by_id_uncached(producer_agent_id.component_id)
+                    .await?;
+                authorize_agent_permission(
+                    &auth_ctx,
+                    &component,
+                    producer_agent_id,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )?;
+            }
+            golem_common::model::durable_stream::DurableStreamReadRequest::AuthorizedExport(_) => {
+                auth_ctx
+                    .authorize_system_only("read authorized durable stream export")
+                    .map_err(AuthServiceError::Unauthorized)?;
+            }
+        }
         self.worker_client
             .read_durable_stream_segment(
                 producer_agent_id,
@@ -1792,6 +1850,84 @@ impl WorkerService {
         .chain(tail);
         self.worker_client
             .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
+    }
+
+    pub async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("create authorized Durable Streams session")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client
+            .create_stream_session(agent_id, request)
+            .await
+    }
+
+    pub async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("control authorized Durable Streams export")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .control_export_stream(agent_id, request)
+            .await
+    }
+
+    pub async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("access authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client.read_stream_slot(agent_id, request).await
+    }
+
+    pub async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
+    > {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("append to authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .append_to_stream_slot(agent_id, request)
             .await
     }
 
@@ -3755,6 +3891,7 @@ mod tests {
 
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        prepared_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_modes_and_schedules: Mutex<Vec<(i32, Option<::prost_types::Timestamp>)>>,
@@ -3772,6 +3909,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_modes_and_schedules: Mutex::new(Vec::new()),
@@ -3792,6 +3930,7 @@ mod tests {
         ) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_modes_and_schedules: Mutex::new(Vec::new()),
@@ -3861,6 +4000,25 @@ mod tests {
 
     #[async_trait]
     impl WorkerClient for RecordingWorkerClient {
+        async fn prepare(
+            &self,
+            agent_id: &AgentId,
+            _: HashMap<String, String>,
+            _: Vec<AgentConfigEntryDto>,
+            _: bool,
+            _: AccountId,
+            _: EnvironmentId,
+            _: AuthCtx,
+            _: Option<InvocationContext>,
+            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+        ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            self.prepared_agent_ids
+                .lock()
+                .unwrap()
+                .push(agent_id.clone());
+            Ok((agent_id.clone(), self.fingerprint))
+        }
+
         async fn create(
             &self,
             agent_id: &AgentId,
@@ -4748,7 +4906,22 @@ mod tests {
                 HashMap::new(),
                 Vec::new(),
                 true,
-                auth_ctx_with_permissions(vec![run_permission]),
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        harness
+            .worker_service
+            .prepare_for_invocation(
+                &agent_id,
+                "run".to_string(),
+                HashMap::new(),
+                Vec::new(),
+                true,
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
                 None,
                 None,
             )
@@ -4764,6 +4937,22 @@ mod tests {
             harness
                 .worker_service
                 .create_for_invocation(
+                    &agent_id,
+                    "run".to_string(),
+                    HashMap::new(),
+                    Vec::new(),
+                    true,
+                    auth_ctx_with_permissions(vec![other_method_permission.clone()]),
+                    None,
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            harness
+                .worker_service
+                .prepare_for_invocation(
                     &agent_id,
                     "run".to_string(),
                     HashMap::new(),
@@ -4785,6 +4974,16 @@ mod tests {
                 .len(),
             1,
             "denied target activation reached the worker client"
+        );
+        assert_eq!(
+            harness
+                .worker_client
+                .prepared_agent_ids
+                .lock()
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&agent_id),
+            "denied prepare reached the worker client"
         );
     }
 
