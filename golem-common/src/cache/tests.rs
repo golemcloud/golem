@@ -214,7 +214,10 @@ async fn remove_if_cached_predicate_is_evaluated_under_the_remove_lock() {
         .remove_if_cached(&1, |current| Arc::ptr_eq(current, &v1))
         .await;
     assert!(!removed, "v1-targeted removal must not delete v2");
-    assert_eq!(cache.try_get(&1).await, Some(v2));
+    assert!(!cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v1)));
+    assert_eq!(cache.try_get(&1).await, Some(v2.clone()));
+    assert!(cache.remove_if_cached_sync(&1, |current| Arc::ptr_eq(current, &v2)));
+    assert_eq!(cache.try_get(&1).await, None);
 }
 
 #[test]
@@ -1063,13 +1066,55 @@ async fn get_or_insert_pending_returns_pending_for_new_key() {
         .unwrap();
 
     match result {
-        PendingOrFinal::Pending(pv) => assert_eq!(pv, "loading"),
+        PendingOrFinal::Pending(pending) => assert_eq!(pending.value, "loading"),
         PendingOrFinal::Final(_) => panic!("expected Pending"),
     }
 
     // Wait for background task to complete and cache the value
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(cache.get(&1).await, Some(42));
+}
+
+#[test]
+async fn get_or_insert_pending_retains_completion_for_late_waiter() {
+    let cache: Cache<u64, (), u64, String> = Cache::new(
+        None,
+        FullCacheEvictionMode::None,
+        BackgroundEvictionMode::None,
+        "pending_retained_completion",
+    );
+    let PendingOrFinal::Pending(mut pending) = cache
+        .get_or_insert_pending(&1, || (), |_| Box::pin(async { Ok(42) }))
+        .await
+        .unwrap()
+    else {
+        panic!("expected Pending");
+    };
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let completion = pending.completion.wait_for(Option::is_some).await.unwrap();
+    assert_eq!(completion.as_ref().unwrap(), &Ok(42));
+}
+
+#[test]
+async fn get_or_insert_pending_retains_error_for_late_waiter() {
+    let cache: Cache<u64, (), u64, String> = Cache::new(
+        None,
+        FullCacheEvictionMode::None,
+        BackgroundEvictionMode::None,
+        "pending_retained_error",
+    );
+    let PendingOrFinal::Pending(mut pending) = cache
+        .get_or_insert_pending(&1, || (), |_| Box::pin(async { Err("failed".to_string()) }))
+        .await
+        .unwrap()
+    else {
+        panic!("expected Pending");
+    };
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let completion = pending.completion.wait_for(Option::is_some).await.unwrap();
+    assert_eq!(completion.as_ref().unwrap(), &Err("failed".to_string()));
 }
 
 #[test]

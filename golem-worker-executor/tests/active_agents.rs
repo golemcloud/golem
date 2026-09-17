@@ -49,6 +49,22 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let mut client = executor.client.clone();
+    let assignment = client
+        .assign_shards(AssignShardsRequest {
+            number_of_shards: 1,
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 1,
+            }],
+            revision: 1,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assignment.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -85,6 +101,17 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
     assert!(executor.worker_is_cached(&owned).await);
     assert!(executor.get_worker_metadata(&agent_id).await.is_ok());
     assert!(!deletion.is_finished());
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
     deletion.abort();
     assert!(deletion.await.unwrap_err().is_cancelled());
     gate.release();
@@ -96,6 +123,21 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
     })
     .await
     .expect("abandoned deletion did not finish");
+    let assignment = client
+        .assign_shards(AssignShardsRequest {
+            number_of_shards: 1,
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 2,
+            }],
+            revision: 2,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assignment.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
     assert!(executor.get_worker_metadata(&agent_id).await.is_err());
     executor
         .invoke_and_await_agent(&component, &parsed, "healthcheck", data_value!())
@@ -272,7 +314,10 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             )
             .await;
         assert!(replacement.entity_metadata().accepting_entities);
-        old_worker.active_agents().remove(&old_worker).await;
+        old_worker
+            .active_agents()
+            .remove_worker(&old_worker, false)
+            .await;
         assert!(Arc::ptr_eq(
             &replacement,
             &executor.active_agent(&owned_agent_id).await.unwrap()

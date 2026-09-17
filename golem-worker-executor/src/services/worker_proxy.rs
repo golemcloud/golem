@@ -93,6 +93,18 @@ fn invoke_agent_session_once<'a>(
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
+    async fn prepare(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError>;
+
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -352,6 +364,58 @@ impl RemoteWorkerProxy {
 
 #[async_trait]
 impl WorkerProxy for RemoteWorkerProxy {
+    async fn prepare(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        debug!(owned_agent_id=%owned_agent_id, "Preparing remote worker");
+
+        let response: LaunchNewWorkerResponse = self
+            .worker_service_client
+            .call("prepare_worker", move |client| {
+                let caller_env = caller_env.clone();
+                Box::pin(client.prepare_worker(LaunchNewWorkerRequest {
+                    component_id: Some(owned_agent_id.component_id().into()),
+                    name: owned_agent_id.agent_name(),
+                    env: caller_env.clone(),
+                    config: config.clone().into_iter().map(Into::into).collect(),
+                    ignore_already_existing: true,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                        parent: Some(caller_agent_id.clone().into()),
+                        env: caller_env,
+                        tracing: Some(caller_stack.clone().into()),
+                    }),
+                    principal: Some(principal.clone().into()),
+                    method_name: Some(method_name.to_string()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(launch_new_worker_response::Result::Success(success)) => success
+                .instance_id
+                .map(|instance_id| AgentFingerprint(instance_id.into()))
+                .ok_or_else(|| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        "Missing instance_id in PrepareWorker response",
+                    ))
+                }),
+            Some(launch_new_worker_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API"),
+            )),
+        }
+    }
+
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1057,6 +1121,8 @@ mod tests {
         segment_responses: Arc<
             Mutex<std::collections::VecDeque<Result<DurableStreamSegmentReadResponse, Status>>>,
         >,
+        prepared_workers: Arc<Mutex<Vec<LaunchNewWorkerRequest>>>,
+        prepared_fingerprint: AgentFingerprint,
     }
 
     macro_rules! unimplemented_rpc {
@@ -1090,6 +1156,24 @@ mod tests {
             LaunchNewWorkerRequest,
             LaunchNewWorkerResponse
         );
+        async fn prepare_worker(
+            &self,
+            request: Request<LaunchNewWorkerRequest>,
+        ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
+            self.prepared_workers
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            Ok(Response::new(LaunchNewWorkerResponse {
+                result: Some(launch_new_worker_response::Result::Success(
+                    golem_api_grpc::proto::golem::worker::v1::LaunchNewWorkerSuccessResponse {
+                        agent_id: None,
+                        component_version: 0,
+                        instance_id: Some(self.prepared_fingerprint.0.into()),
+                    },
+                )),
+            }))
+        }
         unimplemented_rpc!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
         unimplemented_rpc!(resume_worker, ResumeWorkerRequest, ResumeWorkerResponse);
         unimplemented_rpc!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);

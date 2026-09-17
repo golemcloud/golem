@@ -31,7 +31,6 @@ mod terminals;
 pub(crate) mod tests;
 
 pub use catch_up::DurableCatchUpReader;
-pub(crate) use external_input::validate_external_input_payload;
 pub use items::StreamHead;
 pub use metadata::{
     ProducerMetadataKey, ProducerMetadataRow, ProducerSessionMetadata, ProducerStreamMetadata,
@@ -466,6 +465,7 @@ pub struct DurableStreamStore {
     pub(crate) fork_lineage: Arc<StreamForkLineage>,
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     commit: DurableStreamCommit,
+    worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
     control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
     environment_id: EnvironmentId,
     producer: AgentId,
@@ -515,6 +515,15 @@ impl DurableStreamStore {
             .cuts()
             .iter()
             .find_map(|(marker, cut)| (*marker == index).then_some((cut, retained.as_ref())))
+    }
+
+    pub(crate) fn set_worker_tasks(&self, tasks: crate::worker::tasks::WorkerTasks) {
+        assert!(self.worker_tasks.set(tasks).is_ok());
+    }
+
+    pub(crate) fn tasks(&self) -> &crate::worker::tasks::WorkerTasks {
+        self.worker_tasks
+            .get_or_init(|| self.oplog.task_owner().cloned().unwrap_or_default())
     }
 
     pub(crate) async fn load(
@@ -808,6 +817,7 @@ impl DurableStreamStore {
             fork_lineage,
             applied_fork_cuts,
             commit,
+            worker_tasks: std::sync::OnceLock::new(),
             control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
             producer,

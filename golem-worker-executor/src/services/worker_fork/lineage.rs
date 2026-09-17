@@ -1035,6 +1035,7 @@ pub(crate) mod tests {
             );
             let oplog = service
                 .create_fresh(
+                    &mut service.lock_lifecycle(&owner.agent_id).await,
                     owner,
                     AgentMode::Durable,
                     create,

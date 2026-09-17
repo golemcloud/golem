@@ -213,6 +213,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     metadata.fingerprint = key.callee_fingerprint;
     let oplog = oplog_service
         .create_fresh(
+            &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
             OplogEntry::create(
@@ -349,6 +350,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
     let foreign_oplog = oplog_service
         .create_fresh(
+            &mut oplog_service.lock_lifecycle(&foreign.agent_id).await,
             &foreign,
             AgentMode::Durable,
             OplogEntry::create(
@@ -570,6 +572,7 @@ fn suspended_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
 async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn Oplog> {
     service
         .create_fresh(
+            &mut service.lock_lifecycle(&id.agent_id).await,
             id,
             AgentMode::Durable,
             OplogEntry::NoOp {
@@ -613,6 +616,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
         metadata.fingerprint = fingerprint;
         let oplog = oplog_service
             .create_fresh(
+                &mut oplog_service.lock_lifecycle(&id.agent_id).await,
                 &id,
                 AgentMode::Durable,
                 OplogEntry::create(
@@ -741,6 +745,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     metadata.fingerprint = fingerprint;
     let oplog = oplog_service
         .create_fresh(
+            &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
             OplogEntry::create(
@@ -976,6 +981,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
     metadata.fingerprint = fingerprint;
     let oplog = oplog_service
         .create_fresh(
+            &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
             OplogEntry::create(
@@ -2353,6 +2359,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
 
     let reopened = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -2411,6 +2418,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
 
     let second = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -2680,6 +2688,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     );
     let reopened = reopened_service
         .open(
+            &mut reopened_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,
@@ -2751,6 +2760,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     drop(oplog);
     let reopened = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
             None,

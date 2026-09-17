@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -280,6 +280,52 @@ impl IndexedStorage for PostgresIndexedStorage {
         };
 
         Ok((new_cursor, keys))
+    }
+
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let count_i64 = Self::to_i64(count, "count")?;
+        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
+        let after = resume
+            .map(|resume| resume.into_marker("Postgres"))
+            .transpose()?
+            .unwrap_or_default();
+        let query = match prefix {
+            Some(prefix) => {
+                let like = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key LIKE $3 ESCAPE '\\' ORDER BY key LIMIT $4;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(after)
+                .bind(like)
+                .bind(count_i64)
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(after)
+            .bind(count_i64),
+        };
+
+        let keys = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String,), _>(query)
+            .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(Self::classify_repo_error_general)?;
+
+        Ok((super::last_key_resume(&keys, count), keys))
     }
 
     async fn append(
@@ -571,6 +617,29 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(Self::classify_repo_error_general)
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id DESC LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_optional_as::<(i64,), _>(query)
+            .await
+            .map(|op| op.map(|row| row.0 as u64))
             .map_err(Self::classify_repo_error_general)
     }
 

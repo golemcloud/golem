@@ -16,7 +16,8 @@ use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    OplogCloseCompletion, OplogLifecycleGuard, OplogService, OrderedOplogStart,
+    ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -26,7 +27,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
@@ -174,6 +175,22 @@ impl Debug for RateLimitedOplog {
 
 #[async_trait]
 impl Oplog for RateLimitedOplog {
+    fn retire(&self) {
+        self.inner.retire();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.inner.is_retired()
+    }
+
+    fn closed(&self) -> OplogCloseCompletion {
+        self.inner.closed()
+    }
+
+    fn task_owner(&self) -> Option<&super::WorkerTasks> {
+        self.inner.task_owner()
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         // Reserve the inner oplog position synchronously, then apply back-pressure only while the
         // returned receipt is awaited. This preserves ordering without bypassing write limiting.
@@ -361,6 +378,10 @@ impl std::fmt::Debug for RateLimitedOplogService {
 
 #[async_trait]
 impl OplogService for RateLimitedOplogService {
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        self.inner.lock_lifecycle(agent_id).await
+    }
+
     fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
         self.inner.set_stream_session_index(index);
     }
@@ -411,6 +432,7 @@ impl OplogService for RateLimitedOplogService {
 
     async fn create(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -424,6 +446,7 @@ impl OplogService for RateLimitedOplogService {
         let inner_oplog = self
             .inner
             .create(
+                lifecycle,
                 owned_agent_id,
                 agent_mode,
                 initial_entry,
@@ -442,6 +465,7 @@ impl OplogService for RateLimitedOplogService {
 
     async fn create_fresh(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -455,6 +479,7 @@ impl OplogService for RateLimitedOplogService {
         let inner_oplog = self
             .inner
             .create_fresh(
+                lifecycle,
                 owned_agent_id,
                 agent_mode,
                 initial_entry,
@@ -473,6 +498,7 @@ impl OplogService for RateLimitedOplogService {
 
     async fn open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
@@ -486,6 +512,7 @@ impl OplogService for RateLimitedOplogService {
         let inner_oplog = self
             .inner
             .open(
+                lifecycle,
                 owned_agent_id,
                 agent_mode,
                 last_oplog_index,
@@ -510,8 +537,15 @@ impl OplogService for RateLimitedOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.inner.delete(owned_agent_id, agent_mode).await
+    async fn delete(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) {
+        self.inner
+            .delete(lifecycle, owned_agent_id, agent_mode)
+            .await
     }
 
     async fn read_exact(
@@ -706,6 +740,7 @@ mod tests {
 
         service
             .open(
+                &mut service.lock_lifecycle(&owned.agent_id).await,
                 &owned,
                 AgentMode::Durable,
                 None,

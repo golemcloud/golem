@@ -5,6 +5,7 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use super::{DefaultWorkerFork, admission::Admission, stream_cut};
+use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::services::HasOplog;
 use crate::services::oplog::{CommitLevel, OplogService, OplogServiceOps};
 use crate::storage::keyvalue::KeyValueStorageNamespace;
@@ -15,12 +16,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
 use golem_common::model::agent::AgentMode;
-use golem_common::model::agent::Principal;
 use golem_common::model::durable_stream::{
     StreamExportFork, StreamForkCutRecord, StreamId, StreamItemsPayload, StreamOffset,
     StreamSessionRecord,
 };
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId, Timestamp};
 use golem_common::schema::SchemaGraph;
@@ -268,11 +267,12 @@ async fn execute<Ctx: WorkerCtx>(
         oplog.commit(CommitLevel::Always).await;
         let last = oplog.current_oplog_index().await;
         drop(oplog);
+        let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
         let published = service
             .oplog_service
             .publish_staged(&target, AgentMode::Durable, stage_id, last)
             .await;
-        match published {
+        let result = match published {
             Ok(true) => Ok(response(&candidate.export, candidate.cut, false)),
             outcome => {
                 if let Some(receipt) =
@@ -293,7 +293,9 @@ async fn execute<Ctx: WorkerCtx>(
                     )
                 }
             }
-        }
+        };
+        drop(target_lifecycle);
+        result
     }
     .await;
     let cleanup = service
@@ -368,17 +370,9 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
     source: &OwnedAgentId,
     fingerprint: AgentFingerprint,
 ) -> Result<Candidate, Error> {
-    let worker = Worker::get_or_create_suspended(
-        service,
-        source,
-        None,
-        Vec::new(),
-        None,
-        None,
-        &InvocationContextStack::fresh(),
-        Principal::anonymous(),
-    )
-    .await?;
+    let worker = Worker::find_durable_stream_worker(service, source)
+        .await?
+        .ok_or_else(|| reject(Reason::NotFound))?;
     worker
         .commit_oplog_and_update_state(CommitLevel::Always)
         .await;
@@ -625,7 +619,7 @@ pub(super) fn initial_payload(
         }
         StreamItemsPayload::Values(encoded)
     };
-    crate::durable_host::durable_stream::validate_external_input_payload(&payload)
+    DurableStreamStore::validate_external_input(Some(&payload))
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
     Ok(Some(payload))
 }

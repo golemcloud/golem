@@ -655,6 +655,22 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .await
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<crate::storage::indexed::ScanResume>,
+        count: u64,
+    ) -> Result<(Option<crate::storage::indexed::ScanResume>, Vec<String>), IndexedStorageError>
+    {
+        self.count_read();
+        self.inner
+            .scan_stable(svc_name, api_name, namespace, prefix, resume, count)
+            .await
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -833,6 +849,20 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         self.count_read();
         self.inner
             .last(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .last_id(svc_name, api_name, entity_name, namespace, key)
             .await
     }
 
@@ -1153,6 +1183,7 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
     metadata.agent_mode = AgentMode::Ephemeral;
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -1252,6 +1283,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
     metadata.agent_mode = AgentMode::Ephemeral;
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -1368,6 +1400,7 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
     indexed_storage.reset();
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -1434,6 +1467,7 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
     indexed_storage.reset();
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -1601,6 +1635,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .unwrap();
     let reopened = service
         .open(
+            &mut service.lock_lifecycle(&owned.agent_id).await,
             &owned,
             AgentMode::Durable,
             None,
@@ -1699,6 +1734,7 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
         async move {
             service
                 .open(
+                    &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
                     &owned_agent_id,
                     agent_mode,
                     None,
@@ -1774,6 +1810,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
     blob_storage.reset();
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -1839,6 +1876,7 @@ async fn create_append_reconciliation_oplog(
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::jump(
@@ -1853,6 +1891,284 @@ async fn create_append_reconciliation_oplog(
             default_execution_status(AgentMode::Durable),
         )
         .await
+}
+
+#[test]
+async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
+    _tracing: &Tracing,
+) {
+    let service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            100,
+            100,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "lifecycle".into(),
+    };
+    let id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id.clone(), account_id, environment_id);
+    let original = OplogEntry::no_op(None).rounded();
+    let mut read_guard = service.lock_lifecycle(&agent_id).await;
+    let old = service
+        .create_fresh(
+            &mut read_guard,
+            &id,
+            AgentMode::Durable,
+            original.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let stale = old.clone();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let delete = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move {
+            let lock = service.lock_lifecycle(&id.agent_id);
+            tokio::pin!(lock);
+            assert!(futures::poll!(&mut lock).is_pending());
+            entered_tx.send(()).unwrap();
+            let mut guard = lock.await;
+            old.stop_and_wait().await.unwrap();
+            service.delete(&mut guard, &id, AgentMode::Durable).await;
+            let next_lifecycle = service.lock_lifecycle(&id.agent_id);
+            tokio::pin!(next_lifecycle);
+            assert!(futures::poll!(&mut next_lifecycle).is_pending());
+        }
+    });
+    entered_rx.await.unwrap();
+    assert_eq!(stale.read(OplogIndex::INITIAL).await, original);
+    drop(read_guard);
+    delete.await.unwrap();
+
+    let mut guard = service.lock_lifecycle(&agent_id).await;
+    assert!(!service.exists(&id, AgentMode::Durable).await);
+    let replacement_entry = OplogEntry::jump(
+        None,
+        OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        },
+    )
+    .rounded();
+    let replacement = service
+        .create_fresh(
+            &mut guard,
+            &id,
+            AgentMode::Durable,
+            replacement_entry.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    drop(stale);
+    let reopened = service
+        .open(
+            &mut guard,
+            &id,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert!(Arc::ptr_eq(&replacement, &reopened));
+    assert_eq!(reopened.read(OplogIndex::INITIAL).await, replacement_entry);
+    assert_eq!(
+        reopened.add(OplogEntry::no_op(None)).await,
+        OplogIndex::from_u64(2)
+    );
+    reopened.commit(CommitLevel::Always).await;
+    reopened.stop_and_wait().await.unwrap();
+}
+
+#[test]
+async fn stopped_actor_failure_does_not_poison_reopen(_tracing: &Tracing) {
+    let service = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        Arc::new(InMemoryBlobStorage::new()),
+        100,
+        100,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "failed-actor".into(),
+    };
+    let environment_id = EnvironmentId::new();
+    let id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id);
+    let initial = OplogEntry::no_op(None).rounded();
+    let mut guard = service.lock_lifecycle(&agent_id).await;
+    let old = service
+        .create_fresh(
+            &mut guard,
+            &id,
+            AgentMode::Durable,
+            initial.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert_panics(old.add_pair(
+        OplogEntry::no_op(None),
+        Box::new(|_| panic!("injected actor failure")),
+    ))
+    .await;
+    assert!(old.stop_and_wait().await.is_err());
+    let reopened = service
+        .open(
+            &mut guard,
+            &id,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert!(!Arc::ptr_eq(&old, &reopened));
+    assert_eq!(reopened.read(OplogIndex::INITIAL).await, initial);
+    assert_eq!(
+        reopened.add(OplogEntry::no_op(None)).await,
+        OplogIndex::from_u64(2)
+    );
+    reopened.commit(CommitLevel::Always).await;
+    drop(old);
+    reopened.stop_and_wait().await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn reopened_oplog_joins_old_root_children_before_stopping_its_writer(_tracing: &Tracing) {
+    use crate::worker::tasks::TaskScope;
+
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let storage = Arc::new(InMemoryIndexedStorage::new());
+        let primary = Arc::new(
+            PrimaryOplogService::new(
+                storage.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                100,
+                100,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            storage,
+            1,
+            RetryConfig::default(),
+        ));
+        let service = MultiLayerOplogService::new(primary, nev![archive], 100, 100);
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "root-join".into(),
+        };
+        let environment_id = EnvironmentId::new();
+        let id = OwnedAgentId::new(environment_id, &agent_id);
+        let mut metadata = make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id);
+        metadata.agent_mode = mode;
+        let mut guard = service.lock_lifecycle(&agent_id).await;
+        let old = service
+            .create_fresh(
+                &mut guard,
+                &id,
+                mode,
+                OplogEntry::no_op(None),
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(mode),
+            )
+            .await;
+        let reopened = service
+            .open(
+                &mut guard,
+                &id,
+                mode,
+                None,
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(mode),
+            )
+            .await;
+        let (started, started_rx) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        let root = tokio::spawn({
+            let old = old.clone();
+            async move {
+                let scope = TaskScope::default();
+                let owner = old.task_owner().expect("production oplog has a task owner");
+                scope.bind(owner).unwrap();
+                scope
+                    .run(async {
+                        let writer = old.clone();
+                        let job = tokio::spawn(async move {
+                            started.send(()).unwrap();
+                            release_rx.await.unwrap();
+                            assert_eq!(
+                                writer.add(OplogEntry::no_op(None)).await,
+                                OplogIndex::from_u64(2)
+                            );
+                            writer.commit(CommitLevel::Always).await;
+                        });
+                        owner.finish_on_drop(job).await.unwrap();
+                    })
+                    .await
+            }
+        });
+        started_rx.await.unwrap();
+        let stop = reopened.stop_and_wait();
+        tokio::pin!(stop);
+        assert!(futures::poll!(stop.as_mut()).is_pending());
+        assert!(root.await.unwrap().is_none());
+        assert!(futures::poll!(stop.as_mut()).is_pending());
+        release.send(()).unwrap();
+        stop.await.unwrap();
+        assert_eq!(
+            service.get_last_index(&id, mode).await,
+            OplogIndex::from_u64(2)
+        );
+        assert!(
+            TaskScope::default()
+                .bind(old.task_owner().unwrap())
+                .is_err()
+        );
+        let replacement = service
+            .open(
+                &mut guard,
+                &id,
+                mode,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(mode),
+            )
+            .await;
+        assert!(
+            TaskScope::default()
+                .bind(replacement.task_owner().unwrap())
+                .is_ok()
+        );
+        replacement.stop_and_wait().await.unwrap();
+    }
 }
 
 #[test]
@@ -1893,6 +2209,7 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
     .rounded();
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             create_entry,
@@ -1952,6 +2269,7 @@ async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_repor
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = service
         .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::jump(
@@ -2188,6 +2506,7 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let first_oplog = first_service
         .create_fresh(
+            &mut first_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::jump(
@@ -2204,6 +2523,9 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
         .await;
     let second_oplog = second_service
         .open(
+            &mut second_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -2282,6 +2604,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -2356,6 +2679,7 @@ async fn primary_read_range_overflow_panics_without_storage_io(_tracing: &Tracin
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::NONE),
@@ -2400,6 +2724,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -2413,6 +2738,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -2494,6 +2820,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -2681,6 +3008,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     metadata.agent_mode = AgentMode::Ephemeral;
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             OplogEntry::create(
@@ -2822,6 +3150,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = service
         .open(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -2989,6 +3318,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     .await;
     let oplog = service
         .open(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3040,6 +3370,9 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     .await;
     let restarted_oplog = restarted_service
         .open(
+            &mut restarted_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3122,6 +3455,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3232,6 +3566,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3323,6 +3658,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3395,6 +3731,7 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3459,6 +3796,7 @@ async fn ephemeral_read_exact_uncommitted_only(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3520,6 +3858,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3624,6 +3963,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3749,6 +4089,7 @@ async fn ephemeral_read_exact_zero_returns_empty(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3787,6 +4128,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -3990,6 +4332,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4069,6 +4412,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4122,6 +4466,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4408,6 +4753,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4444,6 +4790,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
     loop {
         let primary_length = primary_oplog_service
             .open(
+                &mut primary_oplog_service
+                    .lock_lifecycle(&owned_agent_id.agent_id)
+                    .await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -4475,6 +4824,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4569,6 +4921,7 @@ async fn read_from_archive_impl(use_blob: bool) {
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4612,6 +4965,9 @@ async fn read_from_archive_impl(use_blob: bool) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -4759,6 +5115,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
 
     let oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             create_entry.clone(),
@@ -4818,6 +5175,14 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     assert_eq!(last_index_1, OplogIndex::INITIAL);
     assert_eq!(last_index_2, OplogIndex::INITIAL);
     assert_eq!(last_index_3, OplogIndex::INITIAL);
+
+    // With every movable layer empty there is no transfer to wait for
+    let nothing_left = tokio::time::timeout(
+        Duration::from_secs(10),
+        MultiLayerOplog::try_archive_blocking(&oplog),
+    )
+    .await;
+    assert_eq!(nothing_left, Ok(Some(false)));
 }
 
 async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
@@ -4890,6 +5255,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
 
     let oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry.clone(),
@@ -4934,6 +5300,14 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
         read_after_archive,
         Some((OplogIndex::INITIAL, create_entry))
     );
+
+    // With every movable layer empty there is no transfer to wait for
+    let nothing_left = tokio::time::timeout(
+        Duration::from_secs(10),
+        EphemeralOplog::try_archive_blocking(&oplog),
+    )
+    .await;
+    assert_eq!(nothing_left, Ok(Some(false)));
 }
 
 #[test]
@@ -5195,6 +5569,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::no_op(None),
@@ -5206,7 +5581,13 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     oplog.add_and_commit(OplogEntry::no_op(None)).await;
     let current = oplog.current_oplog_index().await;
 
-    service.delete(&owned_agent_id, AgentMode::Durable).await;
+    service
+        .delete(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+        )
+        .await;
 
     assert_eq!(oplog.current_oplog_index().await, current);
     assert!(!service.exists(&owned_agent_id, AgentMode::Durable).await);
@@ -5223,6 +5604,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
         Some("Oplog read failed: missing oplog entries in range [1..=2]")
     );
 
+    oplog.stop_and_wait().await.unwrap();
     // Deletion must admit a fresh oplog generation, and dropping the
     // old generation afterwards must not evict either replacement cache entry.
     let metadata = make_agent_metadata(owned_agent_id.agent_id(), account_id, environment_id);
@@ -5232,6 +5614,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     };
     let replacement = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             initial_entry.clone(),
@@ -5249,6 +5632,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
 
     let replacement_primary = primary
         .open(
+            &mut primary.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -5260,6 +5644,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     drop(oplog);
     let reopened = service
         .open(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -5271,6 +5656,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     assert!(Arc::ptr_eq(&replacement, &reopened));
     let reopened_primary = primary
         .open(
+            &mut primary.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             Some(OplogIndex::INITIAL),
@@ -5346,6 +5732,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = service
         .open(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             agent_mode,
             None,
@@ -5370,7 +5757,13 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
         .expect("archive transfer did not start")
         .expect("archive transfer start signal dropped");
 
-    service.delete(&owned_agent_id, agent_mode).await;
+    service
+        .delete(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            agent_mode,
+        )
+        .await;
 
     let append_completed = append_finished.notified();
     release_append.notify_one();
@@ -5443,6 +5836,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     info!("FIRST OPEN");
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -5479,6 +5873,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -5509,6 +5906,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         drop(oplog);
         oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -5538,6 +5936,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         ));
         oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -5576,6 +5975,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -5606,6 +6008,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         drop(oplog);
         oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -5635,6 +6038,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         ));
         oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -5809,6 +6213,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -5860,6 +6265,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -5971,6 +6379,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let archive_result = {
         let oplog = oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -5997,6 +6406,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -6037,6 +6449,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let archive_result2 = {
         let oplog = oplog_service
             .open(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -6054,6 +6467,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
 
     let primary_length = primary_oplog_service
         .open(
+            &mut primary_oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -6150,6 +6566,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let oplog = oplog_service
             .create(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 AgentMode::Durable,
                 create_entry,
@@ -6308,6 +6725,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
         );
         let oplog = oplog_service
             .create(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 mode,
                 create_entry,
@@ -6412,6 +6830,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
     // First, create the oplog with an initial entry so it exists in SQLite
     let initial_oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::jump(
@@ -6457,6 +6876,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
 
                 let oplog = oplog_service
                     .open(
+                        &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                         &owned_agent_id,
                         AgentMode::Durable,
                         None,
@@ -6672,6 +7092,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
 
     let durable_oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             durable_create.clone(),
@@ -6682,6 +7103,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         .await;
     let ephemeral_oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             ephemeral_create.clone(),
@@ -6729,7 +7151,11 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
 
     // Deleting one namespace must not affect the other.
     oplog_service
-        .delete(&owned_agent_id, AgentMode::Durable)
+        .delete(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+        )
         .await;
     assert!(
         !oplog_service
@@ -6780,6 +7206,7 @@ async fn make_workers(
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let oplog = oplog_service
             .create(
+                &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 &owned_agent_id,
                 mode,
                 create_entry,
@@ -7037,6 +7464,7 @@ async fn owned_payload_upload_preserves_allocation_at_inline_threshold_and_round
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7080,6 +7508,7 @@ async fn owned_payload_upload_preserves_allocation_at_inline_threshold_and_round
 
     let reopened = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7133,6 +7562,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7265,6 +7695,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7353,6 +7784,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7477,6 +7909,7 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -7581,6 +8014,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
     metadata.agent_mode = AgentMode::Ephemeral;
     let oplog = oplog_service
         .create(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
             create_entry,
@@ -7798,6 +8232,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,

@@ -35,15 +35,15 @@
 //!
 //! * The **status queue** serializes the oplog-commit + status-fold transaction (previously
 //!   guarded by the `update_state_lock` mutex). Its task must never await anything completed by
-//!   a store event loop and must never take the worker's `instance` lock: callers holding the
-//!   instance lock await status jobs (e.g. `Worker::add_and_commit_oplog_internal`), so taking
-//!   that lock here would deadlock. It only performs oplog-actor roundtrips, storage/network IO,
-//!   and lock-free status publication.
+//!   a store event loop and must never take the worker lifecycle lock: callers holding that lock
+//!   await status jobs (e.g. `Worker::add_and_commit_oplog_internal`), so taking it here would
+//!   deadlock. It only performs oplog-actor roundtrips, storage/network IO, and lock-free status
+//!   publication.
 //! * The **lifecycle queue** runs notification and memory-accounting jobs. Jobs that take the
-//!   `instance` lock are fire-and-forget. Ordered oplog entries are awaitable but never take that
-//!   lock, so an instance-lock holder never waits on a lifecycle operation that needs the same
-//!   lock. A cancellation-safe status transaction may own guards acquired by its caller, but the
-//!   status task never acquires those locks itself.
+//!   worker lifecycle-state lock are fire-and-forget. Ordered oplog entries are awaitable but
+//!   never take that lock, so a lifecycle-state-lock holder never waits on a lifecycle operation
+//!   that needs the same lock. A cancellation-safe status transaction may own guards acquired by
+//!   its caller, but the status task never acquires those locks itself.
 //!
 //! The status task is also the **only writer** of the worker's published status
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
@@ -63,6 +63,8 @@ use crate::services::{All, HasConfig, HasSchedulerService};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
 use chrono::Utc;
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -77,22 +79,88 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
 use tracing::debug;
 
-/// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
-/// both tasks.
+/// Handle to the worker-state actor's two job queues. Dropping it requests ordered shutdown.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     commit: Arc<OwnerCommitController>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     notification_queued: Arc<AtomicBool>,
-    status_task: tokio::task::JoinHandle<()>,
-    lifecycle_task: tokio::task::JoinHandle<()>,
+    stop: Arc<WorkerStateActorStop>,
     owned_agent_id: OwnedAgentId,
+}
+
+/// Cold shutdown control retained until both actors have actually exited. Oplog generations
+/// may register a Weak handle without owning the actors or their oplog through pending jobs.
+pub(crate) struct WorkerStateActorStop {
+    request: Box<dyn Fn() + Send + Sync>,
+    completion: Shared<BoxFuture<'static, Result<(), String>>>,
+}
+
+impl WorkerStateActorStop {
+    fn new(
+        request: impl Fn() + Send + Sync + 'static,
+        lifecycle_task: tokio::task::JoinHandle<()>,
+        status_jobs: mpsc::UnboundedSender<StatusJob>,
+        status_task: tokio::task::JoinHandle<()>,
+        finish_status: impl Future<Output = ()> + Send + 'static,
+    ) -> Arc<Self> {
+        let (done, completion) = oneshot::channel();
+        let stop = Arc::new(Self {
+            request: Box::new(request),
+            completion: async move {
+                completion.await.unwrap_or_else(|_| {
+                    Err("Worker state actor completion driver ended without a result".into())
+                })
+            }
+            .boxed()
+            .shared(),
+        });
+        tokio::spawn({
+            let stop = stop.clone();
+            async move {
+                let lifecycle_result = lifecycle_task.await;
+                // Lifecycle work can submit status jobs. Even a lifecycle panic must let
+                // previously accepted status work finish before the status actor exits.
+                let _ = status_jobs.send(StatusJob::Stop);
+                let status_result = status_task.await;
+                finish_status.await;
+                let result = match (lifecycle_result, status_result) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), Ok(())) => Err(format!("Worker lifecycle actor failed: {error}")),
+                    (Ok(()), Err(error)) => Err(format!("Worker status actor failed: {error}")),
+                    (Err(lifecycle), Err(status)) => Err(format!(
+                        "Worker lifecycle actor failed: {lifecycle}; worker status actor failed: {status}"
+                    )),
+                };
+                let _ = done.send(result);
+                drop(stop);
+            }
+        });
+        stop
+    }
+
+    /// The caller must stop external producers before requesting the FIFO drain.
+    pub fn request_stop(&self) {
+        (self.request)();
+    }
+
+    /// Observes actual completion without initiating shutdown. Errors still mean both tasks exited.
+    pub async fn wait(&self) -> Result<(), String> {
+        self.completion.clone().await
+    }
+
+    /// The caller must not hold the WorkerInstance mutex while joining. A cold oplog lifecycle
+    /// guard may remain held. Cancellation does not abandon the shared shutdown driver.
+    pub async fn stop_and_wait(&self) -> Result<(), String> {
+        self.request_stop();
+        self.wait().await
+    }
 }
 
 /// Owner-scoped handle for serializing oplog commits with status publication.
 ///
 /// The controller communicates with the independently-polled status actor and never acquires the
-/// primary Store or the worker instance lock. Primary and entity Stores can therefore commit the
-/// shared owner oplog while another Store is suspended in a guest call.
+/// primary Store or the worker lifecycle-state lock. Primary and entity Stores can therefore
+/// commit the shared owner oplog while another Store is suspended in a guest call.
 pub(crate) struct OwnerCommitController {
     status_jobs: mpsc::UnboundedSender<StatusJob>,
     owned_agent_id: OwnedAgentId,
@@ -103,9 +171,10 @@ pub(crate) struct OwnerCommitController {
 /// former `update_state_lock` mutex provided — without lock-ownership handoff to potentially
 /// unpollable callers.
 enum StatusJob {
+    Stop,
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed.
-    /// The reply deliberately does not depend on the instance lock; if the caller wants the
+    /// The reply deliberately does not depend on the worker lifecycle lock; if the caller wants the
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
@@ -144,13 +213,16 @@ enum StatusJob {
     },
     /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
     /// recomputes it from the oplog, republishes it, and forces a cache flush.
-    Reattach { done: oneshot::Sender<()> },
+    Reattach {
+        done: oneshot::Sender<()>,
+    },
 }
 
 /// A request processed by the lifecycle task. Notifications and ordinary growth persistence are
 /// fire-and-forget. Ordered oplog entries await a reply but never take the worker's `instance`
 /// lock, so it remains safe for store-polled callers.
 enum LifecycleJob<Ctx: WorkerCtx> {
+    Stop,
     Drain {
         done: oneshot::Sender<()>,
     },
@@ -195,12 +267,7 @@ struct StatusState<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     fn drop(&mut self) {
-        // Status jobs that must outlive a cancelled caller hold a strong `Arc<Worker>`, so the
-        // actor cannot be dropped while such a job is queued or running. Lifecycle jobs that need
-        // the worker likewise hold a strong `Arc<Worker>`; other lifecycle jobs are harmless to
-        // discard when the worker goes away.
-        self.status_task.abort();
-        self.lifecycle_task.abort();
+        self.stop.request_stop();
     }
 }
 
@@ -217,8 +284,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
         published_authority_generation: Arc<AtomicU64>,
-        instance: Arc<Mutex<WorkerInstance>>,
+        lifecycle: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
+        let task_owner = oplog.task_owner().cloned();
         let state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
@@ -228,7 +296,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             last_known_status,
             detached,
             metrics_status,
-            status_flusher,
+            status_flusher: status_flusher.clone(),
             published_authority_generation,
         };
 
@@ -236,6 +304,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
+                    StatusJob::Stop => break,
                     StatusJob::CommitAndUpdateState {
                         level,
                         committed,
@@ -333,13 +402,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             let mut drains = Vec::new();
             while let Some(job) = lifecycle_rx.recv().await {
                 match job {
+                    LifecycleJob::Stop => break,
                     LifecycleJob::Drain { done } => {
                         drains.push(done);
                     }
                     LifecycleJob::NotifyStatusChanged => {
-                        let instance_guard = instance.lock().await;
+                        let lifecycle_guard = lifecycle.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
-                        if let WorkerInstance::Running(running) = &*instance_guard {
+                        if let WorkerInstance::Running(running) = &*lifecycle_guard {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
@@ -377,17 +447,36 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             }
         });
 
-        Self {
+        let stop = WorkerStateActorStop::new(
+            {
+                let lifecycle_jobs = lifecycle_jobs.clone();
+                move || {
+                    let _ = lifecycle_jobs.send(LifecycleJob::Stop);
+                }
+            },
+            lifecycle_task,
+            status_jobs.clone(),
+            status_task,
+            async move { status_flusher.begin_delete().await },
+        );
+        let actor = Self {
             commit: Arc::new(OwnerCommitController {
                 status_jobs,
                 owned_agent_id: owned_agent_id.clone(),
             }),
             lifecycle_jobs,
             notification_queued,
-            status_task,
-            lifecycle_task,
+            stop,
             owned_agent_id,
+        };
+        if let Some(task_owner) = task_owner {
+            task_owner.register_actor(&actor.stop_handle());
         }
+        actor
+    }
+
+    pub fn stop_handle(&self) -> Arc<WorkerStateActorStop> {
+        self.stop.clone()
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
@@ -488,7 +577,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
     /// forget: never blocks, and safe to call from store-polled futures and store-keeping
-    /// fibers alike, because the instance lock is only taken on the lifecycle task.
+    /// fibers alike, because the worker lifecycle lock is only taken on the lifecycle task.
     pub fn notify_status_changed(&self) {
         if !self.notification_queued.swap(true, Ordering::AcqRel)
             && self
@@ -577,9 +666,8 @@ impl OwnerCommitController {
 
     /// Sends a job to the status task and waits for its reply.
     ///
-    /// Panics if the task is gone: it is only aborted from `Drop` (when no caller can be in
-    /// flight anymore), so a missing reply means the task itself panicked and the worker's
-    /// status state is no longer trustworthy.
+    /// Panics if the task is gone: orderly shutdown drains accepted jobs after external producers
+    /// stop, so a missing reply means the actor failed or the caller submitted work after shutdown.
     async fn run_status_job<R>(&self, make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob) -> R {
         let (done, done_rx) = oneshot::channel();
         if self.status_jobs.send(make_job(done)).is_err() {
@@ -802,6 +890,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         old_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
+        // Teardown drains an ephemeral oplog, and the oplog sweep archives one stranded by a
+        // crashed pod, so registering an archive per ephemeral invocation would only cost a
+        // scheduler-storage write. With the sweep disabled nothing else covers the crash case, so
+        // the registration still happens. See `OplogSweepConfig::enabled`.
+        if self.agent_mode == AgentMode::Ephemeral && self.deps.config().oplog.sweep.enabled {
+            return;
+        }
+
         if old_status.status != new_status.status
             && matches!(
                 new_status.status,
@@ -868,13 +964,165 @@ fn can_append_invocation(
 
 #[cfg(test)]
 mod tests {
-    use super::{can_append_invocation, complete_status_job};
+    use super::{
+        LifecycleJob, OwnerCommitController, StatusJob, WorkerStateActor, WorkerStateActorStop,
+        can_append_invocation, complete_status_job,
+    };
+    use crate::workerctx::default::Context;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, Timestamp};
+    use golem_common::model::{
+        AgentId, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef, Timestamp,
+    };
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use test_r::test;
-    use tokio::sync::{Notify, oneshot};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use test_r::{test, timeout};
+    use tokio::sync::{Notify, mpsc, oneshot};
+
+    #[test]
+    #[timeout("30s")]
+    async fn stop_drains_lifecycle_status_work_and_retains_cancelled_joins() {
+        for pause_stage in 0..3 {
+            for (panic_lifecycle, panic_status) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let entered = Arc::new(Notify::new());
+                let release = Arc::new(Notify::new());
+                let status_finished = Arc::new(AtomicBool::new(false));
+                let lifecycle_finished = Arc::new(AtomicBool::new(false));
+                let finalized = Arc::new(AtomicBool::new(false));
+                let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
+                let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel();
+                let status_task = tokio::spawn({
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let finished = status_finished.clone();
+                    async move {
+                        // A lifecycle job must be able to submit status work before status Stop.
+                        let Some(StatusJob::AttachedStatus { done }) = status_rx.recv().await
+                        else {
+                            panic!("status actor stopped before lifecycle work finished");
+                        };
+                        done.send(Arc::new(AgentStatusRecord::default())).unwrap();
+                        assert!(matches!(status_rx.recv().await, Some(StatusJob::Stop)));
+                        if pause_stage == 1 {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
+                        finished.store(true, Ordering::Release);
+                        assert!(!panic_status, "injected status actor panic");
+                    }
+                });
+                let lifecycle_task = tokio::spawn({
+                    let status_jobs = status_jobs.clone();
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let finished = lifecycle_finished.clone();
+                    async move {
+                        assert!(matches!(
+                            lifecycle_rx.recv().await,
+                            Some(LifecycleJob::Stop)
+                        ));
+                        let (done, response) = oneshot::channel();
+                        assert!(status_jobs.send(StatusJob::AttachedStatus { done }).is_ok());
+                        response.await.unwrap();
+                        if pause_stage == 0 {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
+                        finished.store(true, Ordering::Release);
+                        assert!(!panic_lifecycle, "injected lifecycle actor panic");
+                    }
+                });
+                let stop = WorkerStateActorStop::new(
+                    {
+                        let lifecycle_jobs = lifecycle_jobs.clone();
+                        move || {
+                            let _ = lifecycle_jobs.send(LifecycleJob::Stop);
+                        }
+                    },
+                    lifecycle_task,
+                    status_jobs.clone(),
+                    status_task,
+                    {
+                        let entered = entered.clone();
+                        let release = release.clone();
+                        let finalized = finalized.clone();
+                        let status_finished = status_finished.clone();
+                        let lifecycle_finished = lifecycle_finished.clone();
+                        async move {
+                            assert!(status_finished.load(Ordering::Acquire));
+                            assert!(lifecycle_finished.load(Ordering::Acquire));
+                            if pause_stage == 2 {
+                                entered.notify_one();
+                                release.notified().await;
+                            }
+                            finalized.store(true, Ordering::Release);
+                        }
+                    },
+                );
+                let weak_stop = Arc::downgrade(&stop);
+                let owned_agent_id = OwnedAgentId::new(
+                    EnvironmentId::new(),
+                    &AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "actor-stop".into(),
+                    },
+                );
+                let actor = Arc::new(WorkerStateActor::<Context> {
+                    commit: Arc::new(OwnerCommitController {
+                        status_jobs,
+                        owned_agent_id: owned_agent_id.clone(),
+                    }),
+                    lifecycle_jobs,
+                    notification_queued: Arc::new(AtomicBool::new(false)),
+                    stop,
+                    owned_agent_id,
+                });
+                if pause_stage == 2 {
+                    // No explicit stop: dropping the old shell must initiate the same drain.
+                    drop(actor);
+                    entered.notified().await;
+                } else {
+                    let first = tokio::spawn({
+                        let actor = actor.clone();
+                        async move { actor.stop_handle().stop_and_wait().await }
+                    });
+                    entered.notified().await;
+                    first.abort();
+                    assert!(first.await.unwrap_err().is_cancelled());
+                    drop(actor);
+                }
+                // The completion driver keeps a weak registration upgradeable after shell Drop.
+                let stop = weak_stop.upgrade().unwrap();
+                let mut retry = Box::pin(stop.stop_and_wait());
+                let mut overlapping = Box::pin(stop.wait());
+                assert!(futures::poll!(retry.as_mut()).is_pending());
+                assert!(futures::poll!(overlapping.as_mut()).is_pending());
+                assert!(!finalized.load(Ordering::Acquire));
+                release.notify_one();
+                let (result, overlapping) = tokio::join!(retry, overlapping);
+                assert!(lifecycle_finished.load(Ordering::Acquire));
+                assert!(status_finished.load(Ordering::Acquire));
+                assert!(finalized.load(Ordering::Acquire));
+                assert_eq!(result, overlapping);
+                assert_eq!(result, stop.stop_and_wait().await);
+                assert_eq!(result.is_err(), panic_lifecycle || panic_status);
+                if let Err(error) = result {
+                    assert_eq!(
+                        error.contains("Worker lifecycle actor failed"),
+                        panic_lifecycle
+                    );
+                    assert_eq!(error.contains("status actor failed"), panic_status);
+                }
+                drop(stop);
+                while weak_stop.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
 
     fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
         PendingInvocationRef {

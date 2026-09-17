@@ -16,26 +16,6 @@ use super::index::validate_items_payload;
 use super::items::AppliedWriteBatch;
 use super::*;
 
-pub(crate) fn validate_external_input_payload(
-    payload: &StreamItemsPayload,
-) -> Result<(), StreamStoreError> {
-    match payload {
-        StreamItemsPayload::Values(values) => {
-            if values.is_empty() {
-                return Err(StreamStoreError::InvalidValueBatch);
-            }
-            if values
-                .iter()
-                .any(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE)
-            {
-                return Err(StreamStoreError::ItemTooLarge);
-            }
-            Ok(())
-        }
-        StreamItemsPayload::PackedU8(_) => validate_items_payload(payload),
-    }
-}
-
 impl DurableStreamStore {
     /// Admits one externally sequenced input and commits it before reporting acceptance.
     pub async fn append_external_input(
@@ -47,21 +27,8 @@ impl DurableStreamStore {
         close: bool,
         producer: Option<ExternalProducer>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
-        if let Some(payload) = &payload {
-            validate_external_input_payload(payload)?;
-        }
-        let retained_bytes = match &payload {
-            Some(StreamItemsPayload::Values(values)) => {
-                values.iter().map(Vec::len).sum::<usize>() * 2
-            }
-            Some(StreamItemsPayload::PackedU8(bytes)) => {
-                bytes.len() * (std::mem::size_of::<CommittedProducerStreamEvent>() + 2)
-            }
-            None => 0,
-        } + producer.as_ref().map_or(0, |producer| match &producer.id {
-            ExternalProducerId::Client(id) => id.len(),
-            ExternalProducerId::Attached => 0,
-        });
+        Self::validate_external_input(payload.as_ref())?;
+        let retained_bytes = Self::external_input_reservation(payload.as_ref(), producer.as_ref());
         let session_key = session_key.clone();
         self.run_owned(context, retained_bytes, move |owner, context| async move {
             owner
@@ -76,6 +43,79 @@ impl DurableStreamStore {
                 .await
         })
         .await
+    }
+
+    /// Rejects empty value batches, oversized items and malformed packed byte batches.
+    pub(crate) fn validate_external_input(
+        payload: Option<&StreamItemsPayload>,
+    ) -> Result<(), StreamStoreError> {
+        match payload {
+            Some(StreamItemsPayload::Values(values)) => {
+                if values.is_empty() {
+                    return Err(StreamStoreError::InvalidValueBatch);
+                }
+                if values
+                    .iter()
+                    .any(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE)
+                {
+                    return Err(StreamStoreError::ItemTooLarge);
+                }
+                Ok(())
+            }
+            Some(payload @ StreamItemsPayload::PackedU8(_)) => validate_items_payload(payload),
+            None => Ok(()),
+        }
+    }
+
+    /// Bytes an admission has to reserve while the batch is queued and committed.
+    pub(crate) fn external_input_reservation(
+        payload: Option<&StreamItemsPayload>,
+        producer: Option<&ExternalProducer>,
+    ) -> usize {
+        let payload_bytes = match payload {
+            Some(StreamItemsPayload::Values(values)) => {
+                values.iter().map(Vec::len).sum::<usize>() * 2
+            }
+            Some(StreamItemsPayload::PackedU8(bytes)) => {
+                bytes.len() * (std::mem::size_of::<CommittedProducerStreamEvent>() + 2)
+            }
+            None => 0,
+        };
+        payload_bytes
+            + producer.map_or(0, |producer| match &producer.id {
+                ExternalProducerId::Client(id) => id.len(),
+                ExternalProducerId::Attached => 0,
+            })
+    }
+
+    /// Commits one externally sequenced input under an admission the caller already holds.
+    /// The caller validated the batch, reserved [`Self::external_input_reservation`] bytes for
+    /// it and keeps the session lock, so slot state it checked before submitting stays valid
+    /// until the commit.
+    pub(crate) async fn append_external_input_admitted(
+        self: &Arc<Self>,
+        admission: &Arc<StreamWriteAdmission>,
+        session_key: &StreamSessionKey,
+        stream_id: StreamId,
+        payload: Option<StreamItemsPayload>,
+        close: bool,
+        producer: Option<ExternalProducer>,
+    ) -> Result<ExternalAppendOutcome, StreamStoreError> {
+        let session_key = session_key.clone();
+        admission
+            .submit(move |owner, context| async move {
+                owner
+                    .append_external_input_owned(
+                        &context,
+                        &session_key,
+                        stream_id,
+                        payload,
+                        close,
+                        producer,
+                    )
+                    .await
+            })
+            .await
     }
 
     async fn append_external_input_owned(
