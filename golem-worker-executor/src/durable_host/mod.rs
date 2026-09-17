@@ -974,15 +974,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .clone(),
         };
 
-        let host_only_primary = matches!(runtime, OwnerRuntime::Agent)
-            && matches!(owner_context, ResolvedOwnerContext::ComponentBaseline);
-        let executable_component_metadata = if !host_only_primary {
-            match &executable {
-                crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
-                crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
-            }
-        } else {
-            None
+        let executable_component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
         };
         if executable_component_metadata
             .is_some_and(|component| component.metadata.has_shared_linear_memory())
@@ -3843,7 +3837,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         let load_result = invoke_observed_and_traced(
                             lowered,
                             store,
-                            Some(instance),
+                            instance,
                             InvocationMode::Replay,
                         )
                         .await;
@@ -4107,8 +4101,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .begin_call_snapshotting_function();
 
         let load_result =
-            invoke_observed_and_traced(lowered, store, Some(instance), InvocationMode::Replay)
-                .await;
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
 
         store
             .as_context_mut()
@@ -5762,18 +5755,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .await?;
         }
 
-        let (agent_mode, is_agent) = {
-            let component = store.as_context().data().component_metadata();
-            (
-                store.as_context().data().agent_mode(),
-                component.metadata.is_agent(),
-            )
-        };
+        let agent_mode = store.as_context().data().agent_mode();
 
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                (agent_mode == AgentMode::Durable || // durable components are fully replayed
-                    (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
+            let context = store.as_context();
+            let durable_ctx = context.data().durable_ctx();
+            let cont = durable_ctx.state.is_replay() && should_replay_invocation(
+                agent_mode,
+                durable_ctx.owner_context(),
+                number_of_replayed_functions,
+            );
 
             if cont {
                 let oplog_entry = store
@@ -5805,6 +5796,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             invocation_payload,
                             invocation_context.clone(),
                         );
+                        if agent_mode == AgentMode::Ephemeral
+                            && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
+                        {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "AgentInitialization for ephemeral initialization replay",
+                                format!("{:?}", agent_invocation.kind()),
+                            ));
+                        }
                         let scope_card = agent_invocation.scope_card().cloned();
                         let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
                         let payload_scope_card_id =
@@ -5886,7 +5885,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
-                            Some(instance),
+                            instance,
                             InvocationMode::Replay,
                         )
                         .instrument(span)
@@ -6180,55 +6179,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
     async fn prepare_instance(
         agent_id: &AgentId,
-        instance: Option<&Instance>,
+        instance: &Instance,
         store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        let prepare_result = if instance.is_none() {
-            if store.as_context().data().agent_mode() != AgentMode::Ephemeral {
-                return Err(WorkerExecutorError::failed_to_resume_worker(
-                    agent_id.clone(),
-                    WorkerExecutorError::runtime(
-                        "Host-only primary runtime requires an ephemeral agent",
-                    ),
-                ));
-            }
-            if !matches!(
-                store.as_context().data().durable_ctx().owner_context(),
-                ResolvedOwnerContext::ComponentBaseline
-            ) {
-                return Err(WorkerExecutorError::failed_to_resume_worker(
-                    agent_id.clone(),
-                    WorkerExecutorError::runtime(
-                        "Host-only primary runtime requires explicit component-baseline ownership",
-                    ),
-                ));
-            }
-
-            store
-                .as_context_mut()
-                .data_mut()
-                .durable_ctx_mut()
-                .switch_to_live()
-                .await?;
-            store
-                .as_context_mut()
-                .data_mut()
-                .get_public_state()
-                .oplog()
-                .add(OplogEntry::restart())
-                .await;
-            Ok(None)
-        } else if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
-            let instance = instance.ok_or_else(|| {
-                WorkerExecutorError::runtime("component instance unexpectedly missing")
-            })?;
+        let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
-            // We have to replay the initialize call for agents:
+            // Only typed agent owners have an initialize call to replay.
             let replay_decision = Self::resume_replay(store, instance, false).await;
             record_resume_worker(start.elapsed());
 
@@ -6255,9 +6216,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 replay_decision
             }
         } else {
-            let instance = instance.ok_or_else(|| {
-                WorkerExecutorError::runtime("component instance unexpectedly missing")
-            })?;
             let pending_update = store
                 .as_context_mut()
                 .data_mut()
@@ -6898,6 +6856,15 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
     ) || status.has_pending_work()
 }
 
+fn should_replay_invocation(
+    mode: AgentMode,
+    owner: &ResolvedOwnerContext,
+    replayed_invocations: usize,
+) -> bool {
+    mode == AgentMode::Durable
+        || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
+}
+
 fn store_is_live(
     entity_execution_mode: Option<InvocationExecutionMode>,
     local_live_tail: bool,
@@ -7149,6 +7116,43 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn ephemeral_replay_is_only_for_typed_owner_initialization() {
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+            AgentTypeName("counter".to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String("meaningful-constructor-input".to_string()),
+            ),
+            None,
+        )));
+        assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
+        assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
+        for owner in [
+            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::ComponentBaseline,
+        ] {
+            for replayed in [0, 1, 3] {
+                assert!(!should_replay_invocation(
+                    AgentMode::Ephemeral,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+        for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
+            for replayed in [0, 1, 3] {
+                assert!(should_replay_invocation(
+                    AgentMode::Durable,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+    }
 
     #[test]
     fn entity_store_liveness_is_scoped_to_its_invocation_mode() {

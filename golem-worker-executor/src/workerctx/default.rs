@@ -608,7 +608,7 @@ impl ExternalOperations<Context> for Context {
 
     async fn prepare_instance(
         agent_id: &AgentId,
-        instance: Option<&Instance>,
+        instance: &Instance,
         store: &mut wasmtime::Store<Self>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Context>::prepare_instance(agent_id, instance, store).await

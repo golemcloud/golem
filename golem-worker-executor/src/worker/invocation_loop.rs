@@ -279,6 +279,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let kind = pending_interrupt
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
+                    if self.parent.initial_worker_metadata.owner_kind
+                        == OwnerKind::EphemeralExternalTool
+                    {
+                        // Core initialization has already entered the executable Store. Losing it
+                        // is terminal for an external owner, just as losing its invocation body is.
+                        self.parent
+                            .add_and_commit_oplog(OplogEntry::interrupted())
+                            .await;
+                        self.stop_unloaded(Some(super::inactive_ephemeral_agent_error()))
+                            .await;
+                        self.parent.remove_from_active_agents().await;
+                        self.archive_ephemeral_oplog();
+                        break;
+                    }
                     // Interrupted while instantiating: record the same lifecycle oplog entry the
                     // invocation failure path would (`Suspend`/`Interrupted`), then park or
                     // restart. There is no store to run `on_invocation_failure` on, but no
@@ -366,7 +380,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         parent: self.parent.clone(),
                         waiting_for_command: self.waiting_for_command.clone(),
                         interrupt_signal: self.interrupt_signal.clone(),
-                        instance: agent.runtime.instance.as_ref(),
+                        instance: &agent.runtime.instance,
                         store: &agent.runtime.store,
                         filesystem: &agent.filesystem,
                         invocations_since_snapshot: 0,
@@ -521,9 +535,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-                // A host-only owner cannot reconstruct accepted execution after losing its Store.
+                // An external owner cannot reconstruct accepted execution after losing its Store.
                 // Record terminal interruption instead of leaving the accepted key pending behind
-                // a retry marker or silently starting an empty replacement Store.
+                // a retry marker or starting a replacement component instance.
                 if matches!(
                     final_decision,
                     Some(
@@ -1238,7 +1252,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
-    instance: Option<&'a Instance>,
+    instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     invocations_since_snapshot: u64,
@@ -1767,16 +1781,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn resume_replay(&self) -> CommandOutcome {
         async {
             let mut store = self.store.lock().await;
-            let Some(instance) = self.instance else {
-                let err = WorkerExecutorError::runtime(
-                    "Cannot resume guest replay without a component instance",
-                );
-                warn!("Failed to resume replay: {err}");
-                store.data().set_suspended();
-                return CommandOutcome::BreakOuterLoop(Some(err));
-            };
 
-            let resume_replay_result = Ctx::resume_replay(&mut *store, instance, true).await;
+            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
@@ -2103,7 +2109,7 @@ async fn take_pending_interrupt(
 struct Invocation<'a, Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
-    instance: Option<&'a Instance>,
+    instance: &'a Instance,
     store: &'a mut Store<Ctx>,
     uses_streams: bool,
 }
@@ -2635,15 +2641,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// The inner implementation of the manual update command
     async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
-        if self.instance.is_none() {
-            return self
-                .fail_update(
-                    target_revision,
-                    "cannot perform a manual update without a component instance".to_string(),
-                )
-                .await;
-        }
-
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
         // update, replay starts from the snapshot and skips everything before it. No durable call
         // or scope may span that cut, so refuse the update while any is still open.
@@ -2924,11 +2921,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     async fn save_snapshot(&mut self) -> CommandOutcome {
-        if self.instance.is_none() {
-            warn!("Skipping periodic snapshot because the runtime has no component instance");
-            return CommandOutcome::Continue;
-        }
-
         // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
         // before it), so no durable call or scope may span it. Skip this periodic snapshot when
         // the worker is not at a safe boundary; the next scheduled snapshot will retry.

@@ -45,7 +45,7 @@ mcp:
 
 Here, `my-app:tool-owner` must already have a resolved component-baseline binding for `file-tools`. Component-level bindings also apply to real agents, with their agent-specific overrides. The MCP deployment must contain at least one agent or tool. All security scheme references in the deployment must agree; that scheme protects the whole domain.
 
-Each call creates a fresh, host-only **ephemeral owner** using that component's configuration, permissions, files, and tool bindings. It does not instantiate the component's primary guest or call its agent constructor. Tool and middleware bodies run through native invocation queueing and permission checks. Accepted execution is not restarted after owner loss. To invoke a tool on an existing real agent, use the native REST API or `golem tool invoke --agent`, not MCP.
+Each call creates a fresh **ephemeral owner** using that component's configuration, permissions, files, and tool bindings. It instantiates the deployed component, including its core initializers, but does not select an agent type or call an agent constructor. Tool and middleware bodies run through native invocation queueing and permission checks. Accepted execution is not restarted after owner loss, including interruption during core initialization. To invoke a tool on an existing real agent, use the native REST API or `golem tool invoke --agent`, not MCP.
 
 ### Commands and schemas
 

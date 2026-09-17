@@ -48,7 +48,7 @@ pub enum ResolvedOwnerContext {
     Agent(Box<ParsedAgentId>),
     /// A non-agent component's guest worker, using component-level provision policy.
     ComponentWorker,
-    /// A host-only ephemeral owner that never instantiates the component's guest.
+    /// An ephemeral external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
 }
 

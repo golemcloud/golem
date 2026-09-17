@@ -287,7 +287,7 @@ pub struct AgentInvocationResult {
 }
 
 /// Select exactly one target: `agentId` for an existing real owner, or `componentId`
-/// for a fresh host-only ephemeral owner using that deployed component's baseline.
+/// for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
 /// Input is required for await and schedule, and forbidden for lookup.
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]

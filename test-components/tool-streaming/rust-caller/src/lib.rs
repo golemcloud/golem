@@ -9,11 +9,18 @@ use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
-    read_only,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation, read_only,
 };
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
+
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_component_baseline_clock() {
+    if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
+        // Observe the reactor initializer independently of any agent constructor.
+        std::hint::black_box(std::time::Instant::now());
+    }
+}
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub struct StreamEvidence {
@@ -359,6 +366,10 @@ async fn wait_at_crash_checkpoint(name: &str) {
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
     fn new(_name: String) -> Self {
+        assert!(
+            std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
+            "component-baseline owners must not construct an agent"
+        );
         Self
     }
 

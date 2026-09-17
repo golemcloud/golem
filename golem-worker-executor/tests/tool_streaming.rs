@@ -6241,7 +6241,7 @@ async fn native_external_tool_scalar_admission(
     Ok(())
 }
 
-struct MetadataOnlyOwnerComponentService {
+struct BaselineOwnerComponentService {
     inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
     owner_loads: Arc<AtomicUsize>,
     http_port: u16,
@@ -6249,7 +6249,7 @@ struct MetadataOnlyOwnerComponentService {
 
 #[async_trait::async_trait]
 impl golem_worker_executor::services::component::ComponentService
-    for MetadataOnlyOwnerComponentService
+    for BaselineOwnerComponentService
 {
     async fn get(
         &self,
@@ -6266,13 +6266,9 @@ impl golem_worker_executor::services::component::ComponentService
         let metadata = self.inner.get_metadata(id, Some(revision)).await?;
         if metadata.component_name.0 == "virtual-native-policy" {
             self.owner_loads.fetch_add(1, Ordering::SeqCst);
-            return Err(
-                golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "primary executable is unavailable",
-                ),
-            );
         }
-        self.inner.get(engine, id, revision).await
+        let (component, _) = self.inner.get(engine, id, revision).await?;
+        Ok((component, self.get_metadata(id, Some(revision)).await?))
     }
 
     async fn get_metadata(
@@ -6283,9 +6279,7 @@ impl golem_worker_executor::services::component::ComponentService
         golem_service_base::model::component::Component,
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
-        use golem_common::model::component_metadata::{
-            ComponentMetadata, ComponentProvisionConfig, LinearMemory,
-        };
+        use golem_common::model::component_metadata::ComponentProvisionConfig;
         let mut component = self.inner.get_metadata(id, revision).await?;
         if component.component_name.0 == "virtual-native-policy" {
             let permissions = component
@@ -6295,26 +6289,17 @@ impl golem_worker_executor::services::component::ComponentService
                 .unwrap()
                 .initial_permissions
                 .clone();
-            component.metadata = ComponentMetadata::from_parts(
-                Default::default(),
-                vec![LinearMemory {
-                    initial: u64::MAX / 2,
-                    maximum: None,
-                    shared: true,
-                }],
-                None,
-                None,
-                Vec::new(),
-                BTreeMap::new(),
-            )
-            .with_component_config(
+            component.metadata = component.metadata.with_component_config(
                 Default::default(),
                 ComponentProvisionConfig {
                     initial_permissions: permissions,
-                    env: BTreeMap::from([(
-                        "NATIVE_ORDER_HTTP_PORT".to_string(),
-                        self.http_port.to_string(),
-                    )]),
+                    env: BTreeMap::from([
+                        (
+                            "NATIVE_ORDER_HTTP_PORT".to_string(),
+                            self.http_port.to_string(),
+                        ),
+                        ("FORBID_AGENT_CONSTRUCTION".to_string(), "true".to_string()),
+                    ]),
                     ..Default::default()
                 },
             );
@@ -6367,9 +6352,15 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     let owner_loads = Arc::new(AtomicUsize::new(0));
     let loads = owner_loads.clone();
     let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::EveryNInvocation {
+                    count: 1,
+                };
+        })),
         environment_state_service: Some(environment_state.clone()),
         wrap_component_service: Some(Arc::new(move |inner| {
-            Arc::new(MetadataOnlyOwnerComponentService {
+            Arc::new(BaselineOwnerComponentService {
                 inner,
                 owner_loads: loads.clone(),
                 http_port,
@@ -6460,7 +6451,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     let owner_metadata = first.get_latest_worker_metadata().await;
     assert_eq!(owner_metadata.owner_kind, OwnerKind::EphemeralExternalTool);
     assert_eq!(owner_metadata.agent_mode, AgentMode::Ephemeral);
-    assert_eq!(owner_metadata.last_known_status.total_linear_memory_size, 0);
+    assert!(owner_metadata.last_known_status.total_linear_memory_size > 0);
     assert_eq!(
         owner_metadata.fingerprint,
         second.get_latest_worker_metadata().await.fingerprint
@@ -6491,9 +6482,30 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             None,
         )
     };
-    let (output, retry) = tokio::join!(invoke(), invoke());
-    let output = output?;
-    assert_eq!(output, retry?);
+    let mut initializer = first
+        .owner_execution()
+        .test_gate_next_monotonic_clock_start();
+    let check_initialization = async {
+        initializer.entered().await;
+        let oplog = executor.get_oplog(&owner_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        );
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+        initializer.release();
+        Ok::<_, golem_service_base::error::worker_executor::WorkerExecutorError>(())
+    };
+    let (output, retry, ()) = tokio::try_join!(invoke(), invoke(), check_initialization)?;
+    assert_eq!(output, retry);
     let AgentInvocationResult::ExternalTool { result: Ok(result) } = output.result else {
         anyhow::bail!("expected successful baseline external tool result, got {output:?}");
     };
@@ -6502,9 +6514,28 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     };
     assert_eq!(value, "no-stream:native-order");
     assert_eq!(effects.load(Ordering::SeqCst), 1);
-    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
-    assert_eq!(first.memory_requirement().await?, 0);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 1);
+    assert!(
+        first.memory_requirement().await?
+            >= owner_metadata.last_known_status.total_linear_memory_size
+    );
+    assert_eq!(
+        first.resident_component_charge_requirement().await,
+        (
+            caller_component.id,
+            caller_component.revision,
+            owner_metadata.last_known_status.component_size
+        ),
+    );
     let oplog = executor.get_oplog(&owner_id, OplogIndex::INITIAL).await?;
+    assert!(oplog.iter().take_while(|entry| !matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now")),
+        "the real component's core initializer must run before tool dispatch");
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+    );
     assert_eq!(
         oplog
             .iter()
@@ -6548,16 +6579,74 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             tokio::join!(interrupted_call(), crash)
         })
         .await
-        .expect("losing a host-only Store must terminate its accepted invocation");
+        .expect("losing an external owner's Store must terminate its accepted invocation");
     crash_result?;
     interrupted_result.expect_err("ephemeral execution cannot restart after losing its Store");
     interrupted_call()
         .await
-        .expect_err("same-key retry must not restart the lost host-only Store");
+        .expect_err("same-key retry must not restart the lost external owner");
     assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 2);
     executor.delete_worker(&interrupted_id).await?;
     drop(interrupted_gate);
     drop(interrupted);
+
+    let startup_key = IdempotencyKey::fresh();
+    let startup = executor
+        .get_or_add_ephemeral_external_tool(
+            caller_component.id,
+            context.default_environment_id,
+            &startup_key,
+            &InvocationContextStack::fresh(),
+            principal.clone(),
+        )
+        .await?;
+    let startup_id = startup.agent_id();
+    let startup_fingerprint = startup.get_latest_worker_metadata().await.fingerprint;
+    let mut initializer = startup
+        .owner_execution()
+        .test_gate_next_monotonic_clock_start();
+    let startup_call = || {
+        executor.invoke_external_tool(
+            &startup_id,
+            startup_fingerprint,
+            startup_key.clone(),
+            ToolName::try_from("streaming").unwrap(),
+            vec!["no-stream".to_string()],
+            input.clone(),
+            InvocationContextStack::fresh(),
+            principal.clone(),
+            None,
+        )
+    };
+    let interrupt_initialization = async {
+        initializer.entered().await;
+        initializer.abort_as_restart();
+    };
+    let (startup_result, ()) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        tokio::join!(startup_call(), interrupt_initialization)
+    })
+    .await
+    .expect("interrupted core initialization must terminate the accepted tool call");
+    startup_result.expect_err("core initialization must not restart an external owner");
+    startup_call().await.expect_err(
+        "same-key retry must not recreate the component after interrupted initialization",
+    );
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 3);
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    let startup_oplog = executor.get_oplog(&startup_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !startup_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert!(
+        startup_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_)))
+    );
+    executor.delete_worker(&startup_id).await?;
+    drop(startup);
 
     let fresh_key = IdempotencyKey::fresh();
     let fresh = executor
@@ -6571,7 +6660,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         .await?;
     assert_ne!(fresh.agent_id(), owner_id);
 
-    // The component is a policy owner only: there is no agent schema to use for a constructor.
+    // Agent exports exist, but an external owner must not construct or update any agent type.
     first
         .enqueue_manual_update(caller_component.revision)
         .await
@@ -6648,7 +6737,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         AgentInvocationResult::ExternalTool { result: Ok(_) }
     ));
     assert_eq!(effects.load(Ordering::SeqCst), 1);
-    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 4);
 
     let failed = executor
         .invoke_external_tool(
@@ -6666,7 +6755,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         .expect_err("accepted ephemeral execution must not restart after executor loss");
     assert!(failed.to_string().contains("ephemeral"), "{failed}");
     assert_eq!(effects.load(Ordering::SeqCst), 1);
-    assert_eq!(owner_loads.load(Ordering::SeqCst), 0);
+    assert_eq!(owner_loads.load(Ordering::SeqCst), 4);
     executor.delete_worker(&lost_id).await?;
     executor.delete_worker(&owner_id).await?;
     drop(body_gate);

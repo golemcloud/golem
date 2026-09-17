@@ -56,16 +56,17 @@ the body may have mutated owner state before returning that error.
 Virtual owners persist `OwnerKind::EphemeralExternalTool` and use a reserved name derived from the
 idempotency key, scoped by the actual component and environment. They use the resolved component
 baseline, never an arbitrary exported agent schema. `RunningWorker::create_instance` reads owner
-metadata and creates the primary Store through `InstanceHost::create_store` without loading its
-executable or creating an Instance. There is no primary guest memory/module reservation; normal
-filesystem accounting and concurrent-agent admission still apply. Tool and middleware Stores
-retain their own executable memory checks and charges. Host-only `prepare_instance` publishes live
-state and performs normal lifecycle initialization, without guest initialization or replay.
+metadata and instantiates that component through `InstanceHost::instantiate`, with normal executable,
+linear-memory, filesystem and concurrent-agent admission. Component/core initializers run, but no
+agent type or constructor parameters are selected and no `AgentInitialization` is queued.
+Ephemeral preparation replays initialization only for a resolved typed agent owner, not merely
+because the component exports agent schemas. The pending external-tool invocation starts once,
+through the normal live queue after preparation.
 
 Virtual owners follow ordinary ephemeral admission, unloading and retention: one accepted key,
 concurrent same-key convergence, and no restart of accepted incomplete work after Store or executor
-loss. Before unloading a host-only Store, the invocation loop turns recovery decisions into a
-terminal interruption and closes the owner rather than starting an empty replacement Store.
+loss. During core initialization as well as tool execution, the invocation loop turns recovery
+decisions into a terminal interruption and closes the owner rather than starting a replacement Store.
 Reconstructed owners exist only for observation. Updates, guest snapshots and revert are rejected;
 delete, interrupt and result lookup use exact-existing access rather than creating a guest agent.
 `ComponentMetadata::owner_plugins` selects baseline or agent-type installations using the persisted

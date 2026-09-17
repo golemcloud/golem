@@ -3770,9 +3770,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_id = self.owned_agent_id.component_id();
         let current_revision = metadata.last_known_status.component_revision;
         let current_size = metadata.last_known_status.component_size;
-        if self.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-            return startup_component_requirement(component_id, current_revision, 0, 0, 0);
-        }
 
         // Mirror create_instance: a queued pending update is applied by loading
         // its target revision, so charge against that revision rather than the
@@ -3869,11 +3866,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         (
             self.owned_agent_id.component_id(),
             metadata.last_known_status.component_revision,
-            if self.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-                0
-            } else {
-                metadata.last_known_status.component_size
-            },
+            metadata.last_known_status.component_size,
         )
     }
 
@@ -7643,6 +7636,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let ResolvedAgentProperties {
             snapshot_policy, ..
         } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
+        let snapshot_policy =
+            if initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                SnapshotPolicy::Disabled
+            } else {
+                snapshot_policy
+            };
         let execution_status = Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
             agent_mode,
             timestamp: Timestamp::now_utc(),
@@ -7780,11 +7779,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
-                    total_linear_memory_size: if virtual_owner {
-                        0
-                    } else {
-                        component.metadata.initial_linear_memory_bytes()
-                    },
+                    total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
                     active_plugins: component
                         .metadata
                         .owner_plugins(owner_kind, agent_id.as_ref().map(|agent| &agent.agent_type))
@@ -7918,7 +7913,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
-        component_charge: Option<WorkerComponentCharge>,
+        component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -8207,24 +8202,18 @@ impl WaitingWorker {
             // concurrency slot above; otherwise one account could exhaust the
             // memory headroom with workers that are not allowed to run yet.
             let phase_start = std::time::Instant::now();
-            let (memory_grant, component_charge) =
-                if parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-                    (parent.active_agents().acquire_memory(0).await, None)
-                } else {
-                    // Not spanned, for the same reason as the charge resolution above:
-                    // `acquire_memory` retries on the same 500ms delay and logs once per
-                    // attempt. Its duration is recorded as a metric instead.
-                    let (memory, component) = parent
-                        .active_agents()
-                        .acquire_with_component_charge(
-                            memory_requirement,
-                            requirement.component_id,
-                            requirement.component_revision,
-                            requirement.module_bytes,
-                        )
-                        .await;
-                    (memory, Some(component))
-                };
+            // Not spanned, for the same reason as the charge resolution above:
+            // `acquire_memory` retries on the same 500ms delay and logs once per
+            // attempt. Its duration is recorded as a metric instead.
+            let (memory_grant, component_charge) = parent
+                .active_agents()
+                .acquire_with_component_charge(
+                    memory_requirement,
+                    requirement.component_id,
+                    requirement.component_revision,
+                    requirement.module_bytes,
+                )
+                .await;
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::Memory,
                 phase_start.elapsed(),
@@ -8418,7 +8407,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 }
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
-    instance: Option<Instance>,
+    instance: Instance,
     store: async_lock::Mutex<Store<Ctx>>,
 }
 
@@ -8476,7 +8465,7 @@ impl RunningWorker {
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
-        component_charge: Option<WorkerComponentCharge>,
+        component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -8601,17 +8590,7 @@ impl RunningWorker {
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
-        let host_only = worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool;
-        let (pending_update, component, component_metadata) = if host_only {
-            let metadata = parent
-                .component_service()
-                .get_metadata(
-                    component_id,
-                    Some(worker_metadata.last_known_status.component_revision),
-                )
-                .await?;
-            (None, None, metadata)
-        } else {
+        let (pending_update, component, component_metadata) = {
             let pending_update_ref = worker_metadata
                 .last_known_status
                 .pending_updates
@@ -8649,7 +8628,7 @@ impl RunningWorker {
                         }
                         None => None,
                     };
-                    Ok((pending_update, Some(component), component_metadata))
+                    Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
                     if component_revision != worker_metadata.last_known_status.component_revision {
@@ -8675,7 +8654,7 @@ impl RunningWorker {
             }?
         };
 
-        if !host_only && component_metadata.metadata.has_shared_linear_memory() {
+        if component_metadata.metadata.has_shared_linear_memory() {
             return Err(shared_linear_memory_error(&parent).into());
         }
 
@@ -8767,7 +8746,10 @@ impl RunningWorker {
             })
             .map(|config| config.files.clone())
             .unwrap_or_else(|| {
-                if host_only {
+                if matches!(
+                    parent.owner_context,
+                    ResolvedOwnerContext::ComponentBaseline
+                ) {
                     component_metadata_for_replay
                         .metadata
                         .component_provision_config()
@@ -9006,15 +8988,9 @@ impl RunningWorker {
             context.begin_call_snapshotting_function();
         }
         let runtime = async {
-            match component {
-                Some(component) => {
-                    let mut hosted = instance_host.instantiate(context, &component).await?;
-                    instance_host.reconcile_linear_memories(&mut hosted).await?;
-                    let (instance, store) = hosted.into_parts();
-                    Ok((Some(instance), store))
-                }
-                None => Ok((None, instance_host.create_store(context)?)),
-            }
+            let mut hosted = instance_host.instantiate(context, &component).await?;
+            instance_host.reconcile_linear_memories(&mut hosted).await?;
+            Ok::<_, WorkerExecutorError>(hosted.into_parts())
         }
         .await;
         let (instance, mut store) = match runtime {
@@ -9034,12 +9010,8 @@ impl RunningWorker {
                 active_agent.reopen_entity_admission_if_generation(generation);
             }
         }
-        let prepare_result = Ctx::prepare_instance(
-            &parent.owned_agent_id.agent_id,
-            instance.as_ref(),
-            &mut store,
-        )
-        .await;
+        let prepare_result =
+            Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
         let decision = match prepare_result {
             Ok(decision) => decision,
             Err(error) => {

@@ -1335,7 +1335,7 @@ pub mod tool {
         /// Existing agent that owns the invocation
         #[arg(long)]
         pub agent: Option<RawAgentId>,
-        /// Component used to create a fresh host-only invocation owner
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
         #[arg(long)]
         pub component: Option<ComponentName>,
         /// Deployed tool name

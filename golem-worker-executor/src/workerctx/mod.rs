@@ -582,7 +582,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// - Ok(Some(RetryDecision::None)) - the preparation has been interrupted and should not be retried, but it is not an error (example: suspend after resuming a previously interrupted invocation)
     async fn prepare_instance(
         agent_id: &AgentId,
-        instance: Option<&Instance>,
+        instance: &Instance,
         store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
