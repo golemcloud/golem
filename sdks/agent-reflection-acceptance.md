@@ -15,7 +15,32 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 | 3. Reflected | Complete deployed schema | Native | F | F | C | F | F |
 | 4. Dynamic | Binding-only | Native | F | F | C | F | F |
 
-Every other level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the complete schema published by the deployed type rather than a caller-authored partial contract; dynamic clients deliberately have no schema to validate canonical JSON. Native tool reflection is `U` in Effect because Effect does not expose that API.
+Every other agent level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the complete schema published by the deployed type rather than a caller-authored partial contract; dynamic clients deliberately have no schema to validate canonical JSON.
+
+## Native tool reflection matrix
+
+The tool matrix covers all five SDKs, including Effect. A tool has a command path and stream attachments rather than an agent identity or lifecycle. `P` remains pending until focused tests and a deployed-tool proof pass for that SDK and row.
+
+| Level | Caller contract | Style | TypeScript | Effect | Rust | Scala | MoonBit |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1. Exact definition or generated | Complete | Typed | P | P | P | P | P |
+| 2. Caller-authored | Complete or partial command subset | Typed | P | P | P | P | P |
+| 3. Reflected | Complete deployed tool schema | JSON | P | P | P | P | P |
+| 3. Reflected | Complete deployed tool schema | Native | P | P | P | P | P |
+| 4. Dynamic | Name and command path only | Native | P | P | P | P | P |
+
+Other tool level × contract × style combinations are `U`: typed clients require caller-owned codecs, reflected JSON requires discovered schemas, and dynamic calls deliberately have no schema for JSON packing. No SDK is intentionally unavailable for native tool reflection.
+
+### Tool behavior evidence
+
+| Behavior | Focused SDK evidence required | Host-backed evidence required |
+| --- | --- | --- |
+| Accessible discovery, aliases, canonical paths, namespace-only nodes, stale snapshots | Metadata and missing/inaccessible lookup tests in all five SDKs | Deploy and revise a bound tool; prove discovery is caller-filtered and invocation does not silently refresh or retry |
+| Inherited globals, option carriers, repeatable values, defaults, refinements, and constraints | Shared descriptor fixtures and local rejection before RPC in all five SDKs | Invoke a deployed tool from each SDK with positive and negative canonical inputs |
+| Unit/value results, malformed outputs, declared custom and structural remote errors | Awaited and pending tests in all five SDKs | Deployed mismatch/error fixtures with original nested errors preserved |
+| Required/optional stdin and stdout, concurrent collection, trigger restrictions | Scoped stream, cancellation, early-close, and cleanup tests in all five SDKs | Deployed streaming invocation and cancellation, including Effect interruption |
+
+No tool matrix cell is complete solely from a mock-host test.
 
 ## Behavior checklist
 

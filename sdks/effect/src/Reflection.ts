@@ -1,4 +1,5 @@
 /** Effect-native runtime agent reflection and schema-checked clients. @since 1.6.0 */
+export * from "./ToolReflection.js"
 import { Effect, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"

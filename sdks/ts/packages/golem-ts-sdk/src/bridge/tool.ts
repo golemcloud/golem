@@ -232,4 +232,4 @@ export function splitToolRpcError<Declared>(
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
   };
 }
-export type { RpcError, ToolError };
+export type { RpcError };

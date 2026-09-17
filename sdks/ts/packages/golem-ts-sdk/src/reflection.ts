@@ -21,6 +21,17 @@ import {
   type InvocationMetadata,
   type RegisteredAgentType,
 } from 'golem:agent/host@2.0.0';
+export {
+  DynamicToolClient,
+  ToolCommand,
+  ToolRemoteOutputError,
+  ToolType,
+  getAllToolTypes,
+  getToolType,
+  type ReflectedToolClient,
+  type ReflectedToolFailure,
+  type ToolArgument,
+} from './toolReflection';
 import type {
   AgentMethod as HostAgentMethod,
   InputSchema as HostInputSchema,

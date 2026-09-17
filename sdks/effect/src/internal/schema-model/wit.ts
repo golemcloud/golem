@@ -326,6 +326,15 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
 
 /** Decode a Component Model carrier into the recursive SDK model. */
 export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+  const decoded = schemaGraphRootsFromWit(wit, [wit.root])
+  return { defs: decoded.defs, root: decoded.roots[0] }
+}
+
+/** Decode selected roots once against one shared definition pool. */
+export function schemaGraphRootsFromWit(
+  wit: WitSchemaGraph,
+  roots: readonly TypeNodeIndex[],
+): { readonly defs: SchemaGraph["defs"]; readonly roots: readonly SchemaType[] } {
   const nodes = wit.typeNodes
   const witDefs = wit.defs
   // See `schemaValueFromWit`: a flat on-path `Uint8Array` (`1` = on the current
@@ -479,8 +488,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     }
     defs.set(d.id, { name: d.name, body: fromType(d.body) })
   }
-  const root = fromType(wit.root)
-  return { defs, root }
+  const selected = roots.map(fromType)
+  return { defs, roots: selected }
 }
 
 // ============================================================

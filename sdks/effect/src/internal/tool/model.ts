@@ -297,6 +297,17 @@ export interface CommandModel {
 export class CommandBuilder<M extends CommandModel = CommandModel> {
   constructor(readonly model: M) {}
   declare readonly name: M["name"]
+  /** Bind this complete definition to its registered tool name. @since 1.6.0 @category constructors */
+  client(
+    options?: import("../../Tool.js").ClientOptions,
+  ): import("../../Tool.js").Client<
+    ToolDefinition<M["name"], M>,
+    import("../../host/ToolClient.js").ToolClient
+  > {
+    if (!toolClientFactory)
+      throw new Error("tool client runtime is unavailable in this guest world")
+    return toolClientFactory(this as ToolDefinition<M["name"], M>, options) as never
+  }
   implement(
     implementation: [ImplementationRequirements<M, never>] extends [never]
       ? ToolImplementation<M>
@@ -319,7 +330,10 @@ export class CommandBuilder<M extends CommandModel = CommandModel> {
   body<B extends BodyBuilder<any, any, any>>(
     build: (body: BodyBuilder) => B,
   ): CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }> {
-    return new CommandBuilder({ ...this.model, body: build(new BodyBuilder()).model } as never)
+    return new CommandBuilder({
+      ...this.model,
+      body: build(new BodyBuilder()).model,
+    } as never) as unknown as CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }>
   }
   command<N extends string, C extends CommandBuilder<any>>(
     name: N,
@@ -342,6 +356,14 @@ export interface ToolDefinition<
 > {
   readonly name: Name
   readonly model: M
+}
+
+let toolClientFactory:
+  | ((definition: ToolDefinition, options?: import("../../Tool.js").ClientOptions) => unknown)
+  | undefined
+/** @internal Install client construction outside the metadata-only tool model. */
+export const registerToolClientFactory = (factory: typeof toolClientFactory): void => {
+  toolClientFactory = factory
 }
 export interface ErasedToolImplementation {
   readonly [name: string]: Handler<any, any> | ErasedToolImplementation

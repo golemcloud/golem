@@ -118,7 +118,8 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { client, ToolCallError } from './toolClient';
+export { toolClientDefinition, ToolCallError } from './toolClient';
+export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -210,6 +211,7 @@ export {
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
+  getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 export type { StartedToolInvocation } from './bridge/tool';
