@@ -348,6 +348,31 @@ Use `Tool.err(name, value)` for a declared tool error and `Tool.ok(value)` where
 carrier is needed. Tool clients cancel the host future and close owned streams when their scope
 ends.
 
+For a tool selected at runtime, `Reflection.getToolType(name)` and `getAllToolTypes` discover
+caller-visible registrations. The selected command exposes its canonical path, aliases, ordered
+arguments, input schema, result schema, and child commands. Namespace-only nodes remain visible
+but have no callable body.
+
+```ts
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const call = Effect.gen(function* () {
+  const tool = yield* Reflection.getToolType("echo")
+  if (tool) {
+    const command = tool.client.command([])
+    return yield* command.invokeJson({ message: "hello" })
+  }
+})
+```
+
+`invokeJson` and `invokeValue` validate inputs before opening RPC and check declared outputs.
+Canonical JSON records include every argument key; use `null` for absent optional values.
+`startJson` and `startValue` expose scoped stdout, result, concurrent collection, and cancellation
+for pending calls. Use them when stdout is required. `Reflection.DynamicToolClient` accepts a
+caller-packed value when the deployed schema is unavailable and does not infer validation rules.
+Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
+
 `WitTypes.PermissionCard({ polymorphic })` represents a permission card. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding

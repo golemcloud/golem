@@ -5,6 +5,8 @@ import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
+import { t } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -57,6 +59,39 @@ describe("native tool reflection", () => {
       )
     await expect(Effect.runPromise(call)).resolves.toBe("ok")
     expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects a remote result whose graph differs from the declaration", async () => {
+    const codec = Effect.runSync(compile(Schema.String))
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: schemaGraphToWit({ defs: new Map(), root: t.bool() }),
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+        }),
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registered],
+      getTool: () => registered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createStdout: vi.fn() as never,
+      rpc: vi.fn() as never,
+    })
+    const call = new ToolType(registered).client
+      .command([])
+      .invokeJson({ name: "hello" })
+      .pipe(
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, host),
+        Effect.flip,
+      )
+    await expect(Effect.runPromise(call)).resolves.toMatchObject({ phase: "output" })
   })
 
   it("constructs exact and partial typed clients from their definitions", () => {

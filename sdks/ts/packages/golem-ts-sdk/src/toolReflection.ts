@@ -283,6 +283,16 @@ export class ToolCommand {
     return value.result.value;
   }
 
+  private unpackResult(value: SchemaValue): JsonValue {
+    try {
+      return this.result!.unpackJson(value);
+    } catch (cause) {
+      throw new ToolRemoteOutputError(
+        `Remote tool result is not canonical JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
   /** Start a cancelable invocation with a schema-native input. */
   startValue(
     input: SchemaValue,
@@ -306,7 +316,7 @@ export class ToolCommand {
   ): StartedToolInvocation<JsonValue | undefined> {
     const started = this.startValue(this.packJson(input), stdin);
     const settled = started.result.then((value) =>
-      value === undefined ? undefined : this.result!.unpackJson(value),
+      value === undefined ? undefined : this.unpackResult(value),
     );
     return {
       ...started,
@@ -314,8 +324,7 @@ export class ToolCommand {
       collect: async () => {
         const collected = await started.collect();
         return {
-          result:
-            collected.result === undefined ? undefined : this.result!.unpackJson(collected.result),
+          result: collected.result === undefined ? undefined : this.unpackResult(collected.result),
           stdout: collected.stdout,
         };
       },
@@ -335,7 +344,7 @@ export class ToolCommand {
   /** Await a structured canonical JSON result. */
   async invokeJson(input: JsonValue, stdin?: ToolInputStream): Promise<JsonValue | undefined> {
     const value = await this.invokeValue(this.packJson(input), stdin);
-    return value === undefined ? undefined : this.result!.unpackJson(value);
+    return value === undefined ? undefined : this.unpackResult(value);
   }
 
   /** Admit a fire-and-forget invocation without a stdout attachment. */

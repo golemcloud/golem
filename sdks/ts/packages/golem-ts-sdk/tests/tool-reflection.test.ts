@@ -9,6 +9,7 @@ import { encodeTool } from '../src/internal/tool';
 import { compileSchema } from '../src/schema/adapter';
 import { ToolRemoteOutputError, ToolType } from '../src/toolReflection';
 import type { ToolClientRuntime } from '../src/bridge/tool';
+import { v } from '../src/internal/schema-model';
 
 function fixture(result: { readonly malformed?: boolean } = {}) {
   const definition = toolDefinition('reflect-demo').body((body) =>
@@ -50,5 +51,34 @@ describe('native tool reflection', () => {
     await expect(
       tool.client.command([]).invokeJson({ value: 'hello', maybe: null }),
     ).rejects.toBeInstanceOf(ToolRemoteOutputError);
+  });
+
+  it('reports a non-canonical declared result as malformed remote output', async () => {
+    const definition = toolDefinition('numeric-reflection').body((body) =>
+      body.positional('value', z.string()).returns(z.number()),
+    );
+    const output = compileSchema(z.number());
+    const start = vi.fn(() => ({
+      settledResult: Promise.resolve({
+        status: 'fulfilled' as const,
+        value: { result: { graph: output.graph, value: v.f64(Number.NaN) } },
+      }),
+      cancel: vi.fn(),
+    }));
+    const tool = new ToolType(
+      {
+        lookupName: 'numeric-reflection',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start } as ToolClientRuntime,
+    );
+    const command = tool.client.command([]);
+    await expect(command.invokeJson({ value: 'hello' })).rejects.toBeInstanceOf(
+      ToolRemoteOutputError,
+    );
+    await expect(command.startJson({ value: 'hello' }).result).rejects.toBeInstanceOf(
+      ToolRemoteOutputError,
+    );
   });
 });

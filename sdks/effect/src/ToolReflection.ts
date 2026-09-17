@@ -7,6 +7,7 @@ import { ToolClient } from "./host/ToolClient.js"
 import {
   field,
   schemaValueEquals,
+  schemaShapesMatch,
   t,
   v,
   type SchemaGraph,
@@ -293,11 +294,24 @@ export class ToolCommand {
               ? Effect.succeed(undefined)
               : Effect.fail(new ToolReflectionError("output", "unexpected remote result"))
           }
-          if (!terminal.result || !command.result.validateValue(terminal.result.value).success)
+          if (!terminal.result)
             return Effect.fail(
               new ToolReflectionError("output", "missing or malformed remote result"),
             )
-          return Effect.succeed(terminal.result.value)
+          return Effect.try({
+            try: () =>
+              schemaShapesMatch(
+                command.result!.graph,
+                schemaGraphFromWit(terminal.result!.graph),
+              ) && command.result!.validateValue(terminal.result!.value).success,
+            catch: (cause) => new ToolReflectionError("output", cause),
+          }).pipe(
+            Effect.flatMap((valid) =>
+              valid
+                ? Effect.succeed(terminal.result!.value)
+                : Effect.fail(new ToolReflectionError("output", "malformed remote result")),
+            ),
+          )
         }),
       )
       const collect = Effect.all([result, Stream.runCollect(stdout)], {
@@ -461,7 +475,10 @@ export class ToolCommand {
           return new ToolReflectionError("output", "custom error has an unexpected payload")
         return { tag: "tool", error: { name: custom.name } }
       }
-      if (!declared.payload.validateValue(custom.payload.value).success)
+      if (
+        !schemaShapesMatch(declared.payload.graph, schemaGraphFromWit(custom.payload.graph)) ||
+        !declared.payload.validateValue(custom.payload.value).success
+      )
         return new ToolReflectionError("output", "custom error payload is malformed")
       return {
         tag: "tool",
