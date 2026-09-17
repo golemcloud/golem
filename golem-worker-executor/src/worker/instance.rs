@@ -21,7 +21,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog, OplogError};
+use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -420,8 +420,11 @@ impl OwnerExecution {
         }
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
-        self.commit.commit_and_update_state(level).await.0
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+        self.commit
+            .commit_and_update_state(level)
+            .await
+            .map(|(index, _)| index)
     }
 }
 
@@ -723,7 +726,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // process crash can replay and persist the same instantiation growth again.
             owner
                 .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await;
+                .await?;
             owner
                 .startup_linear_memory_bytes
                 .store(allocated_bytes, Ordering::Release);

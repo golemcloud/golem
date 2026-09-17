@@ -24,6 +24,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
 
+/// Whether `epoch` immediately precedes `next`, without calling `LeaseEpoch::next()` on `epoch`
+/// itself - which panics at `u64::MAX` (`checked_add(1).expect(..)`).
+///
+/// `epoch` here is the caller's claimed epoch, taken straight off the wire (a `renew_lease` /
+/// `release_lease` argument, itself `golem_common::model::quota::LeaseEpoch(request.epoch)` in
+/// `grpc.rs` with nothing upstream bounding it) - unlike `pod_lease.epoch`, which only ever
+/// advances by exactly one through this state's own `next()` calls. A `u64::MAX` claim can never
+/// legitimately precede a real stored epoch, so it simply fails this check like any other stale
+/// one, rather than aborting the process.
+fn precedes(epoch: LeaseEpoch, next: LeaseEpoch) -> bool {
+    epoch.0.checked_add(1) == Some(next.0)
+}
+
 pub(super) struct AcquireLeaseResult {
     pub epoch: LeaseEpoch,
     pub allocated_amount: u64,
@@ -367,7 +380,7 @@ impl QuotaState {
         let pod_lease = self.leases.get_mut(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,
@@ -424,7 +437,7 @@ impl QuotaState {
         let pod_lease = self.leases.get(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,

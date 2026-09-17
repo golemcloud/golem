@@ -974,7 +974,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 continue;
             };
 
-            worker.queue_card_revocations(&affected_card_ids).await;
+            // A refusal has already given the agent up; the other agents are still notified.
+            let _ = worker.queue_card_revocations(&affected_card_ids).await;
         }
     }
 

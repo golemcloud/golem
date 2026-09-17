@@ -672,7 +672,8 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
         let (_, changed) = self
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
-            .await;
+            .await
+            .map_err(|fence| OplogError::Fenced(fence).to_string())?;
         if changed {
             self.state_actor.notify_status_changed();
         }
@@ -771,16 +772,18 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     }
 }
 
-/// Why the agent is given up instead of having its startup or replay failure persisted, if it is.
+/// Why the agent is given up because of `error`, if the failure is really a lost shard.
 ///
-/// A failure that is really a lost shard is not this executor's to record. The append would be
-/// refused by the same fence that caused it, and on a shard given up without one it would write a
-/// `Recovery` error into an oplog the new owner is already recovering, which would then replay a
-/// failure this executor had no right to append.
+/// Such a failure is not this executor's to record or to retry. An append would be refused by the
+/// same fence that caused it, and on a shard given up without one it would write an error into an
+/// oplog the new owner is already recovering. A retry in place would reopen the oplog at the epoch
+/// this executor no longer holds. Every path that fails on a lost shard - startup and replay
+/// recovery, streaming-session completion, the dropped-call drain, an interrupt - classifies with
+/// this one predicate, so none of them can take the in-place retry another one refuses.
 ///
 /// `latched` is the fence the oplog holds, for a refusal that reached its caller flattened into
 /// some other error; the classified shapes are recognised without one.
-fn recovery_failure_relinquishment(
+pub(crate) fn shard_lost_relinquishment(
     error: &WorkerExecutorError,
     latched: Option<OplogFence>,
 ) -> Option<RelinquishReason> {
@@ -846,6 +849,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) fn is_relinquished(&self) -> bool {
         self.relinquishment.get().is_some()
+    }
+
+    /// Marks the agent given up when `error` means its shard was lost, per
+    /// [`shard_lost_relinquishment`]. Returns whether the agent is given up, by this failure or
+    /// for an earlier reason: either way the caller must neither record the failure nor retry in
+    /// place. Marked rather than stopped, for the same reason as [`Self::mark_relinquished`]: the
+    /// callers unwind to a stop, some of them while holding the instance lock.
+    pub(crate) fn relinquish_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
+        if let Some(reason) = shard_lost_relinquishment(error, self.oplog.fence()) {
+            self.mark_relinquished(reason);
+        }
+        self.is_relinquished()
     }
 
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
@@ -1355,6 +1370,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
             let init_input = agent_id.parameters.value().clone();
+            // Returned rather than unwrapped: an agent created at an epoch another executor has
+            // already claimed is refused here with `OplogFenced`, which its caller retries on the
+            // shard's owner. Nothing is lost by returning early, since the next load repeats this
+            // check against the same short oplog.
             worker
                 .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                     idempotency_key: init_idempotency_key,
@@ -1362,8 +1381,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     invocation_context: invocation_context_stack.clone(),
                     principal,
                 })
-                .await
-                .expect("Failed enqueuing initial agent invocations to worker");
+                .await?;
         };
         if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
             && worker.has_durable_stream_history()
@@ -1606,6 +1624,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         oom_retry_count: u32,
         existing_start_attempt: Option<Uuid>,
     ) -> Result<Option<Uuid>, WorkerExecutorError> {
+        // A handle kept past a generation this executor has given up must not start it again: the
+        // start would take permits, could append `Resumed` to an oplog the new owner now writes,
+        // and a failure in it would publish, by agent id, to the waiters of the generation that
+        // replaced this one.
+        if this.is_relinquished() {
+            return Err(this.relinquish_error());
+        }
+
         {
             *this.last_resume_request.lock().await = Timestamp::now_utc();
         }
@@ -1649,7 +1675,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         OplogEntry::resumed(),
                         None,
                     )
-                    .await;
+                    .await?;
                 }
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
@@ -1959,7 +1985,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
     }
 
+    /// A start of an agent this executor has given up is never a success, and however it failed,
+    /// its waiters are told to retry on the shard's new owner. Without this a stop that reports a
+    /// generic "stopped before startup completed", or the recovery error a lost shard caused,
+    /// would hand them a failure they surface instead of retrying.
+    fn relinquished_startup_result(
+        &self,
+        result: Result<(), WorkerExecutorError>,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_relinquished() {
+            Err(self.relinquish_error())
+        } else {
+            result
+        }
+    }
+
     fn publish_startup_result(&self, start_attempt: Uuid, result: Result<(), WorkerExecutorError>) {
+        let result = self.relinquished_startup_result(result);
         if !self.startup_attempt.complete(start_attempt, &result) {
             return;
         }
@@ -1993,7 +2035,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             _ => None,
         };
         let is_active = active_attempt == Some(start_attempt);
-        let result = if is_active {
+        let mut result = if is_active {
             Ok(())
         } else {
             Err(WorkerExecutorError::unknown(
@@ -2012,13 +2054,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .last_error_kind
                 == Some(OplogErrorKind::Recovery)
         {
-            self.add_and_commit_oplog_internal(
-                &instance_guard,
-                OplogEntry::recovery_succeeded(),
-                None,
-            )
-            .await;
+            // Refused, the start is not a success: the agent has been given up, its waiters are
+            // told to look for the shard's new owner, and the caller stops it.
+            if self
+                .add_and_commit_oplog_internal(
+                    &instance_guard,
+                    OplogEntry::recovery_succeeded(),
+                    None,
+                )
+                .await
+                .is_err()
+            {
+                result = Err(WorkerExecutorError::ShardingNotReady);
+            }
         }
+        let result = self.relinquished_startup_result(result);
 
         let completed = match &result {
             Ok(()) => self
@@ -2027,24 +2077,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(_) => self.startup_attempt.complete(start_attempt, &result),
         };
 
+        let started = result.is_ok();
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
         drop(instance_guard);
-        is_active
+        started
     }
 
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
         // A recovery that failed because the shard moved is recorded by nobody: the agent is given
-        // up here and recovered by the shard's new owner. Marked rather than stopped, as the caller
-        // stops the worker right after this and that stop is where the agent is dropped.
-        if let Some(reason) = recovery_failure_relinquishment(error, self.oplog.fence()) {
-            self.mark_relinquished(reason);
-            return;
-        }
-        // Given up for a reason that never reached this error - a revoked or reassigned shard. The
+        // up here and recovered by the shard's new owner. The caller stops the worker right after
+        // this, and that stop is where the agent is dropped. An agent given up for a reason that
+        // never reached this error - a revoked or reassigned shard - is not recorded either: the
         // oplog would still accept the entry, at the epoch the agent no longer owns in spirit.
-        if self.is_relinquished() {
+        if self.relinquish_if_shard_lost(error) {
             return;
         }
 
@@ -2068,15 +2115,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let error = recovery_agent_error(error);
         let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
             .then_some(RetryPolicyState::Terminal);
-        self.add_and_commit_oplog(OplogEntry::error(
-            None,
-            OplogErrorKind::Recovery,
-            error,
-            retry_from,
-            false,
-            retry_policy_state,
-        ))
-        .await;
+        // A refusal marks the agent given up, which the caller's stop acts on.
+        let _ = self
+            .add_and_commit_oplog(OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                error,
+                retry_from,
+                false,
+                retry_policy_state,
+            ))
+            .await;
     }
 
     pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
@@ -2782,18 +2831,52 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
-    pub async fn enqueue_update(&self, update_description: UpdateDescription) {
-        // Bump + commit under the same instance lock.
+    pub async fn enqueue_update(
+        &self,
+        update_description: UpdateDescription,
+    ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
+        self.enqueue_update_locked(&instance_guard, update_description)
+            .await
+    }
+
+    /// Enqueues an update from inside this worker's own invocation loop. Returns `Ok(false)`,
+    /// enqueuing nothing, when the worker is stopping or has been given up, for the reasons given
+    /// on [`Self::cancel_invocation_from_loop`]. The manual update that produced the description
+    /// stays pending in the oplog and runs again in the next generation, here or on the shard's
+    /// new owner.
+    pub(crate) async fn enqueue_update_from_loop(
+        &self,
+        update_description: UpdateDescription,
+    ) -> Result<bool, WorkerExecutorError> {
+        let instance_guard = self.instance.lock().await;
+        if self.stopping_or_relinquished(&instance_guard) {
+            return Ok(false);
+        }
+        self.enqueue_update_locked(&instance_guard, update_description)
+            .await?;
+        Ok(true)
+    }
+
+    fn stopping_or_relinquished(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
+        matches!(&**instance_guard, WorkerInstance::Stopping(_)) || self.is_relinquished()
+    }
+
+    async fn enqueue_update_locked(
+        &self,
+        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        update_description: UpdateDescription,
+    ) -> Result<(), WorkerExecutorError> {
+        // Bump + commit under the same instance lock.
         self.bump_read_only_cache_epoch();
-        let entry = OplogEntry::pending_update(update_description.clone());
+        let entry = OplogEntry::pending_update(update_description);
         self.add_and_commit_oplog_internal(
-            &instance_guard,
+            instance_guard,
             entry,
             Some(WorkerCommand::WorkAvailable),
         )
-        .await;
-        drop(instance_guard);
+        .await?;
+        Ok(())
     }
 
     /// Enqueues a manual update.
@@ -3471,7 +3554,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+    ) -> Result<(), OplogError> {
         let done = {
             let mut growth = self.memory_growth.lock().unwrap();
             let entry = OplogEntry::successful_update(
@@ -3484,12 +3567,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.state_actor
                 .queue_ordered_oplog_entry(self.clone(), entry)
         };
-        if done.await.is_err() {
+        // A refusal is returned: an update the oplog does not record has not been applied.
+        done.await.unwrap_or_else(|_| {
             panic!(
                 "Worker state actor for {} dropped an ordered oplog entry",
                 self.owned_agent_id
-            );
-        }
+            )
+        })
     }
 
     pub(crate) fn request_memory_limit_interrupt(self: &Arc<Self>, memory: LinearMemoryTracker) {
@@ -3728,7 +3812,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     entry,
                     None,
                 )
-                .await;
+                .await?;
             }
 
             if let Some(idempotency_key) = semantic_idempotency_key {
@@ -4249,7 +4333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             streams
                 .commit_consumer_journal()
                 .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .map_err(|error| self.runtime_error_unless_fenced(error))?;
         }
         for mapping in &foreign_mappings {
             if producer.owns_handle_identity(&mapping.handle)
@@ -4261,9 +4345,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 continue;
             }
             let mut retry_delay = Duration::from_millis(10);
+            // Not bounded: the pending invocation and its attachment are already committed, so
+            // giving up would report a failure for an invocation the agent still runs. Only an
+            // agent this executor no longer owns stops retrying.
             loop {
                 match streams.activate_foreign_mapping(mapping.clone(), 1).await {
                     Ok(()) => break,
+                    // A refusal is permanent. Retrying it would hold the instance lock forever,
+                    // and the relinquish that has to take that lock could never stop the agent.
+                    Err(_) if self.oplog.fence().is_some() => {
+                        return Err(self.runtime_error_unless_fenced(
+                            "durable foreign topology activation was fenced".to_string(),
+                        ));
+                    }
+                    // A revoke writes nothing, so no fence latches: the mark is all there is, and
+                    // `relinquish` is already waiting for this lock.
+                    Err(_) if self.is_relinquished() => return Err(self.relinquish_error()),
                     Err(error) => {
                         warn!(
                             session = %prepared.attempt.session_key.idempotency_key,
@@ -4283,6 +4380,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .expect("persisted durable session has a commit notification")
                 .send(());
         } else if !attached_during_prepare {
+            // Refused, the invocation is not accepted: the dropped notification tells the waiter
+            // nothing was committed, and the error keeps `Accepted` from being sent.
             self.state_actor
                 .commit_and_update_state_notifying(
                     CommitLevel::Always,
@@ -4290,7 +4389,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .take()
                         .expect("legacy durable session has a commit notification"),
                 )
-                .await;
+                .await
+                .map_err(|fence| self.relinquished_by(fence))?;
             self.state_actor.notify_status_changed();
         }
         if !already_attached && let WorkerInstance::Running(running) = &*instance_guard {
@@ -4912,7 +5012,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let commit: DurableStreamCommit = Arc::new(move |committed| {
                     let state_actor = state_actor.clone();
                     Box::pin(async move {
-                        let (_, changed) = if let Some(committed) = committed {
+                        let committed = if let Some(committed) = committed {
                             state_actor
                                 .commit_and_update_state_notifying(CommitLevel::Always, committed)
                                 .await
@@ -4921,7 +5021,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 .commit_and_update_state(CommitLevel::Always)
                                 .await
                         };
-                        if changed {
+                        // A refusal is not reported through this closure: the producer reads it
+                        // back from the oplog's latch, which the refused append set before the
+                        // status actor replied, and the actor has spawned the relinquish.
+                        if let Ok((_, true)) = committed {
                             state_actor.notify_status_changed();
                         }
                     })
@@ -5432,79 +5535,88 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
-        let (result, changed) = self.state_actor.commit_and_update_state(commit_level).await;
-        if changed {
-            // The notification goes through the worker-state actor's lifecycle queue so that
-            // this method never waits on (or becomes a queued owner of) the instance lock. This
-            // method runs inside durable-call host futures polled by wasmtime's store event loop
-            // and on store-keeping wasm fibers, neither of which may block on locks shared with
-            // the other (see the `state_actor` module docs).
-            self.state_actor.notify_status_changed();
-        }
-        result
-    }
-
-    // Should only be called from invocation loop
-    pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        let result = self.add_to_oplog_or_relinquish(entry).await;
-        self.commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
-        result
-    }
-
-    /// Adds and commits an entry that gates a side effect - a durable scope `Start` or a remote
-    /// transaction's begin - and reports it as fenced when the storage refused it.
+    /// Commits the buffered entries and folds them into the published status.
     ///
-    /// `add_and_commit_oplog` cannot be used for these. Below the commit threshold an add only
-    /// buffers, so it answers with an index even on an oplog whose fence has latched, and the
-    /// status actor answers the refused commit that follows by spawning the relinquish rather
-    /// than failing. The caller would run its side effect for an entry that never reached the
-    /// storage, and the shard's new owner, finding no `Start`, would run it again.
-    ///
-    /// Every other storage failure keeps the fail-stop behaviour of `add_to_oplog_or_relinquish`.
-    pub async fn add_and_commit_oplog_or_fenced(
-        &self,
-        entry: OplogEntry,
-    ) -> Result<OplogIndex, OplogError> {
-        let index = match self.oplog.add(entry).await {
-            Ok(index) => index,
-            Err(OplogError::Fenced(fence)) => {
-                self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
-                return Err(OplogError::Fenced(fence));
-            }
-            Err(error) => panic!("oplog write: {error}"),
-        };
-        self.commit_oplog_or_fenced(CommitLevel::Always).await?;
-        Ok(index)
-    }
-
-    /// Commits the buffered entries, reporting a refused commit as fenced; for a commit a side
-    /// effect waits on (see [`Self::add_and_commit_oplog_or_fenced`]).
-    ///
-    /// The fence is read from the oplog's latch rather than from the commit, which swallows it.
-    /// That read is not early: the refused append latches the fence before the status actor
-    /// replies, and this awaits the reply.
-    pub async fn commit_oplog_or_fenced(
+    /// A commit the storage refused is returned as `OplogError::Fenced`, and the agent is marked
+    /// relinquished. It has to be reported rather than folded into "nothing changed": below the
+    /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
+    /// caller about to run a side effect, publish a result or acknowledge a request must not do
+    /// it for entries that never reached the storage. The status actor has already spawned the
+    /// relinquish that drops the agent from this executor.
+    pub async fn commit_oplog_and_update_state(
         &self,
         commit_level: CommitLevel,
     ) -> Result<OplogIndex, OplogError> {
-        let index = self.commit_oplog_and_update_state(commit_level).await;
-        let written = written_unless_fenced(index, self.oplog.fence());
-        if let Err(OplogError::Fenced(fence)) = &written {
-            self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
+        match self.state_actor.commit_and_update_state(commit_level).await {
+            Ok((index, changed)) => {
+                if changed {
+                    // The notification goes through the worker-state actor's lifecycle queue so
+                    // that this method never waits on (or becomes a queued owner of) the instance
+                    // lock. This method runs inside durable-call host futures polled by wasmtime's
+                    // store event loop and on store-keeping wasm fibers, neither of which may block
+                    // on locks shared with the other (see the `state_actor` module docs).
+                    self.state_actor.notify_status_changed();
+                }
+                Ok(index)
+            }
+            Err(fence) => Err(self.relinquished_by(fence)),
         }
-        written
     }
 
-    pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
-        self.queue_card_revocations(&[card_id])
-            .await
+    /// Adds an entry and commits it, reporting a refusal of either as `OplogError::Fenced` (see
+    /// [`Self::commit_oplog_and_update_state`]).
+    ///
+    /// Every other storage failure keeps the fail-stop behaviour of
+    /// [`Self::add_to_oplog_or_relinquish`].
+    pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        let index = self.add_to_oplog_or_fenced(entry).await?;
+        self.commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        Ok(index)
+    }
+
+    /// Appends an entry, reporting a refusal as `OplogError::Fenced` and marking the agent
+    /// relinquished; any other storage failure is fatal, as it always has been.
+    async fn add_to_oplog_or_fenced(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        match self.oplog.add(entry).await {
+            Ok(index) => Ok(index),
+            Err(OplogError::Fenced(fence)) => Err(self.relinquished_by(fence)),
+            Err(error) => panic!("oplog write: {error}"),
+        }
+    }
+
+    /// A failure that reached its caller flattened into a string, reported as the fence when the
+    /// oplog has latched one: the worker service retries a lost shard on its new owner, but not an
+    /// internal error.
+    fn runtime_error_unless_fenced(&self, error: String) -> WorkerExecutorError {
+        match self.oplog.fence() {
+            Some(fence) => self.relinquished_by(fence).into(),
+            None => WorkerExecutorError::runtime(error),
+        }
+    }
+
+    /// Marks the agent given up because its oplog refused a write, and returns the refusal for the
+    /// caller to propagate.
+    pub(crate) fn relinquished_by(&self, fence: OplogFence) -> OplogError {
+        self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
+        OplogError::Fenced(fence)
+    }
+
+    pub async fn queue_card_revocation(
+        &self,
+        card_id: CardId,
+    ) -> Result<Option<OplogIndex>, OplogError> {
+        Ok(self
+            .queue_card_revocations(&[card_id])
+            .await?
             .into_iter()
-            .next()
+            .next())
     }
 
-    pub async fn queue_card_revocations(&self, card_ids: &[CardId]) -> Vec<OplogIndex> {
+    pub async fn queue_card_revocations(
+        &self,
+        card_ids: &[CardId],
+    ) -> Result<Vec<OplogIndex>, OplogError> {
         let boundary_lock = self.card_event_boundary_lock.clone();
         let _boundary_guard = boundary_lock.lock().await;
         self.queue_card_revocations_locked(card_ids).await
@@ -5513,7 +5625,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn queue_card_revocations_locked(
         &self,
         card_ids: &[CardId],
-    ) -> Vec<OplogIndex> {
+    ) -> Result<Vec<OplogIndex>, OplogError> {
         let status = self.get_last_known_status().await;
         let pending_revocations = status
             .pending_card_events
@@ -5538,19 +5650,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog_or_relinquish(OplogEntry::card_event_queued(
+                self.add_to_oplog_or_fenced(OplogEntry::card_event_queued(
                     None,
                     QueuedCardEvent::revoke(card_id),
                 ))
-                .await,
+                .await?,
             );
         }
         if !queued_event_indices.is_empty() {
             self.commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
         }
 
-        queued_event_indices
+        Ok(queued_event_indices)
     }
 
     pub async fn receive_card_transfer(
@@ -5624,13 +5736,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.published_authority_generation.clone()
     }
 
+    /// [`Self::add_and_commit_oplog`] for a caller holding the instance lock, which sends
+    /// `wakeup` to the running loop when the commit changed the status.
+    ///
+    /// A refusal is returned rather than acknowledged: the management request that wrote the
+    /// entry must not report it as accepted.
     async fn add_and_commit_oplog_internal(
         &self,
         instance_guard: &MutexGuard<'_, WorkerInstance>,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
-    ) -> OplogIndex {
-        let result = self.add_to_oplog_or_relinquish(entry).await;
+    ) -> Result<OplogIndex, OplogError> {
+        let index = self.add_to_oplog_or_fenced(entry).await?;
         // The caller already holds the instance lock (and sends the wakeup itself below), so
         // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
         // await while holding the instance lock precisely because the status task never takes
@@ -5638,7 +5755,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (_, changed) = self
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
-            .await;
+            .await
+            .map_err(|fence| self.relinquished_by(fence))?;
 
         if changed
             && let Some(wakeup) = wakeup
@@ -5647,7 +5765,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             running.sender.send(wakeup).unwrap();
         };
 
-        result
+        Ok(index)
     }
 
     async fn activate_plugin_internal(
@@ -5669,7 +5787,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             OplogEntry::activate_plugin(plugin_grant_id),
             Some(WorkerCommand::WorkAvailable),
         )
-        .await;
+        .await?;
 
         drop(instance_guard);
         Ok(())
@@ -5694,7 +5812,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             OplogEntry::deactivate_plugin(plugin_grant_id),
             Some(WorkerCommand::WorkAvailable),
         )
-        .await;
+        .await?;
 
         drop(instance_guard);
         Ok(())
@@ -5740,7 +5858,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
+        self.cancel_invocation_locked(&instance_guard, idempotency_key)
+            .await
+    }
 
+    /// Cancels a pending invocation from inside this worker's own invocation loop. Returns
+    /// `Ok(false)`, cancelling nothing, when the worker is stopping or has been given up.
+    ///
+    /// [`Self::cancel_invocation`] waits for a stop to finish, and a stop from outside the loop
+    /// finishes only once the loop has exited, so the loop waiting for it would never return. The
+    /// loop exits instead; the invocation stays pending in the oplog and the next generation
+    /// skips it again. A given-up agent's oplog is the new owner's to write, so nothing is
+    /// written for it even before its stop begins.
+    pub(crate) async fn cancel_invocation_from_loop(
+        &self,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<bool, WorkerExecutorError> {
+        let instance_guard = self.instance.lock().await;
+        if self.stopping_or_relinquished(&instance_guard) {
+            return Ok(false);
+        }
+        self.cancel_invocation_locked(&instance_guard, idempotency_key)
+            .await?;
+        Ok(true)
+    }
+
+    async fn cancel_invocation_locked(
+        &self,
+        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<(), WorkerExecutorError> {
         if instance_guard.is_deleting() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot cancel invocation on a deleting worker",
@@ -5748,13 +5895,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         self.add_and_commit_oplog_internal(
-            &instance_guard,
+            instance_guard,
             OplogEntry::cancel_pending_invocation(idempotency_key),
             Some(WorkerCommand::WorkAvailable),
         )
-        .await;
-
-        drop(instance_guard);
+        .await?;
         Ok(())
     }
 
@@ -5896,7 +6041,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 OplogEntry::revert(dropped_region),
                 None,
             )
-            .await;
+            .await?;
             self.reattach_worker_status().await;
             self.current_component.store(Arc::new(restored_component));
 
@@ -6027,6 +6172,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
+                // Given up here, so no result for the key will be published on this executor. The
+                // retry answer is published when the agent is given up but not cached, and a
+                // receiver that lagged past it, or subscribed after it, finds it here instead.
+                LookupResult::New | LookupResult::Pending if self.is_relinquished() => {
+                    break Ok(LookupResult::Complete(Err(self.relinquish_error())));
+                }
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
                         Event::InvocationCompleted {
@@ -6058,6 +6209,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         () = tokio::time::sleep_until(next_ownership_check) => {
                             next_ownership_check = tokio::time::Instant::now()
                                 + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
+                            // A key the give-up did not know about yet (enqueued, not yet folded
+                            // into the status it failed from) gets no retry answer published.
+                            // The lookup at the top of the loop answers it.
+                            if self.is_relinquished() {
+                                continue;
+                            }
 
                             // An agent whose shard has moved is resumed by whoever owns
                             // it now, and its `InvocationCompleted` is published on that
@@ -6436,7 +6594,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         true
                     }
                     Err(error) => {
-                        warn!("Committing the oplog while stopping failed: {error}");
+                        warn!(%error, "Committing the oplog while stopping failed");
                         false
                     }
                 };
@@ -6623,6 +6781,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
+        // A relinquished agent's pending invocations are not failed, they move: the shard's new
+        // owner runs them. So their waiters are told to retry there, whatever stopped this
+        // generation, and no result is cached. A cached failure would outlive the stop: a later
+        // lookup would answer the key with an `InvocationFailed` the caller does not retry, and
+        // the invocation loop, finding the key complete, would cancel the pending invocation -
+        // waiting on this very stop to do it, or, with nothing fenced yet, cancelling work the new
+        // owner still has to run.
+        let relinquished = self.is_relinquished();
+        let error = if relinquished {
+            self.relinquish_error()
+        } else {
+            error
+        };
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
         let mut origins = self.external_invocation_origins.write().await;
 
@@ -6654,6 +6825,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .get_valid(idempotency_key, &status)
                 .is_some()
             {
+                continue;
+            }
+            if relinquished {
+                self.publish_completion(idempotency_key, Err(error.clone()));
+                origins.remove(idempotency_key);
                 continue;
             }
             invocation_results.insert(
@@ -7420,19 +7596,6 @@ struct PendingWorkerInterrupt {
     unload_request: UnloadRequest,
 }
 
-/// Whether an entry the oplog answered with `index` was written, given the fence the oplog has
-/// latched by the time its commit returned. A latched fence means the commit was refused, whatever
-/// the add answered, so the index is not handed to a caller about to run a side effect.
-fn written_unless_fenced(
-    index: OplogIndex,
-    latched: Option<OplogFence>,
-) -> Result<OplogIndex, OplogError> {
-    match latched {
-        Some(fence) => Err(OplogError::Fenced(fence)),
-        None => Ok(index),
-    }
-}
-
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
 /// assignment. See [`shard_epoch_to_assert`].
 fn owned_shard_epoch<T: HasShardService>(
@@ -7935,12 +8098,15 @@ impl RunningWorker {
                             "Attempting update to revision {component_revision} failed with {error}"
                         );
 
+                        // Refused, the update cannot be marked failed, and retrying would find
+                        // the same pending update again: the start fails as a lost shard instead.
                         parent
                             .add_and_commit_oplog(OplogEntry::failed_update(
                                 component_revision,
                                 Some(error.to_string()),
                             ))
-                            .await;
+                            .await
+                            .map_err(WorkerExecutorError::from)?;
 
                         // The update is now marked failed in the parent, we can retry.
                         return Box::pin(Self::create_instance(parent, concurrent_agent_permit))
@@ -8962,27 +9128,6 @@ mod tests {
     use std::path::Path;
     use test_r::test;
 
-    /// The add that buffered a side effect's entry answered with an index. A fence latched by the
-    /// commit must win over that answer, or the side effect runs for an entry nobody can see.
-    #[test]
-    fn a_latched_fence_refuses_an_entry_its_add_accepted() {
-        let fence = OplogFence {
-            agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "gated".to_string(),
-            },
-            expected_epoch: ShardEpoch(8),
-            actual_epoch: Some(ShardEpoch(9)),
-        };
-        let index = OplogIndex::from_u64(5);
-
-        assert_eq!(written_unless_fenced(index, None), Ok(index));
-        assert_eq!(
-            written_unless_fenced(index, Some(fence.clone())),
-            Err(OplogError::Fenced(fence))
-        );
-    }
-
     /// Admission and the epoch read are not atomic. An agent whose shard left the assignment in
     /// between must be refused, not handed an oplog that asserts nothing.
     #[test]
@@ -9123,13 +9268,15 @@ mod tests {
         ));
     }
 
-    /// A recovery failure is persisted as an `Error` entry, which a lost shard makes unwritable:
-    /// the entry belongs to an oplog whose owner has changed.
+    /// A lost shard is neither recorded nor retried in place, whichever path it failed: a recovery
+    /// `Error` entry, like an in-place retry of a streaming-session completion, would write to or
+    /// reopen an oplog whose owner has changed. Every path classifies with the same predicate, so
+    /// the shapes one of them recognises are recognised by all.
     #[test]
-    fn a_recovery_failure_that_is_a_lost_shard_is_given_up_rather_than_persisted() {
+    fn a_failure_that_is_a_lost_shard_is_given_up_on_every_path() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "recovering".to_string(),
+            agent_id: "fenced".to_string(),
         };
         let fence = OplogFence {
             agent_id: agent_id.clone(),
@@ -9137,23 +9284,26 @@ mod tests {
             actual_epoch: Some(ShardEpoch(3)),
         };
 
-        // A latched fence wins over whatever the refusal was flattened into on its way out.
+        // A latched fence wins over whatever the refusal was flattened into on its way out, and
+        // its details are kept for the error the waiters are given.
         assert!(matches!(
-            recovery_failure_relinquishment(
-                &WorkerExecutorError::runtime("flattened"),
-                Some(fence)
+            shard_lost_relinquishment(
+                &WorkerExecutorError::runtime("durable stream commit failed"),
+                Some(fence.clone())
             ),
-            Some(RelinquishReason::Fenced(Some(_)))
+            Some(RelinquishReason::Fenced(Some(latched))) if *latched == fence
         ));
         assert!(matches!(
-            recovery_failure_relinquishment(
+            shard_lost_relinquishment(
                 &WorkerExecutorError::oplog_fenced(agent_id, 2, Some(3)),
                 None
             ),
             Some(RelinquishReason::Fenced(None))
         ));
+        // Without a latched fence: a shard revoked or reassigned interrupts the agent with
+        // `ShardLost` and writes nothing, so no fence ever latches.
         assert!(matches!(
-            recovery_failure_relinquishment(
+            shard_lost_relinquishment(
                 &WorkerExecutorError::Interrupted {
                     kind: InterruptKind::ShardLost
                 },
@@ -9162,10 +9312,20 @@ mod tests {
             Some(RelinquishReason::Fenced(None))
         ));
 
-        // Every other recovery failure is still the agent's own, and is persisted.
-        assert!(
-            recovery_failure_relinquishment(&WorkerExecutorError::runtime("boom"), None).is_none()
-        );
+        // Every other failure is still the agent's own, to be recorded or retried.
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+            InterruptKind::Suspend(Timestamp::now_utc()),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+        ] {
+            assert!(
+                shard_lost_relinquishment(&WorkerExecutorError::Interrupted { kind }, None)
+                    .is_none(),
+                "{kind:?} is not a lost shard"
+            );
+        }
+        assert!(shard_lost_relinquishment(&WorkerExecutorError::runtime("boom"), None).is_none());
     }
 
     #[test]

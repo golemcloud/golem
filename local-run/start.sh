@@ -184,6 +184,10 @@ GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
 GOLEM__REGISTRY_SERVICE__HOST="localhost" \
 GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
 GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
+GOLEM__INDEXED_STORAGE__TYPE="Sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__DATABASE="../local-run/data/worker-executor/golem_indexed.sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=10 \
+GOLEM__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false \
 ../target/debug/golem-debugging-service &
 
 debugging_service_pid=$!

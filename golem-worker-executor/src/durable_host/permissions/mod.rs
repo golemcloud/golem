@@ -986,7 +986,7 @@ where
                     card: created.clone(),
                     wallet_generation,
                 })
-                .await;
+                .await?;
         } else {
             return Err(anyhow!(
                 "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
@@ -1702,7 +1702,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
             installed_card.card_id(),
             target_holder,
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1743,7 +1743,7 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
             target_holder.clone(),
             Some(ctx.state.wallet_generation),
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1795,7 +1795,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                     card: installed_card.clone(),
                     wallet_generation: Some(ctx.state.wallet_generation),
                 })
-                .await;
+                .await?;
         }
 
         ctx.public_state
@@ -1809,7 +1809,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                     transfer.target_holder(),
                 ),
             ))
-            .await;
+            .await?;
     }
 
     complete_source_card_transfer(
@@ -2133,7 +2133,7 @@ pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
                     agent_id: retry.target_agent_id,
                 }),
             ))
-            .await;
+            .await?;
     }
 
     Ok(())
@@ -2794,7 +2794,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
+                    .await?;
             }
             let start_index = handle.start_index();
 

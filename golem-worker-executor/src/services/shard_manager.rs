@@ -22,7 +22,7 @@ use golem_common::model::{
 };
 use golem_service_base::clients::shard_manager::{ShardLeaseError, ShardManagerError};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -124,6 +124,106 @@ async fn sleep_or_park(delay: RenewalDelay) {
     }
 }
 
+/// Coordinates the announcements made from the renewal loop, so a slow one cannot stall lease
+/// renewal.
+///
+/// Relinquishing a still-loading agent waits for its whole component load and replay with no
+/// timeout, so a set-changing renewal that awaited [`GrpcShardManagerService::announce_assignment_changed`]
+/// inline would send no further renewal RPCs until that sweep finished, and the lease lapses for
+/// the whole executor - the bug this exists to fix. At most one announcement runs at a time; a
+/// request that arrives while one is already running is coalesced into exactly one more run after
+/// it finishes, so nothing requested is ever dropped, and a loop that keeps correcting the set
+/// does not pile up concurrent sweeps racing each other over the same agents.
+///
+/// Deliberately not tracked by [`Shutdown::spawn`]: a sweep can run for as long as the slowest
+/// agent's replay, and the renewal loop's own deregister - which *is* tracked, so `main` waits for
+/// it - has to still land inside the shutdown grace regardless. Tracking this task the same way
+/// would let a stale sweep hold the process open past that grace for a recovery nobody is waiting
+/// on any more; a bare `tokio::spawn` is simply cut off at its next await point when the runtime
+/// is dropped, which is the right fate for best-effort work like this one.
+struct AnnouncementSingleFlight {
+    state: AtomicU8,
+}
+
+impl AnnouncementSingleFlight {
+    /// No task running.
+    const IDLE: u8 = 0;
+    /// A task is running the announcement.
+    const RUNNING: u8 = 1;
+    /// A task is running, and a request arrived while it did; it reruns once more before going
+    /// idle.
+    const RUNNING_PENDING: u8 = 2;
+
+    fn new() -> Self {
+        Self {
+            state: AtomicU8::new(Self::IDLE),
+        }
+    }
+
+    /// Requests one announcement, without waiting for it to run.
+    ///
+    /// Spawns the task that runs it only when none is already running; a request that arrives
+    /// mid-run instead marks the running task to loop once more, so a burst of requests while a
+    /// sweep is in flight still produces at most one extra run after it.
+    fn request(svc: &Arc<GrpcShardManagerService>) {
+        loop {
+            let state = &svc.announcement_single_flight.state;
+            match state.compare_exchange(
+                Self::IDLE,
+                Self::RUNNING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    let svc = svc.clone();
+                    tokio::spawn(Self::run(svc));
+                    return;
+                }
+                Err(Self::RUNNING) => {
+                    match state.compare_exchange(
+                        Self::RUNNING,
+                        Self::RUNNING_PENDING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => return,
+                        // The running task raced this and just went idle (or another requester
+                        // already coalesced): re-read the state and try again from scratch.
+                        Err(_) => continue,
+                    }
+                }
+                // Already coalesced: a rerun is guaranteed without this request doing anything.
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// The task body [`Self::request`] spawns: runs the announcement, then either goes idle or,
+    /// if a request was coalesced while it ran, runs it once more.
+    async fn run(svc: Arc<GrpcShardManagerService>) {
+        loop {
+            svc.announce_assignment_changed().await;
+            let state = &svc.announcement_single_flight.state;
+            match state.compare_exchange(
+                Self::RUNNING,
+                Self::IDLE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return,
+                Err(Self::RUNNING_PENDING) => {
+                    state.store(Self::RUNNING, Ordering::SeqCst);
+                    continue;
+                }
+                Err(other) => unreachable!(
+                    "AnnouncementSingleFlight in state {other}, which only `request` and `run` \
+                     touch and neither ever stores it"
+                ),
+            }
+        }
+    }
+}
+
 pub struct GrpcShardManagerService {
     client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
     shard_service: Arc<dyn ShardService>,
@@ -173,6 +273,9 @@ pub struct GrpcShardManagerService {
     /// Source of tickets; never reused, so an attempt that outlives a full clear-and-defer cycle
     /// cannot collide with a later one.
     recovery_tickets: AtomicU64,
+    /// Coordinates announcements requested from the renewal loop; see
+    /// [`AnnouncementSingleFlight`].
+    announcement_single_flight: AnnouncementSingleFlight,
 }
 
 impl GrpcShardManagerService {
@@ -212,6 +315,7 @@ impl GrpcShardManagerService {
             rpc_deadline_floor,
             recovery_outstanding: AtomicU64::new(0),
             recovery_tickets: AtomicU64::new(0),
+            announcement_single_flight: AnnouncementSingleFlight::new(),
         })
     }
 
@@ -340,23 +444,39 @@ impl GrpcShardManagerService {
                         break;
                     }
                 };
-                // Raced against the token as well, not just the sleep before it: a renewal can
-                // be followed by a re-registration and a full agent recovery, and a termination
-                // signal arriving meanwhile has to be seen inside the grace `main` waits, which
+                // Raced against the token as well, not just the sleep before it: a termination
+                // signal arriving mid-renewal has to be seen inside the grace `main` waits, which
                 // is the window the deregister below must be sent in. Abandoning the renewal
                 // costs nothing: the process is stopping and handing the lease back.
+                //
+                // The renewal itself never runs the announcement inline any more - see
+                // `renew_shard_lease_internal` and `AnnouncementSingleFlight` - specifically so
+                // that an unbounded sweep following a set change or a re-registration can never
+                // be what the token is raced against here: this arm always returns promptly, and
+                // the loop keeps renewing while a sweep runs in its own task.
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
                         svc.deregister().await;
                         break;
                     }
-                    delay = svc.renew_shard_lease() => renewal_delay = delay,
+                    (delay, announcement_owed) = svc.renew_shard_lease_internal() => {
+                        renewal_delay = delay;
+                        if announcement_owed {
+                            AnnouncementSingleFlight::request(&svc);
+                        }
+                    }
                 }
             }
         });
     }
 
-    /// Applies a granted lease and returns the cadence for the next pass.
+    /// Applies a granted lease and returns the cadence for the next pass, together with whether
+    /// [`Self::announce_assignment_changed`] is owed - the caller decides how to run it, rather
+    /// than this awaiting it inline, so that a caller which must not block on a slow sweep (the
+    /// renewal loop, via `renew_shard_lease_internal`) can hand it to
+    /// [`AnnouncementSingleFlight`] instead. [`ShardManagerService::renew_shard_lease`] awaits it
+    /// right here for every other caller, so nothing outside the loop observes any change: a test
+    /// calling it directly still sees the hook run before it returns.
     ///
     /// The grant is the shard manager's set for this executor. Normally that
     /// is exactly what was claimed, and only the lease clock moves. When it is
@@ -366,40 +486,49 @@ impl GrpcShardManagerService {
     /// set is older than the last delivery applied crossed with a push on the
     /// network: its set is ignored, or it would put the older set back, and
     /// its lease is adopted, because it answers this executor's own request.
-    async fn adopt_lease(
+    fn adopt_lease(
         &self,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
-    ) -> RenewalDelay {
+    ) -> (RenewalDelay, bool) {
         let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
-        match self
-            .shard_service
-            .update_lease(&shard_epochs, expires_at, revision)
-        {
+        let announcement_owed = match self.shard_service.update_lease(
+            &shard_epochs,
+            expires_at,
+            revision,
+        ) {
             Ok(ShardDeliveryOutcome::Applied { set_changed: true }) => {
                 info!(
                     %revision,
                     "Shard lease renewal corrected the shard set; sweeping and recovering agents"
                 );
-                self.announce_assignment_changed().await
+                true
             }
             Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {
                 if self.recovery_outstanding.load(Ordering::SeqCst) != 0 {
                     info!(%revision, "Running the agent recovery still owed from an earlier delivery");
-                    self.announce_assignment_changed().await
+                    true
+                } else {
+                    false
                 }
             }
-            Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => warn!(
-                %delivered,
-                %applied,
-                "Ignoring the shard set of a renewal older than the last delivery applied; the lease clock moved"
-            ),
-            Err(error) => warn!(%error, "Failed to apply a renewed shard lease"),
-        }
+            Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => {
+                warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring the shard set of a renewal older than the last delivery applied; the lease clock moved"
+                );
+                false
+            }
+            Err(error) => {
+                warn!(%error, "Failed to apply a renewed shard lease");
+                false
+            }
+        };
         let cadence = renewal_interval_for(Some(expires_at), Instant::now());
         self.record_granted(cadence);
-        cadence
+        (cadence, announcement_owed)
     }
 
     /// [`ShardManagerService::register`], carrying `previous_claim` to the shard manager: the set
@@ -470,6 +599,127 @@ impl GrpcShardManagerService {
         }
         carried.clone()
     }
+
+    /// [`ShardManagerService::renew_shard_lease`], minus running the announcement it can end up
+    /// owing: returns the delay for the next pass and whether
+    /// [`Self::announce_assignment_changed`] still needs to run. Every caller other than the
+    /// renewal loop goes through the trait method, which awaits it right there - this split exists
+    /// solely so the loop (`start_renewal_loop`) can hand the announcement to
+    /// [`AnnouncementSingleFlight`] instead of awaiting it inline, so a slow sweep cannot stall the
+    /// next renewal RPC.
+    async fn renew_shard_lease_internal(&self) -> (RenewalDelay, bool) {
+        let claim = match self.shard_service.current_assignment() {
+            Ok(assignment) => assignment.claim(),
+            Err(error) => {
+                warn!(%error, "Skipping shard lease renewal, no shard assignment yet");
+                return (self.next_retry_delay(), false);
+            }
+        };
+
+        let executor_id = self.executor_id();
+        // Reported on every renewal and retired only by a grant, so a renewal that is refused or
+        // lost leaves them for the next one; a manager that already applied them moves nothing
+        // the second time.
+        let fenced = self.shard_service.fence_learned_epochs();
+        if !fenced.is_empty() {
+            info!(
+                fenced_shard_epochs = ?fenced,
+                "Reporting shard epochs learned from fenced oplog writes with the lease renewal"
+            );
+        }
+        let deadline = self.rpc_deadline();
+        let renewed = match tokio::time::timeout(
+            deadline,
+            self.client
+                .renew_shard_lease(executor_id, claim, fenced.clone()),
+        )
+        .await
+        {
+            Ok(renewed) => renewed,
+            Err(_elapsed) => {
+                warn!(
+                    deadline_ms = deadline.as_millis(),
+                    "Shard lease renewal did not answer in time; backing off"
+                );
+                return (self.next_retry_delay(), false);
+            }
+        };
+        match renewed {
+            Ok(lease) => {
+                // The manager knows this executor, so its state has the history a carried claim
+                // was kept to restore; one stored by a re-registration whose reply was lost
+                // lands here too.
+                self.carried_claim.write().unwrap().clear();
+                // Stored with this renewal. Only what was sent is retired: an epoch learned while
+                // the renewal was in flight goes with the next one.
+                self.shard_service.retire_fence_learned_epochs(&fenced);
+                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
+            }
+            Err(ShardLeaseError::LeaseNotFound(details)) => {
+                // The manager no longer knows this executor. Drop every shard
+                // (an empty set fences every agent) and come back as a new
+                // instance at the same address, which is the restarted-executor
+                // path the manager already handles. The set held until now goes
+                // with the registration: if the manager's state was wiped or
+                // replaced, it has lost the epochs this executor's oplog rows
+                // were written at, and would otherwise mint below them. Epochs
+                // learned from fenced writes do not go with it: a registration
+                // applies what it carries as this executor's own claim, and
+                // would stamp another writer's epoch onto its entries. They
+                // ride on the first renewal under the fresh id instead.
+                warn!(
+                    details,
+                    "Shard lease not found, clearing the assignment and re-registering"
+                );
+                let previous_claim = self.carry_current_claim();
+                self.shard_service.clear_assignment();
+                let fresh_executor_id = Uuid::new_v4();
+                *self.executor_id.write().unwrap() = fresh_executor_id;
+
+                let registration = self.registration.read().unwrap().clone();
+                match registration {
+                    None => {
+                        error!("Cannot re-register: this executor never completed a registration");
+                        (self.next_retry_delay(), false)
+                    }
+                    Some((port, pod_name)) => match self
+                        .register_with_previous_claim(port, pod_name, previous_claim)
+                        .await
+                    {
+                        Ok(assignment) => {
+                            self.carried_claim.write().unwrap().clear();
+                            self.shard_service.register(
+                                assignment.number_of_shards,
+                                &assignment.shard_epochs,
+                                assignment.expires_at,
+                                assignment.revision,
+                            );
+                            info!(
+                                executor_id = %fresh_executor_id,
+                                "Re-registered with the shard manager after a lost lease"
+                            );
+                            // The same announcement the initial
+                            // registration and `assign_shards_internal` make - owed to the
+                            // caller, exactly like a set-changing grant.
+                            let delay = renewal_interval_for(assignment.expires_at, Instant::now());
+                            (delay, true)
+                        }
+                        Err(error) => {
+                            warn!(%error, "Re-registration after a lost lease failed");
+                            (self.next_retry_delay(), false)
+                        }
+                    },
+                }
+            }
+            Err(error) => {
+                // Transport class: nothing local changes, so the stored expiry
+                // runs down on its own and the self-fence starts refusing
+                // admission the moment it passes.
+                warn!(%error, "Shard lease renewal failed, retrying");
+                (self.next_retry_delay(), false)
+            }
+        }
+    }
 }
 
 /// `(expires_at - now) / 3`, floored, so three attempts fit inside one lease.
@@ -501,118 +751,16 @@ impl ShardManagerService for GrpcShardManagerService {
             .await
     }
 
+    /// Drives [`Self::renew_shard_lease_internal`] and, unlike the renewal loop, awaits the
+    /// announcement it may come back owing right here - so every caller other than the loop
+    /// itself (every test in this file included) sees exactly the synchronous behaviour this had
+    /// before the split: the hook has run by the time this returns.
     async fn renew_shard_lease(&self) -> RenewalDelay {
-        let claim = match self.shard_service.current_assignment() {
-            Ok(assignment) => assignment.claim(),
-            Err(error) => {
-                warn!(%error, "Skipping shard lease renewal, no shard assignment yet");
-                return self.next_retry_delay();
-            }
-        };
-
-        let executor_id = self.executor_id();
-        // Reported on every renewal and retired only by a grant, so a renewal that is refused or
-        // lost leaves them for the next one; a manager that already applied them moves nothing
-        // the second time.
-        let fenced = self.shard_service.fence_learned_epochs();
-        if !fenced.is_empty() {
-            info!(
-                fenced_shard_epochs = ?fenced,
-                "Reporting shard epochs learned from fenced oplog writes with the lease renewal"
-            );
+        let (delay, announcement_owed) = self.renew_shard_lease_internal().await;
+        if announcement_owed {
+            self.announce_assignment_changed().await;
         }
-        let deadline = self.rpc_deadline();
-        let renewed = match tokio::time::timeout(
-            deadline,
-            self.client
-                .renew_shard_lease(executor_id, claim, fenced.clone()),
-        )
-        .await
-        {
-            Ok(renewed) => renewed,
-            Err(_elapsed) => {
-                warn!(
-                    deadline_ms = deadline.as_millis(),
-                    "Shard lease renewal did not answer in time; backing off"
-                );
-                return self.next_retry_delay();
-            }
-        };
-        match renewed {
-            Ok(lease) => {
-                // The manager knows this executor, so its state has the history a carried claim
-                // was kept to restore; one stored by a re-registration whose reply was lost
-                // lands here too.
-                self.carried_claim.write().unwrap().clear();
-                // Stored with this renewal. Only what was sent is retired: an epoch learned while
-                // the renewal was in flight goes with the next one.
-                self.shard_service.retire_fence_learned_epochs(&fenced);
-                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
-                    .await
-            }
-            Err(ShardLeaseError::LeaseNotFound(details)) => {
-                // The manager no longer knows this executor. Drop every shard
-                // (an empty set fences every agent) and come back as a new
-                // instance at the same address, which is the restarted-executor
-                // path the manager already handles. The set held until now goes
-                // with the registration: if the manager's state was wiped or
-                // replaced, it has lost the epochs this executor's oplog rows
-                // were written at, and would otherwise mint below them. Epochs
-                // learned from fenced writes do not go with it: a registration
-                // applies what it carries as this executor's own claim, and
-                // would stamp another writer's epoch onto its entries. They
-                // ride on the first renewal under the fresh id instead.
-                warn!(
-                    details,
-                    "Shard lease not found, clearing the assignment and re-registering"
-                );
-                let previous_claim = self.carry_current_claim();
-                self.shard_service.clear_assignment();
-                let fresh_executor_id = Uuid::new_v4();
-                *self.executor_id.write().unwrap() = fresh_executor_id;
-
-                let registration = self.registration.read().unwrap().clone();
-                match registration {
-                    None => {
-                        error!("Cannot re-register: this executor never completed a registration");
-                        self.next_retry_delay()
-                    }
-                    Some((port, pod_name)) => match self
-                        .register_with_previous_claim(port, pod_name, previous_claim)
-                        .await
-                    {
-                        Ok(assignment) => {
-                            self.carried_claim.write().unwrap().clear();
-                            self.shard_service.register(
-                                assignment.number_of_shards,
-                                &assignment.shard_epochs,
-                                assignment.expires_at,
-                                assignment.revision,
-                            );
-                            info!(
-                                executor_id = %fresh_executor_id,
-                                "Re-registered with the shard manager after a lost lease"
-                            );
-                            // The same announcement the initial
-                            // registration and `assign_shards_internal` make.
-                            self.announce_assignment_changed().await;
-                            renewal_interval_for(assignment.expires_at, Instant::now())
-                        }
-                        Err(error) => {
-                            warn!(%error, "Re-registration after a lost lease failed");
-                            self.next_retry_delay()
-                        }
-                    },
-                }
-            }
-            Err(error) => {
-                // Transport class: nothing local changes, so the stored expiry
-                // runs down on its own and the self-fence starts refusing
-                // admission the moment it passes.
-                warn!(%error, "Shard lease renewal failed, retrying");
-                self.next_retry_delay()
-            }
-        }
+        delay
     }
 
     async fn deregister(&self) {
@@ -1168,6 +1316,184 @@ mod tests {
         assert!(
             mock.renew_calls().len() >= 2,
             "a renewal that never answers must time out so the loop can try again"
+        );
+    }
+
+    #[test]
+    // F29: relinquishing a still-loading agent waits for its whole component load and replay,
+    // with no timeout. If the renewal loop awaited the assignment-changed hook inline, that sweep
+    // would hold every later renewal RPC back and the lease would lapse for the whole executor
+    // while a single agent is loading. The hook here blocks on a flag the test controls, standing
+    // in for that sweep, and the assertion is that the loop keeps renewing right through it.
+    async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
+        // Short enough that a stalled loop would be obvious within the test's own timeout, but
+        // the cadence this derives floors at `MIN_RENEWAL_INTERVAL` (1 s) regardless - see
+        // `renewal_interval` - so there is no point going below that.
+        let ttl = Duration::from_secs(3);
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(Instant::now() + ttl, [(0, 1)])))
+                .with_renew(move |_, _claimed| {
+                    Ok(ShardLease {
+                        // Always the widened set: the first grant is a real assignment change,
+                        // and every later one only echoes it back (it now matches what was
+                        // claimed), so only the first renewal ever owes an announcement.
+                        shard_epochs: claim([(0, 1), (1, 1)]),
+                        expires_at: Instant::now() + ttl,
+                        revision: ShardLeaseRevision(1),
+                    })
+                }),
+        );
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let released = Arc::new(AtomicBool::new(false));
+        let calls = hook_calls.clone();
+        let hook_released = released.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let calls = calls.clone();
+            let released = hook_released.clone();
+            Box::pin(async move {
+                while !released.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecoveryOutcome::Recovered)
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+
+        // The first renewal widens the set, so its announcement enters the hook and blocks
+        // there - on its own task, not on the loop.
+        for _ in 0..200 {
+            if !mock.renew_calls().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let renewals_before = mock.renew_calls().len();
+        assert!(
+            renewals_before >= 1,
+            "the loop must have issued the first renewal"
+        );
+
+        // Several renewal periods pass (cadence is ~1s) while the hook stays blocked: the loop
+        // must keep renewing rather than waiting on the sweep, which is exactly the stall F29
+        // fixes. Each of these renewals also finds `recovery_outstanding` still set by the first
+        // one - the sweep has not reported back yet - and asks for the announcement again; that
+        // is correct (an unchanged grant re-runs a recovery still owed), and the single-flight
+        // coalesces every one of these requests into exactly one rerun, asserted below.
+        for _ in 0..100 {
+            if mock.renew_calls().len() >= renewals_before + 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let renewals_after = mock.renew_calls().len();
+        assert!(
+            renewals_after >= renewals_before + 3,
+            "further renewals must happen while the hook is blocked; before={renewals_before} \
+             after={renewals_after}"
+        );
+        assert_eq!(
+            hook_calls.load(Ordering::SeqCst),
+            0,
+            "the hook must still be blocked at this point"
+        );
+
+        // Releasing it lets the sweep complete - and, deterministically, exactly one coalesced
+        // rerun right after: at least one of the renewals just observed above landed while the
+        // single-flight was already running, which is what put it in its "one more owed" state.
+        released.store(true, Ordering::SeqCst);
+        for _ in 0..200 {
+            if hook_calls.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            hook_calls.load(Ordering::SeqCst),
+            2,
+            "the blocked sweep and exactly one coalesced rerun, never one rerun per renewal"
+        );
+    }
+
+    #[test]
+    // The single-flight coordinator behind the fix above must not let a burst of requests that
+    // arrive while one announcement is already running turn into one run per request: exactly one
+    // more run is owed, coalescing the rest. Drives `AnnouncementSingleFlight` directly, bypassing
+    // the renewal loop entirely, since that is the unit actually being tested here.
+    async fn concurrent_announcement_requests_coalesce_into_one_more_run() {
+        let mock = Arc::new(MockShardManager::new());
+        let (service, _shard_service) = make_service(mock, Shutdown::new());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(AtomicUsize::new(0));
+        let released = Arc::new(AtomicBool::new(false));
+        let hook_calls = calls.clone();
+        let hook_started = started.clone();
+        let hook_released = released.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let calls = hook_calls.clone();
+            let started = hook_started.clone();
+            let released = hook_released.clone();
+            Box::pin(async move {
+                // Only the first call blocks; the coalesced rerun this test looks for must be
+                // observable without releasing a second time.
+                if started.fetch_add(1, Ordering::SeqCst) == 0 {
+                    while !released.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecoveryOutcome::Recovered)
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        AnnouncementSingleFlight::request(&service);
+        // Wait for the run to actually start (and block) before piling more requests onto it.
+        for _ in 0..200 {
+            if started.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+
+        // A burst of requests while the first run is still blocked.
+        for _ in 0..5 {
+            AnnouncementSingleFlight::request(&service);
+        }
+
+        released.store(true, Ordering::SeqCst);
+
+        for _ in 0..200 {
+            if calls.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a burst of requests while one run is in flight must coalesce into exactly one \
+             more run"
+        );
+        // Give a wrongly-spawned extra run a chance to show up before declaring victory.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            2,
+            "exactly two runs total: the first, and the one coalesced burst"
         );
     }
 

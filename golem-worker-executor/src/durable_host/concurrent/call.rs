@@ -848,10 +848,10 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.inner
             .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
-            .await;
+            .await
     }
 }
 
@@ -2420,6 +2420,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             start: begin_index.next(),
                             end: pending.replay_target().next(),
                         };
+                        // Refused, the scope must not re-run live: its first attempt would be
+                        // replayed by the shard's new owner with no `Jump` skipping it.
                         prepared
                             .public_state
                             .worker()
@@ -2427,7 +2429,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 prepared.entity_parent_start_index,
                                 deleted_region,
                             ))
-                            .await;
+                            .await
+                            .map_err(|error| {
+                                (
+                                    WorkerExecutorError::from(error),
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?;
                         prepared
                             .public_state
                             .worker()
@@ -2497,7 +2507,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         prepared
             .public_state
             .worker()
-            .add_and_commit_oplog_or_fenced(OplogEntry::Start {
+            .add_and_commit_oplog(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
@@ -4842,7 +4852,7 @@ where
         public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
         if let Some(min_exposed_marker) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             if ctx.state.at_clean_checkpoint_boundary() {

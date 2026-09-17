@@ -329,7 +329,7 @@ impl UpdateManagement for DebugContext {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_failed(target_revision, details)
             .await
@@ -340,7 +340,7 @@ impl UpdateManagement for DebugContext {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await

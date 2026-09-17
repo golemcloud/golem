@@ -1,10 +1,16 @@
 # Crash-window matrix
 
-"Crash" here means any loss of the resident runtime: process death, `Restart` (simulated crash),
-`Suspend`, eviction, resharding (`on_shard_assignment_changed`), or an executor drop in a test.
-Reconstruction is identical in every case: new `Store`, `prepare_instance`, `resume_replay`,
-publish Live. The matrix says what the next incarnation does for a crash inside each window and
-which durable fact makes that safe.
+"Crash" here means any loss of the resident runtime *on the same executor*: process death,
+`Restart` (simulated crash), `Suspend`, eviction, or an executor drop in a test. Reconstruction is
+identical in every case: new `Store`, `prepare_instance`, `resume_replay`, publish Live. The
+matrix says what the next incarnation does for a crash inside each window and which durable fact
+makes that safe.
+
+Resharding and the oplog epoch fence are different: this executor does not reconstruct at all. It
+relinquishes the agent (`InterruptKind::ShardLost`) — stopped without writing to its oplog or
+status, dropped here — and the shard's new owner is the one that runs `prepare_instance` /
+`resume_replay`, on its own copy of the same oplog. See "Resharding and the oplog epoch fence"
+below for what that leaves behind.
 
 ## Durable host call (`concurrent/call.rs`, `concurrent/delivery.rs`)
 
@@ -91,6 +97,23 @@ which durable fact makes that safe.
 | Live attachment memory exhausted during incomplete replay | rejection persisted | The rejection is durable; later replays do not retry admission | `incomplete_tool_replay_persists_attachment_upgrade_rejection` |
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
 | Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `completed_reconstruction_claim_blocks_concurrent_replay_to_live` |
+
+## Resharding and the oplog epoch fence (`worker/mod.rs::relinquish`, `services/oplog/primary.rs`)
+
+Two triggers relinquish an agent instead of reconstructing it here: the shard manager revoking or
+reassigning the shard (`grpc/mod.rs::revoke_shards_internal` / `assign_shards_internal`,
+`RelinquishReason::ShardRevoked` / `ShardNotAssigned`), and a write refused because the epoch this
+executor asserted no longer matches storage (`OplogError::Fenced`, `RelinquishReason::Fenced`).
+Only Postgres and the SQLite-backed indexed storages can refuse a write this way; an executor
+configured with Redis and a real shard manager refuses to start rather than run unfenced.
+
+| Crash window | Oplog shape left behind | What happens here | Durable fact relied on |
+|---|---|---|---|
+| Assignment revoked/reassigned, before any write is attempted | whatever was already committed | `relinquish_matching` stops matching agents directly; no write is attempted or refused | `ShardService::check_worker` / the delivered assignment, not the oplog |
+| A write is attempted after the shard actually moved | nothing new; the attempted entry is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent relinquishes | Epoch asserted inside the storage transaction |
+| Any later write on the same oplog handle | still nothing new | The fence latches: every later add/commit is refused immediately, without a second storage round trip | The oplog's own latched `OplogFence` |
+| An invocation still queued when relinquish runs | unaffected | Failed with a retriable error (`ShardingNotReady` / the fenced variant), never a cached result | `PendingLiveInvocationDisposition::Fail` |
+| The new owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `resume_replay`, from committed history exactly as it was left | Nothing was written after the fence latched |
 
 ## Oplog-processor plugins (`services/oplog/plugin.rs`)
 

@@ -263,9 +263,25 @@ async fn retry_oplog_append(
             .await
             {
                 Some(true) => return Ok(()),
-                Some(false) => panic!(
-                    "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"
-                ),
+                Some(false) => {
+                    // The stored content differs from what this attempt sent - the only
+                    // legitimate way that happens is a new owner having already written those
+                    // same indices. Repeat the write once as a probe: the backends check the
+                    // epoch inside the same transaction as the insert, so a shard that has
+                    // moved on is fenced before the insert is even attempted. A same-epoch
+                    // conflict instead fails the probe's insert (still fatal, below) - the
+                    // mismatch is unexplained and not safe to paper over.
+                    if let Some(epoch) = shard_epoch
+                        && let Err(fenced @ IndexedStorageError::Fenced { .. }) = append
+                            .write(indexed_storage, namespace, api_name, key, Some(epoch))
+                            .await
+                    {
+                        return Err(fenced);
+                    }
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"
+                    )
+                }
                 None => {}
             }
         }
@@ -1351,6 +1367,10 @@ impl PrimaryOplog {
                 match job {
                     OplogJob::Add { entry, done } => {
                         record_oplog_call("add");
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let idx = state.push(entry);
                         // A threshold commit failing must fail the `add` that triggered it: the
                         // caller would otherwise be told its entry landed when the batch it was
@@ -1363,6 +1383,10 @@ impl PrimaryOplog {
                     }
                     OplogJob::AddDurableStreamBatch { make_batch, done } => {
                         record_oplog_call("add_durable_stream_batch");
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let first_index = state.last_oplog_idx.next();
                         let records = make_batch(first_index);
                         let serialized = records
@@ -1400,6 +1424,10 @@ impl PrimaryOplog {
                         done,
                     } => {
                         record_oplog_call("add_pair");
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let first_idx = state.push(start);
                         let second = make_second(first_idx);
                         let second_idx = state.push(second);
@@ -1428,6 +1456,13 @@ impl PrimaryOplog {
                         // `guard`: this actor future must stay `Send` for `tokio::spawn`, so a
                         // refactor holding the guard across an `.await` is rejected rather than
                         // silently breaking ordering. Do not move `drop(guard)` before `push`.
+                        //
+                        // A fenced oplog refuses before reserving, so no upload is started for a
+                        // `Start` that can never be written.
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let result = {
                             let ReservedPayload {
                                 raw,
@@ -1459,6 +1494,10 @@ impl PrimaryOplog {
                         done,
                     } => {
                         record_oplog_call("add_start_with_indexed_reserved_raw_payload");
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let result = build_request(state.last_oplog_idx.next()).and_then(
                             |(serialized_request, build_start)| {
                                 let ReservedPayload {
@@ -1890,10 +1929,12 @@ impl PrimaryOplogState {
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         record_oplog_call("append");
 
-        // Already refused once: fail fast rather than re-asking the storage for every entry the
-        // guest goes on to produce before it notices it has been given up.
+        // Already refused once: fail fast rather than re-asking the storage. Only entries buffered
+        // before the fence latched can reach here, and they go back where they were.
         if let Some(fence) = self.fence.get() {
-            return Err(OplogError::Fenced(fence.clone()));
+            let fence = fence.clone();
+            self.retain_refused(entries);
+            return Err(OplogError::Fenced(fence));
         }
 
         // Commit barrier: every deferred external payload reserved during this session must be
@@ -1938,7 +1979,7 @@ impl PrimaryOplogState {
             agent_id: self.owned_agent_id.agent_id(),
             agent_mode: self.agent_mode,
         };
-        retry_oplog_append(
+        let appended = retry_oplog_append(
             &self.retry_config,
             self.indexed_storage.as_ref(),
             &namespace,
@@ -1949,15 +1990,14 @@ impl PrimaryOplogState {
             self.shard_epoch,
         )
         .await
-        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err))
-        .inspect_err(|err| {
-            if let OplogError::Fenced(fence) = err {
-                // The drained entries are dropped: this oplog is not ours to write. Nothing else
-                // is undone - the commit barrier above already awaited every payload the batch
-                // referenced, so those blobs are durable and stay behind with no entry pointing at
-                // them. The epoch the storage holds is reported, so a shard manager whose state
-                // lost history can mint above it. Warned only when it latches: each write after
-                // that fails fast on the latch without reaching the storage.
+        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
+        if let Err(error) = appended {
+            if let OplogError::Fenced(fence) = &error {
+                // The commit barrier above already awaited every payload the batch referenced, so
+                // those blobs are durable and stay behind with no stored entry pointing at them.
+                // The epoch the storage holds is reported, so a shard manager whose state lost
+                // history can mint above it. Warned only when it latches: each write after that
+                // fails fast on the latch without reaching the storage.
                 if self.fence.set(fence.clone()).is_ok() {
                     warn!(
                         agent_id = %self.owned_agent_id,
@@ -1969,8 +2009,10 @@ impl PrimaryOplogState {
                 if let Some(observer) = &self.fence_observer {
                     observer.fenced(fence);
                 }
+                self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
             }
-        })?;
+            return Err(error);
+        }
 
         record_storage_bytes_written(
             STORAGE_TYPE_OPLOG,
@@ -1991,6 +2033,31 @@ impl PrimaryOplogState {
                 .into_iter()
                 .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry)),
         ))
+    }
+
+    /// Refuses a new write once the fence has latched, before anything is buffered or reserved.
+    ///
+    /// Without it an add below the commit threshold would only buffer, answer with an index, and
+    /// report a write that can never reach the storage.
+    fn refuse_if_fenced(&self) -> Result<(), OplogError> {
+        match self.fence.get() {
+            Some(fence) => Err(OplogError::Fenced(fence.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Puts entries a fenced append turned away back at the head of the buffer, where `commit`
+    /// drained them from.
+    ///
+    /// Every index this oplog has handed out stays readable from it: `last_oplog_idx` is not
+    /// rolled back, and the reader maps the buffer from `last_committed_idx`. A reader that took
+    /// `current_oplog_index` before the refusal and reads after it would otherwise find a gap and
+    /// fail-stop the executor. The entries are never sent again, because every later append fails
+    /// on the latch, and the buffer cannot grow, because every later add is refused.
+    fn retain_refused(&mut self, entries: impl IntoIterator<Item = OplogEntry>) {
+        let mut restored: VecDeque<OplogEntry> = entries.into_iter().collect();
+        restored.append(&mut self.buffer);
+        self.buffer = restored;
     }
 
     /// Commits if the buffer is over the threshold. Separated out so the actor arms can fold a

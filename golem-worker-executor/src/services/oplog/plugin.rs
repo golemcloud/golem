@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder,
+    ReservedRawStartBuilder, downcast_oplog,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -877,8 +877,12 @@ impl OplogService for ForwardingOplogService {
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
     jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
-    actor: JoinHandle<()>,
-    timer: Option<JoinHandle<()>>,
+    /// `Mutex`-guarded (not owned outright) so [`try_join_background_work`] can take both
+    /// handles out through a shared reference and await them, the same way `Drop` aborts them
+    /// through a shared method (`JoinHandle::abort` only needs `&self`). Never held across an
+    /// `.await`.
+    actor: std::sync::Mutex<Option<JoinHandle<()>>>,
+    timer: std::sync::Mutex<Option<JoinHandle<()>>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -917,6 +921,10 @@ enum ForwardingJob {
     },
     /// Periodic tick from the timer task: runs locality recovery and a time-based flush.
     Tick,
+    /// Sent only by [`try_join_background_work`]: drains no further jobs after this one, so the
+    /// actor exits once every job already queued ahead of it - including a stray `Tick` the timer
+    /// enqueued in the instant before it was stopped - has been processed.
+    Shutdown,
     #[cfg(test)]
     Inspect {
         done: tokio::sync::oneshot::Sender<ForwardingStateSnapshot>,
@@ -1149,6 +1157,7 @@ impl ForwardingOplog {
                         ))
                         .await;
                     }
+                    ForwardingJob::Shutdown => break,
                     #[cfg(test)]
                     ForwardingJob::Inspect { done } => {
                         let _ = done.send(ForwardingStateSnapshot {
@@ -1176,8 +1185,8 @@ impl ForwardingOplog {
         Self {
             inner,
             jobs,
-            actor,
-            timer: Some(timer),
+            actor: std::sync::Mutex::new(Some(actor)),
+            timer: std::sync::Mutex::new(Some(timer)),
             close_fn: Some(close_fn),
         }
     }
@@ -1208,8 +1217,9 @@ impl ForwardingOplog {
 
     /// Enqueues a job for the actor task and awaits its reply.
     ///
-    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
-    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
+    /// Panics if the actor task is gone: the actor is aborted only from `Drop`, and stopped
+    /// cooperatively only by `try_join_background_work`, both of which run only once no caller
+    /// can still be in flight - so a missing reply means the actor itself panicked and the
     /// oplog's state is no longer trustworthy.
     async fn run_job<R>(
         &self,
@@ -1237,15 +1247,50 @@ impl Drop for ForwardingOplog {
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        if let Some(timer) = self.timer.take() {
+        if let Some(timer) = self.timer.get_mut().unwrap().take() {
             timer.abort();
         }
         // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
         // job reply anymore and aborting the actor cannot lose an observed operation. Dropping
         // the actor's state aborts all background monitor tasks (they are
         // `AbortOnDropJoinHandle`s), preventing them from outliving this oplog and causing
-        // resource contention.
-        self.actor.abort();
+        // resource contention. A handle that already went through `try_join_background_work` has
+        // taken both out already, so there is nothing left here to abort.
+        if let Some(actor) = self.actor.get_mut().unwrap().take() {
+            actor.abort();
+        }
+    }
+}
+
+/// Stops this handle's periodic commit timer and forwarding actor and waits for both to actually
+/// finish, so no job either one is holding - or that the timer enqueues in the instant before it
+/// stops - can still be running once this returns. Does nothing for an oplog with no forwarding
+/// layer.
+///
+/// Unlike `Drop` (which only requests cancellation: by the time it runs no caller can still be
+/// waiting on a job reply, and a live oplog's own epoch fences anything the actor is still
+/// writing), a handle built for a fork target asserts no epoch at all - it is closed and hands off
+/// to the target's real owner before that owner opens its own primary oplog at its own epoch. A
+/// periodic checkpoint commit the actor is still running when the caller moves on would land,
+/// unfenced, into storage the owner may already be writing into. Aborting the timer stops it from
+/// scheduling further ticks; the actor is never aborted, only sent a `Shutdown` job and awaited,
+/// so it drains everything already queued ahead of that job - including a tick the timer sent in
+/// the instant before it was stopped - before exiting.
+pub(crate) async fn try_join_background_work(this: &Arc<dyn Oplog>) {
+    let Some(this) = downcast_oplog::<ForwardingOplog>(this) else {
+        return;
+    };
+    let timer = this.timer.lock().unwrap().take();
+    if let Some(timer) = timer {
+        timer.abort();
+        let _ = timer.await;
+    }
+    let actor = this.actor.lock().unwrap().take();
+    if let Some(actor) = actor {
+        // Ignored: a send failure means the actor is already gone (panicked), in which case
+        // there is nothing left to drain and awaiting its handle below still completes.
+        let _ = this.jobs.send(ForwardingJob::Shutdown);
+        let _ = actor.await;
     }
 }
 

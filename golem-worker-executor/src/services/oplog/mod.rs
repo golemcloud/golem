@@ -49,7 +49,6 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -1149,9 +1148,11 @@ impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 #[derive(Clone)]
 struct OpenOplogEntry {
     pub oplog: Weak<dyn Oplog>,
-    pub initial: Arc<AtomicBool>,
     /// Identifies this insertion, so that the remover the oplog runs when it is dropped removes
-    /// this entry and not a replacement cached under the same agent after it.
+    /// this entry and not a replacement cached under the same agent after it. Also identifies,
+    /// to the call whose closure built this entry, that it is the one that built it: comparing
+    /// against the opener's own token (not a flag shared by every concurrent reader of the cache
+    /// entry) is race-free, since each opener allocates a distinct token before racing to insert.
     pub token: Arc<()>,
     /// The epoch the opener that constructed this handle asked it to assert.
     pub requested_epoch: Option<ShardEpoch>,
@@ -1161,7 +1162,6 @@ impl OpenOplogEntry {
     pub fn new(oplog: Arc<dyn Oplog>, token: Arc<()>, requested_epoch: Option<ShardEpoch>) -> Self {
         Self {
             oplog: Arc::downgrade(&oplog),
-            initial: Arc::new(AtomicBool::new(true)),
             token,
             requested_epoch,
         }
@@ -1226,7 +1226,15 @@ impl OpenOplogs {
                 .await
                 .unwrap();
             if let Some(oplog) = entry.oplog.upgrade() {
-                let just_constructed = entry.initial.swap(false, Ordering::AcqRel);
+                // Whether *this* call's closure is the one that built the cached entry, not
+                // whether it merely observed it first: every concurrent opener racing on the
+                // same key gets a clone of the same entry back, so a shared flag here would
+                // let a newer-epoch opener win a race against the actual constructor and skip
+                // the older-generation eviction below, handing it a stale handle without ever
+                // recording its own epoch. `token` is a fresh allocation per opener, and only
+                // the constructing closure's copy ends up stored on the entry, so identity by
+                // pointer is decided at construction time, not by scheduling order.
+                let just_constructed = Arc::ptr_eq(&entry.token, &token);
                 let oplog = if just_constructed {
                     unsafe {
                         let ptr = Arc::into_raw(oplog);
@@ -1271,7 +1279,17 @@ impl OpenOplogs {
 
                 break oplog;
             } else {
-                self.oplogs.remove(agent_id).await;
+                // Scoped to this entry's own token, like the eviction above: a concurrent
+                // opener can already have replaced this dead weak reference with a Pending
+                // construction of its own by the time we get here, and `remove_if_cached`
+                // never touches a Pending entry. An unconditional remove-by-key would delete
+                // that in-flight Pending marker instead, leaving the key looking empty to a
+                // third opener, which would then start a second, independent construction -
+                // two live oplog actors writing the same initial index at the same epoch, one
+                // of them aborting on the storage's unique-key conflict.
+                self.oplogs
+                    .remove_if_cached(agent_id, |cached| Arc::ptr_eq(&cached.token, &entry.token))
+                    .await;
                 continue;
             }
         }

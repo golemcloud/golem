@@ -12,6 +12,11 @@ license-file = "../LICENSE"
 [lib]
 harness = false
 
+[[test]]
+name = "signal_unreaped_child"
+path = "tests/signal_unreaped_child.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }

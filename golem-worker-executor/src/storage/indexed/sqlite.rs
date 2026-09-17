@@ -104,6 +104,19 @@ impl SqliteIndexedStorage {
         }
     }
 
+    /// sqlx has no `Encode<Sqlite>` for `u64`, so a value that must stay integer-bound (rather
+    /// than go through `Json`, which encodes as TEXT - see [`Self::upsert_oplog_metadata`]) has to
+    /// cross to `i64` first. Checked, like Postgres's own `to_i64`: an unchecked `as i64` on a
+    /// value above `i64::MAX` wraps to negative, and reading that back `as u64` produces a
+    /// spuriously huge epoch instead of failing loudly.
+    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
+        i64::try_from(value).map_err(|_| {
+            IndexedStorageError::Other(format!(
+                "SQLite indexed storage cannot represent {field_name}={value} as i64"
+            ))
+        })
+    }
+
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
@@ -348,8 +361,9 @@ impl IndexedStorage for SqliteIndexedStorage {
         let namespace = Self::namespace(namespace);
         // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
         // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
-        // per operand, so this column stays integer-bound everywhere.
-        let epoch = shard_epoch.0 as i64;
+        // per operand, so this column stays integer-bound everywhere. Checked (see `to_i64`)
+        // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
+        let epoch = Self::to_i64(shard_epoch.0, "shard_epoch")?;
 
         let mut api = self.pool.with_rw(svc_name, api_name);
         let result = api
@@ -695,5 +709,65 @@ mod tests {
                 .unwrap(),
             vec![(2, b"existing".to_vec())]
         );
+    }
+
+    #[test]
+    // The column is `i64`-bound (see `to_i64`'s doc). An epoch that does not fit it must be
+    // rejected here rather than silently wrapped to a negative value that a later `epoch as u64`
+    // read turns into a spuriously huge one - the class of bug that let a corrupted epoch panic
+    // downstream in the shard manager (`ShardEpoch::next`'s `checked_add(1).expect(..)`).
+    async fn upsert_oplog_metadata_rejects_an_epoch_that_does_not_fit_i64() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-epoch-overflow");
+
+        let result = storage
+            .upsert_oplog_metadata(
+                "test",
+                "upsert_oplog_metadata",
+                namespace,
+                "oplog",
+                ShardEpoch(u64::MAX),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(IndexedStorageError::Other(_))),
+            "an epoch above i64::MAX must be a rejected write, not a wrapped negative one, got {result:?}"
+        );
+    }
+
+    #[test]
+    // The largest value that does fit is the boundary right below the rejected one, and must
+    // still succeed - a regression here would mean the checked conversion rejects valid input.
+    async fn upsert_oplog_metadata_accepts_the_largest_epoch_that_fits_i64() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-epoch-boundary");
+
+        storage
+            .upsert_oplog_metadata(
+                "test",
+                "upsert_oplog_metadata",
+                namespace,
+                "oplog",
+                ShardEpoch(i64::MAX as u64),
+            )
+            .await
+            .unwrap();
     }
 }

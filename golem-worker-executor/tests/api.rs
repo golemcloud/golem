@@ -5924,6 +5924,42 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
             elements: vec![SchemaValue::U8(42)]
         }
     );
+
+    // The value alone cannot tell the retry being handed the parked call's own answer apart from
+    // a second, independent run of `await_promise` that happened to read the same completed
+    // promise: both return `[42]`. Count the method's oplog pair instead - the idempotency key
+    // must have deduplicated the retry into the original invocation, so there can only be one.
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+    let oplog = executor
+        .get_oplog(&parked.agent_id, OplogIndex::INITIAL)
+        .await?;
+    let started = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => matches!(
+                &params.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(m)
+                    if m.method_name.replace('-', "_") == "await_promise"
+            ),
+            _ => false,
+        })
+        .count();
+    let finished = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params) => params
+                .method_name
+                .as_deref()
+                .is_some_and(|name| name.replace('-', "_") == "await_promise"),
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        (started, finished),
+        (1, 1),
+        "the retry under the same idempotency key must be answered from the recorded run, not \
+         by executing await_promise a second time"
+    );
     Ok(())
 }
 
@@ -6391,6 +6427,9 @@ async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_
     // Lets `subscribe_duration`'s own commit finish, so the guest is parked in `poll` with about
     // five seconds of sleep left and nothing else is due to write.
     sleep(Duration::from_secs(1)).await;
+    // Baseline for the no-further-progress check below: from here on, the guest's only next
+    // durable operation is the monotonic-clock read that must be refused.
+    let oplog_before_takeover = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     let mut clock = executor
         .gate_next_monotonic_clock_start(&owned_agent_id)
@@ -6425,9 +6464,20 @@ async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_
     .await
     .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
 
-    // The hook signals `entered` only once its commit has succeeded, and by now the agent is gone
-    // from this executor, so a gate that was going to be entered already has been. Silence means
-    // the refusal happened at that commit, inside the host call.
+    // `entered()` only fires once the gated commit *succeeds* (`OwnerExecution::
+    // test_after_monotonic_clock_start` sends it after the commit, not before), so its timing out
+    // here does not by itself prove the guest ever reached the gate: the same timeout would be
+    // observed if the agent had been interrupted by something else first, well before the
+    // monotonic-clock read. Prove reachability directly from the oplog instead: nothing may follow
+    // `subscribe_duration`'s `End` on this executor once the shard is taken away, since the
+    // guest's only next durable operation is the monotonic-clock read the fence must have refused.
+    let oplog_after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog_after.len(),
+        oplog_before_takeover.len(),
+        "no oplog entries may follow `subscribe_duration`'s `End` once the shard is taken away; \
+         the guest's next durable call is the monotonic-clock read the fence must have refused"
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(500), clock.entered())
             .await

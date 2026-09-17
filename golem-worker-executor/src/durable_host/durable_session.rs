@@ -968,7 +968,7 @@ impl DurableSessionStreams {
                 epoch,
             },
         ))
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(true)
     }
@@ -1057,11 +1057,18 @@ impl DurableSessionStreams {
         }
     }
 
-    pub(crate) async fn append_record(&self, record: StreamSessionRecordV1) {
-        self.producer
+    pub(crate) async fn append_record(&self, record: StreamSessionRecordV1) -> Result<(), String> {
+        match self
+            .producer
             .append_session_record_attributed(self.entity_parent_start_index, record)
             .await
-            .expect("internally generated durable session record is valid");
+        {
+            Ok(()) => Ok(()),
+            Err(error @ DurableStreamProducerError::Fenced(_)) => Err(error.to_string()),
+            Err(error) => {
+                panic!("internally generated durable session record is invalid: {error}")
+            }
+        }
     }
 
     async fn try_append_record(&self, record: StreamSessionRecordV1) -> Result<(), String> {
@@ -1091,7 +1098,7 @@ impl DurableSessionStreams {
                 attempt_id,
             },
         ))
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(attempt_id)
     }
@@ -1202,7 +1209,7 @@ impl DurableSessionStreams {
                 mapping,
             },
         ))
-        .await;
+        .await?;
         Ok(())
     }
 
@@ -2099,7 +2106,7 @@ impl DurableSessionStreams {
             Some(existing) => existing,
             None => {
                 self.append_record(StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()))
-                    .await;
+                    .await?;
                 self.commit_consumer_journal().await?;
                 intent
             }
@@ -2721,7 +2728,7 @@ impl DurableSessionStreams {
             }
         } else {
             self.append_record(StreamSessionRecordV1::InvocationResult(record))
-                .await;
+                .await?;
             self.commit_consumer_journal().await?;
         }
         self.decode_initial(
@@ -4688,7 +4695,7 @@ impl DurableInputProducer {
                     }),
                 };
                 if !journaled {
-                    streams.append_record(record).await;
+                    streams.append_record(record).await?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
                         .back()
@@ -7135,7 +7142,7 @@ mod tests {
             ),
         ] {
             assert!(record.has_supported_format());
-            streams.append_record(record).await;
+            streams.append_record(record).await.unwrap();
         }
         producer
             .prepare_attachment(attachment.clone(), 100)
@@ -7166,7 +7173,8 @@ mod tests {
                     terminal: StreamConsumerTerminalV1::End(StreamEndResultV1::Ok),
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         streams.commit_consumer_journal().await.unwrap();
         producer.finalize_attachment(attachment.clone(), golem_common::model::durable_stream::StreamAttachmentFinalizationReasonV1::ConsumerFinalized, 101).await.unwrap();
         let mut next_attachment = attachment;
@@ -7272,7 +7280,8 @@ mod tests {
                     consumer_read_ordinal: 0,
                 },
             ))
-            .await;
+            .await
+            .unwrap();
 
         let endpoint = streams
             .endpoint(handle, 0, SessionStreamRoleV1::Input)
@@ -7975,7 +7984,8 @@ mod tests {
                     stream_mappings: vec![mapping.clone()],
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let pending_invocation_oplog_index = consumer_oplog
             .add(OplogEntry::pending_agent_invocation(
                 consumer.invocation.idempotency_key.clone(),
@@ -7997,7 +8007,8 @@ mod tests {
                     pending_invocation_oplog_index,
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let streams = streams.with_attachment(1, attempt_id);
         remote_producer
             .prepare_attachment(attachment.clone(), 100)
@@ -8321,7 +8332,8 @@ mod tests {
                     mapping: partial_mapping.clone(),
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let consumer_length = restarted.oplog.current_oplog_index().await;
         let producer_length = producer_oplog.current_oplog_index().await;
         assert!(
@@ -8348,7 +8360,8 @@ mod tests {
                     mapping: partial_mapping,
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         assert!(restarted.complete().await.is_err());
     }
 
@@ -8830,7 +8843,8 @@ mod tests {
                     pending_invocation_oplog_index,
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let streams = streams.with_attachment(1, attempt_id);
         assert!(
             streams
@@ -9186,7 +9200,8 @@ mod tests {
                     stream_mappings: Vec::new(),
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let pending_invocation_oplog_index = consumer_oplog
             .add(OplogEntry::pending_agent_invocation(
                 consumer.invocation.idempotency_key.clone(),
@@ -9208,7 +9223,8 @@ mod tests {
                     pending_invocation_oplog_index,
                 },
             ))
-            .await;
+            .await
+            .unwrap();
         let epoch1 = streams.with_attachment(1, start_attempt_id);
         let root_mapping = StreamSessionMappingRecordV1 {
             transport_stream_id: 17,

@@ -489,10 +489,18 @@ enum InjectedAppendFailure {
     CommitThenIndeterminate,
     CommitDifferentThenIndeterminate,
     CommitPrefixThenIndeterminate,
+    /// Refuses the write as a stale epoch would, naming the epoch one above whatever was
+    /// asserted. Used to simulate the storage fencing the reconciliation probe
+    /// `retry_oplog_append` repeats after a genuine indeterminate-write mismatch (F16).
+    Fenced,
 }
 
 impl InjectedAppendFailure {
-    fn before_write_error(self) -> Option<IndexedStorageError> {
+    fn before_write_error(
+        self,
+        key: &str,
+        shard_epoch: Option<ShardEpoch>,
+    ) -> Option<IndexedStorageError> {
         match self {
             Self::IndeterminateBeforeWrite => Some(IndexedStorageError::Indeterminate(
                 "injected connection loss".to_string(),
@@ -503,6 +511,11 @@ impl InjectedAppendFailure {
             Self::PermanentBeforeWrite => Some(IndexedStorageError::Other(
                 "injected permanent failure".to_string(),
             )),
+            Self::Fenced => Some(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: shard_epoch.unwrap_or_default(),
+                actual: shard_epoch.map(|epoch| ShardEpoch(epoch.0 + 1)),
+            }),
             _ => None,
         }
     }
@@ -517,7 +530,8 @@ impl InjectedAppendFailure {
             )),
             Self::IndeterminateBeforeWrite
             | Self::TransientBeforeWrite
-            | Self::PermanentBeforeWrite => unreachable!(),
+            | Self::PermanentBeforeWrite
+            | Self::Fenced => unreachable!(),
         }
     }
 }
@@ -719,7 +733,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .unwrap()
             .pop_front()
             .unwrap_or(InjectedAppendFailure::None);
-        if let Some(error) = failure.before_write_error() {
+        if let Some(error) = failure.before_write_error(key, shard_epoch) {
             return Err(error);
         }
         if matches!(
@@ -775,7 +789,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .unwrap()
             .pop_front()
             .unwrap_or(InjectedAppendFailure::None);
-        if let Some(error) = failure.before_write_error() {
+        if let Some(error) = failure.before_write_error(key, shard_epoch) {
             return Err(error);
         }
         let pairs = if matches!(
@@ -1642,6 +1656,14 @@ async fn create_append_reconciliation_oplog(
     service: &PrimaryOplogService,
     name: &str,
 ) -> Arc<dyn Oplog> {
+    create_append_reconciliation_oplog_with_epoch(service, name, None).await
+}
+
+async fn create_append_reconciliation_oplog_with_epoch(
+    service: &PrimaryOplogService,
+    name: &str,
+    shard_epoch: Option<ShardEpoch>,
+) -> Arc<dyn Oplog> {
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -1663,7 +1685,7 @@ async fn create_append_reconciliation_oplog(
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
-            None,
+            shard_epoch,
         )
         .await
 }
@@ -2099,6 +2121,39 @@ async fn differing_read_back_after_indeterminate_append_remains_fatal(_tracing: 
 
     assert_eq!(indexed_storage.append_many_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 1);
+}
+
+/// Same mismatch as `differing_read_back_after_indeterminate_append_remains_fatal`, except this
+/// writer asserts a shard epoch and the mismatch is explained: a new owner already wrote those
+/// indices. The reconciliation probe this fences (F16) must return `Fenced` and let the caller
+/// give up the agent, rather than panicking and aborting the whole - otherwise still live -
+/// executor process (`panic = "abort"`).
+#[test]
+async fn differing_read_back_on_a_moved_shard_is_fenced_instead_of_panicking(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(indexed_storage.clone()).await;
+    let oplog = create_append_reconciliation_oplog_with_epoch(
+        &service,
+        "different-append-read-back-fenced",
+        Some(ShardEpoch(5)),
+    )
+    .await;
+    indexed_storage.reset();
+    indexed_storage.reset_append_observations();
+    indexed_storage.inject_append_many_failures([
+        InjectedAppendFailure::CommitDifferentThenIndeterminate,
+        InjectedAppendFailure::Fenced,
+    ]);
+
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    let result = oplog.commit(CommitLevel::Always).await;
+
+    assert!(
+        matches!(result, Err(OplogError::Fenced(_))),
+        "expected the reconciliation probe to surface a fence instead of panicking, got {result:?}"
+    );
+    // The original attempt, then the reconciliation probe once the read-back mismatched.
+    assert_eq!(indexed_storage.append_many_attempts(), 2);
 }
 
 #[test]
@@ -7705,12 +7760,11 @@ async fn a_fenced_oplog_is_not_handed_out_again_while_it_is_still_held(_tracing:
     );
 }
 
-/// What every write that gates a side effect relies on: an add's answer is no evidence the entry
-/// was written, only the latch read after the commit is. A below-threshold add on a moved shard
-/// buffers and succeeds, before and after the fence latches, and the refused commit is what
-/// latches it.
+/// A below-threshold add on a moved shard only buffers, so nothing refuses it until the commit;
+/// the refused commit latches the fence, and from then on the add itself is refused rather than
+/// buffered under an index that could never reach the storage.
 #[test]
-async fn a_below_threshold_add_on_a_moved_shard_is_latched_by_the_refused_commit(
+async fn a_below_threshold_add_on_a_moved_shard_is_refused_once_the_commit_latches_the_fence(
     _tracing: &Tracing,
 ) {
     let tempdir = tempfile::TempDir::new().unwrap();
@@ -7762,10 +7816,13 @@ async fn a_below_threshold_add_on_a_moved_shard_is_latched_by_the_refused_commit
     assert_eq!(fence.expected_epoch, ShardEpoch(8));
     assert_eq!(fence.actual_epoch, Some(ShardEpoch(9)));
 
-    stale
-        .add(OplogEntry::exited().rounded())
-        .await
-        .expect("a latched fence does not stop a below-threshold add");
+    assert!(
+        matches!(
+            stale.add(OplogEntry::exited().rounded()).await,
+            Err(OplogError::Fenced(_))
+        ),
+        "a latched fence refuses a below-threshold add"
+    );
     assert!(matches!(
         stale.commit(CommitLevel::Always).await,
         Err(OplogError::Fenced(_))
@@ -7973,6 +8030,96 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
         ),
         None => panic!("the refused flush must latch the fence"),
     }
+    assert_eq!(
+        owner.length().await,
+        1,
+        "the losing executor must not have appended to the owner's oplog"
+    );
+}
+
+#[test]
+async fn a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "half-alive".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let losing_executor = fencing_oplog_service(&tempdir, "half-alive").await;
+    let owning_executor = fencing_oplog_service(&tempdir, "half-alive").await;
+
+    let loser = losing_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(8)),
+        )
+        .await;
+    let owner = owning_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(9)),
+        )
+        .await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    // Below the commit threshold both adds only buffer, and each is answered with an index.
+    let first = loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+    loser.add(OplogEntry::exited().rounded()).await.unwrap();
+    // A reader takes the horizon before the storage refuses the batch and reads after it, as a
+    // durable session or a fork running beside the invocation loop does.
+    let horizon = loser.current_oplog_index().await;
+    assert!(matches!(
+        loser.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    let entries = loser
+        .read_exact(first, horizon.as_u64() - first.as_u64() + 1)
+        .await;
+    assert_eq!(
+        entries.len(),
+        2,
+        "an index handed out before the refusal must still be readable after it"
+    );
+
+    // Once latched, an add below the threshold is refused instead of buffered under an index
+    // that could never reach the storage.
+    assert!(matches!(
+        loser.add(OplogEntry::suspend().rounded()).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert!(matches!(
+        loser
+            .add_pair(
+                OplogEntry::suspend().rounded(),
+                Box::new(|_| OplogEntry::exited().rounded())
+            )
+            .await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(
+        loser.current_oplog_index().await,
+        horizon,
+        "a refused add must not take an index"
+    );
+    assert!(matches!(
+        loser.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
     assert_eq!(
         owner.length().await,
         1,
@@ -8845,4 +8992,50 @@ async fn aborting_a_transfer_waits_for_the_prefix_drop_it_handed_to_the_primary(
             .is_empty(),
         "the abort returned before the primary finished dropping the transferred prefix"
     );
+}
+
+/// `try_abort_transfer` can land between `append_target` and `drop_source_prefix` (see
+/// `BackgroundTransfer::run`'s doc comment): the chunk this test appends models one that already
+/// reached the archive when that happened. The real owner's next transfer would start from the
+/// same, never-trimmed source range and derive the identical chunk id and bytes - exercised here
+/// directly against the archive rather than by racing a real abort, since the archive is what
+/// must tolerate the repeat (F19).
+#[test]
+async fn compressed_archive_append_reconciles_a_resumed_transfers_repeat_chunk(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let archive_service =
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default());
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "resumed-transfer".into(),
+        },
+    );
+    let archive = archive_service
+        .open_fresh(&owned_agent_id, AgentMode::Durable)
+        .await;
+
+    let chunk = vec![
+        (OplogIndex::from_u64(1), OplogEntry::suspend().rounded()),
+        (OplogIndex::from_u64(2), OplogEntry::exited().rounded()),
+    ];
+    archive.append(&chunk).await;
+    assert_eq!(archive.length().await, 1);
+
+    // The resumed transfer's repeat: identical id, identical bytes.
+    archive.append(&chunk).await;
+    assert_eq!(
+        archive.length().await,
+        1,
+        "a resumed transfer's identical repeat chunk must not duplicate"
+    );
+
+    // A different chunk landing at the same id is not explainable as a replay and must stay
+    // fatal rather than being papered over.
+    let different_chunk = vec![
+        (OplogIndex::from_u64(1), OplogEntry::suspend().rounded()),
+        (OplogIndex::from_u64(2), OplogEntry::suspend().rounded()),
+    ];
+    assert_panics(archive.append(&different_chunk)).await;
 }

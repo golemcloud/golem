@@ -433,7 +433,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 debug!("Enqueuing update");
                 worker
                     .enqueue_update(UpdateDescription::Automatic { target_revision })
-                    .await;
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {

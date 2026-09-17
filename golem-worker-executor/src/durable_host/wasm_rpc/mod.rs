@@ -1450,7 +1450,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let auth_ctx = handle.take_agent_auth_ctx();
@@ -2736,7 +2736,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 ctx.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let either_result = futures::future::select(
@@ -2864,7 +2864,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
                 ctx.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let result = ctx

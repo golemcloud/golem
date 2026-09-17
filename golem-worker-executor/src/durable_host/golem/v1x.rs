@@ -717,7 +717,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
-                .await;
+                .await?;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
             Err(InterruptKind::Jump.into())
@@ -820,7 +820,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             self.entity_parent_start_index(),
                             deleted_region,
                         ))
-                        .await;
+                        .await?;
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
@@ -1613,7 +1613,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
 
             let created_by = self.created_by();
             let fork_result = loop {

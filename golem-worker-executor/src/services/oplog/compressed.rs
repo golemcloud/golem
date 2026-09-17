@@ -78,6 +78,92 @@ where
     }
 }
 
+/// Appends one already-serialized compressed chunk, retrying transient failures like
+/// [`retry_storage_op`]. A permanent failure is reconciled against storage before it is treated
+/// as fatal, because this append is not protected by a shard epoch (it is driven by whichever
+/// executor's transfer fiber is running, primary-owner or not) and its background task can be
+/// aborted between steps - including after this append lands but before the `drop_source_prefix`
+/// that would have advanced the source past it. The owner's next transfer then chunks from the
+/// same unadvanced point, so a chunk it writes under an id that already exists holds the identical
+/// entries and bytes. A duplicate-id failure whose stored content matches what this attempt would
+/// have written is that resumed transfer catching up, not corruption, and is treated as success
+/// rather than panicking on the storage's key conflict.
+async fn append_compressed_chunk(
+    retry_config: &RetryConfig,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    namespace: &IndexedStorageNamespace,
+    key: &str,
+    id: u64,
+    value: Vec<u8>,
+) {
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        let error = match indexed_storage
+            .with_entity("compressed_oplog", "append", "compressed_entry")
+            .append_raw(namespace.clone(), key, id, value.clone(), None)
+            .await
+        {
+            Ok(()) => return,
+            Err(error) => error,
+        };
+
+        if let IndexedStorageError::Transient(msg) = &error {
+            if let Some(delay) = get_delay(retry_config, attempts) {
+                record_oplog_storage_retry("compressed_append");
+                warn!(
+                    op = "compressed_append",
+                    key = key,
+                    attempt = attempts,
+                    delay_ms = delay.as_millis() as u64,
+                    "Transient indexed storage error, retrying: {msg}"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            panic!(
+                "Indexed storage operation 'compressed_append' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+            );
+        }
+
+        if stored_chunk_matches(retry_config, indexed_storage, namespace, key, id, &value).await {
+            return;
+        }
+        panic!("Indexed storage operation 'compressed_append' failed for key '{key}': {error}");
+    }
+}
+
+/// Reads back the chunk stored at `id` and compares it byte-for-byte with `expected`. Used only to
+/// tell a resumed transfer's harmless repeat write apart from a genuine conflict - see
+/// [`append_compressed_chunk`].
+async fn stored_chunk_matches(
+    retry_config: &RetryConfig,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    namespace: &IndexedStorageNamespace,
+    key: &str,
+    id: u64,
+    expected: &[u8],
+) -> bool {
+    let actual = retry_storage_op(retry_config, "compressed_append_reconcile", key, || {
+        let namespace = namespace.clone();
+        async move {
+            indexed_storage
+                .with_entity(
+                    "compressed_oplog",
+                    "compressed_append_reconcile",
+                    "compressed_entry",
+                )
+                .read_raw(namespace, key, id, id)
+                .await
+        }
+    })
+    .await;
+    actual
+        .into_iter()
+        .find(|(actual_id, _)| *actual_id == id)
+        .is_some_and(|(_, bytes)| bytes == expected)
+}
+
 #[derive(Debug)]
 pub struct CompressedOplogArchiveService {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
@@ -487,27 +573,22 @@ impl OplogArchive for CompressedOplogArchive {
             total_bytes += compressed_chunk.compressed_data.len() as u64;
 
             {
-                let is = self.indexed_storage.clone();
-                let agent_id_clone = self.agent_id.clone();
-                let agent_mode = self.agent_mode;
-                let level = self.level;
-                let key = self.key.clone();
+                let ns = IndexedStorageNamespace::CompressedOpLog {
+                    agent_id: self.agent_id.clone(),
+                    agent_mode: self.agent_mode,
+                    level: self.level,
+                };
                 let last_id_val: u64 = last_id.into();
-                retry_storage_op(&self.retry_config, "compressed_append", &key, || {
-                    let is = is.clone();
-                    let ns = IndexedStorageNamespace::CompressedOpLog {
-                        agent_id: agent_id_clone.clone(),
-                        agent_mode,
-                        level,
-                    };
-                    let key = key.clone();
-                    let chunk = compressed_chunk.clone();
-                    async move {
-                        is.with_entity("compressed_oplog", "append", "compressed_entry")
-                            .append(ns, &key, last_id_val, &chunk, None)
-                            .await
-                    }
-                })
+                let value = serialize(&compressed_chunk)
+                    .unwrap_or_else(|err| panic!("failed to serialize oplog chunk: {err}"));
+                append_compressed_chunk(
+                    &self.retry_config,
+                    self.indexed_storage.as_ref(),
+                    &ns,
+                    &self.key,
+                    last_id_val,
+                    value,
+                )
                 .await;
             }
         }

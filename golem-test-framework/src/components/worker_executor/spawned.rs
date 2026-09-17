@@ -211,8 +211,11 @@ impl SpawnedWorkerExecutor {
 /// A reaped child's pid is free for the OS to hand to an unrelated process, and `is_running`'s
 /// `try_wait` reaps an exited child while leaving it in place, so a raw `kill` on `child.id()`
 /// alone could signal a stranger. `Child::kill` has this guard built in; `kill(2)` does not.
+///
+/// `pub` so its process-supervision behavior can be pinned by an integration test under
+/// `golem-test-framework/tests/` rather than a `--lib` unit test that would spawn a process.
 #[cfg(unix)]
-fn signal_unreaped_child(child: &mut Child, signal: libc::c_int, what: &str) {
+pub fn signal_unreaped_child(child: &mut Child, signal: libc::c_int, what: &str) {
     match child.try_wait() {
         Ok(None) => {}
         Ok(Some(status)) => panic!("Cannot {what}: it has already exited ({status})"),
@@ -340,47 +343,7 @@ impl Drop for SpawnedWorkerExecutor {
     }
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use test_r::test;
-
-    use super::signal_unreaped_child;
-    use std::process::{Child, Command};
-
-    /// Kills and reaps the child when the test ends, also when an assertion panics, so a failing
-    /// run does not leave a stopped process behind.
-    struct KilledOnDrop(Child);
-
-    impl Drop for KilledOnDrop {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "has already exited")]
-    fn a_child_that_has_been_reaped_is_never_signalled() {
-        let mut child = Command::new("true")
-            .spawn()
-            .expect("failed to spawn `true`");
-        // Records the exit status, exactly as `is_running`'s `try_wait` does for an exited child.
-        child.wait().expect("failed to wait for `true`");
-
-        signal_unreaped_child(&mut child, libc::SIGSTOP, "pause `true`");
-    }
-
-    #[test]
-    fn a_live_child_can_be_stopped_and_continued() {
-        let mut child = KilledOnDrop(
-            Command::new("sleep")
-                .arg("30")
-                .spawn()
-                .expect("failed to spawn `sleep`"),
-        );
-
-        signal_unreaped_child(&mut child.0, libc::SIGSTOP, "pause `sleep`");
-        // `try_wait` does not report a stopped child, so continuing it is not refused as exited.
-        signal_unreaped_child(&mut child.0, libc::SIGCONT, "resume `sleep`");
-    }
-}
+// `signal_unreaped_child`'s process-supervision behavior is pinned by
+// `golem-test-framework/tests/signal_unreaped_child.rs` instead of a `--lib` unit test: unit
+// tests must never spawn external processes (AGENTS.md), and `cargo make unit-tests` runs
+// `--workspace --lib`.

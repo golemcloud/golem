@@ -1658,10 +1658,11 @@ impl InFunctionRetryHost for RetryHostProbe {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
         self.appended_inside_atomic_region
             .push(inside_atomic_region);
+        Ok(())
     }
 }
 

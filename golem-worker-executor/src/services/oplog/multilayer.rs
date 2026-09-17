@@ -1318,6 +1318,22 @@ trait BackgroundTransfer {
     async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]);
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex);
 
+    /// `try_abort_transfer` can land between any two `.await`s here, including between
+    /// `append_target` and `drop_source_prefix`: a `JoinHandle::abort` takes effect at whichever
+    /// suspension point the task is next parked at, not at a step boundary this trait controls.
+    /// So a target chunk can already be durable while the source that fed it has not yet been
+    /// trimmed. That is only safe because the target append is written to be replayed: the next
+    /// transfer starts from the same untrimmed source position and chunks from there, so every
+    /// chunk it shares an id with has the identical bytes, and the archive backing `append_target`
+    /// (the compressed layer; a blob-backed one overwrites by path and is idempotent by
+    /// construction) reconciles a duplicate-id write against what is already stored instead of
+    /// treating it as a conflict. A next transfer that covers more entries ends the aborted run's
+    /// trailing partial chunk at a later id instead: the two overlap with identical entries, which
+    /// reads tolerate, and the earlier one goes with the layer's next `drop_prefix` past it. Sequencing the steps
+    /// behind a cooperative, checked-between-steps cancellation instead of a hard abort would
+    /// also close this window, but the archive already has to tolerate a replayed append for
+    /// other reasons (retried indeterminate writes), so leaning on that here avoids a second
+    /// cancellation mechanism.
     async fn run(&self) {
         let entries = self.read_source().await;
         match entries.last() {

@@ -794,7 +794,7 @@ impl TestWorkerExecutor {
             .try_get_worker(&owned_agent_id)
             .await
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
-        worker.queue_card_revocation(card_id).await;
+        worker.queue_card_revocation(card_id).await?;
         Ok(())
     }
 
@@ -833,7 +833,7 @@ impl TestWorkerExecutor {
                 None,
                 golem_common::base_model::oplog::QueuedCardEvent::install(card),
             ))
-            .await;
+            .await?;
         Ok(())
     }
 
@@ -2253,7 +2253,7 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_failed(target_revision, details)
             .await
@@ -2264,7 +2264,7 @@ impl UpdateManagement for TestWorkerCtx {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await

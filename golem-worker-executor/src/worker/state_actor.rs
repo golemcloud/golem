@@ -105,13 +105,14 @@ pub(crate) struct OwnerCommitController {
 /// unpollable callers.
 enum StatusJob {
     /// Commits the oplog and folds the newly committed entries into the published status.
-    /// Replies with the current oplog index after the commit and whether the status changed.
+    /// Replies with the current oplog index after the commit and whether the status changed, or
+    /// with the fence when the storage refused the commit.
     /// The reply deliberately does not depend on the instance lock; if the caller wants the
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
         committed: Option<oneshot::Sender<()>>,
-        done: oneshot::Sender<(OplogIndex, bool)>,
+        done: oneshot::Sender<Result<(OplogIndex, bool), OplogFence>>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
@@ -164,7 +165,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
         entry: Box<OplogEntry>,
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), OplogError>>,
     },
     MemoryLimitExceeded {
         worker: Arc<Worker<Ctx>>,
@@ -243,14 +244,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                // The reply keeps its shape: these callers learn of a fence from
-                                // the oplog's latch and from the relinquish the refusal spawned.
-                                let changed = state
-                                    .commit_and_update_state(level, committed)
-                                    .await
-                                    .unwrap_or(false);
+                                let changed =
+                                    state.commit_and_update_state(level, committed).await?;
                                 let index = state.oplog.current_oplog_index().await;
-                                (index, changed)
+                                Ok((index, changed))
                             },
                             done,
                         )
@@ -380,8 +377,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         entry,
                         done,
                     } => {
-                        worker.add_and_commit_oplog(*entry).await;
-                        let _ = done.send(());
+                        let _ = done.send(worker.add_and_commit_oplog(*entry).await.map(|_| ()));
                     }
                     LifecycleJob::MemoryLimitExceeded { worker, memory } => {
                         worker
@@ -414,11 +410,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
-    /// current oplog index after the commit and whether the status changed.
+    /// current oplog index after the commit and whether the status changed, or the fence when the
+    /// storage refused the commit; the refusal has already spawned the agent's relinquish.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
-    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+    pub async fn commit_and_update_state(
+        &self,
+        level: CommitLevel,
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -432,7 +432,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         level: CommitLevel,
         committed: oneshot::Sender<()>,
-    ) -> (OplogIndex, bool) {
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -556,7 +556,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         worker: Arc<Worker<Ctx>>,
         entry: OplogEntry,
-    ) -> oneshot::Receiver<()> {
+    ) -> oneshot::Receiver<Result<(), OplogError>> {
         let (done, done_rx) = oneshot::channel();
         if self
             .lifecycle_jobs
@@ -577,7 +577,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 }
 
 impl OwnerCommitController {
-    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+    pub async fn commit_and_update_state(
+        &self,
+        level: CommitLevel,
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
