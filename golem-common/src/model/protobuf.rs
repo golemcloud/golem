@@ -883,6 +883,16 @@ mod tests {
 
     test_r::enable!();
 
+    #[test]
+    fn scan_cursor_preserves_opaque_value_through_protobuf_conversion() {
+        for value in ["", "gsc1_opaque-token_雪"] {
+            let cursor = ScanCursor::new(value.to_string());
+            let wire: Cursor = cursor.clone().into();
+            assert_eq!(wire.value, value);
+            assert_eq!(ScanCursor::from(wire), cursor);
+        }
+    }
+
     /// The round trip goes through the free conversion functions
     /// themselves — they are what `AssignShards` and `RenewShardLease` use on
     /// both sides of the wire. `epoch_of` is how a reader of the pushed set

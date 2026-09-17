@@ -44,6 +44,7 @@ use golem_test_framework::dsl::{
     AgentResult, drain_connection, stdout_event_matching, stdout_events,
 };
 use golem_worker_executor::services::events::Event;
+use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
     INVOCATION_OWNERSHIP_RECHECK_INTERVAL, WorkerDeletionHook, WorkerDeletionStage,
@@ -2840,13 +2841,91 @@ async fn get_workers_from_worker(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn malformed_worker_enumeration_cursor_returns_domain_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::Cursor;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetWorkersMetadataRequest, get_workers_metadata_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = executor
+        .client
+        .clone()
+        .get_workers_metadata(GetWorkersMetadataRequest {
+            component_id: Some(ComponentId::new().into()),
+            environment_id: Some(context.default_environment_id.into()),
+            filter: None,
+            cursor: Some(Cursor {
+                value: "not-a-valid-cursor".to_string(),
+            }),
+            count: 1,
+            precise: false,
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(get_workers_metadata_response::Result::Failure(error)) => {
+            let error: WorkerExecutorError = error.try_into().map_err(anyhow::Error::msg)?;
+            assert!(matches!(error, WorkerExecutorError::InvalidRequest { .. }));
+        }
+        other => panic!("expected InvalidRequest domain failure, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CountingWorkerEnumerationService {
+    inner: Arc<dyn WorkerEnumerationService>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl WorkerEnumerationService for CountingWorkerEnumerationService {
+    async fn get(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        filter: Option<AgentFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> Result<(Option<ScanCursor>, Vec<golem_common::model::AgentMetadata>), WorkerExecutorError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .get(environment_id, component_id, filter, cursor, count, precise)
+            .await
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_workers_opaque_cursor_replays_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let enumeration_calls = Arc::new(AtomicUsize::new(0));
+    let wrap_calls = enumeration_calls.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_worker_enumeration_service: Some(Arc::new(move |inner| {
+            Arc::new(CountingWorkerEnumerationService {
+                inner,
+                calls: wrap_calls.clone(),
+            })
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -2854,39 +2933,99 @@ async fn get_workers_opaque_cursor_replays_after_restart(
     let caller = agent_id!("GolemHostApi", "opaque-cursor-replay");
     let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
 
+    let mut expected_ids = HashSet::from([caller.to_string()]);
     for index in 0..50 {
-        executor
-            .start_agent(
-                &component.id,
-                agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}")),
-            )
-            .await?;
+        let target = agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}"));
+        executor.start_agent(&component.id, target.clone()).await?;
+        expected_ids.insert(target.to_string());
     }
 
-    let first_page_size = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "get_agents_next_result",
-            data_value!(component.id),
-        )
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &caller, "create_promise", data_value!())
         .await?
-        .into_typed::<Result<u64, String>>()?;
-    assert_eq!(first_page_size, Ok(50));
-    executor.check_oplog_is_queryable(&caller_id).await?;
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected promise id"))?;
+    let component_id_value = {
+        let (high, low) = component.id.0.as_u64_pair();
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Record {
+                fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
+            }],
+        }
+    };
+    let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
+    let resumed_params = params.clone();
+    let invocation_key = IdempotencyKey::fresh();
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let caller_clone = caller.clone();
+    let key_clone = invocation_key.clone();
+    let mut pending_invocation = tokio::spawn(async move {
+        executor_clone
+            .invoke_and_await_agent_with_key(
+                &component_clone,
+                &caller_clone,
+                &key_clone,
+                "get_agents_across_promise",
+                params,
+            )
+            .await
+    });
+    tokio::select! {
+        result = &mut pending_invocation => {
+            return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
+        }
+        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 1);
+    pending_invocation.abort();
+    assert!(
+        pending_invocation
+            .await
+            .expect_err("pending invocation should be cancelled")
+            .is_cancelled()
+    );
 
     drop(executor);
-    let executor = start(deps, &context).await?;
-    let self_id = executor
-        .invoke_and_await_agent(
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: caller_id.clone(),
+                oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let pages = executor
+        .invoke_and_await_agent_with_key(
             &component,
             &caller,
-            "get_self_metadata_result",
-            data_value!(),
+            &invocation_key,
+            "get_agents_across_promise",
+            resumed_params,
         )
         .await?
-        .into_typed::<Result<String, String>>()?;
-    assert_eq!(self_id, Ok(caller.to_string()));
+        .into_typed::<Result<Vec<Vec<String>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].len(), 50);
+    assert_eq!(pages[1].len(), 1);
+    let first_page: HashSet<_> = pages[0].iter().cloned().collect();
+    let second_page: HashSet<_> = pages[1].iter().cloned().collect();
+    assert!(first_page.is_disjoint(&second_page));
+    assert_eq!(
+        first_page
+            .union(&second_page)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        expected_ids
+    );
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 2);
     executor.check_oplog_is_queryable(&caller_id).await?;
 
     Ok(())

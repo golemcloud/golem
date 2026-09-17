@@ -1608,6 +1608,8 @@ type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> A
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+type WrapWorkerEnumerationServiceFn =
+    dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
@@ -1623,6 +1625,7 @@ pub struct TestExecutorOverrides {
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    pub wrap_worker_enumeration_service: Option<Arc<WrapWorkerEnumerationServiceFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
     /// agents this executor owns. Everything that gates on ownership reads it,
     /// including the periodic re-check a caller parked in
@@ -2994,6 +2997,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             wrap(rpc)
         } else {
             rpc
+        }
+    }
+
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        if let Some(wrap) = &self.overrides.wrap_worker_enumeration_service {
+            wrap(service)
+        } else {
+            service
         }
     }
 }

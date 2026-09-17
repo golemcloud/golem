@@ -111,6 +111,11 @@ pub trait GolemHostApi {
         precise: bool,
     ) -> Vec<AgentMetadata>;
     fn get_agents_next_result(&self, component_id: ComponentId) -> Result<u64, String>;
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String>;
     fn get_self_metadata_result(&self) -> Result<String, String>;
     fn resolve_agent_id_strict_result(
         &self,
@@ -658,6 +663,43 @@ impl GolemHostApi for GolemHostApiImpl {
             .get_next()
             .map(|agents| agents.map_or(0, |agents| agents.len() as u64))
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String> {
+        let getter = GetAgents::new(component_id, None, false);
+        let first = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected first agent page".to_string())?;
+
+        golem_rust::blocking_await_promise(&promise_id);
+
+        let second = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected second agent page".to_string())?;
+        if getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .is_some()
+        {
+            return Err("expected agent enumeration to be exhausted".to_string());
+        }
+
+        Ok(vec![
+            first
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+            second
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+        ])
     }
 
     fn get_self_metadata_result(&self) -> Result<String, String> {

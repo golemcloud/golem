@@ -6297,6 +6297,47 @@ fn scan_cursor_round_trips_marker_resume() {
 }
 
 #[test]
+fn scan_cursor_decodes_fixed_wire_format_fixtures() {
+    let fixtures = [
+        (
+            "gsc1_eyJsYXllciI6MCwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOnsidHlwZSI6Im1hcmtlciIsInZhbHVlIjoiYWdlbnQta2V5In19",
+            OplogScanState {
+                layer: 0,
+                mode: AgentMode::Durable,
+                resume: Some(ScanResume::Marker("agent-key".to_string())),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MiwibW9kZSI6IkVwaGVtZXJhbCIsInJlc3VtZSI6eyJ0eXBlIjoiY3Vyc29yIiwidmFsdWUiOjE3fX0",
+            OplogScanState {
+                layer: 2,
+                mode: AgentMode::Ephemeral,
+                resume: Some(ScanResume::Cursor(17)),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MSwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOm51bGx9",
+            OplogScanState {
+                layer: 1,
+                mode: AgentMode::Durable,
+                resume: None,
+            },
+        ),
+    ];
+
+    for (token, expected) in fixtures {
+        assert_eq!(
+            encode_scan_cursor(expected.clone()).unwrap().as_str(),
+            token
+        );
+        assert_eq!(
+            decode_scan_cursor(&ScanCursor::new(token.to_string()), None).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn scan_cursor_durable_completion_advances_to_ephemeral() {
     let cursor = next_scan_cursor(
         OplogScanState {
@@ -6352,6 +6393,99 @@ fn scan_cursor_rejects_malformed_and_mode_mismatched_tokens() {
 
     let cursor = first_scan_cursor(0, Some(AgentMode::Ephemeral)).unwrap();
     assert!(decode_scan_cursor(&cursor, Some(AgentMode::Durable)).is_err());
+}
+
+#[test]
+async fn oplog_services_reject_invalid_cursor_layers_and_resumes(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let blob = Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let multilayer = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![compressed, blob.clone() as Arc<dyn OplogArchiveService>],
+        1000,
+        10,
+    );
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let layer_one = first_scan_cursor(1, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        primary
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                layer_one,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    let last_valid_layer = first_scan_cursor(2, Some(AgentMode::Durable)).unwrap();
+    multilayer
+        .scan_for_component(
+            &environment_id,
+            &component_id,
+            Some(AgentMode::Durable),
+            last_valid_layer,
+            1,
+        )
+        .await
+        .unwrap();
+    let invalid_layer = first_scan_cursor(3, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        multilayer
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                invalid_layer,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    for resume in [
+        ScanResume::Marker("marker".to_string()),
+        ScanResume::Cursor(1),
+    ] {
+        let cursor = encode_scan_cursor(OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: Some(resume),
+        })
+        .unwrap();
+        assert!(matches!(
+            blob.scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                cursor,
+                1,
+            )
+            .await,
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------

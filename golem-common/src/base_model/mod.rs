@@ -829,6 +829,27 @@ impl From<ScanCursor> for String {
     }
 }
 
+#[cfg(all(test, feature = "full"))]
+mod scan_cursor_tests {
+    use super::ScanCursor;
+    use test_r::test;
+
+    #[test]
+    fn scan_cursor_preserves_opaque_value_through_json_and_binary_round_trips() {
+        for value in ["", "gsc1_opaque-token_雪"] {
+            let cursor = ScanCursor::new(value.to_string());
+
+            let json = serde_json::to_string(&cursor).unwrap();
+            let json_roundtrip: ScanCursor = serde_json::from_str(&json).unwrap();
+            assert_eq!(json_roundtrip, cursor);
+
+            let bytes = desert_rust::serialize_to_byte_vec(&cursor).unwrap();
+            let binary_roundtrip: ScanCursor = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(binary_roundtrip, cursor);
+        }
+    }
+}
+
 #[cfg(feature = "full")]
 impl poem_openapi::types::Type for ScanCursor {
     const IS_REQUIRED: bool = true;

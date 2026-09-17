@@ -87,6 +87,17 @@ fn freshness_disposition_for_dispatch(
     }
 }
 
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
 pub type InvocationResponseStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
@@ -1094,13 +1105,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        if count == 0 || count > i64::MAX as u64 {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Agent enumeration count must be between 1 and {}",
-                i64::MAX
-            ))
-            .into());
-        }
+        validate_agent_enumeration_count(count)?;
 
         if can_use_running_metadata_fast_path(&filter, &cursor) {
             let result = self
@@ -2573,7 +2578,10 @@ mod one_shot_session_tests {
 
 #[cfg(test)]
 mod rejection_mapping_tests {
-    use super::{WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection};
+    use super::{
+        WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection,
+        validate_agent_enumeration_count,
+    };
     use futures::{Stream, stream};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
@@ -2623,6 +2631,14 @@ mod rejection_mapping_tests {
         };
         let error: AgentError = decode_invocation_rejection(rejection).into();
         error.error.expect("missing public error")
+    }
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
     }
 
     #[test]
