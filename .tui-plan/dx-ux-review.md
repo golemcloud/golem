@@ -22,17 +22,16 @@ a separate explicit decision and never creates a user-selectable theme.
 
 ## Current Focus
 
-- Focus: Content primitives (`UX-018`)
-- Cases: `content-density`, `content-split`, `content-scrolling`, `content-long`
-- Decision: review shared hierarchy, alignment, selection, state, and output
-  treatment under content pressure.
+- Focus: Pane data tables (`UX-019`)
+- Cases: `table-decoration`, `table-long`, `table-details`, `table-columns`
+- Decision: compare main-pane table decoration and validate long columns,
+  selected-row expansion, optional details, and column visibility.
 - Options: Frame Base
-- Scratch observations: content styling now comes from named semantic widgets;
-  the four stories vary geometry and pressure without restyling primitives.
-  The legacy in-body `> Content hierarchy  tab focus` chrome was removed;
-  identity remains on the joined pane boundary as previously locked.
+- Scratch observations: odd/even is the only candidate that permits multi-line
+  selected rows; it uses four high-contrast row surfaces. Cell rules occupy one
+  unpadded column, and the Columns chooser follows popup-table navigation.
 - Queued next: Adaptive and minimal layouts
-- Exit: accept the content hierarchy or record a concrete primitive-level
+- Exit: select the pane-table decoration or record a concrete table-level
   change before responsive reduction begins.
 
 ## Sources Of Truth

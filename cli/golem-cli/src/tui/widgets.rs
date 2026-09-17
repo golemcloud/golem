@@ -17,11 +17,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget, Wrap,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub(super) fn fit(text: &str, width: usize) -> String {
-    let count = text.chars().count();
-    if count <= width {
-        return format!("{text}{}", " ".repeat(width - count));
+    let display_width = UnicodeWidthStr::width(text);
+    if display_width <= width {
+        return format!("{text}{}", " ".repeat(width - display_width));
     }
     if width == 0 {
         return String::new();
@@ -29,7 +30,18 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     if width == 1 {
         return "…".to_string();
     }
-    format!("{}…", text.chars().take(width - 1).collect::<String>())
+    let target_width = width - 1;
+    let mut fitted = String::new();
+    for character in text.chars() {
+        let mut candidate = fitted.clone();
+        candidate.push(character);
+        if UnicodeWidthStr::width(candidate.as_str()) > target_width {
+            break;
+        }
+        fitted = candidate;
+    }
+    let fitted_width = UnicodeWidthStr::width(fitted.as_str());
+    format!("{fitted}…{}", " ".repeat(target_width - fitted_width))
 }
 
 pub(super) struct SectionHeading<'a> {
@@ -499,7 +511,7 @@ fn table_virtual_width(columns: &[PaneTableColumn<'_>], state: &PaneTableState) 
     let count = visible.clone().count() as u16;
     visible
         .map(|column| column.width)
-        .sum::<u16>()
+        .fold(0_u16, u16::saturating_add)
         .saturating_add(count.saturating_sub(1))
 }
 
@@ -529,14 +541,33 @@ fn wrap_cell(text: &str, width: u16) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
     }
-    let chars = text.chars().collect::<Vec<_>>();
-    if chars.is_empty() {
+    if text.is_empty() {
         return vec![" ".repeat(width)];
     }
-    chars
-        .chunks(width)
-        .map(|chunk| fit(&chunk.iter().collect::<String>(), width))
-        .collect()
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for character in text.chars() {
+        let mut candidate = current.clone();
+        candidate.push(character);
+        if !current.is_empty() && UnicodeWidthStr::width(candidate.as_str()) > width {
+            lines.push(fit(&current, width));
+            current.clear();
+            current.push(character);
+        } else {
+            current = candidate;
+        }
+        if UnicodeWidthStr::width(current.as_str()) > width {
+            lines.push(fit(&current, width));
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(fit(&current, width));
+    }
+    if lines.is_empty() {
+        lines.push(" ".repeat(width));
+    }
+    lines
 }
 
 impl ContentTableRow<'_> {
@@ -772,6 +803,29 @@ impl PaneLayout {
                 before: index,
                 after: index + 1,
             });
+        }
+        for region in regions {
+            if region
+                .resize_dividers
+                .before
+                .is_some_and(|area| rect_contains(area, x, y))
+            {
+                let before = region.index.checked_sub(1)?;
+                return Some(PaneHitTarget::ResizeDivider {
+                    before,
+                    after: region.index,
+                });
+            }
+            if region
+                .resize_dividers
+                .after
+                .is_some_and(|area| rect_contains(area, x, y))
+            {
+                return Some(PaneHitTarget::ResizeDivider {
+                    before: region.index,
+                    after: region.index.saturating_add(1),
+                });
+            }
         }
         for region in regions {
             if region
@@ -1520,6 +1574,40 @@ mod tests {
     }
 
     #[test]
+    fn pane_hit_testing_finds_nested_horizontal_resize_dividers() {
+        let layout = PaneLayout::horizontal(Rect::new(0, 0, 30, 10), &[1, 1]);
+        let primary = layout.regions(&[0, 0])[0];
+        let handle = Rect::new(16, 4, 14, 1);
+        let upper = PaneRegion::new(
+            1,
+            PaneRole::Right,
+            Rect::new(16, 0, 14, 4),
+            0,
+            PaneResizeDividers {
+                before: layout.dividers.first().copied(),
+                after: Some(handle),
+            },
+        );
+        let lower = PaneRegion::new(
+            2,
+            PaneRole::Right,
+            Rect::new(16, 5, 14, 5),
+            0,
+            PaneResizeDividers {
+                before: Some(handle),
+                after: None,
+            },
+        );
+        assert_eq!(
+            layout.hit_test(&[primary, upper, lower], handle.x, handle.y),
+            Some(PaneHitTarget::ResizeDivider {
+                before: 1,
+                after: 2,
+            })
+        );
+    }
+
+    #[test]
     fn left_pane_scrollbar_uses_the_trailing_edge_and_preserves_the_body_spine() {
         let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
         let header = PaneLayout::horizontal(Rect::new(0, 0, 20, 1), &[1, 1]);
@@ -1633,7 +1721,7 @@ mod tests {
     }
 
     #[test]
-    fn content_table_truncates_by_character_and_fills_selected_width() {
+    fn content_table_truncates_by_terminal_width_and_fills_selected_width() {
         let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
         let line = ContentTableRow {
             cells: &["checkout-service", "running"],
@@ -1647,6 +1735,22 @@ mod tests {
         });
         assert!(text(&buffer).starts_with("◆ checkou… running"));
         assert!((0..18).all(|x| buffer[(x, 0)].bg == visual.selection_background));
+    }
+
+    #[test]
+    fn fit_and_wrap_respect_wide_and_combining_terminal_widths() {
+        assert_eq!(UnicodeWidthStr::width(fit("abcd界x", 6).as_str()), 6);
+        assert_eq!(fit("abcd界x", 6), "abcd… ");
+        assert_eq!(fit("ab🙂cd", 5), "ab🙂…");
+        assert_eq!(fit("e\u{301}cho", 5), "e\u{301}cho ");
+
+        let wrapped = wrap_cell("界面e\u{301}cho", 4);
+        assert_eq!(wrapped, vec!["界面", "e\u{301}cho"]);
+        assert!(
+            wrapped
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) == 4)
+        );
     }
 
     fn pane_table_columns() -> [PaneTableColumn<'static>; 3] {

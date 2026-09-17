@@ -86,17 +86,19 @@ application states.
 
 Pane geometry tests assert that every visible scrollbar occupies its pane's
 trailing-right cell, removes exactly one usable content column, preserves the
-outer-left spine, and stays distinct from resize dividers. Scrolling story
-tests additionally assert that text and ellipses stop immediately before that
-reserved cell. Terminal preview tests route resize events through a backend-
-generic helper and verify both viewport dimensions and redraw signaling.
+outer-left spine, stays distinct from resize dividers, and exposes nested
+horizontal resize handles through hit testing. Scrolling story tests additionally
+assert that text and ellipses stop immediately before that reserved cell.
+Terminal preview tests route resize events through a backend-generic helper and
+verify both viewport dimensions and redraw signaling.
 
 Pane-table tests cover required and optional visibility, transactional chooser
 apply/cancel behavior, horizontal offset clamping, frozen marker placement,
 unselected ellipsis, selected-only wrapping, full-height selection surfaces,
 continuous full-height `▌` selection rails, and independent minimal/rule/zebra decorations. Preview coverage includes the
 table/details split and all four pane-table focus stories at standard and
-degenerate terminal sizes.
+degenerate terminal sizes. Fitting and wrapping tests include wide, emoji, and
+combining characters and assert exact terminal display widths.
 
 Decoration tests also assert unpadded one-cell rules and all four odd/even ×
 selected/unselected surface tokens. The Columns overlay coverage checks its

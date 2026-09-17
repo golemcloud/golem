@@ -257,6 +257,11 @@ Current status:
   the compact popup-table selection grammar with an `↑/↓ Navigate` hint, and
   restricted multi-line rows to odd/even tables with four explicit row
   surfaces for odd/even × selected/unselected.
+- Made shared fitting and pane-table wrapping use terminal display width so
+  wide, emoji, and combining characters preserve cell geometry, and made table
+  virtual-width accumulation saturating.
+- Extended pane hit testing to nested horizontal resize-divider metadata, with
+  divider precedence over scrollbar and body targets.
 - Accepted the pane-boundary and scrollbar treatment, then moved the active
   review to search, confirmation, error, and nested-modal baseline cases.
 - Replaced the overlay side-rail treatment with complete outer borders, inset

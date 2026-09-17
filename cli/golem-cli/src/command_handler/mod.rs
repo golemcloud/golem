@@ -79,8 +79,8 @@ mod resource_definition;
 mod retry_policy;
 mod secret;
 pub(crate) mod template;
-mod tui;
 mod tool;
+mod tui;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
