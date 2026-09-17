@@ -100,6 +100,11 @@ fn tool_option_argument(
   tool : ToolType,
   spec : @toolCommon.OptionSpec,
 ) -> ToolArgument raise ReflectError {
+  let scalar_shape = match spec.shape {
+    Scalar(_) | OptionalScalar(_) => true
+    RepeatableList(_) | RepeatableMap(_) => false
+  }
+  let optional_carrier = !spec.required && spec.default is None && scalar_shape
   let schema = match spec.shape {
     Scalar(root) | OptionalScalar(root) => tool_schema_at(tool, root)
     RepeatableList(shape) => {
@@ -128,7 +133,7 @@ fn tool_option_argument(
       None => None
     },
     schema,
-    optional_carrier: !spec.required && spec.default is None,
+    optional_carrier,
   }
 }
 
@@ -267,15 +272,9 @@ pub fn ToolType::command(
   for item in body.flags {
     arguments.push(tool_flag_argument(self, item))
   }
-  let wire_fields : Array[@model.NamedFieldType] = []
-  let local_fields : Array[@model.NamedFieldType] = []
+  let input_fields : Array[@model.NamedFieldType] = []
   for argument in arguments {
-    wire_fields.push({
-      name: argument.name,
-      body: argument.schema.root,
-      metadata: @model.empty_metadata(),
-    })
-    local_fields.push({
+    input_fields.push({
       name: argument.name,
       body: if argument.optional_carrier {
         @model.schema_type(Option(argument.schema.root))
@@ -292,19 +291,14 @@ pub fn ToolType::command(
     Some(spec) => Some(tool_schema_at(self, spec.type_))
     None => None
   }
+  let input_root = @model.schema_type(Record(input_fields))
   {
     tool: self,
     path: canonical,
     body,
     arguments,
-    input_schema: SchemaRef::new({
-      defs: decoded.defs,
-      root: @model.schema_type(Record(local_fields)),
-    }),
-    wire_input: {
-      defs: decoded.defs,
-      root: @model.schema_type(Record(wire_fields)),
-    },
+    input_schema: SchemaRef::new({ defs: decoded.defs, root: input_root, }),
+    wire_input: { defs: decoded.defs, root: input_root, },
     result,
   }
 }

@@ -17,10 +17,31 @@ fn sample_tool() -> ToolType raise {
           required: true,
           accepts_stdio: false,
         },
+        {
+          name: "note",
+          doc,
+          value_name: None,
+          type_: graph.root,
+          default: None,
+          required: false,
+          accepts_stdio: false,
+        },
       ],
       tail: None,
     },
-    options: [],
+    options: [
+      {
+        long: "label",
+        short: None,
+        aliases: [],
+        doc,
+        value_name: None,
+        shape: @toolCommon.OptionShape::Scalar(graph.root),
+        default: None,
+        required: false,
+        env_var: None,
+      },
+    ],
     flags: [],
     constraints: [],
     stdin: None,
@@ -73,6 +94,30 @@ test "reflected tool resolves aliases and rejects input before RPC" {
   match command.start_value(invalid) {
     Err(@tool.ToolError::InvalidInput(_)) => ()
     _ => fail("expected local tool input rejection")
+  }
+}
+
+///|
+test "reflected optional tool inputs share the canonical wire schema" {
+  let command = sample_tool().command(["run"])
+  assert_eq(command.input_schema.graph, command.wire_input)
+  let omitted = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  let supplied = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("note"))),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("label"))),
+  ])
+  match command.checked_input(omitted) {
+    Ok(_) => ()
+    Err(_) => fail("expected omitted optional inputs to validate")
+  }
+  match command.checked_input(supplied) {
+    Ok(_) => ()
+    Err(_) => fail("expected supplied optional inputs to validate")
   }
 }
 

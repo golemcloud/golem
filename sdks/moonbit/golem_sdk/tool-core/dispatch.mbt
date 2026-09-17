@@ -189,8 +189,9 @@ fn value_matches_type(
       }
     @model.SchemaTypeBody::Option(inner) =>
       match value {
-        @model.SchemaValue::Option(payload) =>
-          optional_payload_matches(graph, Some(inner), payload)
+        @model.SchemaValue::Option(None) => true
+        @model.SchemaValue::Option(Some(payload)) =>
+          value_matches_type(graph, inner, payload)
         _ => false
       }
     @model.SchemaTypeBody::Result(ok_type, err_type) =>
