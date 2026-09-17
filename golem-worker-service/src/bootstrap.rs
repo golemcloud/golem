@@ -58,6 +58,7 @@ pub struct Services {
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
+        config.http_session.validate().map_err(anyhow::Error::msg)?;
         let invocation_session_token_keyring = Arc::new(
             InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
                 .map_err(anyhow::Error::msg)?,
@@ -179,6 +180,8 @@ impl Services {
             call_agent_handler.clone(),
             oidc_handler.clone(),
             webhook_callback_handler.clone(),
+            worker_service.clone(),
+            config.http_session.clone(),
         ));
 
         Ok(Self {

@@ -25,10 +25,10 @@ use golem_service_base::custom_api::{
     SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::{HeaderName, StatusCode};
+use http::{HeaderMap, StatusCode};
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -121,7 +121,7 @@ pub struct RichSecuritySchemeRouteSecurity {
 #[derive(Debug)]
 pub struct RouteExecutionResult {
     pub status: StatusCode,
-    pub headers: HashMap<HeaderName, String>,
+    pub headers: HeaderMap,
     pub body: ResponseBody,
 }
 
@@ -141,6 +141,7 @@ pub enum ResponseBody {
         spec: Arc<HttpApiOpenApiSpec>,
         format: OpenApiSpecFormat,
     },
+    Stream(poem::Body),
 }
 
 impl fmt::Debug for ResponseBody {
@@ -158,6 +159,7 @@ impl fmt::Debug for ResponseBody {
                 .field("spec", &spec.0)
                 .field("format", format)
                 .finish(),
+            ResponseBody::Stream(_) => f.write_str("Stream"),
         }
     }
 }

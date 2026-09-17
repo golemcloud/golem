@@ -26,8 +26,8 @@ use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, clos
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
 use crate::worker::inspection_queue;
 use crate::worker::invocation::{
-    GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, lower_invocation, run_guest_call_settled,
+    InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    lower_invocation, materialize_streaming_result,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -72,8 +72,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
+use wasmtime::Store;
 use wasmtime::component::Instance;
-use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -2129,9 +2129,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function = display_name
         );
 
-        self.invoke_agent_inner(invocation_context, idempotency_key, invocation)
+        let outcome = self
+            .invoke_agent_inner(invocation_context, idempotency_key, invocation)
             .instrument(span)
-            .await
+            .await;
+        self.store.data().set_suspended();
+        outcome
     }
 
     /// Invokes an agent function on the worker
@@ -2154,10 +2157,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
+        let result = if self.uses_streams {
+            materialize_streaming_result(
+                self.store,
+                result,
+                &display_name,
+                &invocation_idempotency_key,
+            )
+            .await
+        } else {
+            result
+        };
 
         match result {
             Ok(InvokeResult::Succeeded {
-                result: mut invocation_result,
+                result: invocation_result,
                 consumed_fuel,
             }) => {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
@@ -2174,109 +2188,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
-                    if self.uses_streams
-                        && let AgentInvocationResult::AgentMethod { output } =
-                            &mut invocation_result
-                    {
-                        let component = self.store.data().component_metadata();
-                        let Some(agent_type) =
-                            self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
-                                component
-                                    .metadata
-                                    .find_agent_type_by_name_ref(&parsed.agent_type)
-                            })
-                        else {
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(WorkerExecutorError::runtime(
-                                        "durable invocation result schema is unavailable",
-                                    )),
-                                )
-                                .await;
-                        };
-                        let Some(method) = agent_type
-                            .methods
-                            .iter()
-                            .find(|method| method.name == display_name)
-                        else {
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(WorkerExecutorError::runtime(
-                                        "durable invocation result method schema is unavailable",
-                                    )),
-                                )
-                                .await;
-                        };
-                        let graph = agent_type.schema.clone();
-                        let root =
-                            method.output_schema.schema().cloned().unwrap_or_else(|| {
-                                golem_common::schema::SchemaType::tuple(Vec::new())
-                            });
-                        let component_revision = component.revision;
-                        let parent = self.parent.clone();
-                        let idempotency_key = invocation_idempotency_key.clone();
-                        let result_value = output.clone();
-                        match self
-                            .store
-                            .run_concurrent(async move |_accessor| {
-                                parent
-                                    .materialize_durable_streaming_result(
-                                        &idempotency_key,
-                                        result_value,
-                                        &graph,
-                                        &root,
-                                        component_revision,
-                                    )
-                                    .await
-                            })
-                            .await
-                        {
-                            Ok(Ok(materialized)) => *output = materialized,
-                            Ok(Err(error)) => {
-                                return self
-                                    .agent_invocation_failed(
-                                        &display_name,
-                                        &invocation_idempotency_key,
-                                        Err(error),
-                                    )
-                                    .await;
-                            }
-                            Err(error) => {
-                                return self
-                                    .agent_invocation_failed(
-                                        &display_name,
-                                        &invocation_idempotency_key,
-                                        Err(WorkerExecutorError::runtime(error.to_string())),
-                                    )
-                                    .await;
-                            }
-                        }
-                        if let Err(error) = run_guest_call_settled(
-                            &mut self.store.as_context_mut(),
-                            async |_accessor| (),
-                        )
-                        .await
-                        {
-                            let error = match error {
-                                GuestCallSettlementError::Infrastructure(error) => error,
-                                GuestCallSettlementError::Trap(error)
-                                | GuestCallSettlementError::Interrupted(error) => {
-                                    WorkerExecutorError::runtime(error.to_string())
-                                }
-                            };
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(error),
-                                )
-                                .await;
-                        }
-                    }
                     self.agent_invocation_finished(
                         display_name,
                         &invocation_idempotency_key,
@@ -2633,6 +2544,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
+        self.store.data().set_suspended();
         self.store
             .data_mut()
             .durable_ctx_mut()
@@ -2908,6 +2820,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
+        self.store.data().set_suspended();
         self.store
             .data_mut()
             .durable_ctx_mut()

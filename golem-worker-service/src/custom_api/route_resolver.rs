@@ -33,11 +33,14 @@ use golem_service_base::custom_api::{
     SecuritySchemeDetails,
 };
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tracing::debug;
 
 pub struct ResolvedRouteEntry {
     pub domain: Domain,
+    pub public_scheme: String,
+    pub public_authority: String,
     pub route: Arc<RichCompiledRoute>,
     pub captured_path_parameters: Vec<String>,
     pub request_target: HttpRequestTarget,
@@ -67,6 +70,7 @@ impl SafeDisplay for RouteResolverError {
 pub struct RouteResolver {
     domain_api_cache: Cache<Domain, (), DomainHttpApi, ()>,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
+    trusted_ingress_addresses: Vec<IpAddr>,
 }
 
 impl RouteResolver {
@@ -85,6 +89,7 @@ impl RouteResolver {
                 "route_resolver_routers",
             ),
             api_definition_lookup,
+            trusted_ingress_addresses: config.trusted_ingress_addresses.clone(),
         }
     }
 
@@ -109,8 +114,10 @@ impl RouteResolver {
                 .as_str(),
         )
         .map_err(RouteResolverError::MalformedPath)?;
-        let domain = authority_from_request(request)
+        let public_origin = self
+            .public_origin(request)
             .map_err(RouteResolverError::CouldNotGetDomainFromRequest)?;
+        let domain = Domain(public_origin.authority.clone());
         debug!("Resolving router for domain: {domain}");
 
         let domain_api = self.get_or_build_domain_api(&domain).await?;
@@ -132,11 +139,25 @@ impl RouteResolver {
 
         Ok(ResolvedRouteEntry {
             domain,
+            public_scheme: public_origin.scheme,
+            public_authority: public_origin.authority,
             captured_path_parameters,
             request_target,
             route: route_entry.clone(),
             openapi_spec: domain_api.openapi_spec.clone(),
         })
+    }
+
+    pub(crate) fn public_origin(
+        &self,
+        request: &poem::Request,
+    ) -> Result<super::http_envelope::Origin, String> {
+        let trusted = request
+            .remote_addr()
+            .as_socket_addr()
+            .is_some_and(|address| self.trusted_ingress_addresses.contains(&address.ip()));
+        super::http_envelope::origin_from_request(request, trusted)
+            .map_err(|_| "Invalid request origin".to_string())
     }
 
     pub async fn invalidate_domain(&self, domain: &Domain) {
@@ -313,12 +334,6 @@ impl RouteResolver {
 
         Ok(enriched_routes)
     }
-}
-
-fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
-    crate::mcp::resolve_effective_host(request.headers())
-        .map(Domain)
-        .ok_or("No host header provided".to_string())
 }
 
 fn compile_route_security(
@@ -898,6 +913,119 @@ pub(super) mod tests {
             assert_eq!(resolved.request_target.query(), expected_query);
             assert_eq!(resolved.request_target.segments(), expected_segments);
             assert_eq!(resolved.request_target.trailing_slash(), trailing_slash);
+        }
+    }
+
+    fn request_from_peer(
+        headers: &[(&str, &str)],
+        peer: std::net::IpAddr,
+        version: http::Version,
+        uri: &str,
+        scheme: &'static str,
+    ) -> poem::Request {
+        let mut builder = http::Request::builder().uri(uri).version(version);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let (parts, _) = builder.body(()).unwrap().into_parts();
+        let parts = poem::RequestParts::from((
+            parts,
+            poem::web::LocalAddr(poem::Addr::socket(([127, 0, 0, 1], 9006).into())),
+            poem::web::RemoteAddr(poem::Addr::socket((peer, 1234).into())),
+            scheme.parse::<http::uri::Scheme>().unwrap(),
+        ));
+        poem::Request::from_parts(parts, poem::Body::empty())
+    }
+
+    #[test]
+    async fn canonical_origin_policy_is_enforced_through_route_resolution() {
+        let trusted: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let untrusted: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+        let config = RouteResolverConfig {
+            trusted_ingress_addresses: vec![trusted],
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "untrusted-forwarding-ignored",
+                untrusted,
+                vec![
+                    ("host", "Direct.EXAMPLE:8080"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-host", "public.example"),
+                ],
+                http::Version::HTTP_11,
+                "/",
+                Ok(("http", "direct.example:8080")),
+            ),
+            (
+                "trusted-forwarding",
+                trusted,
+                vec![
+                    ("host", "internal"),
+                    ("x-forwarded-proto", "HTTPS"),
+                    ("x-forwarded-host", "Public.EXAMPLE:443"),
+                ],
+                http::Version::HTTP_11,
+                "/",
+                Ok(("https", "public.example:443")),
+            ),
+            (
+                "trusted-partial-forwarding",
+                trusted,
+                vec![("host", "internal"), ("x-forwarded-proto", "https")],
+                http::Version::HTTP_11,
+                "/",
+                Err(()),
+            ),
+            (
+                "trusted-forwarding-chain",
+                trusted,
+                vec![
+                    ("host", "internal"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-host", "public.example, proxy"),
+                ],
+                http::Version::HTTP_11,
+                "/",
+                Err(()),
+            ),
+            (
+                "duplicate-host",
+                untrusted,
+                vec![("host", "one.example"), ("host", "two.example")],
+                http::Version::HTTP_11,
+                "/",
+                Err(()),
+            ),
+            (
+                "h2-authority-host-conflict",
+                untrusted,
+                vec![("host", "other.example")],
+                http::Version::HTTP_2,
+                "https://example.com/",
+                Err(()),
+            ),
+        ];
+        for (name, peer, headers, version, uri, expected) in cases {
+            let resolver = RouteResolver::new(&config, Arc::new(LiteralLookup(Vec::new())));
+            let request = request_from_peer(&headers, peer, version, uri, "http");
+            let result = resolver.resolve_matching_route(&request).await;
+            match expected {
+                Ok((scheme, authority)) => {
+                    let resolved = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert_eq!(resolved.public_scheme, scheme, "{name}");
+                    assert_eq!(resolved.public_authority, authority, "{name}");
+                    assert_eq!(resolved.domain.0, authority, "{name}");
+                }
+                Err(()) => assert!(
+                    matches!(
+                        result,
+                        Err(RouteResolverError::CouldNotGetDomainFromRequest(_))
+                    ),
+                    "{name}"
+                ),
+            }
         }
     }
 }

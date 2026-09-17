@@ -18,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 pub struct HttpTestContext {
     pub user: TestUserContext<EnvBasedTestDependencies>,
     pub env_id: EnvironmentId,
+    pub component_id: golem_common::model::component::ComponentId,
     pub deployment_revision: DeploymentRevision,
     pub client: reqwest::Client,
     pub base_url: Url,
@@ -74,7 +75,8 @@ pub async fn make_test_context_with_openapi_endpoint(
         )
         .await?;
 
-    user.component(&env.id, component_name)
+    let component = user
+        .component(&env.id, component_name)
         .name(package_name)
         .store()
         .await?;
@@ -108,6 +110,7 @@ pub async fn make_test_context_with_openapi_endpoint(
         base_url,
         user,
         env_id: env.id,
+        component_id: component.id,
         deployment_revision: deployment.revision,
         host_header,
     })

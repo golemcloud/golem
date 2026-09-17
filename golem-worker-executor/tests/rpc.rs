@@ -26,7 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::durable_stream::StreamSessionRecordV1;
+use golem_common::model::durable_stream::{StreamItemsRecordV1, StreamSessionRecordV1};
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
@@ -699,6 +699,259 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
 
 #[test]
 #[timeout("2 minutes")]
+async fn ephemeral_output_producer_can_be_interrupted_after_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    interrupt_output_producer_after_result(last_unique_id, deps, agent_rpc_rust, true, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn durable_output_producer_can_be_interrupted_after_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    interrupt_output_producer_after_result(last_unique_id, deps, agent_rpc_rust, false, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn replayed_output_producer_can_be_interrupted_after_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    interrupt_output_producer_after_result(last_unique_id, deps, agent_rpc_rust, false, true).await
+}
+
+async fn interrupt_output_producer_after_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_rpc_rust: &PrecompiledComponent,
+    ephemeral: bool,
+    restart_before_input: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let agent_id = if ephemeral {
+        agent_id!("EphemeralStreamingRpcTarget", "interrupt-output")
+            .with_ephemeral_invocation_phantom(&key)
+            .map_err(anyhow::Error::msg)?
+    } else {
+        agent_id!("StreamingRpcTarget", "interrupt-output")
+    };
+    let agent_id = executor.start_agent(&component.id, agent_id).await?;
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(agent_id.clone().into()),
+            method_name: Some("produce_then_spin".to_string()),
+            input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::RecordValue(RecordValue {
+                    fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id: 1 },
+                        )),
+                    }],
+                })),
+            }),
+            idempotency_key: Some(key.clone().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (mut requests, receiver) = mpsc::channel(8);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut result_seen = false;
+        let mut first_item_seen = false;
+        let mut accepted = None;
+        let mut restarted = false;
+        loop {
+            let response = responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("producer ended before the spin handshake"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            let next_input = match response.response {
+                Some(invocation_response::Response::Accepted(value)) => {
+                    accepted = Some(value);
+                    None
+                }
+                Some(invocation_response::Response::Result(_)) => {
+                    let acceptance = accepted.as_ref().expect("acceptance before result");
+                    if restart_before_input && !restarted {
+                        executor.simulated_crash(&agent_id).await?;
+                        let resume = InvocationRequest {
+                            request: Some(invocation_request::Request::ResumeAttach(
+                                ResumeAttach {
+                                    idempotency_key: Some(key.clone().into()),
+                                    agent_id: Some(agent_id.clone().into()),
+                                    environment_id: Some(component.environment_id.into()),
+                                    attachment_id: acceptance.attachment_id,
+                                    attempt_id: Some(uuid::Uuid::new_v4().into()),
+                                    expected_callee_fingerprint: Some(
+                                        metadata.fingerprint.0.into(),
+                                    ),
+                                    expected_epoch: acceptance.epoch,
+                                    operation: ResumeOperation::Resume as i32,
+                                    cursors: Vec::new(),
+                                    auth_ctx: Some(executor.auth_ctx().into()),
+                                    principal: None,
+                                },
+                            )),
+                        };
+                        state = InvocationSessionState::default();
+                        state
+                            .validate_trusted_request(&resume)
+                            .map_err(anyhow::Error::msg)?;
+                        let (resumed_requests, receiver) = mpsc::channel(8);
+                        resumed_requests.send(resume).await?;
+                        requests = resumed_requests;
+                        responses = executor
+                            .client
+                            .clone()
+                            .invoke_agent_session(ReceiverStream::new(receiver))
+                            .await?
+                            .into_inner();
+                        accepted = None;
+                        restarted = true;
+                        continue;
+                    }
+                    result_seen = true;
+                    Some((0, 7))
+                }
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    assert!(result_seen, "output arrived before the return value");
+                    assert_eq!(
+                        item.value.unwrap().value,
+                        Some(schema_value::Value::U32Value(if first_item_seen {
+                            8
+                        } else {
+                            7
+                        }))
+                    );
+                    if first_item_seen {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    // A resumed Result can precede reconstruction. Fresh output proves that
+                    // the reconstructed producer reached materialization before it may spin.
+                    first_item_seen = true;
+                    Some((1, 8))
+                }
+                Some(invocation_response::Response::Finished(_)) => {
+                    anyhow::bail!("producer finished before interruption")
+                }
+                _ => None,
+            };
+            if let Some((sequence, value)) = next_input {
+                let acceptance = accepted.as_ref().expect("acceptance before input");
+                let input = acceptance
+                    .stream_mappings
+                    .iter()
+                    .find(|mapping| mapping.transport_stream_id == 1)
+                    .expect("input mapping");
+                let item = InvocationRequest {
+                    request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                        transport_stream_id: 1,
+                        sequence,
+                        payload: Some(input_stream_item::Payload::Value(
+                            SchemaValue::U32(value)
+                                .try_into()
+                                .map_err(anyhow::Error::msg)?,
+                        )),
+                        durable_stream_id: input
+                            .handle
+                            .as_ref()
+                            .and_then(|handle| handle.stream_id),
+                        epoch: acceptance.epoch,
+                    })),
+                };
+                state
+                    .validate_trusted_request(&item)
+                    .map_err(anyhow::Error::msg)?;
+                requests.send(item).await?;
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("producer did not complete its post-result spin handshake"))??;
+
+    // The producer now spins without another stream write or cooperative guest wait.
+    tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&agent_id))
+        .await
+        .map_err(|_| anyhow::anyhow!("post-result interruption was not acknowledged"))??;
+    assert_eq!(
+        executor.get_worker_metadata(&agent_id).await?.status,
+        AgentStatus::Interrupted
+    );
+    let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_)))
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "interruption must not become an invocation error or retry"
+    );
+    let failure = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("interrupted producer closed without completion"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                return match finished.outcome {
+                    Some(invocation_session_completion::Outcome::Failure(failure)) => Ok(failure),
+                    other => anyhow::bail!("interrupted producer did not fail: {other:?}"),
+                };
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("interrupted producer did not terminalize"))??;
+    assert_ne!(failure.kind, InvocationFailureKind::Protocol as i32);
+    assert!(state.is_complete());
+    drop(requests);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
 #[tracing::instrument]
 async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
     last_unique_id: &LastUniqueId,
@@ -796,6 +1049,28 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    streaming_output_resume_restores_exact_cursors(last_unique_id, deps, agent_rpc_rust, true).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn resident_ephemeral_streaming_output_resume_restores_cursors_without_duplicates(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    streaming_output_resume_restores_exact_cursors(last_unique_id, deps, agent_rpc_rust, false)
+        .await
+}
+
+async fn streaming_output_resume_restores_exact_cursors(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_rpc_rust: &PrecompiledComponent,
+    restart_executor: bool,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -810,20 +1085,28 @@ async fn durable_streaming_output_recovers_after_executor_restart(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let worker_agent_id = executor
-        .start_agent(
-            &component.id,
-            agent_id!("StreamingRpcTarget", "output-restart"),
-        )
-        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let worker_agent_id = if restart_executor {
+        executor
+            .start_agent(
+                &component.id,
+                agent_id!("StreamingRpcTarget", "output-restart"),
+            )
+            .await?
+    } else {
+        let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-output-resume")
+            .with_ephemeral_invocation_phantom(&idempotency_key)
+            .map_err(anyhow::Error::msg)?;
+        executor.start_agent(&component.id, final_agent_id).await?
+    };
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let (_, input) = data_value!().into_parts();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            agent_id: Some(worker_agent_id.clone().into()),
             method_name: Some("produce_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            idempotency_key: Some(idempotency_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             environment_id: Some(component.environment_id.into()),
             component_owner_account_id: Some(component.account_id.into()),
@@ -861,6 +1144,8 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     };
     let mut observed_output_items = 0;
     let mut cursors = BTreeMap::new();
+    let mut observed_values = BTreeMap::<u64, Vec<SchemaValue>>::new();
+    let mut observed_offsets = BTreeMap::<u64, BTreeSet<Vec<u8>>>::new();
     while observed_output_items < 10 {
         let response = responses
             .message()
@@ -870,6 +1155,22 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         if let Some(invocation_response::Response::OutputItem(item)) = response.response {
+            let value = item
+                .value
+                .ok_or_else(|| anyhow::anyhow!("durable output item omitted its value"))?
+                .try_into()
+                .map_err(anyhow::Error::msg)?;
+            assert!(
+                observed_offsets
+                    .entry(item.transport_stream_id)
+                    .or_default()
+                    .insert(item.durable_offset.clone()),
+                "duplicate offset before resume"
+            );
+            observed_values
+                .entry(item.transport_stream_id)
+                .or_default()
+                .push(value);
             let stream_id = item
                 .durable_stream_id
                 .ok_or_else(|| anyhow::anyhow!("durable output item omitted its stream ID"))?;
@@ -885,16 +1186,50 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     }
     drop(requests);
     drop(responses);
-    drop(executor);
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = if restart_executor {
+        drop(executor);
+        start_with_overrides(deps, &context, overrides).await?
+    } else {
+        executor
+    };
+    if !restart_executor {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if executor
+                    .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+                    .await?
+                    .into_iter()
+                    .any(|entry| {
+                        matches!(
+                            entry.entry,
+                            PublicOplogEntry::StreamSession(session)
+                                if matches!(
+                                    StreamSessionRecordV1::from_value(session.record.value()),
+                                    Ok(StreamSessionRecordV1::Detached(record))
+                                        if record.epoch == accepted.epoch
+                                )
+                        )
+                    })
+                {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("ephemeral output session did not detach before resume"))??;
+    }
     let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("durable output restart request is not Start");
+        anyhow::bail!("streaming output request is not Start");
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: start.idempotency_key.clone(),
-            agent_id: start.agent_id.clone(),
+            agent_id: if restart_executor {
+                start.agent_id.clone()
+            } else {
+                accepted.agent_id.clone()
+            },
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -931,7 +1266,25 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
             }
-            Some(invocation_response::Response::OutputItem(_)) => output_items += 1,
+            Some(invocation_response::Response::OutputItem(item)) => {
+                let value = item
+                    .value
+                    .ok_or_else(|| anyhow::anyhow!("resumed output item omitted its value"))?
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?;
+                assert!(
+                    observed_offsets
+                        .entry(item.transport_stream_id)
+                        .or_default()
+                        .insert(item.durable_offset),
+                    "resume redelivered an observed durable offset"
+                );
+                observed_values
+                    .entry(item.transport_stream_id)
+                    .or_default()
+                    .push(value);
+                output_items += 1;
+            }
             Some(invocation_response::Response::OutputEnd(_)) => output_ends += 1,
             Some(invocation_response::Response::Finished(finished)) => {
                 finished_successfully = matches!(
@@ -951,6 +1304,507 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     assert_eq!(output_items, 66 - observed_output_items);
     assert_eq!(output_ends, 2);
     assert!(finished_successfully);
+    let mut actual_stream_values: Vec<Vec<SchemaValue>> = observed_values.into_values().collect();
+    actual_stream_values.sort_by_key(Vec::len);
+    assert_eq!(
+        actual_stream_values,
+        vec![
+            vec![
+                SchemaValue::String("a".into()),
+                SchemaValue::String("b".into())
+            ],
+            (0..64).map(SchemaValue::U32).collect(),
+        ],
+        "resume must deliver every exact sibling value once"
+    );
+    if restart_executor {
+        return Ok(());
+    }
+    let final_agent_id: AgentId = accepted
+        .agent_id
+        .ok_or_else(|| anyhow::anyhow!("ephemeral acceptance omitted final agent ID"))?
+        .try_into()
+        .map_err(anyhow::Error::msg)?;
+    let starts = executor
+        .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .count();
+    assert_eq!(
+        starts, 2,
+        "expected initialization plus one method start; ResumeAttach must not execute again"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralStreamingRpcTarget", "interrupt-spin");
+    let idempotency_key = IdempotencyKey::fresh();
+    let final_agent_id = AgentId::from_agent_id(
+        component.id,
+        &logical_agent_id
+            .with_ephemeral_invocation_phantom(&idempotency_key)
+            .map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?;
+    executor
+        .start_agent(
+            &component.id,
+            logical_agent_id
+                .with_ephemeral_invocation_phantom(&idempotency_key)
+                .map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+
+    let invocation_executor = executor.clone();
+    let invocation_component = component.clone();
+    let invocation_agent_id = logical_agent_id.clone();
+    let invocation_key = idempotency_key.clone();
+    let invocation = tokio::spawn(async move {
+        invocation_executor
+            .invoke_and_await_agent_with_key(
+                &invocation_component,
+                &invocation_agent_id,
+                &invocation_key,
+                "spin",
+                data_value!(),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if executor
+                .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .any(|entry| {
+                    matches!(
+                        &entry.entry,
+                        PublicOplogEntry::AgentInvocationStarted(started)
+                            if matches!(
+                                &started.invocation,
+                                PublicAgentInvocation::AgentMethodInvocation(method)
+                                    if method.method_name == "spin"
+                            )
+                    )
+                })
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("spin did not reach its method-start marker"))??;
+    executor.interrupt(&final_agent_id).await?;
+    let first = tokio::time::timeout(Duration::from_secs(10), invocation)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("active ephemeral invocation did not observe interruption")
+        })??;
+    assert!(first.is_err(), "interrupted compute unexpectedly succeeded");
+
+    let redispatch = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &logical_agent_id,
+            &idempotency_key,
+            "spin",
+            data_value!(),
+        )
+        .await;
+    assert!(
+        redispatch.is_err(),
+        "same-key redispatch restarted interrupted ephemeral compute"
+    );
+    assert_eq!(
+        executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "spin"
+                    )
+            ))
+            .count(),
+        1,
+        "same-key redispatch must not start a second method invocation"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let target_key = IdempotencyKey::fresh();
+    let target_logical = agent_id!("EphemeralStreamingRpcTarget", "pending-cancel-target");
+    let target_parsed = target_logical
+        .with_ephemeral_invocation_phantom(&target_key)
+        .map_err(anyhow::Error::msg)?;
+    let target_final =
+        AgentId::from_agent_id(component.id, &target_parsed).map_err(anyhow::Error::msg)?;
+
+    // An interrupt before the target exists is intentionally a no-op. It must not
+    // pre-arm a stop that consumes the later accepted invocation.
+    executor.interrupt(&target_final).await?;
+    let mut initialization_success = executor.gate_next_agent_invocation_success(&target_final);
+    let (mut state, _frames, mut inbound) = open_invocation_session_with_key(
+        &executor,
+        &component,
+        &target_parsed,
+        &target_key,
+        "spin",
+        data_value!(),
+    )
+    .await?;
+    let accepted = tokio::time::timeout(Duration::from_secs(10), inbound.message())
+        .await
+        .map_err(|_| anyhow::anyhow!("pending invocation was not accepted"))??
+        .ok_or_else(|| anyhow::anyhow!("pending invocation ended before acceptance"))?;
+    state
+        .validate_response(&accepted)
+        .map_err(anyhow::Error::msg)?;
+    if !matches!(
+        accepted.response,
+        Some(invocation_response::Response::Accepted(_))
+    ) {
+        anyhow::bail!("expected pending acceptance after absent interrupt, got {accepted:?}");
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), initialization_success.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("initialization did not reach its success barrier"))?;
+    let active = executor
+        .active_agent(&OwnedAgentId::new(component.environment_id, &target_final))
+        .await
+        .expect("initialization is resident");
+    let execution_status = active.resources().execution_status();
+    let interrupt = tokio::spawn({
+        let executor = executor.clone();
+        let target_final = target_final.clone();
+        async move { executor.interrupt(&target_final).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !matches!(
+            &*execution_status.read().unwrap(),
+            golem_worker_executor::model::ExecutionStatus::Interrupting { .. }
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("initialization interrupt was not signalled"))?;
+    assert!(
+        !interrupt.is_finished(),
+        "interrupt acknowledged before initialization settled"
+    );
+    initialization_success.release();
+    tokio::time::timeout(Duration::from_secs(10), interrupt)
+        .await
+        .map_err(|_| anyhow::anyhow!("initialization interrupt was not acknowledged"))???;
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let response = inbound
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("pending invocation closed without a terminal"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                return Ok::<_, anyhow::Error>(finished);
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("pending cancellation did not terminalize"))??;
+    assert!(matches!(
+        finished.outcome,
+        Some(invocation_session_completion::Outcome::Failure(_))
+    ));
+    assert!(state.is_complete());
+    executor
+        .wait_for_status(
+            &target_final,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let method_starts = executor
+        .get_oplog(&target_final, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "spin"
+                    )
+            )
+        })
+        .count();
+    assert_eq!(
+        method_starts, 0,
+        "pending cancellation allowed spin to start after the permit was released"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_restart_method(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "interrupt-held-input")
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_agent_id = executor.start_agent(&component.id, final_agent_id).await?;
+    let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
+    let start_request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_agent_id.clone().into()),
+            method_name: Some("hold_input".to_string()),
+            input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::RecordValue(RecordValue {
+                    fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id: 1 },
+                        )),
+                    }],
+                })),
+            }),
+            idempotency_key: Some(idempotency_key.clone().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start_request)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start_request.clone()).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let accepted = tokio::time::timeout(Duration::from_secs(10), responses.message())
+        .await
+        .map_err(|_| anyhow::anyhow!("held-input invocation was not accepted"))??
+        .ok_or_else(|| anyhow::anyhow!("held-input session ended before acceptance"))?;
+    state
+        .validate_response(&accepted)
+        .map_err(anyhow::Error::msg)?;
+    assert!(matches!(
+        accepted.response,
+        Some(invocation_response::Response::Accepted(_))
+    ));
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let starts = executor
+                .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .filter(|entry| {
+                    matches!(
+                        &entry.entry,
+                        PublicOplogEntry::AgentInvocationStarted(started)
+                            if matches!(
+                                &started.invocation,
+                                PublicAgentInvocation::AgentMethodInvocation(method)
+                                    if method.method_name == "hold_input"
+                            )
+                    )
+                })
+                .count();
+            if starts == 1 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("hold_input did not reach its method-start marker"))??;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), responses.message())
+            .await
+            .is_err(),
+        "host-wait invocation terminated before interruption"
+    );
+    executor.interrupt(&worker_agent_id).await?;
+    let failure = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let response = responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("interrupted session closed without a terminal"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                return match finished.outcome {
+                    Some(invocation_session_completion::Outcome::Failure(failure)) => Ok(failure),
+                    other => {
+                        anyhow::bail!("interrupted held-input session did not fail: {other:?}")
+                    }
+                };
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("interrupted held-input session did not terminalize"))??;
+    assert!(state.is_complete());
+    drop(requests);
+    drop(responses);
+
+    let resume = executor.resume(&worker_agent_id, false).await;
+    assert!(
+        resume.is_err(),
+        "interrupted ephemeral agent unexpectedly resumed"
+    );
+    let resume_error = resume.unwrap_err().to_string();
+    let inactive_ephemeral_error =
+        "An ephemeral agent cannot accept another invocation or be resumed";
+    assert!(
+        resume_error.contains(inactive_ephemeral_error),
+        "explicit resume failed with the wrong category: {resume_error}"
+    );
+
+    let mut redispatch = start_request;
+    let Some(invocation_request::Request::Start(start)) = redispatch.request.as_mut() else {
+        unreachable!("constructed a Start request")
+    };
+    start.attempt_id = Some(uuid::Uuid::new_v4().into());
+    let mut redispatch_state = InvocationSessionState::default();
+    redispatch_state
+        .validate_trusted_request(&redispatch)
+        .map_err(anyhow::Error::msg)?;
+    let (redispatch_requests, receiver) = mpsc::channel(1);
+    redispatch_requests.send(redispatch).await?;
+    let mut redispatch_responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let redispatch_terminal = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let response = redispatch_responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("same-key redispatch closed without a terminal"))?;
+            redispatch_state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Finished(finished)) => {
+                    return Ok::<_, anyhow::Error>((
+                        matches!(
+                            finished.outcome,
+                            Some(invocation_session_completion::Outcome::Failure(_))
+                        ),
+                        format!("{:?}", finished.outcome),
+                    ));
+                }
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    return Ok((true, format!("Rejected({})", rejected.error)));
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("same-key redispatch did not terminalize"))??;
+    assert!(redispatch_terminal.0, "same-key redispatch did not fail");
+    assert!(
+        redispatch_terminal.1.contains(inactive_ephemeral_error),
+        "same-key redispatch failed with the wrong category: {}",
+        redispatch_terminal.1
+    );
+    let method_starts = executor
+        .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "hold_input"
+                    )
+            )
+        })
+        .count();
+    eprintln!(
+        "held-input interrupt failure: kind={}, message={}; resume failed: {resume_error}; same-key redispatch={}; method_starts={method_starts}",
+        failure.kind, failure.message, redispatch_terminal.1
+    );
+    assert_eq!(
+        method_starts, 1,
+        "resume or redispatch restarted hold_input"
+    );
+    drop(redispatch_requests);
     Ok(())
 }
 
@@ -1320,6 +2174,339 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
     }
 
     anyhow::bail!("invocation response closed without InvocationFinished")
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-input-resume")
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_agent_id = executor.start_agent(&component.id, final_agent_id).await?;
+    let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
+    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+        value: Some(schema_value::Value::RecordValue(RecordValue {
+            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::StreamReference(
+                    SchemaValueStreamReference { stream_id: 1 },
+                )),
+            }],
+        })),
+    };
+    let start_request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_agent_id.clone().into()),
+            method_name: Some("transform".to_string()),
+            input: Some(input),
+            idempotency_key: Some(idempotency_key.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut first_state = InvocationSessionState::default();
+    first_state
+        .validate_trusted_request(&start_request)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start_request.clone()).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let accepted = responses
+        .message()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ephemeral input ended before acceptance"))?;
+    first_state
+        .validate_response(&accepted)
+        .map_err(anyhow::Error::msg)?;
+    let accepted = match accepted.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("expected ephemeral input acceptance, got {other:?}"),
+    };
+    let mapping = accepted
+        .stream_mappings
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ephemeral acceptance omitted its input mapping"))?;
+    let durable_stream_id = mapping
+        .handle
+        .as_ref()
+        .and_then(|handle| handle.stream_id)
+        .ok_or_else(|| anyhow::anyhow!("ephemeral input mapping omitted its stream ID"))?;
+    let durable_stream_uuid: uuid::Uuid = durable_stream_id.into();
+
+    let make_item = |sequence, value| InvocationRequest {
+        request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: 1,
+            sequence,
+            payload: Some(input_stream_item::Payload::Value(
+                SchemaValue::U32(value)
+                    .try_into()
+                    .expect("u32 schema value"),
+            )),
+            durable_stream_id: Some(durable_stream_id),
+            epoch: accepted.epoch,
+        })),
+    };
+    let first_item = make_item(0, 7);
+    first_state
+        .validate_trusted_request(&first_item)
+        .map_err(anyhow::Error::msg)?;
+    requests.send(first_item).await?;
+    let mut values = Vec::<SchemaValue>::new();
+    let mut offsets = BTreeSet::new();
+    let first_ack = loop {
+        let response = responses
+            .message()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("ephemeral input ended before its first ACK"))?;
+        first_state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::InputAck(ack)) => break ack,
+            // The empty-cursor resume below observes output from the beginning.
+            Some(invocation_response::Response::Result(_))
+            | Some(invocation_response::Response::OutputItem(_)) => {}
+            other => {
+                anyhow::bail!("unexpected response before first ephemeral input ACK: {other:?}")
+            }
+        }
+    };
+    assert_eq!(first_ack.highest_contiguous_sequence, 0);
+    assert_eq!(first_ack.logical_item_count, 1);
+    assert!(!first_ack.resulting_offset.is_empty());
+
+    let lost_ack_item = make_item(1, 19);
+    first_state
+        .validate_trusted_request(&lost_ack_item)
+        .map_err(anyhow::Error::msg)?;
+    requests.send(lost_ack_item).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let second_input_was_recorded = executor
+                .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .any(|entry| {
+                    matches!(
+                        entry.entry,
+                        PublicOplogEntry::StreamItems(params)
+                            if matches!(
+                                StreamItemsRecordV1::from_value(params.record.value()),
+                                Ok(record)
+                                    if record.stream_id.0 == durable_stream_uuid
+                                        && record.first_sequence == 1
+                            )
+                    )
+                });
+            if second_input_was_recorded {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("second input was not accepted before transport loss"))??;
+    drop(requests);
+    drop(responses);
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if executor
+                .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .any(|entry| {
+                    matches!(
+                        entry.entry,
+                        PublicOplogEntry::StreamSession(session)
+                            if matches!(
+                                StreamSessionRecordV1::from_value(session.record.value()),
+                                Ok(StreamSessionRecordV1::Detached(record))
+                                    if record.epoch == accepted.epoch
+                            )
+                    )
+                })
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("ephemeral input session did not detach before resume"))??;
+
+    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
+        anyhow::bail!("ephemeral input request is not Start");
+    };
+    let resume_request = InvocationRequest {
+        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+            idempotency_key: start.idempotency_key.clone(),
+            agent_id: accepted.agent_id.clone(),
+            environment_id: start.environment_id,
+            attachment_id: accepted.attachment_id,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: start.expected_callee_fingerprint,
+            expected_epoch: accepted.epoch,
+            operation: ResumeOperation::Resume as i32,
+            cursors: Vec::new(),
+            auth_ctx: start.auth_ctx.clone(),
+            principal: start.principal.clone(),
+        })),
+    };
+    let mut resumed_state = InvocationSessionState::default();
+    resumed_state
+        .validate_trusted_request(&resume_request)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(resume_request).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let resumed = responses
+        .message()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ephemeral resume ended before acceptance"))?;
+    resumed_state
+        .validate_response(&resumed)
+        .map_err(anyhow::Error::msg)?;
+    let resumed = match resumed.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("expected resumed ephemeral acceptance, got {other:?}"),
+    };
+    assert_eq!(resumed.attachment_id, accepted.attachment_id);
+    assert_eq!(resumed.epoch, accepted.epoch + 1);
+    let resumed_mapping = resumed
+        .stream_mappings
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("resumed acceptance omitted its input mapping"))?;
+    assert_eq!(resumed_mapping.handle, mapping.handle);
+    assert!(matches!(
+        &resumed_mapping.high_water,
+        Some(high_water)
+            if high_water.highest_contiguous_sequence == 1
+                && high_water.resulting_offset != first_ack.resulting_offset
+                && !high_water.terminal
+    ));
+
+    let final_item = InvocationRequest {
+        request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: 1,
+            sequence: 2,
+            payload: Some(input_stream_item::Payload::Value(
+                SchemaValue::U32(3).try_into().map_err(anyhow::Error::msg)?,
+            )),
+            durable_stream_id: Some(durable_stream_id),
+            epoch: resumed.epoch,
+        })),
+    };
+    resumed_state
+        .validate_trusted_request(&final_item)
+        .map_err(anyhow::Error::msg)?;
+    requests.send(final_item).await?;
+    let end = InvocationRequest {
+        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            transport_stream_id: 1,
+            sequence: 3,
+            durable_stream_id: Some(durable_stream_id),
+            epoch: resumed.epoch,
+        })),
+    };
+    resumed_state
+        .validate_trusted_request(&end)
+        .map_err(anyhow::Error::msg)?;
+    requests.send(end).await?;
+
+    while !resumed_state.is_complete() {
+        let response = responses
+            .message()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resumed ephemeral input closed before completion"))?;
+        resumed_state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::OutputItem(item)) => {
+                assert!(
+                    offsets.insert(item.durable_offset),
+                    "duplicate output offset"
+                );
+                values.push(
+                    item.value
+                        .ok_or_else(|| anyhow::anyhow!("output omitted its value"))?
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                );
+            }
+            Some(
+                invocation_response::Response::Accepted(_)
+                | invocation_response::Response::InputAck(_)
+                | invocation_response::Response::Result(_)
+                | invocation_response::Response::OutputEnd(_),
+            ) => {}
+            Some(invocation_response::Response::Finished(finished)) => assert!(matches!(
+                finished.outcome,
+                Some(invocation_session_completion::Outcome::Success(_))
+            )),
+            Some(other) => anyhow::bail!("unexpected resumed input response: {other:?}"),
+            None => anyhow::bail!("empty resumed input response"),
+        }
+    }
+    assert_eq!(
+        values,
+        vec![
+            SchemaValue::U32(70),
+            SchemaValue::U32(190),
+            SchemaValue::U32(30)
+        ]
+    );
+    assert_eq!(offsets.len(), 3);
+    let starts = executor
+        .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "transform"
+                    )
+            )
+        })
+        .count();
+    assert_eq!(starts, 1, "ResumeAttach must not restart transform");
+    Ok(())
 }
 
 #[test]
@@ -2031,6 +3218,29 @@ async fn open_invocation_session(
     mpsc::Sender<InvocationRequest>,
     tonic::Streaming<InvocationResponse>,
 )> {
+    open_invocation_session_with_key(
+        executor,
+        component,
+        agent_id,
+        &IdempotencyKey::fresh(),
+        method_name,
+        params,
+    )
+    .await
+}
+
+async fn open_invocation_session_with_key(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
+    idempotency_key: &IdempotencyKey,
+    method_name: &str,
+    params: TypedSchemaValue,
+) -> anyhow::Result<(
+    InvocationSessionState,
+    mpsc::Sender<InvocationRequest>,
+    tonic::Streaming<InvocationResponse>,
+)> {
     let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
         .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
     let (_, input) = params.into_parts();
@@ -2041,7 +3251,7 @@ async fn open_invocation_session(
             agent_id: Some(worker_agent_id.into()),
             method_name: Some(method_name.to_string()),
             input: Some(input),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            idempotency_key: Some(idempotency_key.clone().into()),
             context: None,
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,

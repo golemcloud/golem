@@ -106,9 +106,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
-    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
-    lower_invocation, run_guest_call_settled,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -3744,6 +3744,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             InvocationMode::Replay,
                         )
                         .await;
+                        store.as_context_mut().data().set_suspended();
 
                         store
                             .as_context_mut()
@@ -4007,6 +4008,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let load_result =
             invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
 
         store
             .as_context_mut()
@@ -5799,76 +5801,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: mut invocation_result,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if uses_streams
-                                    && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut invocation_result
-                                {
-                                    let (graph, root, component_revision) = {
-                                        let component = store.data().component_metadata();
-                                        let agent_id = store.data().parsed_agent_id();
-                                        let agent_type = agent_id
-                                            .as_ref()
-                                            .and_then(|agent_id| {
-                                                component
-                                                    .metadata
-                                                    .find_agent_type_by_name_ref(
-                                                        &agent_id.agent_type,
-                                                    )
-                                            })
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result schema is unavailable",
-                                                )
-                                            })?;
-                                        let method = agent_type
-                                            .methods
-                                            .iter()
-                                            .find(|method| method.name == full_function_name)
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result method schema is unavailable",
-                                                )
-                                            })?;
-                                        (
-                                            agent_type.schema.clone(),
-                                            method.output_schema.schema().cloned().unwrap_or_else(
-                                                || {
-                                                    golem_common::schema::SchemaType::tuple(
-                                                        Vec::new(),
-                                                    )
-                                                },
-                                            ),
-                                            component.revision,
-                                        )
-                                    };
-                                    let worker = worker.clone();
-                                    let result_value = output.clone();
-                                    let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store.run_concurrent(async move |_accessor| {
-                                            worker
-                                                .materialize_durable_streaming_result(
-                                                    &replay_idempotency_key,
-                                                    result_value,
-                                                    &graph,
-                                                    &root,
-                                                    component_revision,
-                                                )
-                                                .await
-                                        })
-                                        .await
-                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
-                                        .await
-                                        .map_err(|error| match error {
-                                            GuestCallSettlementError::Infrastructure(error) => error,
-                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
-                                        })?;
-                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -5985,8 +5927,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // Like the invocation loop, permanently fail the
                                             // durable Stream Session of an invocation that was
                                             // interrupted by a crash and cannot be retried.
+                                            // A fresh interrupt is authoritative even before live
+                                            // publication; already-finished sessions stay unchanged.
                                             if uses_streams
-                                                && store.as_context().data().durable_ctx().is_live()
+                                                && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().is_live())
                                             {
                                                 let _ = worker
                                                     .fail_durable_streaming_session(
@@ -6057,6 +6002,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         resume_result
         }.await;
+        store.data().set_suspended();
         // Result validation can consume the final recorded entry before detecting a mismatch.
         // Its typed replay error, rather than the resulting live cursor, identifies divergence.
         if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result

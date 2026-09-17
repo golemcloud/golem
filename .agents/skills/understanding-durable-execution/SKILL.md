@@ -472,6 +472,13 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
   later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
 
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
+
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
 

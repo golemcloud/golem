@@ -41,7 +41,6 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -231,7 +230,7 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let mut headers: HashMap<http::HeaderName, String> = HashMap::new();
+        let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
             agent_id,
@@ -501,7 +500,7 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// the response (`Authorization` / session-header for principal-aware
 /// methods, plus any header-bound method parameters).
 fn add_read_only_cache_headers(
-    headers: &mut HashMap<http::HeaderName, String>,
+    headers: &mut http::HeaderMap,
     agent_id: &AgentId,
     oplog_index: Option<OplogIndex>,
     agent_fingerprint: Option<AgentFingerprint>,
@@ -511,7 +510,7 @@ fn add_read_only_cache_headers(
 ) {
     headers.insert(
         cache_header::CACHE_CONTROL,
-        build_cache_control_value(read_only),
+        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -526,7 +525,10 @@ fn add_read_only_cache_headers(
     if supports_http_revalidation(read_only)
         && let (Some(idx), Some(fp)) = (oplog_index, agent_fingerprint)
     {
-        headers.insert(cache_header::ETAG, build_etag_value(agent_id, fp, idx));
+        headers.insert(
+            cache_header::ETAG,
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+        );
     }
 
     // Vary on every request header that may influence the response: the
@@ -558,7 +560,9 @@ fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     }
 }
 
-fn principal_from_request(request: &RichRequest) -> Result<Principal, RequestHandlerError> {
+pub(super) fn principal_from_request(
+    request: &RichRequest,
+) -> Result<Principal, RequestHandlerError> {
     match request.authenticated_session() {
         Some(session) => Ok(Principal::Oidc(OidcPrincipal {
             sub: session.subject.clone(),

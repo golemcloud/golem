@@ -29,7 +29,6 @@
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex};
-use http::HeaderName;
 use http::header;
 
 /// `Cache-Control` visibility for a read-only method.
@@ -210,13 +209,15 @@ pub fn merge_vary_with_header(existing: Option<&str>, header_name: &str) -> Stri
 
 /// Insert a `Vary: <header_name>` header into a header map, merging with any
 /// existing `Vary` value. Call repeatedly to add multiple varying headers.
-pub fn add_vary_header(
-    headers: &mut std::collections::HashMap<HeaderName, String>,
-    header_name: &str,
-) {
-    let existing = headers.get(&header::VARY).cloned();
-    let new_value = merge_vary_with_header(existing.as_deref(), header_name);
-    headers.insert(header::VARY, new_value);
+pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
+    let existing = headers
+        .get(&header::VARY)
+        .and_then(|value| value.to_str().ok());
+    let new_value = merge_vary_with_header(existing, header_name);
+    headers.insert(
+        header::VARY,
+        http::HeaderValue::from_str(&new_value).unwrap(),
+    );
 }
 
 #[cfg(test)]

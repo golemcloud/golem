@@ -482,6 +482,7 @@ fn worker_service_config(
             router_cache_max_capacity: 0,
             router_cache_ttl: Default::default(),
             router_cache_eviction_period: Default::default(),
+            trusted_ingress_addresses: Vec::new(),
         },
         ..Default::default()
     })

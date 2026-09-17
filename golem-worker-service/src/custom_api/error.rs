@@ -71,6 +71,14 @@ pub enum RequestHandlerError {
     OidcSchemeMismatch,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+    #[error("Raw HTTP request rejected")]
+    RawRequest(http::StatusCode),
+    #[error("Raw HTTP upstream failed")]
+    RawBadGateway,
+    #[error("Raw HTTP handler failed")]
+    RawInternal,
+    #[error("Raw HTTP handler timed out")]
+    RawDeadline,
 }
 
 impl RequestHandlerError {
@@ -109,6 +117,9 @@ impl SafeDisplay for RequestHandlerError {
             }
 
             Self::InternalError(_) => "internal error".to_string(),
+            Self::RawRequest(_) | Self::RawBadGateway | Self::RawInternal | Self::RawDeadline => {
+                self.to_string()
+            }
         }
     }
 }

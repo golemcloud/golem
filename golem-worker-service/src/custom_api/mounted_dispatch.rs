@@ -20,7 +20,6 @@ use golem_common::model::AgentId;
 use golem_common::model::agent::FileMapping;
 use golem_service_base::custom_api::RouterFileIndexEntry;
 use http::{Method, StatusCode};
-use std::collections::HashMap;
 
 #[allow(dead_code)]
 pub(super) enum MountFile<'a> {
@@ -48,8 +47,10 @@ pub(super) trait MountBackend {
     ) -> Result<RouteExecutionResult, RequestHandlerError>;
 }
 
-pub(super) struct PendingMountBackend;
+#[cfg(test)]
+struct PendingMountBackend;
 
+#[cfg(test)]
 impl MountBackend for PendingMountBackend {
     async fn file(
         &mut self,
@@ -169,7 +170,7 @@ fn mapping_target(
 fn empty_response(status: StatusCode) -> RouteExecutionResult {
     RouteExecutionResult {
         status,
-        headers: HashMap::new(),
+        headers: http::HeaderMap::new(),
         body: ResponseBody::NoBody,
     }
 }
@@ -183,6 +184,7 @@ mod tests {
     use golem_service_base::custom_api::{
         CompiledInputSchema, CompiledOutputSchema, RouteBehaviour, RouterMethod,
     };
+    use std::collections::HashMap;
     use test_r::test;
 
     #[derive(Default)]

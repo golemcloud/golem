@@ -18,6 +18,7 @@ mod agent_http_routes_ts;
 mod http_test_context;
 mod mcp;
 mod openapi_generation;
+mod raw_http_router;
 mod readonly_http;
 
 use golem_test_framework::config::EnvBasedTestDependencies;

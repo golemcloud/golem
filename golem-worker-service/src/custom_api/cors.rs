@@ -18,8 +18,8 @@ use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;
 use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
-use http::{HeaderName, Method, StatusCode};
-use std::collections::{BTreeSet, HashMap};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use std::collections::BTreeSet;
 use tracing::debug;
 
 pub fn is_cors_preflight(request: &poem::Request) -> bool {
@@ -87,7 +87,7 @@ pub fn handle_selected_preflight(
 }
 
 pub fn denied_preflight() -> RouteExecutionResult {
-    let mut headers = HashMap::new();
+    let mut headers = HeaderMap::new();
     merge_vary_header(
         &mut headers,
         &[
@@ -110,7 +110,7 @@ pub fn handle_cors_preflight_behaviour(
     let requested_headers = requested_preflight_headers(request)?;
     let policy = requested_method_policy(cors_preflight, &requested_method)?;
 
-    let mut headers = HashMap::new();
+    let mut headers = HeaderMap::new();
     merge_vary_header(
         &mut headers,
         &[
@@ -141,23 +141,27 @@ pub fn handle_cors_preflight_behaviour(
 
     headers.insert(
         http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        origin.to_string(),
+        HeaderValue::from_str(origin).map_err(anyhow::Error::from)?,
     );
     headers.insert(
         http::header::ACCESS_CONTROL_ALLOW_METHODS,
-        requested_method.to_string(),
+        HeaderValue::from_str(requested_method.as_str()).map_err(anyhow::Error::from)?,
     );
     if !requested_headers.is_empty() {
         headers.insert(
             http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-            requested_headers.into_iter().collect::<Vec<_>>().join(", "),
+            HeaderValue::from_str(&requested_headers.into_iter().collect::<Vec<_>>().join(", "))
+                .map_err(anyhow::Error::from)?,
         );
     }
     headers.insert(
         http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-        "true".to_string(),
+        HeaderValue::from_static("true"),
     );
-    headers.insert(http::header::ACCESS_CONTROL_MAX_AGE, "3600".to_string());
+    headers.insert(
+        http::header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("3600"),
+    );
 
     Ok(RouteExecutionResult {
         status: StatusCode::NO_CONTENT,
@@ -189,7 +193,7 @@ pub fn apply_cors_outgoing_middleware(
         return Ok(());
     }
 
-    let mut headers = HashMap::new();
+    let mut headers = HeaderMap::new();
     let vary = response
         .headers()
         .get_all(http::header::VARY)
@@ -197,7 +201,10 @@ pub fn apply_cors_outgoing_middleware(
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>()
         .join(", ");
-    headers.insert(http::header::VARY, vary);
+    headers.insert(
+        http::header::VARY,
+        HeaderValue::from_str(&vary).map_err(anyhow::Error::from)?,
+    );
     merge_vary_header(&mut headers, &["Origin"]);
 
     if let Some(origin) = request.origin()?
@@ -205,24 +212,21 @@ pub fn apply_cors_outgoing_middleware(
     {
         headers.insert(
             http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            origin.to_string(),
+            HeaderValue::from_str(origin).map_err(anyhow::Error::from)?,
         );
         headers.insert(
             http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            "true".to_string(),
+            HeaderValue::from_static("true"),
         );
     }
 
-    for (name, value) in headers {
-        response.headers_mut().insert(
-            name,
-            http::HeaderValue::from_str(&value).map_err(anyhow::Error::from)?,
-        );
+    for (name, value) in &headers {
+        response.headers_mut().insert(name, value.clone());
     }
     Ok(())
 }
 
-fn forbidden_response(headers: HashMap<HeaderName, String>) -> RouteExecutionResult {
+fn forbidden_response(headers: HeaderMap) -> RouteExecutionResult {
     RouteExecutionResult {
         status: StatusCode::FORBIDDEN,
         headers,
@@ -313,9 +317,15 @@ fn render_http_method(method: &HttpMethod) -> Result<String, RequestHandlerError
     Ok(converted.to_string())
 }
 
-fn merge_vary_header(headers: &mut HashMap<HeaderName, String>, values: &[&str]) {
-    let Some(existing) = headers.get(&http::header::VARY).cloned() else {
-        headers.insert(http::header::VARY, values.join(", "));
+fn merge_vary_header(headers: &mut HeaderMap, values: &[&str]) {
+    let Some(existing) = headers
+        .get(&http::header::VARY)
+        .and_then(|value| value.to_str().ok())
+    else {
+        headers.insert(
+            http::header::VARY,
+            HeaderValue::from_str(&values.join(", ")).unwrap(),
+        );
         return;
     };
 
@@ -339,7 +349,10 @@ fn merge_vary_header(headers: &mut HashMap<HeaderName, String>, values: &[&str])
         }
     }
 
-    headers.insert(http::header::VARY, merged.join(", "));
+    headers.insert(
+        http::header::VARY,
+        HeaderValue::from_str(&merged.join(", ")).unwrap(),
+    );
 }
 
 #[cfg(test)]
@@ -598,27 +611,30 @@ mod tests {
         assert_eq!(
             result
                 .headers
-                .get(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&"https://frontend.example.com".to_string())
+                .get(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("https://frontend.example.com")
         );
         assert_eq!(
             result
                 .headers
-                .get(&http::header::ACCESS_CONTROL_ALLOW_HEADERS),
-            Some(&"content-type".to_string())
+                .get(&http::header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .and_then(|value| value.to_str().ok()),
+            Some("content-type")
         );
         assert_eq!(
             result
                 .headers
-                .get(&http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
-            Some(&"true".to_string())
+                .get(&http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
         );
         assert_eq!(
-            result.headers.get(&http::header::VARY),
-            Some(
-                &"Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
-                    .to_string(),
-            )
+            result
+                .headers
+                .get(&http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
         );
     }
 
@@ -648,11 +664,11 @@ mod tests {
 
         assert_eq!(result.status, StatusCode::FORBIDDEN);
         assert_eq!(
-            result.headers.get(&http::header::VARY),
-            Some(
-                &"Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
-                    .to_string(),
-            )
+            result
+                .headers
+                .get(&http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
         );
     }
 
@@ -724,6 +740,8 @@ mod tests {
     fn resolved_route_with_cors(allowed_patterns: Vec<OriginPattern>) -> ResolvedRouteEntry {
         ResolvedRouteEntry {
             domain: golem_common::model::domain_registration::Domain("example.com".to_string()),
+            public_scheme: "http".to_string(),
+            public_authority: "example.com".to_string(),
             route: Arc::new(RichCompiledRoute {
                 account_id: AccountId(uuid::Uuid::nil()),
                 account_email: golem_common::model::account::AccountEmail::new("test@golem"),

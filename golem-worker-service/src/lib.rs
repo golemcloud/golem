@@ -229,20 +229,14 @@ impl WorkerService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener = poem::listener::TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            self.config.custom_request_port
-        ));
-        let acceptor = poem_listener.into_acceptor().await?;
-        let port = acceptor.local_addr()[0]
-            .as_socket_addr()
-            .expect("socket address")
-            .port();
+        let listener =
+            tokio::net::TcpListener::bind(format!("0.0.0.0:{}", self.config.custom_request_port))
+                .await?;
+        let port = listener.local_addr()?.port();
 
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                custom_api::http_server::serve(listener, route)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }

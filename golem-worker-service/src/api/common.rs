@@ -489,6 +489,15 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::OpenApiSpecGenerationFailed => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
+            RequestHandlerError::RawRequest(_) => {
+                Self::bad_request(api::error_code::REQUEST_VALUE_PARSING_FAILED, value)
+            }
+            RequestHandlerError::RawBadGateway | RequestHandlerError::RawDeadline => {
+                Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
+            }
+            RequestHandlerError::RawInternal => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
+            }
         }
     }
 }

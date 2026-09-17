@@ -19,8 +19,9 @@ use super::cors::{
 };
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
-use super::mounted_dispatch::{PendingMountBackend, dispatch_mount};
+use super::mounted_dispatch::dispatch_mount;
 use super::oidc::handler::OidcHandler;
+use super::raw_handler::RawHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhooks::WebhookCallbackHandler;
@@ -32,7 +33,6 @@ use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
 use http::StatusCode;
 use poem::{Request, Response};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{Instrument, debug};
 
@@ -41,6 +41,7 @@ pub struct RequestHandler {
     call_agent_handler: Arc<CallAgentHandler>,
     oidc_handler: Arc<OidcHandler>,
     webhook_callback_handler: Arc<WebhookCallbackHandler>,
+    raw_handler: RawHandler,
 }
 
 #[derive(Debug)]
@@ -65,18 +66,39 @@ impl RequestHandler {
         call_agent_handler: Arc<CallAgentHandler>,
         oidc_handler: Arc<OidcHandler>,
         webhook_callback_handler: Arc<WebhookCallbackHandler>,
+        worker_service: Arc<crate::service::worker::WorkerService>,
+        http_session_limits: crate::config::HttpSessionLimits,
     ) -> Self {
         Self {
             route_resolver,
             call_agent_handler,
             oidc_handler,
             webhook_callback_handler,
+            raw_handler: RawHandler::new(worker_service, http_session_limits),
         }
     }
 
     pub async fn handle_request(&self, request: Request) -> Result<Response, RequestFailure> {
-        debug!("Begin http request handling for request {request:?}");
+        debug!(method = %request.method(), path = request.uri().path(), "Begin http request handling");
 
+        if request.method() == http::Method::OPTIONS && request.uri().path() == "*" {
+            return Ok(Response::builder().status(StatusCode::NO_CONTENT).finish());
+        }
+        if matches!(
+            *request.method(),
+            http::Method::CONNECT | http::Method::TRACE
+        ) || request.headers().contains_key(http::header::UPGRADE)
+        {
+            return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
+        }
+        if request
+            .headers()
+            .get_all(http::header::EXPECT)
+            .iter()
+            .any(|value| !value.as_bytes().eq_ignore_ascii_case(b"100-continue"))
+        {
+            return Err(RequestHandlerError::RawRequest(StatusCode::EXPECTATION_FAILED).into());
+        }
         if is_cors_preflight(&request) {
             return handle_preflight(&self.route_resolver, request).await;
         }
@@ -154,7 +176,7 @@ impl RequestHandler {
 
                 Ok(RouteExecutionResult {
                     status: StatusCode::OK,
-                    headers: HashMap::new(),
+                    headers: http::HeaderMap::new(),
                     body: ResponseBody::OpenApiSchema {
                         spec,
                         format: *format,
@@ -168,7 +190,7 @@ impl RequestHandler {
                     .await
             }
             RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
-                dispatch_mount(request, resolved_route, &mut PendingMountBackend).await
+                dispatch_mount(request, resolved_route, &mut self.raw_handler.clone()).await
             }
         }
     }
@@ -197,7 +219,7 @@ async fn require_available_security(
     if matches!(selected.route.security, RichRouteSecurity::Unavailable) {
         Ok(RouteExecutionResult {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            headers: HashMap::new(),
+            headers: http::HeaderMap::new(),
             body: ResponseBody::NoBody,
         })
     } else {
@@ -229,14 +251,11 @@ fn finish_selected_response(
 fn route_execution_result_to_response(
     result: RouteExecutionResult,
 ) -> Result<Response, RequestHandlerError> {
-    let mut response_builder = Response::builder().status(result.status);
-
-    for (name, value) in result.headers {
-        response_builder = response_builder.header(name, value);
-    }
+    let mut response = Response::builder().status(result.status).finish();
+    *response.headers_mut() = result.headers;
 
     match result.body {
-        ResponseBody::NoBody => Ok(response_builder.finish()),
+        ResponseBody::NoBody => Ok(response),
 
         ResponseBody::ComponentModelJsonBody { body } => {
             let body = poem::Body::from_json(
@@ -245,17 +264,17 @@ fn route_execution_result_to_response(
             )
             .map_err(anyhow::Error::from)?;
 
-            Ok(response_builder
-                .body(body)
-                .set_content_type("application/json"))
+            response.set_body(body);
+            Ok(response.set_content_type("application/json"))
         }
 
-        ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
-            .body(body.data)
-            .set_content_type(body.binary_type.mime_type)),
+        ResponseBody::UnstructuredBinaryBody { body } => {
+            response.set_body(body.data);
+            Ok(response.set_content_type(body.binary_type.mime_type))
+        }
 
         ResponseBody::UnstructuredTextBody { body } => {
-            let mut response_builder = response_builder.content_type("text/plain; charset=utf-8");
+            response = response.set_content_type("text/plain; charset=utf-8");
             if let Some(text_type) = &body.text_type {
                 let trimmed = text_type.language_code.trim();
                 if !trimmed.is_empty()
@@ -264,11 +283,14 @@ fn route_execution_result_to_response(
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
                 {
-                    response_builder =
-                        response_builder.header(http::header::CONTENT_LANGUAGE, trimmed);
+                    response.headers_mut().insert(
+                        http::header::CONTENT_LANGUAGE,
+                        http::HeaderValue::from_str(trimmed).unwrap(),
+                    );
                 }
             }
-            Ok(response_builder.body(body.data))
+            response.set_body(body.data);
+            Ok(response)
         }
 
         ResponseBody::OpenApiSchema { spec: body, format } => {
@@ -277,20 +299,22 @@ fn route_execution_result_to_response(
                     let body_json = serde_json::to_vec(&body.0)
                         .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
 
-                    response_builder
-                        .body(body_json)
-                        .set_content_type("application/json")
+                    response.set_body(body_json);
+                    response.set_content_type("application/json")
                 }
                 OpenApiSpecFormat::Yaml => {
                     let body_yaml = serde_yaml::to_string(&body.0)
                         .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
 
-                    response_builder
-                        .body(body_yaml)
-                        .set_content_type("application/yaml")
+                    response.set_body(body_yaml);
+                    response.set_content_type("application/yaml")
                 }
             };
 
+            Ok(response)
+        }
+        ResponseBody::Stream(body) => {
+            response.set_body(body);
             Ok(response)
         }
     }
@@ -306,6 +330,67 @@ mod tests {
     };
     use poem::IntoResponse;
     use test_r::test;
+
+    #[test]
+    async fn response_boundary_preserves_duplicate_and_raw_headers() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("first=1"),
+        );
+        headers.append(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("second=2"),
+        );
+        headers.insert(
+            http::HeaderName::from_static("x-raw"),
+            http::HeaderValue::from_bytes(&[0x80, 0xff]).unwrap(),
+        );
+
+        let response = route_execution_result_to_response(RouteExecutionResult {
+            status: StatusCode::OK,
+            headers,
+            body: ResponseBody::NoBody,
+        })
+        .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get_all(http::header::SET_COOKIE)
+                .iter()
+                .map(|value| value.as_bytes())
+                .collect::<Vec<_>>(),
+            vec![b"first=1".as_slice(), b"second=2".as_slice()]
+        );
+        assert_eq!(response.headers()["x-raw"].as_bytes(), &[0x80, 0xff]);
+    }
+
+    #[test]
+    async fn stream_response_is_not_collected_at_the_boundary() {
+        use futures::{StreamExt, stream};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let polled = Arc::new(AtomicBool::new(false));
+        let stream_polled = polled.clone();
+        let body = poem::Body::from_bytes_stream(stream::poll_fn(move |_| {
+            stream_polled.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(Some(Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                b"first",
+            ))))
+        }));
+        let response = route_execution_result_to_response(RouteExecutionResult {
+            status: StatusCode::OK,
+            headers: http::HeaderMap::new(),
+            body: ResponseBody::Stream(body),
+        })
+        .unwrap();
+
+        assert!(!polled.load(Ordering::SeqCst));
+        let mut stream = response.into_body().into_bytes_stream();
+        assert_eq!(stream.next().await.unwrap().unwrap(), "first");
+        assert!(polled.load(Ordering::SeqCst));
+    }
 
     #[test]
     async fn shared_auth_and_unsafe_path_corpus_through_request_handler() {
@@ -401,6 +486,8 @@ mod tests {
                     harness.worker_service.clone(),
                     vec![],
                 )),
+                harness.worker_service.clone(),
+                Default::default(),
             );
             let request = Request::builder()
                 .uri(input["target"].as_str().unwrap().parse().unwrap())
@@ -560,17 +647,35 @@ mod tests {
             (
                 Ok(RouteExecutionResult {
                     status: StatusCode::FORBIDDEN,
-                    headers: HashMap::from([
-                        (
-                            http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                            "https://evil.example".into(),
-                        ),
-                        (
-                            http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                            "x-secret".into(),
-                        ),
-                        (http::header::VARY, "Accept-Encoding".into()),
-                    ]),
+                    headers: {
+                        let mut headers = http::HeaderMap::from_iter([
+                            (
+                                http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                                http::HeaderValue::from_static("https://evil.example"),
+                            ),
+                            (
+                                http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                                http::HeaderValue::from_static("x-secret"),
+                            ),
+                            (
+                                http::header::VARY,
+                                http::HeaderValue::from_static("Accept-Encoding"),
+                            ),
+                        ]);
+                        headers.append(
+                            http::header::SET_COOKIE,
+                            http::HeaderValue::from_static("first=1"),
+                        );
+                        headers.append(
+                            http::header::SET_COOKIE,
+                            http::HeaderValue::from_static("second=2"),
+                        );
+                        headers.insert(
+                            http::HeaderName::from_static("x-raw"),
+                            http::HeaderValue::from_bytes(&[0x80, 0xff]).unwrap(),
+                        );
+                        headers
+                    },
                     body: ResponseBody::NoBody,
                 }),
                 StatusCode::FORBIDDEN,
@@ -604,6 +709,18 @@ mod tests {
                     .unwrap()
                     .contains("Origin")
             );
+            if status == StatusCode::FORBIDDEN {
+                assert_eq!(
+                    response
+                        .headers()
+                        .get_all(http::header::SET_COOKIE)
+                        .iter()
+                        .map(|value| value.as_bytes())
+                        .collect::<Vec<_>>(),
+                    vec![b"first=1".as_slice(), b"second=2".as_slice()]
+                );
+                assert_eq!(response.headers()["x-raw"].as_bytes(), &[0x80, 0xff]);
+            }
         }
     }
 }
