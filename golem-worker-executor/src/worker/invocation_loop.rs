@@ -918,8 +918,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
         }, move || {
             let retirement = shutdown_worker.durable_stream_producer.shutdown();
+            let agent_id = shutdown_worker.agent_id();
             Box::pin(async move {
-                retirement.await.expect("Failed to drain ephemeral streams during executor shutdown");
+                if let Err(error) = retirement.await {
+                    tracing::error!(agent_id = %agent_id, error = %error, "Failed to drain ephemeral streams during executor shutdown");
+                }
             })
         });
     }

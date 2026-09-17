@@ -451,6 +451,21 @@ pub fn add_cors_preflight_http_routes(
     }
 }
 
+/// Request headers a browser client may send on any durable-stream route:
+/// session creation options, conditional reads, closing appends and
+/// producer-tracked appends.
+const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
+    "content-type",
+    "if-none-match",
+    "stream-ttl",
+    "stream-expires-at",
+    "stream-forked-from",
+    "stream-closed",
+    "producer-id",
+    "producer-epoch",
+    "producer-seq",
+];
+
 fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTreeSet<String> {
     let mut headers = BTreeSet::new();
 
@@ -462,14 +477,9 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
     {
         if *route_mode == AgentRouteMode::DurableStreams {
             headers.extend(
-                [
-                    "content-type",
-                    "if-none-match",
-                    "stream-ttl",
-                    "stream-expires-at",
-                    "stream-forked-from",
-                ]
-                .map(str::to_owned),
+                DURABLE_STREAM_REQUEST_HEADERS
+                    .iter()
+                    .map(|h| (*h).to_owned()),
             );
         }
         headers.extend(
@@ -1110,16 +1120,22 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(routes.len(), 10);
         for route in routes {
+            let headers = collect_allowed_request_headers(&route);
             assert_eq!(
-                collect_allowed_request_headers(&route),
-                BTreeSet::from([
-                    "content-type".into(),
-                    "if-none-match".into(),
-                    "stream-ttl".into(),
-                    "stream-expires-at".into(),
-                    "stream-forked-from".into(),
-                ])
+                headers,
+                DURABLE_STREAM_REQUEST_HEADERS
+                    .iter()
+                    .map(|h| (*h).to_owned())
+                    .collect::<BTreeSet<_>>()
             );
+            for header in [
+                "stream-closed",
+                "producer-id",
+                "producer-epoch",
+                "producer-seq",
+            ] {
+                assert!(headers.contains(header), "missing {header}");
+            }
             let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
             let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();
             let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =

@@ -10358,6 +10358,10 @@ enum DurableStreamingAcceptanceMatch {
     StreamSlotSession,
 }
 
+/// Decides whether a repeated stream-session PUT targets the persisted session. Attempt
+/// identity, the live-join buffer and the execution config are per-attempt choices and are
+/// deliberately not compared: a retried PUT with a different execution config still binds to the
+/// same session.
 fn stream_slot_session_matches(
     persisted: &StartAttemptDescriptor,
     requested: &StartAttemptDescriptor,
