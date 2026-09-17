@@ -27,6 +27,7 @@ use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
+use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
 use golem_service_base::clients::registry::{
@@ -132,6 +133,8 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
                 ),
             ]),
             mcp_imports: Vec::new(),
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
         },
         agent_a,
         agent_b,
@@ -155,6 +158,8 @@ fn empty_deployment(revision: DeploymentRevision) -> ToolDeploymentState {
         registered_tools: BTreeMap::new(),
         agent_tool_bindings: BTreeMap::new(),
         mcp_imports: Vec::new(),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
 }
 
@@ -180,6 +185,8 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
         vec!["alpha", "beta"]
     );
     assert_eq!(agent_a_tools[0].implemented_by, expected_alpha_component);
+    assert_eq!(agent_a_tools[0].lookup_name, "alpha");
+    assert_eq!(agent_a_tools[1].lookup_name, "beta");
     assert_eq!(
         agent_b_tools
             .iter()
@@ -187,6 +194,7 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
             .collect::<Vec<_>>(),
         vec!["beta"]
     );
+    assert_eq!(agent_b_tools[0].lookup_name, "beta");
     let beta_for_agent_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
         .unwrap()
         .unwrap();
@@ -194,7 +202,58 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
         .unwrap()
         .unwrap();
     assert!(Arc::ptr_eq(&agent_a_tools[1], &beta_for_agent_a));
-    assert!(Arc::ptr_eq(&beta_for_agent_a, &beta_for_agent_b));
+    assert_eq!(beta_for_agent_a.as_ref(), beta_for_agent_b.as_ref());
+}
+
+#[test]
+fn discovery_projects_effective_definition_per_agent_binding() {
+    let (mut deployment, agent_a, agent_b) = deployment_state();
+    let beta = ToolName::try_from("beta").unwrap();
+    let mut presented_a = deployment.registered_tools[&beta].definition.clone();
+    presented_a.commands.nodes[0].name = "adapter-a".to_string();
+    let mut presented_b = presented_a.clone();
+    presented_b.commands.nodes[0].name = "adapter-b".to_string();
+    deployment.tool_middleware_chains = BTreeMap::from([
+        (
+            agent_a.clone(),
+            BTreeMap::from([(
+                beta.clone(),
+                CompiledToolMiddlewareChain {
+                    deployment_revision: deployment.deployment_revision,
+                    agent_type_name: agent_a.clone(),
+                    tool_name: beta.clone(),
+                    effective_definition: presented_a,
+                    occurrences: Vec::new(),
+                },
+            )]),
+        ),
+        (
+            agent_b.clone(),
+            BTreeMap::from([(
+                beta.clone(),
+                CompiledToolMiddlewareChain {
+                    deployment_revision: deployment.deployment_revision,
+                    agent_type_name: agent_b.clone(),
+                    tool_name: beta.clone(),
+                    effective_definition: presented_b,
+                    occurrences: Vec::new(),
+                },
+            )]),
+        ),
+    ]);
+
+    let snapshot = ToolDiscoverySnapshot::from(deployment);
+    let for_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
+        .unwrap()
+        .unwrap();
+    let for_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
+        .unwrap()
+        .unwrap();
+    assert_eq!(for_a.lookup_name, "beta");
+    assert_eq!(for_b.lookup_name, "beta");
+    assert_eq!(for_a.definition.name(), Some("adapter-a"));
+    assert_eq!(for_b.definition.name(), Some("adapter-b"));
+    assert_eq!(for_a.implemented_by, for_b.implemented_by);
 }
 
 #[test]

@@ -14,18 +14,20 @@
 
 use crate::model::ExecutionStatus;
 use crate::services::stream_session_index::StreamSessionIndexService;
+pub use crate::worker::tasks::WorkerTasks;
 use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use desert_rust::BinaryCodec;
+use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -42,16 +44,16 @@ use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
-pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
+pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 mod blob;
 mod compressed;
@@ -69,6 +71,14 @@ pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, f
 #[cfg(test)]
 pub mod tests;
 
+/// Whether an archive step returns once its transfer is queued or once the transfer has finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveWait {
+    Queued,
+    /// Holds the agent's oplog lifecycle lock until the transfer finishes.
+    Finished,
+}
+
 /// A top-level service for managing worker oplogs
 ///
 /// For write access an oplog has to be opened with the `open` function (or if it doesn't exist,
@@ -85,6 +95,10 @@ pub mod tests;
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    /// Locks cold lifecycle operations for the entire logical oplog stack.
+    /// Wrappers delegate to their inner service; normal oplog operations do not take this lock.
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard;
+
     /// Installs the shared index after the complete oplog layer stack has been constructed.
     /// Primary actors need the index, but reconstruction must read through the outer service so
     /// archived entries and payloads remain visible. Constructing an index from primary storage
@@ -97,6 +111,7 @@ pub trait OplogService: Debug + Send + Sync {
 
     async fn create(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -112,6 +127,7 @@ pub trait OplogService: Debug + Send + Sync {
     /// may already have an oplog.
     async fn create_fresh(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
@@ -131,6 +147,7 @@ pub trait OplogService: Debug + Send + Sync {
     ///   across all layers and need to pass it down to inner layers.
     async fn open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
@@ -145,7 +162,12 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
+    async fn delete(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    );
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(
@@ -403,11 +425,11 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
-    Items(Option<OplogIndex>, StreamItemsRecordV1),
-    End(Option<OplogIndex>, StreamEndRecordV1),
-    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
-    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
+    Registered(Option<OplogIndex>, StreamRegisteredRecord),
+    Items(Option<OplogIndex>, StreamItemsRecord),
+    End(Option<OplogIndex>, StreamEndRecord),
+    Cancel(Option<OplogIndex>, StreamCancelRecord),
+    Session(Option<OplogIndex>, Box<StreamSessionRecord>),
     InlineEntry(OplogEntry),
 }
 
@@ -500,6 +522,47 @@ pub struct RawDurableStreamSessionStatus {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
+    /// Retires this open handle after its worker's durable state has been deleted.
+    ///
+    /// Cached implementations unregister the exact handle and propagate retirement through
+    /// wrapper layers. The retired object may remain alive through stale worker references, but
+    /// it must no longer be returned when a new worker with the same identity opens its oplog.
+    fn retire(&self) {}
+
+    /// Consulted only while holding the cold lifecycle lock, never on the append/read path.
+    fn is_retired(&self) -> bool {
+        false
+    }
+
+    /// Completion of this layer's owned work after its last handle is dropped or retired.
+    fn closed(&self) -> OplogCloseCompletion {
+        futures::future::ready(Ok(())).boxed().shared()
+    }
+
+    /// Root tasks share the open oplog's lifetime even when its cached worker shell changes.
+    /// Wrappers delegate this reference to their leaf; in-memory test oplogs need no owner.
+    fn task_owner(&self) -> Option<&WorkerTasks> {
+        None
+    }
+
+    /// Stops owned work without removing persisted history. Callers first stop/drain users and
+    /// hold the logical lifecycle guard until work finishes and storage removal completes.
+    /// Every layer is joined even when cleanup reports an error.
+    async fn stop_and_wait(&self) -> Result<(), String> {
+        let tasks_result = if let Some(tasks) = self.task_owner() {
+            tasks.stop_and_wait().await
+        } else {
+            Ok(())
+        };
+        self.retire();
+        let result = self.closed().await;
+        if let Some(inner) = self.inner() {
+            let inner_result = inner.stop_and_wait().await;
+            return tasks_result.and(result).and(inner_result);
+        }
+        tasks_result.and(result)
+    }
+
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         self.enqueue_add(entry).await
@@ -565,7 +628,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// through the returned watermark; storage failures must not be reported as absence.
     async fn raw_durable_stream_session_status(
         &self,
-        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> RawDurableStreamSessionStatus {
         RawDurableStreamSessionStatus {
             watermark: self.current_oplog_index().await,
@@ -1071,24 +1134,41 @@ pub trait OplogServiceOps: OplogService {
 #[async_trait]
 impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 
-#[derive(Clone)]
+pub type OplogCloseCompletion = Shared<BoxFuture<'static, Result<(), String>>>;
+
 struct OpenOplogEntry {
-    pub oplog: Weak<dyn Oplog>,
-    pub initial: Arc<AtomicBool>,
+    oplog: Weak<dyn Oplog>,
+    closed: OplogCloseCompletion,
 }
 
-impl OpenOplogEntry {
-    pub fn new(oplog: Arc<dyn Oplog>) -> Self {
-        Self {
-            oplog: Arc::downgrade(&oplog),
-            initial: Arc::new(AtomicBool::new(true)),
-        }
+type OplogSlot = Arc<Mutex<Option<OpenOplogEntry>>>;
+
+/// Exclusive ownership of a logical oplog's cold lifecycle. The primary service owns the slot;
+/// wrapper construction uses the same guard, including when no primary handle exists yet.
+pub struct OplogLifecycleGuard {
+    agent_id: AgentId,
+    slot: Option<OwnedMutexGuard<Option<OpenOplogEntry>>>,
+    owner: OpenOplogs,
+}
+
+impl OplogLifecycleGuard {
+    pub fn assert_agent(&self, agent_id: &AgentId) {
+        assert_eq!(&self.agent_id, agent_id);
+    }
+}
+
+impl Drop for OplogLifecycleGuard {
+    fn drop(&mut self) {
+        let guard = self.slot.take().unwrap();
+        let slot = OwnedMutexGuard::mutex(&guard).clone();
+        drop(guard);
+        self.owner.release_if_unused(&self.agent_id, &slot);
     }
 }
 
 #[derive(Clone)]
 pub struct OpenOplogs {
-    oplogs: Cache<AgentId, (), OpenOplogEntry, ()>,
+    oplogs: Cache<AgentId, (), OplogSlot, ()>,
 }
 
 impl OpenOplogs {
@@ -1103,52 +1183,96 @@ impl OpenOplogs {
         }
     }
 
+    async fn slot(&self, agent_id: &AgentId) -> OplogSlot {
+        self.oplogs
+            .get_or_insert_simple(agent_id, || async { Ok(Arc::new(Mutex::new(None))) })
+            .await
+            .unwrap()
+    }
+
+    pub async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        let slot = self.slot(agent_id).await.lock_owned().await;
+        OplogLifecycleGuard {
+            agent_id: agent_id.clone(),
+            slot: Some(slot),
+            owner: self.clone(),
+        }
+    }
+
+    fn release_if_unused(&self, agent_id: &AgentId, slot: &OplogSlot) {
+        // Every waiter and live handle owns a slot reference. Removing the last unused slot
+        // cannot split waiters between two locks or let an old handle evict its replacement.
+        self.oplogs.remove_if_cached_sync(agent_id, |current| {
+            Arc::ptr_eq(current, slot)
+                && Arc::strong_count(current) == 2
+                && current.try_lock().is_ok_and(|entry| {
+                    entry
+                        .as_ref()
+                        .is_none_or(|entry| entry.closed.peek().is_some())
+                })
+        });
+    }
+
     pub async fn get_or_open(
         &self,
+        lifecycle: &mut OplogLifecycleGuard,
         agent_id: &AgentId,
-        constructor: impl OplogConstructor + 'static,
+        constructor: impl OplogConstructor,
     ) -> Arc<dyn Oplog> {
-        loop {
-            let constructor_clone = constructor.clone();
-            let close = Box::new(self.oplogs.create_weak_remover(agent_id.clone()));
-
-            let entry = self
-                .oplogs
-                .get_or_insert(
-                    agent_id,
-                    || (),
-                    async |_| {
-                        let result = constructor_clone.create_oplog(close).await;
-
-                        // Temporarily increasing ref count because we want to store a weak pointer
-                        // but not drop it before we re-gain a strong reference when got out of the cache
-                        let result = unsafe {
-                            let ptr = Arc::into_raw(result);
-                            Arc::increment_strong_count(ptr);
-                            Arc::from_raw(ptr)
-                        };
-                        Ok(OpenOplogEntry::new(result))
-                    },
-                )
-                .await
-                .unwrap();
-            if let Some(oplog) = entry.oplog.upgrade() {
-                let oplog = if entry.initial.swap(false, Ordering::AcqRel) {
-                    unsafe {
-                        let ptr = Arc::into_raw(oplog);
-                        Arc::decrement_strong_count(ptr);
-                        Arc::from_raw(ptr)
-                    }
-                } else {
-                    oplog
-                };
-
-                break oplog;
-            } else {
-                self.oplogs.remove(agent_id).await;
-                continue;
+        lifecycle.assert_agent(agent_id);
+        let slot = self.slot(agent_id).await;
+        let is_primary = Arc::ptr_eq(
+            &slot,
+            OwnedMutexGuard::mutex(lifecycle.slot.as_ref().unwrap()),
+        );
+        // Wrapper slots are only reached under the primary lifecycle guard. Their nested
+        // locks protect cached handles during construction, not independent lifecycles.
+        let mut wrapper_slot = if is_primary {
+            None
+        } else {
+            Some(slot.lock().await)
+        };
+        let cached = if let Some(wrapper) = &wrapper_slot {
+            wrapper.as_ref()
+        } else {
+            lifecycle.slot.as_ref().unwrap().as_ref()
+        };
+        if let Some(oplog) = cached.and_then(|entry| entry.oplog.upgrade()) {
+            if !oplog.is_retired() {
+                return oplog;
             }
+            oplog.retire();
         }
+        if let Some(cached) = cached {
+            // Completion, including an error, proves the old layer no longer owns running work.
+            // The new attempt reloads persisted state rather than inheriting the old error.
+            let _ = cached.closed.clone().await;
+        }
+        let owner = self.clone();
+        let close_agent_id = agent_id.clone();
+        let close_slot = slot.clone();
+        let close = Box::new(move || owner.release_if_unused(&close_agent_id, &close_slot));
+        let oplog = constructor.create_oplog(lifecycle, close).await;
+        let closed = oplog.closed();
+        let entry = Some(OpenOplogEntry {
+            oplog: Arc::downgrade(&oplog),
+            closed: closed.clone(),
+        });
+        if let Some(wrapper) = &mut wrapper_slot {
+            **wrapper = entry;
+        } else {
+            **lifecycle.slot.as_mut().unwrap() = entry;
+        }
+        // Retain the cache slot until asynchronous last-handle cleanup finishes, even when
+        // nobody reopens it. A cold open that wins this race awaits the same completion above.
+        let owner = self.clone();
+        let agent_id = agent_id.clone();
+        let cleanup_slot = slot.clone();
+        tokio::spawn(async move {
+            let _ = closed.await;
+            owner.release_if_unused(&agent_id, &cleanup_slot);
+        });
+        oplog
     }
 }
 
@@ -1159,6 +1283,10 @@ impl Debug for OpenOplogs {
 }
 
 #[async_trait]
-pub trait OplogConstructor: Clone + Send {
-    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog>;
+pub trait OplogConstructor: Send {
+    async fn create_oplog(
+        self,
+        lifecycle: &mut OplogLifecycleGuard,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog>;
 }

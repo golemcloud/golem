@@ -20,8 +20,8 @@ use golem_common::model::entity::{
 use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::oplog::host_functions::{McpToolCall, McpToolPresence};
 use golem_common::model::oplog::payload::types::{
-    SerializableToolError, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableCustomToolError, SerializableToolError, SerializableToolResultValue,
+    SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestMcpToolCall, HostRequestMcpToolPresence,
@@ -503,10 +503,13 @@ fn tool_error(error: CallError) -> SerializableToolRpcError {
         CallError::InvalidInput(details) => SerializableToolError::InvalidInput(details),
         CallError::InvalidResult(details) => SerializableToolError::InvalidResult(details),
         CallError::ToolError(details) => {
-            SerializableToolError::CustomError(Box::new(TypedSchemaValue::new(
-                SchemaGraph::anonymous(SchemaType::string()),
-                SchemaValue::String(details),
-            )))
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "mcp-tool-error".to_string(),
+                payload: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::string()),
+                    SchemaValue::String(details),
+                ),
+            }))
         }
     }))
 }

@@ -17,10 +17,9 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
-use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex, UpdateDescription};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::{AgentMetadata, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
@@ -60,19 +59,32 @@ fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> Interr
         | AgentStatus::Idle
         | AgentStatus::Failed
         | AgentStatus::Interrupted => InterruptDecision::Ignore,
-        AgentStatus::Suspended | AgentStatus::Retrying => InterruptDecision::Interrupt,
-        AgentStatus::Running if recover_immediately => InterruptDecision::Restart,
-        AgentStatus::Running => InterruptDecision::Interrupt,
+        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying
+            if recover_immediately =>
+        {
+            InterruptDecision::Restart
+        }
+        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying => {
+            InterruptDecision::Interrupt
+        }
     }
 }
 
-fn resume_decision(status: &AgentStatus, force: bool) -> ResumeDecision {
+fn resume_decision(
+    status: &AgentStatus,
+    last_error_kind: Option<OplogErrorKind>,
+    force: bool,
+) -> ResumeDecision {
     match status {
+        AgentStatus::Failed if force && last_error_kind == Some(OplogErrorKind::Recovery) => {
+            ResumeDecision::ForceStart
+        }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
-        AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
-            ResumeDecision::Start
-        }
+        AgentStatus::Suspended
+        | AgentStatus::Interrupted
+        | AgentStatus::Idle
+        | AgentStatus::Retrying => ResumeDecision::Start,
         _ if force => ResumeDecision::ForceStart,
         _ => ResumeDecision::Reject,
     }
@@ -105,35 +117,17 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    async fn existing_metadata<T: HasAll<Ctx>>(
+    pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<AgentMetadata, WorkerExecutorError> {
-        Self::get_latest_metadata(deps, owned_agent_id)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
-    }
-
-    async fn get_existing_suspended<T>(
-        deps: &T,
-        owned_agent_id: &OwnedAgentId,
-        component_revision: Option<ComponentRevision>,
         principal: Principal,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::get_or_create_suspended(
-            deps,
-            owned_agent_id,
-            None,
-            Vec::new(),
-            component_revision,
-            None,
-            &InvocationContextStack::fresh(),
-            principal,
-        )
-        .await
+        deps.active_agents()
+            .get_existing(deps, owned_agent_id, principal)
+            .await
     }
 
     pub async fn delete<T>(
@@ -144,22 +138,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
-
-        info!("Interrupting worker before deletion");
-        worker
-            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await;
-        info!("Marking worker for deletion");
-        worker.start_deleting_internal().await?;
-
-        worker.worker_service().remove(owned_agent_id).await?;
-        worker.remove_from_active_agents().await;
-
-        // Keep the worker alive until durable metadata and cache cleanup has completed.
-        drop(worker);
-        Ok(())
+        let mut worker =
+            Self::get_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        loop {
+            if let Some(outcome) = worker.start_deletion().await? {
+                return outcome.handle().wait().await;
+            }
+            worker = match Self::get_existing_suspended(deps, owned_agent_id, principal.clone())
+                .await
+            {
+                Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
+                    worker
+                }
+                Ok(_) | Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+                Err(error) => return Err(error),
+            };
+        }
     }
 
     pub async fn interrupt<T>(
@@ -171,9 +166,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let Some(metadata) = Self::get_latest_metadata(deps, owned_agent_id).await? else {
-            return Ok(());
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id, principal).await {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+            Err(error) => return Err(error),
         };
+        let metadata = worker.get_latest_worker_metadata().await;
 
         let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
         if decision == InterruptDecision::Ignore {
@@ -189,27 +187,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
-        match metadata.last_known_status.status {
-            AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
-            AgentStatus::Retrying => {
-                debug!("Marking worker scheduled to be retried as interrupted")
+        if decision == InterruptDecision::Interrupt {
+            match metadata.last_known_status.status {
+                AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
+                AgentStatus::Retrying => {
+                    debug!("Marking worker scheduled to be retried as interrupted")
+                }
+                _ => {}
             }
-            _ => {}
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
         let interrupt_kind = match decision {
             InterruptDecision::Interrupt => InterruptKind::Interrupt(Timestamp::now_utc()),
             InterruptDecision::Restart => InterruptKind::Restart,
             InterruptDecision::Ignore => unreachable!(),
         };
-        if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
-            await_interruption.recv().await.unwrap();
-        }
-
         if decision == InterruptDecision::Interrupt {
-            // Dropping the resident worker also closes live connections associated with it.
-            worker.remove_from_active_agents().await;
+            worker.interrupt_and_retire(interrupt_kind).await?;
+        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
+            await_interruption.recv().await.unwrap();
         }
         Ok(())
     }
@@ -223,9 +219,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
 
-        match resume_decision(&metadata.last_known_status.status, force) {
+        match resume_decision(
+            &metadata.last_known_status.status,
+            metadata.last_known_status.last_error_kind,
+            force,
+        ) {
             ResumeDecision::PreviousFailed => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     deps,
@@ -235,10 +236,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
-                    return Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    });
+                    return if metadata.last_known_status.last_error_kind
+                        == Some(golem_common::model::oplog::OplogErrorKind::Recovery)
+                    {
+                        Err(WorkerExecutorError::failed_to_resume_worker(
+                            owned_agent_id.agent_id.clone(),
+                            WorkerExecutorError::runtime(
+                                last_error.error.to_string(&last_error.stderr),
+                            ),
+                        ))
+                    } else {
+                        Err(WorkerExecutorError::PreviousInvocationFailed {
+                            error: last_error.error,
+                            stderr: last_error.stderr,
+                        })
+                    };
                 }
                 Err(WorkerExecutorError::runtime(
                     "Previous invocation failed, but failed to get error details",
@@ -257,21 +269,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ),
                     _ => unreachable!(),
                 }
-                Self::get_or_create_running(
-                    deps,
-                    owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
+                Self::start_if_needed(worker).await?;
                 Ok(())
             }
             ResumeDecision::Reject => Err(WorkerExecutorError::invalid_request(format!(
-                "Worker {agent_id} is not suspended, interrupted or idle",
+                "Worker {agent_id} is not suspended, interrupted, idle, or retrying",
                 agent_id = owned_agent_id.agent_id
             ))),
         }
@@ -288,7 +290,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
+        if worker.deletion_owns_retirement().await {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
 
         if metadata.last_known_status.component_revision == target_revision {
             return Err(WorkerExecutorError::invalid_request(
@@ -386,24 +394,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 warn!("Attempted updating worker which already exited");
             }
             (UpdateMode::Automatic, decision) => {
-                let current_revision = metadata.last_known_status.component_revision;
-                let component_revision = match decision {
-                    UpdateDecision::Queue | UpdateDecision::QueueAndStart => Some(current_revision),
-                    UpdateDecision::QueueAndRestart => None,
-                    UpdateDecision::Ignore => unreachable!(),
-                };
-                let worker = Self::get_existing_suspended(
-                    deps,
-                    owned_agent_id,
-                    component_revision,
-                    principal,
-                )
-                .await?;
-
                 debug!("Enqueuing update");
                 worker
                     .enqueue_update(UpdateDescription::Automatic { target_revision })
-                    .await;
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -422,8 +416,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
             (UpdateMode::Manual, decision) => {
-                let worker =
-                    Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
                 worker.enqueue_manual_update(target_revision).await?;
 
                 match decision {
@@ -451,8 +443,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -540,7 +531,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
+        if worker.deletion_owns_retirement().await {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
         let component_metadata = deps
             .component_service()
             .get_metadata(
@@ -578,7 +575,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
         if activate {
             worker.activate_plugin_internal(grant_id).await
         } else {
@@ -616,9 +612,9 @@ mod tests {
         let expected_recovering = [
             InterruptDecision::Restart,
             InterruptDecision::Ignore,
-            InterruptDecision::Interrupt,
+            InterruptDecision::Restart,
             InterruptDecision::Ignore,
-            InterruptDecision::Interrupt,
+            InterruptDecision::Restart,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
         ];
@@ -638,7 +634,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::Reject,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
@@ -647,7 +643,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::ForceStart,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
@@ -655,9 +651,14 @@ mod tests {
         for ((status, expected), expected_forced) in
             STATUSES.iter().zip(expected).zip(expected_forced)
         {
-            assert_eq!(resume_decision(status, false), expected);
-            assert_eq!(resume_decision(status, true), expected_forced);
+            assert_eq!(resume_decision(status, None, false), expected);
+            assert_eq!(resume_decision(status, None, true), expected_forced);
         }
+
+        assert_eq!(
+            resume_decision(&AgentStatus::Failed, Some(OplogErrorKind::Recovery), true),
+            ResumeDecision::ForceStart
+        );
     }
 
     #[test]

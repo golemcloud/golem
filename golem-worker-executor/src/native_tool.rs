@@ -183,8 +183,13 @@ where
                     NativeToolRpcError::InvalidResult(details) => {
                         SerializableToolError::InvalidResult(details)
                     }
-                    NativeToolRpcError::Custom(value) => {
-                        SerializableToolError::CustomError(Box::new(value))
+                    NativeToolRpcError::Custom { name, payload } => {
+                        SerializableToolError::CustomError(Box::new(
+                            golem_common::model::oplog::payload::types::SerializableCustomToolError {
+                                name,
+                                payload,
+                            },
+                        ))
                     }
                 };
                 Err(SerializableToolRpcError::RemoteToolError(Box::new(error)))

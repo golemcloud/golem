@@ -96,6 +96,8 @@ mod tests {
             registered_tools: BTreeMap::new(),
             agent_tool_bindings: BTreeMap::new(),
             mcp_imports: Vec::new(),
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
         };
         let state = EnvironmentState {
             agent_deployment_details: HashMap::new(),

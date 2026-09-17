@@ -520,7 +520,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -570,7 +570,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -593,7 +593,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -615,7 +615,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -656,7 +656,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
-                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
@@ -689,24 +689,42 @@ pub(crate) fn rearm_fuel_check<T>(store: &mut StoreContextMut<'_, T>) {
 
 /// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,
 /// exit, or runtime error) raised by a typed export call.
-async fn invoke_result_from_trap<Ctx: WorkerCtx>(
+pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     err: wasmtime::Error,
-) -> InvokeResult {
+) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
     let in_atomic_region = store.data().current_in_atomic_region();
     let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
-    InvokeResult::from_error::<Ctx>(
+    if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
+        return Err(error);
+    }
+    Ok(InvokeResult::from_error::<Ctx>(
         consumed_fuel,
         &err,
         retry_from,
         in_atomic_region,
         atomic_region_had_side_effects,
         agent_mode,
-    )
+    ))
+}
+
+fn replay_divergence_from_trap(
+    error: &anyhow::Error,
+    is_live: bool,
+) -> Option<WorkerExecutorError> {
+    (!is_live)
+        .then(|| {
+            error
+                .chain()
+                .find_map(|error| error.downcast_ref::<WorkerExecutorError>())
+        })
+        .flatten()
+        .filter(|error| matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. }))
+        .cloned()
 }
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
@@ -1572,6 +1590,15 @@ mod tests {
             }
             .is_snapshot_replay_divergence()
         );
+    }
+
+    #[test]
+    fn unexpected_oplog_trap_is_propagated_during_replay_only() {
+        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "NoOp");
+        let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
+
+        assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
+        assert_eq!(replay_divergence_from_trap(&error, true), None);
     }
 
     #[test]

@@ -22,6 +22,7 @@
 use super::agent::{AgentTypeName, HttpMethod};
 use super::component::ComponentId;
 use super::tool::ToolName;
+use super::tool_middleware::ToolMiddlewareName;
 use crate::{declare_structs, declare_unions};
 use std::fmt;
 
@@ -44,7 +45,10 @@ declare_unions! {
 
         /// Best-effort import discovery failed or excluded an upstream definition.
         /// Runtime discovery remains authoritative and may succeed later.
-        McpImportDiscovery(McpImportDiscovery)
+        McpImportDiscovery(McpImportDiscovery),
+
+        /// A non-fatal tool middleware compilation diagnostic.
+        ToolMiddleware(ToolMiddlewareWarning)
     }
 }
 
@@ -73,6 +77,13 @@ declare_structs! {
         pub import_index: Option<u32>,
         pub upstream_tool_name: Option<String>,
         pub reason: String,
+    }
+
+    pub struct ToolMiddlewareWarning {
+        pub middleware_name: Option<ToolMiddlewareName>,
+        pub agent_type: Option<AgentTypeName>,
+        pub tool_name: Option<ToolName>,
+        pub message: String,
     }
 }
 
@@ -110,6 +121,22 @@ impl fmt::Display for DeployValidationWarning {
                 }
                 write!(f, ": {}", w.reason)
             }
+            DeployValidationWarning::ToolMiddleware(w) => write!(
+                f,
+                "Tool middleware{middleware}{agent_tool}: {message}",
+                middleware = w
+                    .middleware_name
+                    .as_ref()
+                    .map(|name| format!(" {name}"))
+                    .unwrap_or_default(),
+                agent_tool = w
+                    .agent_type
+                    .as_ref()
+                    .zip(w.tool_name.as_ref())
+                    .map(|(agent, tool)| format!(" for agent {agent} and tool {tool}"))
+                    .unwrap_or_default(),
+                message = w.message,
+            ),
         }
     }
 }

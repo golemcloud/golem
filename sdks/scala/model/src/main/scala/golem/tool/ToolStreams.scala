@@ -36,10 +36,12 @@ trait ToolInputStream {
 }
 
 /**
- * Opaque handle to the process stdout stream a tool invocation may write to. A
- * tool method parameter of this type is auto-injected and excluded from the
- * tool's input schema. The caller receives the paired stream independently from
- * the structured result.
+ * Writable handle to the host-supplied, invocation-scoped stdout stream. A tool
+ * method parameter of this type is auto-injected and excluded from the tool's
+ * input schema. The caller receives the paired stream independently from the
+ * structured result. Await writes before returning; overlapping operations fail
+ * with `ConcurrentOperation`. The guest finishes an open writer on return and
+ * releases it, preserving an explicitly selected finish or failure.
  */
 trait ToolOutputStream {
   def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =

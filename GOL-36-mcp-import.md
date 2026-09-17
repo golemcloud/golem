@@ -1376,8 +1376,8 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
 ### Step 8 — dependency integration pending
 
 - The dependency status changed during implementation: GOL-39 is merged in
-  [PR 3842](https://github.com/golemcloud/golem/pull/3842), but this orb checkout
-  predates it. GOL-439 is actively implementing the chain dispatcher in the
+  [PR 3842](https://github.com/golemcloud/golem/pull/3842) and is included in the
+  latest-main merge for this draft PR. GOL-439 is implementing the chain dispatcher in the
   [middleware thread](https://ampcode.com/threads/T-01a0a94d-ba14-716c-9f45-1f7766424d43).
   Coordinate and integrate that baseline rather than build another dispatcher.
 - Its recorded root-chain plan/descendant-position model, typed installation
@@ -1664,6 +1664,26 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   that thread. No integration-ready patch/bundle is available yet; no remote
   branch contains that local unpushed work. Step 8 remains required, and its
   dispatcher/rollback work must not be duplicated in the MCP bridge.
+
+### Draft PR and latest-main integration
+
+- [Draft PR 3907](https://github.com/golemcloud/golem/pull/3907) retains steps 8
+  and 10 as deferred until GOL-439 is reviewed and merged. It is not ready for
+  final acceptance or merge.
+- The main merge preserves middleware metadata alongside MCP imports, assigns
+  MCP imports protobuf field 6 after middleware fields 4/5, and moves the MCP
+  migrations to 039/040 after main's 036–038. The combined diff model is version
+  10; main's historical fingerprints are preserved.
+- Oracle caught lost MCP-only deployment rendering in the CLI's renamed module;
+  it is restored. MCP custom errors now retain the declared `mcp-tool-error`
+  name required by main's native-output validation. The focused merge bug-finder
+  run returned clean. Common-model tests passed 23/23, and the new fingerprint
+  passes with golden-file updates disabled. Broader merge/CI validation is ongoing.
+- Registered tool chains remain fail-closed until middleware runtime integration.
+  Dynamically discovered MCP tools do not yet receive universal middleware chains;
+  step 8 must explicitly construct their dynamic Host leaf plans through GOL-439.
+  The provisional whole-envelope transport bounds and separate projection budgets
+  remain a final-review item, as previously agreed.
 
 ## Review and decision history
 

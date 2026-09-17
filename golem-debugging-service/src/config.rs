@@ -22,8 +22,8 @@ use golem_service_base::service::compiled_component::CompiledComponentServiceCon
 use golem_worker_executor::services::golem_config::{
     ActiveAgentsConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig, ComponentCacheConfig,
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, QuotaServiceConfig, RdbmsConfig,
-    ResourceLimitsConfig, SchedulerConfig, SchedulerStorageConfig, SuspendConfig,
+    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, OplogSweepConfig, QuotaServiceConfig,
+    RdbmsConfig, ResourceLimitsConfig, SchedulerConfig, SchedulerStorageConfig, SuspendConfig,
     WorkerServiceGrpcConfig, default_key_value_storage_retry,
 };
 use serde::{Deserialize, Serialize};
@@ -147,7 +147,14 @@ impl Default for DebugConfig {
             limits: default_golem_config.limits,
             retry: default_golem_config.retry,
             compiled_component_service: default_golem_config.compiled_component_service,
-            oplog: default_golem_config.oplog,
+            // Archiving goes through the worker activator, which a debugging service never sets.
+            oplog: OplogConfig {
+                sweep: OplogSweepConfig {
+                    enabled: false,
+                    ..default_golem_config.oplog.sweep
+                },
+                ..default_golem_config.oplog
+            },
             suspend: default_golem_config.suspend,
             active_agents: default_golem_config.active_agents,
             scheduler: default_golem_config.scheduler,

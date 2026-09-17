@@ -24,10 +24,10 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
-use crate::model::agent::AgentUpdateMode;
 use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
+use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
@@ -81,10 +81,12 @@ use golem_common::model::plugin_registration::PluginSpecDto;
 use golem_common::model::tool::{
     RemoteToolDeployment, SecretKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig,
 };
+use golem_common::model::tool_middleware::{RemoteToolMiddlewareDeployment, ToolMiddlewareName};
+use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseReference;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
-use golem_common::schema::tool::validation::validate_tool;
+use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
@@ -420,16 +422,18 @@ impl ComponentCommandHandler {
         log_action("Redeploying", "existing agents");
         let _indent = LogIndent::new();
 
-        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        // Best-effort, like updating: per-agent failures are collected and reported together,
+        // only failures of listing the agents abort the whole operation.
         let mut agents = Vec::new();
+        let mut errors = Vec::new();
         for component in components {
-            let redeployed = self
+            let result = self
                 .ctx
                 .agent_handler()
                 .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
             let version = component.metadata.root_package_version().clone();
-            for (agent_id, from_revision) in redeployed {
+            for (agent_id, from_revision) in result.succeeded {
                 let from_version = self
                     .component_version_at(&component.id, from_revision)
                     .await;
@@ -442,12 +446,20 @@ impl ComponentCommandHandler {
                     version: version.clone(),
                 });
             }
+            errors.extend(result.errors);
         }
 
+        let has_errors = !errors.is_empty();
+
         self.ctx.log_handler().log_output(AgentRedeployResult {
-            redeployed: true,
+            redeployed: !has_errors,
             agents,
+            errors,
         })?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
+        }
 
         Ok(())
     }
@@ -463,34 +475,53 @@ impl ComponentCommandHandler {
         // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
         //       we do so to help a bit with pending invocations or currently running worker creations,
         //       but this is not a 100% guarantee.
+        //       Deleting is best-effort: per-agent failures are collected and reported together.
+        //       Only successful deletes count as progress, so agents that keep failing do not
+        //       keep the loop alive; an agent that fails first and gets deleted in a later round
+        //       is not reported as an error.
         let mut agents = Vec::new();
-        let mut found_any = true;
+        let mut errors: Vec<AgentActionError> = Vec::new();
+        let mut deleted_any = true;
         let mut first_round = true;
-        while found_any {
-            found_any = false;
+        while deleted_any {
+            deleted_any = false;
             for component in components {
-                let deleted = self
+                let result = self
                     .ctx
                     .agent_handler()
                     .delete_component_agents(&component.component_name, &component.id, first_round)
                     .await?;
-                if !deleted.is_empty() {
-                    found_any = true;
+                if !result.succeeded.is_empty() {
+                    deleted_any = true;
                 }
-                for agent_id in deleted {
+                for agent_id in result.succeeded {
+                    errors.retain(|error| !error.is_for(&component.component_name, &agent_id));
                     agents.push(AgentDeletionMeta {
                         component_name: component.component_name.clone(),
                         agent_id,
                     });
                 }
+                for error in result.errors {
+                    errors.retain(|existing| {
+                        !existing.is_for(&error.component_name, &error.agent_id)
+                    });
+                    errors.push(error);
+                }
             }
             first_round = false;
         }
 
+        let has_errors = !errors.is_empty();
+
         self.ctx.log_handler().log_output(AgentDeleteAllView {
-            deleted: true,
+            deleted: !has_errors,
             agents,
+            errors,
         })?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
+        }
 
         Ok(())
     }
@@ -836,6 +867,9 @@ impl ComponentCommandHandler {
             components.insert(component_name, properties);
         }
 
+        self.resolve_manifest_tool_middlewares(&mut components)
+            .await?;
+
         let mut exported_agents = HashMap::<AgentTypeName, Vec<ComponentName>>::new();
         for (component_name, properties) in &components {
             for agent_type in &properties.agent_types {
@@ -867,6 +901,90 @@ impl ComponentCommandHandler {
             remote_tools,
             tools_to_publish,
         })
+    }
+
+    async fn resolve_manifest_tool_middlewares(
+        &self,
+        components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
+    ) -> anyhow::Result<()> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app = app_ctx.some_or_err()?.application();
+        let mut discovered = BTreeMap::<ToolMiddlewareName, ComponentName>::new();
+
+        for (component_name, properties) in components.iter() {
+            for definition in &properties.tool_middlewares {
+                validate_tool_middleware(definition).map_err(|errors| {
+                    anyhow!(
+                        "Invalid tool middleware '{}' exported by component '{}': {}",
+                        definition.name,
+                        component_name,
+                        errors.into_iter().map(|error| error.to_string()).join("; ")
+                    )
+                })?;
+                let name = ToolMiddlewareName::try_from(definition.name.as_str())
+                    .map_err(anyhow::Error::msg)?;
+                if discovered
+                    .insert(name.clone(), component_name.clone())
+                    .is_some()
+                {
+                    bail!("Tool middleware '{name}' is exported by multiple components");
+                }
+            }
+        }
+
+        for (name, declaration) in app.tool_middleware_declarations() {
+            if declaration.value.release.is_some() {
+                continue;
+            }
+            let component_name = discovered.get(name).with_context(|| {
+                format!("Tool middleware '{name}' is declared but is not exported by any component")
+            })?;
+            if let Some(selected) = declaration.value.component.as_ref()
+                && selected != component_name
+            {
+                bail!(
+                    "Tool middleware '{}' selects component '{}' but is exported by component '{}'",
+                    name,
+                    selected,
+                    component_name
+                );
+            }
+            let provision = app.resolve_tool_middleware_provision(name, Some(component_name))?;
+            let config = ToolManifestProvisionConfig {
+                config: NormalizedJsonValue::new(resolve_json_value(
+                    "tool middleware",
+                    name.as_str(),
+                    "tool middleware config",
+                    provision
+                        .properties
+                        .config
+                        .unwrap_or_else(|| serde_json::json!({})),
+                )?),
+                env: resolve_env_vars("tool middleware", name.as_str(), &provision.properties.env)?,
+                files: provision.properties.files,
+                plugins: resolve_plugin_parameters(
+                    "tool middleware",
+                    name.as_str(),
+                    &provision.properties.plugins,
+                )?,
+            };
+            components
+                .get_mut(component_name)
+                .expect("discovered middleware component must exist")
+                .tool_middleware_provision_configs
+                .insert(name.clone(), config);
+        }
+
+        for (name, component_name) in discovered {
+            if !app.tool_middleware_declarations().contains_key(&name) {
+                bail!(
+                    "Tool middleware '{}' exported by component '{}' has no matching top-level declaration",
+                    name,
+                    component_name
+                );
+            }
+        }
+        Ok(())
     }
 
     async fn resolve_manifest_tool_deployments(
@@ -1069,6 +1187,29 @@ impl ComponentCommandHandler {
             })
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
+        let environment_tool_bindings = app
+            .environment_tool_bindings()
+            .map(|bindings| {
+                bindings
+                    .iter()
+                    .map(|(name, binding)| {
+                        (
+                            name.clone(),
+                            ToolBindingState::from_binding(binding.clone()),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        validate_tool_binding_references(
+            &mut issues,
+            &environment_tool_bindings,
+            "environments.tools",
+            None,
+            app.selected_environment_source(),
+            &implementations,
+            &ambient_names,
+        );
         for agent_name in agent_components.keys() {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
@@ -1238,6 +1379,21 @@ impl ComponentCommandHandler {
                 .get(tool_name)
                 .map(|declaration| declaration.source.clone());
 
+            let environment_binding =
+                environment_tool_bindings
+                    .get(tool_name.as_str())
+                    .and_then(|state| {
+                        resolve_tool_binding_input(
+                            &mut issues,
+                            tool_name,
+                            definition,
+                            owner,
+                            state,
+                            "environments.tools",
+                            None,
+                            app.selected_environment_source(),
+                        )
+                    });
             let mut agent_bindings = BTreeMap::new();
             for agent_name in agent_components.keys() {
                 let Some(agent) = resolved_agents.agent(agent_name) else {
@@ -1259,7 +1415,7 @@ impl ComponentCommandHandler {
                     validate_effective_tool_binding(
                         &mut issues,
                         tool_name,
-                        None,
+                        environment_binding.as_ref(),
                         &binding,
                         agent_name,
                         agent.source(),
@@ -1344,7 +1500,7 @@ impl ComponentCommandHandler {
                     files: provision.properties.files,
                     plugins,
                 },
-                environment_binding: None,
+                environment_binding,
                 agent_bindings,
             };
 
@@ -1540,6 +1696,30 @@ impl ComponentCommandHandler {
         ))
     }
 
+    pub async fn materialize_remote_tool_middleware_deployment(
+        &self,
+        name: ToolMiddlewareName,
+        release: ToolMiddlewareReleaseReference,
+        provision: &ToolManifestProvisionConfig,
+        plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
+    ) -> anyhow::Result<(
+        RemoteToolMiddlewareDeployment,
+        Vec<PendingRemoteInitialFile>,
+    )> {
+        let tool_name = ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?;
+        let (provision, pending_files) = self
+            .materialize_remote_tool_provision(&tool_name, provision, plugin_grants)
+            .await?;
+        Ok((
+            RemoteToolMiddlewareDeployment {
+                name,
+                release,
+                provision,
+            },
+            pending_files,
+        ))
+    }
+
     pub async fn component_deploy_properties(
         &self,
         component_name: &ComponentName,
@@ -1554,6 +1734,7 @@ impl ComponentCommandHandler {
         .await?;
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
+        let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
         let wasm_path = component.final_wasm();
 
@@ -1637,8 +1818,10 @@ impl ComponentCommandHandler {
             wasm_path,
             agent_types,
             tools,
+            tool_middlewares,
             agent_type_configs,
             tool_deployment_configs: BTreeMap::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
         })
     }
 
@@ -1904,10 +2087,102 @@ impl ComponentCommandHandler {
             );
         }
 
+        let middleware_by_name = properties
+            .tool_middlewares
+            .iter()
+            .map(|middleware| (middleware.name.as_str(), middleware))
+            .collect::<BTreeMap<_, _>>();
+        let mut tool_middleware_deployment_configs = BTreeMap::new();
+        for (middleware_name, provision) in &properties.tool_middleware_provision_configs {
+            let definition = middleware_by_name
+                .get(middleware_name.as_str())
+                .ok_or_else(|| anyhow!("Missing discovered definition for resolved tool middleware {middleware_name}"))?;
+            let resolved_files = provision
+                .files
+                .iter()
+                .map(|file| {
+                    crate::model::app::InitialComponentFileSource::new(
+                        &file.file.source_path,
+                        &file.source,
+                    )
+                    .map(|source| crate::model::app::InitialComponentFile {
+                        source,
+                        target: crate::model::app::CanonicalFilePathWithPermissions {
+                            path: file.file.target_path.clone(),
+                            permissions: file.file.permissions.unwrap_or(
+                                golem_common::model::component::AgentFilePermissions::ReadOnly,
+                            ),
+                        },
+                    })
+                    .map_err(anyhow::Error::msg)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let files_by_path = ifs_manager
+                .collect_file_hashes(
+                    &format!("{}:tool-middleware:{}", component_name.0, middleware_name),
+                    &resolved_files,
+                )
+                .await?
+                .into_iter()
+                .map(|file| {
+                    (
+                        file.target.path.to_abs_string(),
+                        diff::AgentFile {
+                            hash: file.hash.into(),
+                            permissions: file.target.permissions,
+                        }
+                        .into(),
+                    )
+                })
+                .collect();
+            let plugins_by_grant_id = provision
+                .plugins
+                .iter()
+                .enumerate()
+                .map(|(index, plugin)| {
+                    let grant = PluginGrantKey::resolve(
+                        &plugin_grants,
+                        plugin.account.as_deref(),
+                        &plugin.name,
+                        &plugin.version,
+                    )?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Plugin {}/{} is not available in this environment",
+                            plugin.name,
+                            plugin.version
+                        )
+                    })?;
+                    Ok((
+                        grant.id.0,
+                        diff::PluginInstallation {
+                            priority: index as i32,
+                            name: plugin.name.clone(),
+                            version: plugin.version.clone(),
+                            grant_id: grant.id.0,
+                            parameters: plugin.parameters.clone().into_iter().collect(),
+                        },
+                    ))
+                })
+                .collect::<anyhow::Result<_>>()?;
+            tool_middleware_deployment_configs.insert(
+                middleware_name.to_string(),
+                diff::ToolMiddlewareDeploymentConfig {
+                    definition: (*definition).clone(),
+                    config: provision.config.clone(),
+                    env: provision.env.clone(),
+                    files_by_path,
+                    plugins_by_grant_id,
+                }
+                .into(),
+            );
+        }
+
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
             agent_type_provision_configs,
             tool_deployment_configs,
+            tool_middleware_deployment_configs,
         })
     }
 
@@ -1943,7 +2218,7 @@ impl ComponentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .component
+            .component_upload
             .create_component(
                 &environment.environment_id.0,
                 &ComponentCreation {
@@ -1954,6 +2229,10 @@ impl ComponentCommandHandler {
                         .await?,
                     tools: component_stager.tools().clone(),
                     tool_deployment_configs: component_stager.tool_deployment_configs().await?,
+                    tool_middlewares: component_stager.tool_middlewares().clone(),
+                    tool_middleware_provision_configs: component_stager
+                        .tool_middleware_provision_configs()
+                        .await?,
                 },
                 wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -2037,9 +2316,13 @@ impl ComponentCommandHandler {
             .map_err(UpdateStagedComponentError::Other)?;
         let agent_types = component_stager.agent_types_if_changed().cloned();
 
+        let current_component = self
+            .get_component_revision_by_id(&component.id, component.revision)
+            .await
+            .map_err(UpdateStagedComponentError::Other)?;
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager
-            .changed_files()
+            .changed_files(current_component.metadata.tool_middlewares())
             .await
             .map_err(UpdateStagedComponentError::Other)?;
 
@@ -2048,7 +2331,7 @@ impl ComponentCommandHandler {
             .golem_clients()
             .await
             .map_err(UpdateStagedComponentError::Other)?
-            .component
+            .component_upload
             .update_component(
                 &component.id.0,
                 &ComponentUpdate {
@@ -2065,6 +2348,14 @@ impl ComponentCommandHandler {
                     tools: component_stager.tools_if_changed().cloned(),
                     tool_deployment_config_updates: component_stager
                         .tool_deployment_config_updates_if_changed(&changed_files)
+                        .await
+                        .map_err(UpdateStagedComponentError::Other)?,
+                    tool_middlewares: component_stager.tool_middlewares_if_changed().cloned(),
+                    tool_middleware_provision_config_updates: component_stager
+                        .tool_middleware_provision_config_updates_if_changed(
+                            &changed_files,
+                            current_component.metadata.tool_middlewares(),
+                        )
                         .await
                         .map_err(UpdateStagedComponentError::Other)?,
                     allow_incompatible_config,
@@ -2307,6 +2598,21 @@ fn resolve_tool_binding_input(
         config_keys_readable,
         secret_keys_readable: readable,
         secret_keys_revealable: revealable,
+        filesystem_access: state.filesystem_access,
+        middleware: match state.middleware_installations() {
+            Ok(middleware) => middleware,
+            Err(message) => {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::BindingSemantics,
+                    ToolValidationCode::InvalidParameters,
+                    entity_path("middleware"),
+                    source.map(std::path::Path::to_path_buf),
+                    message,
+                ));
+                None
+            }
+        },
+        middleware_merge_mode: agent_name.and(state.middleware_merge_mode),
     })
 }
 
@@ -2757,9 +3063,12 @@ fn collect_unused_agent_config_paths(
 mod tool_binding_tests {
     use super::{
         effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
-        validate_effective_tool_binding,
+        resolve_tool_binding_input, validate_effective_tool_binding,
     };
-    use crate::model::app_raw::{ManifestConfigKeyScope, ManifestSecretKeyScope};
+    use crate::model::app_raw::{
+        ManifestConfigKeyScope, ManifestSecretKeyScope, ToolMiddlewareInstallation,
+    };
+    use crate::model::cascade::property::tool_bindings::ToolBindingState;
     use crate::model::tool_deployment::{
         ToolEntityPath, ToolValidationCode, ToolValidationSeverity,
     };
@@ -2769,7 +3078,12 @@ mod tool_binding_tests {
     use golem_common::model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::model::component::ComponentName;
     use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::tool::{SecretKeyScope, ToolBindingInput, ToolName};
+    use golem_common::model::tool::{
+        SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
+    };
+    use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{CommandTree, Tool};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use test_r::test;
@@ -2791,6 +3105,9 @@ mod tool_binding_tests {
             config_keys_readable: golem_common::model::tool::ConfigKeyScope::All,
             secret_keys_readable: readable,
             secret_keys_revealable: revealable,
+            filesystem_access: Default::default(),
+            middleware: None,
+            middleware_merge_mode: None,
         }
     }
 
@@ -2904,5 +3221,117 @@ mod tool_binding_tests {
         );
         assert_eq!(effective.secret_keys_readable, keys(&["github"]));
         assert_eq!(effective.secret_keys_revealable, keys(&["github"]));
+    }
+
+    #[test]
+    fn agent_binding_materialization_preserves_middleware_chain_and_merge_mode() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let state = ToolBindingState {
+            filesystem_access: ToolFilesystemAccess::Allowed,
+            middleware: Some(vec![ToolMiddlewareInstallation::Shortcut(
+                "audit@2.0.0".to_string(),
+            )]),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        };
+        let mut issues = Vec::new();
+
+        let binding = resolve_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &definition,
+            &AccountEmail::new("owner@example.com"),
+            &state,
+            "environments.tools",
+            Some(&AgentTypeName("Agent".to_string())),
+            Some(Path::new("agents.yaml")),
+        )
+        .unwrap();
+
+        assert!(issues.is_empty());
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Allowed);
+        assert_eq!(
+            binding.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+        let middleware = binding.middleware.unwrap();
+        assert_eq!(middleware.len(), 1);
+        assert_eq!(middleware[0].name.as_str(), "audit");
+        assert_eq!(middleware[0].version.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn environment_parameters_only_binding_has_no_middleware_merge_mode() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let mut state = ToolBindingState::default();
+        state
+            .parameters
+            .insert("limit".to_string(), serde_json::json!(5));
+        let mut issues = Vec::new();
+
+        let binding = resolve_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &definition,
+            &AccountEmail::new("owner@example.com"),
+            &state,
+            "environments.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+        )
+        .unwrap();
+
+        assert!(issues.is_empty());
+        assert_eq!(binding.parameters.0, serde_json::json!({ "limit": 5 }));
+        assert_eq!(binding.middleware, None);
+        assert_eq!(binding.middleware_merge_mode, None);
+    }
+
+    #[test]
+    fn agent_binding_distinguishes_omitted_and_explicit_merge_mode() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let owner = AccountEmail::new("owner@example.com");
+        let agent_name = AgentTypeName("Agent".to_string());
+        let materialize = |state: &ToolBindingState| {
+            resolve_tool_binding_input(
+                &mut Vec::new(),
+                &tool_name,
+                &definition,
+                &owner,
+                state,
+                "agents.tools",
+                Some(&agent_name),
+                Some(Path::new("agents.yaml")),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            materialize(&ToolBindingState::default()).middleware_merge_mode,
+            None
+        );
+        assert_eq!(
+            materialize(&ToolBindingState {
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                ..Default::default()
+            })
+            .middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Append)
+        );
     }
 }

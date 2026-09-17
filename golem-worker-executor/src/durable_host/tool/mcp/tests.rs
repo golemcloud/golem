@@ -132,7 +132,8 @@ async fn recorded_protocol_error_preserves_code_message_and_data() {
     let SerializableToolError::CustomError(value) = *error else {
         panic!("expected custom error");
     };
-    let SchemaValue::String(details) = value.value() else {
+    assert_eq!(value.name, "mcp-tool-error");
+    let SchemaValue::String(details) = value.payload.value() else {
         panic!("expected string payload");
     };
     assert_eq!(
@@ -159,7 +160,7 @@ async fn recorded_tool_error_bypasses_declared_success_schema() {
         panic!("expected tool error");
     };
     assert!(
-        matches!(*error, SerializableToolError::CustomError(ref value) if value.value() == &SchemaValue::String("permission rejected".into()))
+        matches!(*error, SerializableToolError::CustomError(ref value) if value.name == "mcp-tool-error" && value.payload.value() == &SchemaValue::String("permission rejected".into()))
     );
     let bytes = encode_response(Ok(json!({"content":[]}))).await.unwrap();
     assert!(

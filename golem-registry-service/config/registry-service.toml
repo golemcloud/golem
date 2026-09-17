@@ -39,6 +39,11 @@ type = "Disabled"
 
 [component_compilation.config.tls.config]
 
+[component_file_upload]
+max_concurrent_files = 16
+max_uncompressed_archive_size = 1073741824
+max_uncompressed_file_size = 536870912
+
 [db]
 type = "Sqlite"
 
