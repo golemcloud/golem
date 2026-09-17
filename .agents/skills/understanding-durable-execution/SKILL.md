@@ -128,7 +128,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 ```diagram
 ┌─────────────────────────────────────────────────────────────────────┐
 │ outer loop (one iteration = one resident instance)                  │
-│  create Store + instance ──▶ prepare_instance                       │
+│  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
 │    ephemeral:      replay first invocation only, append Restart     │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
@@ -147,6 +147,52 @@ reconstruction path. Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) neve
 worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
+
+### Monthly admission, interruption, and recovery
+
+Monthly policy uses the shared account `AtomicResourceEntry` in `services/resource_limits.rs`.
+Registry revisions arrive through the existing refresh path; stale refreshes must not restore
+older policy. Admission in `worker/invocation_loop.rs` checks the latest cached capacity before
+instance creation, replay resumption, and invocation. Reconstruction must pass those checks too;
+a resume or queued invocation cannot bypass an exhausted applicable cap.
+
+During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
+`workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check compute when enabled,
+then monthly memory and the agent's matching storage class. `worker/instance.rs` calls it from the
+existing Wasmtime epoch callback, and `worker/invocation.rs` checks before guest calls. Compute
+and memory exhaustion apply account-wide; durable storage applies only to durable agents and
+ephemeral storage only to ephemeral agents. Durable exhaustion requests suspension and unload
+with `RetryDecision::TryStop`. Ephemeral exhaustion fails the invocation without retry, using
+`EphemeralFuelExhausted` for compute or `EphemeralCannotSuspend` for memory/storage. Production
+hard-limit execution does not borrow local ephemeral overdraft. Enforcement infrastructure
+failure is distinct from exhausted capacity and must not be reported as an ordinary cap hit.
+
+Capacity can return after a UTC month reset, a grant or plan increase above current usage, or
+application of an `allowOverage` revision. Subsequent demand uses the same admission and
+reconstruction path, not a second recovery system. Mode changes reach running agents through
+refresh within five minutes. Excess accrued under the applied `allowOverage` revision remains
+billable until `hardLimit` applies; earlier `hardLimit` usage never becomes billable retrospectively.
+
+Disabled meters omit their monthly accounting, caps, overage, and billing. Filesystem metering
+controls both storage meters but their amounts and usage remain separate. Per-agent memory and
+managed-XFS quota enforcement remain independent; unmanaged storage has no finite per-agent quota.
+
+A pending invocation still holds its allocated linear memory and allocated filesystem storage
+while waiting for host I/O. Those allocations occupy real capacity that other agents cannot reuse
+while it is held. Memory and storage therefore accrue byte-time during permit-held host I/O waits
+even when no Wasm executes, as well as during replay. The memory meter measures actual allocated
+linear-memory bytes, not the configured maximum memory limit. Fuel measures instruction consumption,
+so the parked guest itself burns no fuel.
+
+The concurrent-agent permit defines the billing window. Permit release settles and pauses metering
+before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends the billable window by
+design; it does not mean every cached allocation is physically freed immediately. Released-permit
+durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
+
+Interruption delivery is separate from that billing rationale. The default 10 ms epoch increment
+is a cooperative guest checkpoint, not a timer that wakes pending host futures. Compute, memory
+and storage share this limitation. Bounded monthly enforcement during such waits remains unresolved;
+do not infer a universal 10 ms bound or change the billing window to hide it.
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data

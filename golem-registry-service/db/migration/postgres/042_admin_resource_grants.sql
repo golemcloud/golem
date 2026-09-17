@@ -1,18 +1,18 @@
-ALTER TABLE account_resource_overrides
-    DROP CONSTRAINT account_resource_overrides_pk;
+DROP TABLE account_resource_overrides;
 
-ALTER TABLE account_resource_overrides
-    ADD COLUMN source TEXT;
+CREATE TABLE account_resource_overrides
+(
+    account_id     UUID      NOT NULL REFERENCES accounts,
+    dimension      TEXT      NOT NULL,
+    source         TEXT      NOT NULL,
+    override_value NUMERIC   NOT NULL,
+    reason         TEXT      NOT NULL,
+    expires_at     TIMESTAMP,
+    created_by     UUID      NOT NULL REFERENCES accounts,
+    created_at     TIMESTAMP NOT NULL,
 
-UPDATE account_resource_overrides
-SET source = 'self_service';
-
-ALTER TABLE account_resource_overrides
-    ALTER COLUMN source SET NOT NULL;
-
-ALTER TABLE account_resource_overrides
-    ADD CONSTRAINT account_resource_overrides_pk PRIMARY KEY (account_id, dimension, source),
-    ADD CONSTRAINT account_resource_overrides_dimension_check
+    CONSTRAINT account_resource_overrides_pk PRIMARY KEY (account_id, dimension, source),
+    CONSTRAINT account_resource_overrides_dimension_check
         CHECK (dimension IN (
             'monthly_compute_gcu',
             'monthly_memory_gb_seconds',
@@ -21,13 +21,14 @@ ALTER TABLE account_resource_overrides
             'max_disk_space_per_worker',
             'max_memory_per_worker'
         )),
-    ADD CONSTRAINT account_resource_overrides_source_check
+    CONSTRAINT account_resource_overrides_source_check
         CHECK (source IN ('self_service', 'admin_grant')),
-    ADD CONSTRAINT account_resource_overrides_source_reason_check
+    CONSTRAINT account_resource_overrides_source_reason_check
         CHECK (
             (source = 'self_service' AND reason IN ('user_self_serve', 'downgrade_clamp'))
             OR (source = 'admin_grant' AND reason IN ('promotional', 'support'))
-        );
+        )
+);
 
 CREATE TABLE account_resource_override_events (
     event_sequence BIGSERIAL PRIMARY KEY,

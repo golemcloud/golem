@@ -49,13 +49,15 @@ The managed XFS root cannot be combined with the deterministic agent filesystem 
 
 ## Metering and enforcement
 
-These switches control usage measurement and export. They do not control resource enforcement.
+These switches control monthly usage accounting, caps, overage, and billing for their corresponding dimensions. Disabling a meter disables all of that monthly policy, not just export. Missing measurements are not measured zero. Per-agent safety limits and other independent non-billing controls remain active.
 
 | Metering switch | Behavior when disabled | Controls that remain active |
 | --- | --- | --- |
-| `compute` | Fuel consumption is not accumulated or exported. Cumulative fuel is treated as unlimited. | Epoch-based interruption and executor scheduling |
-| `memory` | Linear-memory byte-time is not accumulated or exported. | Per-agent memory limits, measured admission, and memory-pressure eviction |
-| `filesystem` | Allocated filesystem byte-time is not accumulated or exported. | Managed XFS project quotas, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
+| `compute` | No compute usage accounting, monthly compute cap, overage, or billing. | Epoch-based interruption and executor scheduling |
+| `memory` | No linear-memory byte-time accounting, monthly memory cap, overage, or billing. | Per-agent memory limits, measured admission, and memory-pressure eviction |
+| `filesystem` | No allocated-byte-time accounting, monthly durable or ephemeral storage caps, overage, or billing. | Managed XFS project quotas, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
+
+With every meter disabled, monthly usage mode has no runtime effect. Maximum memory per agent remains enforced. Finite maximum storage per agent remains available only on managed quota-capable storage, currently managed XFS; unmanaged storage reports it disabled.
 
 Managed XFS does not enable storage billing. A self-hosted deployment may use managed XFS and quotas while leaving `filesystem = false`.
 

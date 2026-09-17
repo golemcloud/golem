@@ -1,4 +1,4 @@
-ALTER TABLE account_resource_overrides RENAME TO account_resource_overrides_v30;
+DROP TABLE account_resource_overrides;
 
 CREATE TABLE account_resource_overrides
 (
@@ -29,15 +29,6 @@ CREATE TABLE account_resource_overrides
             OR (source = 'admin_grant' AND reason IN ('promotional', 'support'))
         )
 );
-
-INSERT INTO account_resource_overrides (
-    account_id, dimension, source, override_value, reason, expires_at, created_by, created_at
-)
-SELECT
-    account_id, dimension, 'self_service', override_value, reason, expires_at, created_by, created_at
-FROM account_resource_overrides_v30;
-
-DROP TABLE account_resource_overrides_v30;
 
 CREATE TABLE account_resource_override_events (
     event_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
