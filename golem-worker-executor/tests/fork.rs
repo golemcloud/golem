@@ -91,6 +91,22 @@ struct LocalResumeProxy {
 
 #[async_trait]
 impl WorkerProxy for LocalResumeProxy {
+    async fn prepare(
+        &self,
+        agent: &OwnedAgentId,
+        method: &str,
+        caller: &AgentId,
+        env: HashMap<String, String>,
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .prepare(agent, method, caller, env, stack, config, principal, auth)
+            .await
+    }
+
     async fn resume(
         &self,
         agent_id: &AgentId,

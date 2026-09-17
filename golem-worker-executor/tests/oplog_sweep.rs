@@ -169,6 +169,7 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
         })
         .await?;
     assert!(
