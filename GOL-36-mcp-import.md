@@ -1716,6 +1716,12 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   through the shared `Notify`; per-request oneshot releases remove that race.
   The corrected integration test and eight consecutive repetitions pass, Oracle
   approved the follow-up, and bug-finder run 2 is clean. CI revalidation follows.
+- CI revalidation twice hit the 15-minute executables-build limit without a
+  compiler error; 23 other build/SDK jobs and CI Clippy passed. The preceding
+  build took 12m 53s. Only this build-step budget is raised to 30 minutes; test
+  limits and commands are unchanged. YAML semantic comparison passed, Oracle
+  approved the bounded increase, and bug-finder is clean. The full build and
+  dependent tests still need to complete in CI.
 - Follow-up observations outside this CI fix: other unbound foreign-stream
   attachment/reader paths still use their resident default epoch, and generic
   mid-stream protocol-failure terminalization needs separate investigation.
