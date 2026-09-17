@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::DropEvent;
+use crate::durable_host::concurrent::{DropEvent, LiveCallPermit};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
@@ -884,7 +884,10 @@ impl StreamSession {
                 continue;
             }
             let streams = self.clone();
-            tokio::spawn(async move { streams.refresh_control_metadata().await })
+            self.producer
+                .tasks()
+                .spawn_metadata(async move { streams.refresh_control_metadata().await })
+                .map_err(str::to_string)?
                 .await
                 .map_err(|error| format!("durable session metadata refresh failed: {error}"))??;
         }
@@ -2539,9 +2542,9 @@ impl StreamSession {
         if !drains.is_empty() {
             let streams = self.clone();
             let graph = Arc::new(graph);
-            tokio::spawn(async move {
+            self.producer.tasks().spawn(async move {
                 let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
-                let mut tasks = tokio::task::JoinSet::new();
+                let mut tasks = streams.producer.tasks().children();
                 for drain in drains {
                     let streams = streams.clone();
                     let graph = graph.clone();
@@ -2910,7 +2913,7 @@ impl StreamSession {
     ) -> Result<(), String> {
         if !drains.is_empty() {
             let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
-            let mut tasks = tokio::task::JoinSet::new();
+            let mut tasks = self.producer.tasks().children();
             for drain in drains {
                 let streams = self.clone();
                 let graph = graph.clone();
@@ -4799,6 +4802,17 @@ struct DurableInputRead {
 
 type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, String>>;
 
+struct ReceiveGuard {
+    source_wait: Option<SuspendableWaitRegistration>,
+    _live_call: LiveCallPermit,
+}
+
+impl ReceiveGuard {
+    fn clear_source_wait(&mut self) {
+        self.source_wait = None;
+    }
+}
+
 /// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
 pub struct DurableInputProducer {
     input: DurableInputEndpoint,
@@ -4930,10 +4944,7 @@ impl DurableInputProducer {
 }
 
 impl DurableInputEndpoint {
-    fn receive(
-        &mut self,
-        source_wait: Option<SuspendableWaitRegistration>,
-    ) -> DurableReceiveFuture {
+    fn receive(&mut self, guard: Option<ReceiveGuard>) -> DurableReceiveFuture {
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
         let streams = self.streams.clone();
@@ -4941,6 +4952,7 @@ impl DurableInputEndpoint {
         let ordinal = self.consumer_read_ordinal;
         let role = self.role;
         Box::pin(async move {
+            let mut guard = guard;
             let mut journaled = queued_event.is_some();
             let event = match queued_event {
                 Some(event) => Some(event),
@@ -4950,7 +4962,9 @@ impl DurableInputEndpoint {
                         .expect("durable input reader is missing")
                         .next()
                         .await;
-                    drop(source_wait);
+                    if let Some(guard) = &mut guard {
+                        guard.clear_source_wait();
+                    }
                     result.map_err(|error| error.to_string())?
                 }
             };
@@ -5243,6 +5257,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             }
         }
         if self.pending.is_none() {
+            let live_call = LiveCallPermit::new(
+                store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .live_host_call_counter(),
+            );
             let source_wait = self.input.journal.is_empty().then(|| {
                 store
                     .data_mut()
@@ -5250,7 +5271,10 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     .state
                     .register_passive_suspendable_wait()
             });
-            self.pending = Some(self.input.receive(source_wait));
+            self.pending = Some(self.input.receive(Some(ReceiveGuard {
+                source_wait,
+                _live_call: live_call,
+            })));
         }
         let mut read = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Pending => return Poll::Pending,

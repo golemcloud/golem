@@ -1100,43 +1100,42 @@ impl DurableStreamStore {
                 .self_weak
                 .upgrade()
                 .expect("live producer has an owning Arc");
-            let keys = keys.clone();
-            let session = session.clone();
-            let activity = self
-                .durable_activity
-                .inherit_or_enter()
-                .ok_or(StreamStoreError::RecoveryRequired)?;
             // Never return a guard in the task result: a suspended store may stop polling
             // its JoinHandle indefinitely. The task owns and releases all hydration locks.
-            tokio::spawn(activity.scope(async move {
-                let mut index = producer.index.lock().await;
-                producer.ensure_healthy()?;
-                if !index.complete_for_deletion
-                    && producer.control_metadata_provider.get().is_some()
-                    && (index.loaded_metadata.len() > 128
-                        || index.batch_positions.len() > 128
-                        || index.streams.len() > 128)
-                {
-                    *index = ProducerStreamIndex::default();
-                    producer
-                        .buses
-                        .write()
-                        .expect("durable stream bus map lock poisoned")
-                        .retain(|_, bus| {
-                            Arc::strong_count(bus) > 1 || bus.has_pending_deferred_terminal()
-                        });
-                }
-                producer.load_index_keys(&mut index, keys.clone()).await?;
-                let required = producer.query_keys(&index, &keys, session.as_ref());
-                producer.load_index_keys(&mut index, required).await?;
-                if let Some(stream) = terminal {
-                    producer.load_terminal(&mut index, stream).await?;
-                }
-                Ok::<(), StreamStoreError>(())
-            }))
-            .await
-            .map_err(|error| StreamStoreError::Oplog(error.to_string()))??;
+            self.tasks()
+                .spawn_metadata(producer.hydrate_query(keys.clone(), terminal, session.clone()))
+                .map_err(|error| StreamStoreError::Oplog(error.to_string()))?
+                .await
+                .map_err(|error| StreamStoreError::Oplog(error.to_string()))??;
         }
+    }
+
+    async fn hydrate_query(
+        self: Arc<Self>,
+        keys: Vec<ProducerMetadataKey>,
+        terminal: Option<StreamId>,
+        session: Option<StreamSessionKey>,
+    ) -> Result<(), StreamStoreError> {
+        let mut index = self.index.lock().await;
+        if !index.complete_for_deletion
+            && self.control_metadata_provider.get().is_some()
+            && (index.loaded_metadata.len() > 128
+                || index.batch_positions.len() > 128
+                || index.streams.len() > 128)
+        {
+            *index = ProducerStreamIndex::default();
+            self.buses
+                .write()
+                .expect("durable stream bus map lock poisoned")
+                .retain(|_, bus| Arc::strong_count(bus) > 1 || bus.has_pending_deferred_terminal());
+        }
+        self.load_index_keys(&mut index, keys.clone()).await?;
+        let required = self.query_keys(&index, &keys, session.as_ref());
+        self.load_index_keys(&mut index, required).await?;
+        if let Some(stream) = terminal {
+            self.load_terminal(&mut index, stream).await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn index_for_cleanup(
@@ -1303,17 +1302,15 @@ impl DurableStreamStore {
             .self_weak
             .upgrade()
             .expect("live producer has an owning Arc");
-        let activity = self
-            .durable_activity
-            .inherit_or_enter()
-            .ok_or(StreamStoreError::RecoveryRequired)?;
-        tokio::spawn(activity.scope(async move {
-            producer
-                .indexed_attachment_candidates_inner(batch_size)
-                .await
-        }))
-        .await
-        .map_err(|error| StreamStoreError::Oplog(error.to_string()))?
+        self.tasks()
+            .spawn_metadata(async move {
+                producer
+                    .indexed_attachment_candidates_inner(batch_size)
+                    .await
+            })
+            .map_err(|error| StreamStoreError::Oplog(error.to_string()))?
+            .await
+            .map_err(|error| StreamStoreError::Oplog(error.to_string()))?
     }
 
     async fn indexed_attachment_candidates_inner(
@@ -1699,6 +1696,7 @@ mod tests {
             );
             let oplog = primary
                 .create_fresh(
+                    &mut primary.lock_lifecycle(&owner.agent_id).await,
                     &owner,
                     AgentMode::Durable,
                     create,
@@ -2993,6 +2991,245 @@ mod tests {
         .unwrap();
         assert_eq!(fixture.blobs.reads(), 1);
         suspended.await.unwrap();
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn retirement_joins_unary_hydration_before_and_after_parent_cancellation() {
+        for cancel_parent in [false, true] {
+            let fixture = Fixture::new().await;
+            let producer = fixture.producer().await;
+            let handle = producer
+                .register(None, fixture.registration(0))
+                .await
+                .unwrap()
+                .value;
+            producer
+                .end(
+                    None,
+                    handle.stream_id,
+                    0,
+                    StreamEndResult::ErrorContext(vec![7; 256]),
+                )
+                .await
+                .unwrap();
+            fixture.persist().await;
+            let cold = fixture.producer().await;
+            let late = fixture.producer().await;
+            let (started, release) = fixture.blobs.pause_next_read();
+            let mut unary = Some(Box::pin(cold.index_for_terminal([], handle.stream_id)));
+            assert!(futures::poll!(unary.as_mut().unwrap().as_mut()).is_pending());
+            started.await.unwrap();
+            let mut stop = Box::pin(fixture.oplog.stop_and_wait());
+            assert!(
+                futures::poll!(stop.as_mut()).is_pending(),
+                "retirement must observe the task before its parent is cancelled"
+            );
+            assert!(late.index_for_terminal([], handle.stream_id).await.is_err());
+            assert!(late.indexed_attachment_candidates(32).await.is_err());
+            if cancel_parent {
+                drop(unary.take());
+            }
+            assert!(futures::poll!(stop.as_mut()).is_pending());
+            release.send(()).unwrap();
+            stop.await.unwrap();
+            if let Some(unary) = unary {
+                let index = unary.await.unwrap();
+                assert!(index.streams[&handle.stream_id].terminal_event.is_some());
+            }
+            assert!(
+                cold.index.try_lock().is_ok(),
+                "hydration must release its actual lock"
+            );
+            assert_eq!(fixture.blobs.reads(), 1);
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cached_queries_need_no_task_admission_after_root_stop() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(None, fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let expected = producer.input_high_water(handle.stream_id).await.unwrap();
+        let reads = fixture.indexed.reads();
+        producer.tasks().stop_roots_and_wait().await;
+        assert!(
+            producer.indexed_attachment_candidates(1).await.is_ok(),
+            "owner cleanup still needs metadata queries after roots stop"
+        );
+        producer.tasks().stop_and_wait().await.unwrap();
+        let reads_after_cleanup = fixture.indexed.reads();
+        assert!(reads_after_cleanup >= reads);
+        for _ in 0..32 {
+            assert_eq!(
+                producer.input_high_water(handle.stream_id).await.unwrap(),
+                expected
+            );
+        }
+        assert_eq!(fixture.indexed.reads(), reads_after_cleanup);
+        assert!(producer.indexed_attachment_candidates(1).await.is_err());
+    }
+
+    #[test]
+    #[ignore]
+    async fn metadata_task_admission_workloads() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let worker = Arc::new(());
+        producer.set_worker_tasks(
+            fixture
+                .oplog
+                .task_owner()
+                .unwrap()
+                .for_worker(worker.clone()),
+        );
+        let handle = producer
+            .register(None, fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        producer
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![17, 3, 29]),
+            )
+            .await
+            .unwrap();
+        producer
+            .end(
+                None,
+                handle.stream_id,
+                3,
+                StreamEndResult::ErrorContext(vec![7; 256]),
+            )
+            .await
+            .unwrap();
+        let attachment = crate::durable_host::durable_stream::tests::attachment_key(
+            &fixture.identity,
+            handle.stream_id,
+        );
+        producer.prepare_attachment(attachment, 100).await.unwrap();
+        let attempt_id = golem_common::model::durable_stream::AttemptId::fresh();
+        producer
+            .append_session_record(
+                None,
+                StreamSessionRecord::CallerAttempt(
+                    golem_common::model::durable_stream::StreamCallerAttemptRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: fixture.identity.invocation.clone(),
+                        attempt_id,
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        fixture.persist().await;
+
+        for workload in [
+            "cached-query",
+            "cold-hydration",
+            "attachment-query",
+            "session-resume",
+        ] {
+            for sample in 0..=10 {
+                for tracked in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let iterations = if sample == 0 {
+                        100
+                    } else if workload == "cached-query" {
+                        100_000
+                    } else {
+                        1_000
+                    };
+                    let reads = fixture.indexed.reads();
+                    let blobs = fixture.blobs.reads();
+                    let start = std::time::Instant::now();
+                    for _ in 0..iterations {
+                        match workload {
+                            "cached-query" => {
+                                assert!(
+                                    producer
+                                        .input_high_water(handle.stream_id)
+                                        .await
+                                        .unwrap()
+                                        .is_some()
+                                );
+                            }
+                            "cold-hydration" => {
+                                *producer.index.lock().await = ProducerStreamIndex::default();
+                                let query = producer.clone().hydrate_query(
+                                    vec![ProducerMetadataKey::Stream(handle.stream_id)],
+                                    Some(handle.stream_id),
+                                    None,
+                                );
+                                let task = if tracked {
+                                    producer.tasks().spawn_metadata(query).unwrap()
+                                } else {
+                                    tokio::spawn(query)
+                                };
+                                task.await.unwrap().unwrap();
+                                assert!(
+                                    producer.index.lock().await.streams[&handle.stream_id]
+                                        .terminal_event
+                                        .is_some()
+                                );
+                            }
+                            "attachment-query" => {
+                                let producer_for_query = producer.clone();
+                                let query = async move {
+                                    producer_for_query
+                                        .indexed_attachment_candidates_inner(32)
+                                        .await
+                                };
+                                let task = if tracked {
+                                    producer.tasks().spawn_metadata(query).unwrap()
+                                } else {
+                                    tokio::spawn(query)
+                                };
+                                let IndexedAttachmentCandidateBatch { candidates, .. } =
+                                    task.await.unwrap().unwrap().unwrap();
+                                assert_eq!(candidates.len(), 1);
+                            }
+                            "session-resume" => {
+                                let streams =
+                                    crate::durable_host::durable_session::StreamSession::new(
+                                        producer.clone(),
+                                        fixture.oplog.clone(),
+                                        fixture.identity.invocation.clone(),
+                                        [],
+                                    );
+                                let scope = crate::worker::tasks::TaskScope::default();
+                                let resumed = if tracked {
+                                    scope.bind(producer.tasks()).unwrap();
+                                    scope.run(streams.caller_attempt_id()).await.unwrap()
+                                } else {
+                                    streams.caller_attempt_id().await
+                                };
+                                assert_eq!(resumed.unwrap(), attempt_id);
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    let elapsed = start.elapsed();
+                    println!(
+                        "workload={workload}, tracked={tracked}, sample={sample}, iterations={iterations}, ns/op={}, indexed_reads={}, blob_reads={}",
+                        elapsed.as_nanos() / iterations,
+                        fixture.indexed.reads() - reads,
+                        fixture.blobs.reads() - blobs
+                    );
+                }
+            }
+        }
     }
 
     #[test]

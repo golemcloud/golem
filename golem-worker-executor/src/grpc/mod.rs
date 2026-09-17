@@ -335,6 +335,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
+        wait_until_loaded: bool,
     ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
@@ -406,6 +407,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+
+        if !wait_until_loaded {
+            return Ok(fingerprint);
+        }
 
         let mut subscription = self.events().subscribe();
         let start_attempt = Worker::start_if_needed(worker.clone()).await?;
@@ -570,9 +575,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        worker
-            .control_durable_stream_attachment(control)
+        let scope = crate::worker::tasks::TaskScope::default();
+        scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        scope
+            .run(worker.control_durable_stream_attachment(control))
             .await
+            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
             .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
@@ -2201,7 +2211,48 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         match self
-            .create_worker_internal(request)
+            .create_worker_internal(request, true)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(fingerprint) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::CreateWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::create_worker_response::Result::Success(
+                            golem::workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(fingerprint.0.into()),
+                            },
+                        ),
+                    ),
+                },
+            ))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::create_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn prepare_worker(
+        &self,
+        request: Request<golem::workerexecutor::v1::CreateWorkerRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::CreateWorkerResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "prepare_worker",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        match self
+            .create_worker_internal(request, false)
             .instrument(record.span.clone())
             .await
         {

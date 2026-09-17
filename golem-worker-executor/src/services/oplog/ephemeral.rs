@@ -22,9 +22,11 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
+    OplogCloseCompletion, OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder,
+    downcast_oplog,
 };
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{DurableStreamSessionStatus, OwnedAgentId};
@@ -32,7 +34,8 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -54,17 +57,20 @@ pub struct EphemeralOplog {
     agent_mode: AgentMode,
     primary_service: Arc<dyn OplogService>,
     jobs: UnboundedSender<EphemeralJob>,
-    actor: tokio::task::JoinHandle<()>,
+    closed: OplogCloseCompletion,
+    tasks: super::WorkerTasks,
+    retired: AtomicBool,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     transfer_fiber: TransferFiber,
     multi_layer_oplog_service: MultiLayerOplogService,
-    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+    close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 /// A request processed by the [`EphemeralOplog`] actor task, which exclusively owns the
 /// [`EphemeralOplogState`].
 enum EphemeralJob {
+    Close,
     Add {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<OplogIndex>,
@@ -210,6 +216,7 @@ impl EphemeralOplog {
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
                 match job {
+                    EphemeralJob::Close => break,
                     EphemeralJob::Add { entry, done } => {
                         let idx = state.add(entry).await;
                         let _ = done.send(idx);
@@ -326,25 +333,34 @@ impl EphemeralOplog {
             }
         });
 
+        let transfer_closed = MultiLayerOplogService::transfer_closed(&transfer_fiber);
+        let closed = async move {
+            let (actor, transfer) = futures::join!(actor, transfer_closed);
+            actor.map_err(|error| error.to_string())?;
+            transfer
+        }
+        .boxed()
+        .shared();
         Self {
             owned_agent_id,
             agent_mode,
             primary_service,
             jobs,
-            actor,
+            closed,
+            tasks: super::WorkerTasks::default(),
+            retired: AtomicBool::new(false),
             lower,
             transfer,
             transfer_fiber,
             multi_layer_oplog_service,
-            close_fn: Some(close),
+            close_fn: Mutex::new(Some(close)),
         }
     }
 
     /// Enqueues a job for the actor task and awaits its reply.
     ///
-    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
-    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
-    /// oplog's state is no longer trustworthy.
+    /// A missing reply means the actor failed or this handle was used after retirement.
+    /// Orderly shutdown drains jobs queued before Close.
     async fn run_job<R>(
         &self,
         make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> EphemeralJob,
@@ -422,7 +438,7 @@ impl EphemeralOplog {
             // Return true if there are more movable layers that could still hold data
             source + 1 < last_movable
         } else {
-            // Fully archived
+            // Fully archived, and no transfer was enqueued to wait for
             return false;
         };
 
@@ -596,14 +612,12 @@ impl Drop for EphemeralOplog {
     fn drop(&mut self) {
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
-        if let Some(close_fn) = self.close_fn.take() {
+        if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
         self.multi_layer_oplog_service
             .abort_transfer_in_drop(&self.transfer_fiber);
-        // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
-        // job reply anymore and aborting the actor cannot lose an observed operation.
-        self.actor.abort();
+        let _ = self.jobs.send(EphemeralJob::Close);
     }
 }
 
@@ -617,6 +631,28 @@ impl Debug for EphemeralOplog {
 
 #[async_trait]
 impl Oplog for EphemeralOplog {
+    fn retire(&self) {
+        if !self.retired.swap(true, Ordering::AcqRel) {
+            let _ = self.jobs.send(EphemeralJob::Close);
+        }
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire) || self.jobs.is_closed()
+    }
+
+    fn closed(&self) -> OplogCloseCompletion {
+        self.closed.clone()
+    }
+
+    fn task_owner(&self) -> Option<&super::WorkerTasks> {
+        Some(&self.tasks)
+    }
+
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         record_oplog_call("add");
         let (done, done_rx) = tokio::sync::oneshot::channel();

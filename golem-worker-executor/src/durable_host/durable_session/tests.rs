@@ -28,6 +28,77 @@ use golem_schema::schema::{
 use test_r::test;
 use uuid::Uuid;
 
+fn receive_guard_counts(
+    with_source_wait: bool,
+) -> (
+    ReceiveGuard,
+    Arc<std::sync::atomic::AtomicUsize>,
+    crate::durable_host::suspendable_wait::SuspendableWaitRegistry,
+) {
+    let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let waits: crate::durable_host::suspendable_wait::SuspendableWaitRegistry = Default::default();
+    let source_wait =
+        with_source_wait.then(|| SuspendableWaitRegistration::new(1, None, waits.clone()));
+    let guard = ReceiveGuard {
+        source_wait,
+        _live_call: LiveCallPermit::new(live_calls.clone()),
+    };
+    (guard, live_calls, waits)
+}
+
+#[test]
+fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
+    let (guard, live_calls, waits) = receive_guard_counts(true);
+    assert_eq!(live_calls.load(Ordering::Acquire), 1);
+    assert_eq!(waits.lock().unwrap().len(), 1);
+
+    let future = Box::pin(async move {
+        let _guard = guard;
+        std::future::pending::<()>().await;
+    });
+    drop(future);
+
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+    assert!(waits.lock().unwrap().is_empty());
+}
+
+#[test]
+fn receive_guard_clears_source_wait_but_covers_post_receive_work() {
+    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (_commit, commit_wait) = tokio::sync::oneshot::channel::<()>();
+    let mut future = Box::pin(async move {
+        guard.clear_source_wait();
+        commit_wait.await.map_err(|error| error.to_string())?;
+        Ok::<(), String>(())
+    });
+
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(future.as_mut().poll(&mut context).is_pending());
+    assert!(waits.lock().unwrap().is_empty());
+    assert_eq!(live_calls.load(Ordering::Acquire), 1);
+
+    drop(future);
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+
+    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let mut failed = Box::pin(async move {
+        guard.clear_source_wait();
+        Err::<(), _>("journal commit failed")
+    });
+    assert!(failed.as_mut().poll(&mut context).is_ready());
+    assert!(waits.lock().unwrap().is_empty());
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn replay_receive_guard_has_live_call_without_source_wait() {
+    let (guard, live_calls, waits) = receive_guard_counts(false);
+    assert_eq!(live_calls.load(Ordering::Acquire), 1);
+    assert!(waits.lock().unwrap().is_empty());
+    drop(guard);
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+}
+
 #[test]
 async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
     let identity = identity();

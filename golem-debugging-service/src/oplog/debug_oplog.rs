@@ -27,6 +27,7 @@ use std::time::Duration;
 pub struct DebugOplog {
     pub inner: Arc<dyn Oplog>,
     pub oplog_state: DebugOplogState,
+    close: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl DebugOplog {
@@ -34,13 +35,18 @@ impl DebugOplog {
         inner: Arc<dyn Oplog>,
         debug_session_id: DebugSessionId,
         debug_session: Arc<dyn DebugSessions>,
+        close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let oplog_state = DebugOplogState {
             debug_session_id,
             debug_session,
         };
 
-        Self { inner, oplog_state }
+        Self {
+            inner,
+            oplog_state,
+            close: Some(close),
+        }
     }
 
     pub async fn get_oplog_entry_applying_overrides(
@@ -62,6 +68,14 @@ impl Debug for DebugOplog {
     }
 }
 
+impl Drop for DebugOplog {
+    fn drop(&mut self) {
+        if let Some(close) = self.close.take() {
+            close();
+        }
+    }
+}
+
 pub struct DebugOplogState {
     debug_session_id: DebugSessionId,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
@@ -69,6 +83,18 @@ pub struct DebugOplogState {
 
 #[async_trait]
 impl Oplog for DebugOplog {
+    fn retire(&self) {
+        self.inner.retire();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.inner.is_retired()
+    }
+
+    fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {
+        self.inner.task_owner()
+    }
+
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
     //
