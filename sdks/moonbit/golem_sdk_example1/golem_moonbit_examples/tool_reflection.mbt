@@ -67,3 +67,62 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
   }
   "\{native_text}|\{json_text}|\{invalid}|\{dynamic_text}"
 }
+
+///|
+pub async fn MoonBitToolReflectionCaller::agent_round_trip(
+  self : Self,
+) -> String {
+  let agent_type = match @reflection.get_agent_type("Counter") {
+    Some(value) => value
+    None => return "missing-counter"
+  }
+  let client = agent_type.get_json(
+    Json::object({ "name": Json::string("reflected-" + self.name) }),
+  ) catch {
+    error => return "binding:\{Repr(error)}"
+  }
+  let first = client.invoke_json("get_value", Json::object({})) catch {
+    error => return "first:\{Repr(error)}"
+  }
+  let parts = first.metadata.agent_id.parts() catch {
+    error => return "identity:\{Repr(error)}"
+  }
+  let discovered = @reflection.get_agent_type_by_agent_id(
+    first.metadata.agent_id,
+  ) catch {
+    error => return "lookup:\{Repr(error)}"
+  }
+  ignore(
+    client.invoke_json("increment", Json::object({})) catch {
+      error => return "increment:\{Repr(error)}"
+    },
+  )
+  let second = client.invoke_json("get_value", Json::object({})) catch {
+    error => return "second:\{Repr(error)}"
+  }
+  let dynamic = @reflection.DynamicAgentClient::from_agent_id(
+    first.metadata.agent_id,
+  ) catch {
+    error => return "dynamic-binding:\{Repr(error)}"
+  }
+  let third = dynamic.invoke_value("get_value", @model.SchemaValue::Record([])) catch {
+    error => return "dynamic:\{Repr(error)}"
+  }
+  let first_value = match first.value {
+    Some(value) => value.stringify()
+    None => "unit"
+  }
+  let second_value = match second.value {
+    Some(value) => value.stringify()
+    None => "unit"
+  }
+  let dynamic_value = match third.value {
+    Some(@model.SchemaValue::U64(value)) => "\{value}"
+    _ => "unexpected"
+  }
+  let discovered_name = match discovered {
+    Some(value) => value.name
+    None => "missing"
+  }
+  "\{parts.type_name}|\{discovered_name}|\{first_value}|\{second_value}|\{dynamic_value}"
+}
