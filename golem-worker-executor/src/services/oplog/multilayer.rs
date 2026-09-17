@@ -1138,8 +1138,8 @@ impl MultiLayerOplog {
                 // If there are more layers to transfer from, return true
                 first_non_empty < this.lower.len().get() - 2
             } else {
-                // Fully archived
-                false
+                // Fully archived, and no transfer was enqueued to wait for
+                return false;
             }
         };
 

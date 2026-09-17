@@ -4584,6 +4584,14 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     assert_eq!(last_index_1, OplogIndex::INITIAL);
     assert_eq!(last_index_2, OplogIndex::INITIAL);
     assert_eq!(last_index_3, OplogIndex::INITIAL);
+
+    // With every movable layer empty there is no transfer to wait for
+    let nothing_left = tokio::time::timeout(
+        Duration::from_secs(10),
+        MultiLayerOplog::try_archive_blocking(&oplog),
+    )
+    .await;
+    assert_eq!(nothing_left, Ok(Some(false)));
 }
 
 async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
@@ -4701,6 +4709,14 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
         read_after_archive,
         Some((OplogIndex::INITIAL, create_entry))
     );
+
+    // With every movable layer empty there is no transfer to wait for
+    let nothing_left = tokio::time::timeout(
+        Duration::from_secs(10),
+        EphemeralOplog::try_archive_blocking(&oplog),
+    )
+    .await;
+    assert_eq!(nothing_left, Ok(Some(false)));
 }
 
 #[test]
