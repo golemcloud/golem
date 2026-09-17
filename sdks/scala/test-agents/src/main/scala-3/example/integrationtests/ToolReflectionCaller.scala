@@ -11,7 +11,7 @@
 package example.integrationtests
 
 import golem.BaseAgent
-import golem.reflection.{DynamicToolClient, Reflection}
+import golem.reflection.{DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
 import golem.runtime.annotations.*
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import zio.blocks.schema.json.Json
@@ -32,6 +32,7 @@ final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
 trait ScalaToolReflectionCaller extends BaseAgent {
   class Id(val name: String)
   def roundTrip(): Future[String]
+  def agentRoundTrip(): Future[String]
 }
 
 @agentImplementation()
@@ -56,6 +57,54 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
           encoded <- command.invokeJson(json)
           dynamic <- new DynamicToolClient("scala-reflection-test").invoke(List("echo"), dynamicInput)
         } yield s"$native|$encoded|$invalid|${dynamic.map(_.result.map(_.value))}"
+    }
+  }
+
+  override def agentRoundTrip(): Future[String] = {
+    val prepared = for {
+      agent <- Reflection
+                 .getAgentType("StatefulCounter")
+                 .flatMap(_.toRight(GolemReflectError.Discovery("StatefulCounter was not found")))
+      constructor <- Json
+                       .parse("""{"initialCount":0}""")
+                       .left
+                       .map(error => GolemReflectError.Validation(error.toString))
+      client    <- agent.client.get(constructor)
+      current   <- client.method("current")
+      increment <- client.method("increment")
+    } yield (current, increment)
+
+    prepared match {
+      case Left(error)                 => Future.successful(s"error:$error")
+      case Right((current, increment)) =>
+        val empty = SchemaValue.RecordValue(Nil)
+        for {
+          first     <- current.invokeJson(Json.Object())
+          native    <- current.invokeValue(empty)
+          increased <- increment.invokeJson(Json.Object())
+          second    <- current.invokeJson(Json.Object())
+          dynamic   <- first match {
+                       case Left(error)       => Future.successful(Left(error))
+                       case Right(invocation) =>
+                         DynamicAgentClient.fromAgentId(invocation.metadata.agentId) match {
+                           case Left(error)   => Future.successful(Left(error))
+                           case Right(client) => client.method("current").invokeValue(empty)
+                         }
+                     }
+        } yield {
+          val result = for {
+            firstCall     <- first
+            nativeCall    <- native
+            increasedCall <- increased
+            secondCall    <- second
+            dynamicCall   <- dynamic
+            parts         <- firstCall.metadata.agentId.parts
+            discovered    <- Reflection
+                            .getAgentTypeFor(firstCall.metadata.agentId)
+                            .flatMap(_.toRight(GolemReflectError.Discovery("StatefulCounter ID was not found")))
+          } yield s"${parts.typeName}|${discovered.name}|${firstCall.value}|${nativeCall.value}|${increasedCall.value}|${secondCall.value}|${dynamicCall.value}"
+          result.fold(error => s"error:$error", identity)
+        }
     }
   }
 }
