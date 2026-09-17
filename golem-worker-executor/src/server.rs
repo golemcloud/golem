@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
