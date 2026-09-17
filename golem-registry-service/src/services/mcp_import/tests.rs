@@ -651,10 +651,7 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
     let state = fixture
         .services
         .deployment_service
-        .get_tool_deployment_state_at_revision(
-            fixture.source.environment_id,
-            deployed.revision.into(),
-        )
+        .get_tool_deployment_state_at_revision(fixture.source.environment_id, deployed.revision)
         .await
         .unwrap()
         .unwrap();
@@ -1585,7 +1582,7 @@ async fn background_replacement_preserves_foreground_demand_after_scan() {
     let upstream = Upstream::new().await;
     let fixture = Fixture::new(&upstream).await;
     let config = McpImportResolverConfig::default();
-    let resolver = fixture.resolver(config.clone());
+    let resolver = fixture.resolver(config);
     upstream.reply(200, json!({"tools":[tool("initial")]}));
     resolver
         .resolve_observation(fixture.source.clone(), fixture.auth.clone())
@@ -2187,14 +2184,15 @@ async fn oauth_generation_keys_cache_and_resource_401_refreshes_once_without_sam
     let upstream = Upstream::with_oauth(true).await;
     let fixture = Fixture::new(&upstream).await;
     fixture.oauth_import_and_grant(&upstream).await;
-    let forms = upstream.token_forms.lock().unwrap();
-    let initial_form = &forms[0];
-    assert_eq!(
-        initial_form.get("grant_type").unwrap(),
-        "authorization_code"
-    );
-    assert_eq!(initial_form.get("code").unwrap(), "code");
-    drop(forms);
+    {
+        let forms = upstream.token_forms.lock().unwrap();
+        let initial_form = &forms[0];
+        assert_eq!(
+            initial_form.get("grant_type").unwrap(),
+            "authorization_code"
+        );
+        assert_eq!(initial_form.get("code").unwrap(), "code");
+    }
     let resolver = fixture.resolver(Default::default());
     let issued_generation = fixture.oauth_generation().await;
 
@@ -2250,11 +2248,12 @@ async fn oauth_generation_keys_cache_and_resource_401_refreshes_once_without_sam
         ["rotated"]
     );
     assert_eq!(upstream.refresh_count(), 1);
-    let forms = upstream.token_forms.lock().unwrap();
-    assert_eq!(forms.len(), 2);
-    assert_eq!(forms[1].get("grant_type").unwrap(), "refresh_token");
-    assert_eq!(forms[1].get("refresh_token").unwrap(), "initial-refresh");
-    drop(forms);
+    {
+        let forms = upstream.token_forms.lock().unwrap();
+        assert_eq!(forms.len(), 2);
+        assert_eq!(forms[1].get("grant_type").unwrap(), "refresh_token");
+        assert_eq!(forms[1].get("refresh_token").unwrap(), "initial-refresh");
+    }
     assert_eq!(upstream.count(), 3);
     assert_eq!(
         upstream.authorizations.lock().unwrap().last().unwrap(),

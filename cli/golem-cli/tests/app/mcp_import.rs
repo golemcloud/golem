@@ -217,10 +217,10 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         .await;
     assert!(output.success_or_dump());
     for (prefix, score) in [("bearer", 7), ("basic", 13)] {
-        assert!(output.stdout_contains(&format!(
+        assert!(output.stdout_contains(format!(
             "{prefix}:answer:/{prefix}:simple:{score}:stdout:simple:text/plain; charset=utf-8"
         )));
-        assert!(output.stdout_contains(&format!(
+        assert!(output.stdout_contains(format!(
             "{prefix}:answer:/{prefix}:mixed:{score}::left,right"
         )));
     }
@@ -258,10 +258,10 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         .await;
     assert!(replayed.success_or_dump());
     for (prefix, score) in [("bearer", 7), ("basic", 13)] {
-        assert!(replayed.stdout_contains(&format!(
+        assert!(replayed.stdout_contains(format!(
             "{prefix}:answer:/{prefix}:simple:{score}:stdout:simple:text/plain; charset=utf-8"
         )));
-        assert!(replayed.stdout_contains(&format!(
+        assert!(replayed.stdout_contains(format!(
             "{prefix}:answer:/{prefix}:mixed:{score}::left,right"
         )));
     }
