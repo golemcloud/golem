@@ -206,7 +206,7 @@ try {
     )
     assert.ok(
       reflectedEffectTool.includes(
-        `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION`,
+        `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|true`,
       ),
       reflectedEffectTool,
     )
@@ -217,7 +217,7 @@ try {
     )
     assert.ok(
       reflectedTsTool.includes(
-        `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION`,
+        `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|true`,
       ),
       reflectedTsTool,
     )

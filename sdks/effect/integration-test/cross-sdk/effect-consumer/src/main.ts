@@ -254,7 +254,15 @@ defineAgent({
             true,
           )
           const dynamic = yield* dynamicCall.collect
-          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}`
+          const invalidRejected = yield* command.startJson({ label: 7 }).pipe(
+            Effect.as(false),
+            Effect.catch((error) =>
+              Effect.succeed(
+                error instanceof Reflection.ToolReflectionError && error.phase === "input",
+              ),
+            ),
+          )
+          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}|${invalidRejected}`
         }),
       ).pipe(Effect.orDie),
     quotaThroughTs: () =>

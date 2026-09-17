@@ -53,6 +53,10 @@ the tool checks. The targeted path ran against a fresh local deployment and pass
 build required a current checkout-built `golem` CLI and a temporary Node preload to unref
 Rollup's lingering file watchers; neither changes the SDK contract.
 
+The TS and Effect reflected callers also attempted an invalid declared string argument in the
+deployed fixture and reported local input rejection. Focused mock-host tests assert that these
+invalid calls do not open an RPC.
+
 ## Behavior checklist
 
 | Behavior | Local evidence | Host evidence still required |
