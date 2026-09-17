@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds oplog layers holding entries for agents that have gone quiet, and runs one archive step
-//! against each.
+//! Finds oplog layers holding entries for agents that have gone quiet, and archives each agent
+//! down through the layers below.
 //!
 //! `Worker::archive_oplog` does the moving, as it does for `ScheduledAction::ArchiveOplog`, but the
 //! sweep waits for each transfer. Where the scheduled action needs a row written on the oplog
@@ -146,7 +146,8 @@ impl Outcome {
     }
 
     /// Whether deciding this agent cost an archive attempt, which is what both archive budgets are
-    /// charged. A declined or failed archive counts, since it will be attempted again.
+    /// charged. A declined or failed archive counts. It is attempted again on a later pass, or, when
+    /// the attempt left a worker in `ActiveAgents`, once that worker expires.
     fn reached_the_store(self) -> bool {
         matches!(
             self,
@@ -781,9 +782,10 @@ impl OplogSweeper {
     /// Moves one agent's entries down through every layer below, up to
     /// [`OplogSweeper::max_archive_steps`] steps.
     ///
-    /// Each step waits for its transfer, so `max_concurrency` and `max_tick_duration` bound the
-    /// transfers themselves. It drains fully in one visit because archiving leaves the worker in
-    /// `ActiveAgents`, and until that worker expires later ticks skip the agent as resident.
+    /// Each step waits for its transfer, so `max_concurrency` bounds the transfers in flight.
+    /// `max_tick_duration` only keeps further agents from starting, and a started transfer runs to
+    /// its end. It drains fully in one visit because archiving leaves the worker in `ActiveAgents`,
+    /// and until that worker expires later ticks skip the agent as resident.
     async fn archive_agent(
         &self,
         route: &Route,
@@ -3036,7 +3038,7 @@ mod tests {
             }),
         );
 
-        // A worker being deleted, or one whose index moved, declines; the next pass asks again.
+        // No worker stays cached, as when the agent no longer exists, so the next pass asks again.
         sweeper.sweep_once(&CancellationToken::new()).await;
         for tick in 2..=3 {
             let report = sweeper.sweep_once(&CancellationToken::new()).await;

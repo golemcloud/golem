@@ -1995,8 +1995,8 @@ pub struct OplogSweepConfig {
     pub max_scanned_per_tick: usize,
     /// Wall-clock bound on one tick. The count budgets bound work; this bounds how long a tick
     /// holds the indexed-storage concurrency it shares with invocations, which matters when the
-    /// store is slow. A tick stops at its next boundary, never inside an archive step, so it can
-    /// overrun by one step.
+    /// store is slow. A tick stops at its next boundary, never inside an agent's archive, so it
+    /// can overrun by the agents already started, at most `max_concurrency` of them.
     #[serde(with = "humantime_serde")]
     pub max_tick_duration: Duration,
     /// Most intervals to wait after a tick that hit `max_tick_duration`. The wait doubles after

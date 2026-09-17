@@ -37,9 +37,10 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
-    /// Whether `ActiveAgents` holds a worker for the agent, loaded or not, including one still
-    /// being created. Unlike [`Self::active_worker_fingerprint`] it leaves the entry's last access
-    /// alone, so asking repeatedly does not keep an unloaded worker from expiring.
+    /// Whether `ActiveAgents` holds a constructed worker for the agent, loaded or not. One still
+    /// being created does not count. Unlike [`Self::active_worker_fingerprint`] it leaves the
+    /// entry's last access alone, so asking repeatedly does not keep an unloaded worker from
+    /// expiring.
     async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool;
 
     /// Makes sure an already existing worker is active in a background task. Returns immediately.
