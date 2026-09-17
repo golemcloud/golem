@@ -209,7 +209,18 @@ TsPeer.implement({
       const native = await command
         .startValue(command.inputSchema!.packJson({ label: this.name }), stdin())
         .collect()
-      return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}`
+      const dynamic = await new reflection.DynamicToolClient("effect-cross-streaming")
+        .start(
+          [],
+          {
+            graph: command.inputSchema!.graph,
+            value: command.inputSchema!.packJson({ label: this.name }),
+          },
+          stdin(),
+          true,
+        )
+        .collect()
+      return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}`
     },
     async quotaThroughEffect({ tenant }) {
       const token = acquireQuotaToken("cross-sdk-quota", 2n)

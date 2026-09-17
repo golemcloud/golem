@@ -23,11 +23,11 @@ The tool matrix covers all five SDKs, including Effect. A tool has a command pat
 
 | Level | Caller contract | Style | TypeScript | Effect | Rust | Scala | MoonBit |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1. Exact definition or generated | Complete | Typed | P | P | P | P | P |
-| 2. Caller-authored | Complete or partial command subset | Typed | P | P | P | P | P |
+| 1. Exact definition or generated | Complete | Typed | H+ | H+ | P | P | P |
+| 2. Caller-authored | Complete or partial command subset | Typed | P | H+ | P | P | P |
 | 3. Reflected | Complete deployed tool schema | JSON | H+ | H+ | P | P | P |
 | 3. Reflected | Complete deployed tool schema | Native | H+ | H+ | P | P | P |
-| 4. Dynamic | Name and command path only | Native | P | P | P | P | P |
+| 4. Dynamic | Name and command path only | Native | H+ | H+ | P | P | P |
 
 Other tool level × contract × style combinations are `U`: typed clients require caller-owned codecs, reflected JSON requires discovered schemas, and dynamic calls deliberately have no schema for JSON packing. No SDK is intentionally unavailable for native tool reflection.
 
@@ -44,8 +44,10 @@ No tool matrix cell is complete solely from a mock-host test.
 
 The TS and Effect `H+` cells were exercised by the deployed cross-SDK fixture's
 `RUN_TOOL_REFLECTION_ONLY=1` path. Each caller discovered the other SDK's tool and invoked its
-required-stdin/required-stdout command twice, once with canonical JSON and once with a native
-schema value; both structured results and byte streams matched. The full cross-SDK harness was
+required-stdin/required-stdout command with canonical JSON, a reflected native schema value,
+and a caller-owned typed value through a dynamic client. Generated typed clients in both SDKs
+and Effect's caller-authored typed client also passed. Structured results and byte streams
+matched in every case. The full cross-SDK harness was
 also attempted, but its earlier `callEffectStream` case stopped progressing before it reached
 the tool checks. The targeted path ran against a fresh local deployment and passed. Its local
 build required a current checkout-built `golem` CLI and a temporary Node preload to unref

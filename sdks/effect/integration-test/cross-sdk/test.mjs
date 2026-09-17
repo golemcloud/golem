@@ -206,7 +206,7 @@ try {
     )
     assert.ok(
       reflectedEffectTool.includes(
-        `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION`,
+        `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION`,
       ),
       reflectedEffectTool,
     )
@@ -217,11 +217,34 @@ try {
     )
     assert.ok(
       reflectedTsTool.includes(
-        `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION`,
+        `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION`,
       ),
       reflectedTsTool,
     )
-    console.log("Deployed TS and Effect reflected tool JSON and native streaming calls passed")
+    const generatedTsTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"typed"')
+    assert.ok(
+      generatedTsTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:TYPED`),
+      generatedTsTool,
+    )
+    const callerAuthoredEffectTool = invoke(
+      `EffectConsumer("effect-${stamp}")`,
+      "callTsTool",
+      '"typed"',
+    )
+    assert.ok(
+      callerAuthoredEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+      callerAuthoredEffectTool,
+    )
+    const generatedEffectTool = invoke(
+      `EffectConsumer("effect-${stamp}")`,
+      "toolRoundTrip",
+      '"typed"',
+    )
+    assert.ok(
+      generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+      generatedEffectTool,
+    )
+    console.log("Deployed TS and Effect typed, reflected, and dynamic tool calls passed")
   }
 } finally {
   if (server) {

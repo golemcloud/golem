@@ -6,6 +6,7 @@ import {
   Quota,
   Reflection,
   Tool,
+  WitCodec,
   WitTypes,
 } from "@golemcloud/effect-golem"
 import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
@@ -245,7 +246,15 @@ defineAgent({
             Stream.succeed(new TextEncoder().encode(payload)),
           )
           const native = yield* nativeCall.collect
-          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}`
+          const codec = yield* WitCodec.compile(Schema.Struct({ label: Schema.String }))
+          const dynamicCall = yield* new Reflection.DynamicToolClient("ts-cross-streaming").start(
+            [],
+            { graph: codec.schemaGraph, value: yield* codec.encode({ label: name }) },
+            Stream.succeed(new TextEncoder().encode(payload)),
+            true,
+          )
+          const dynamic = yield* dynamicCall.collect
+          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}`
         }),
       ).pipe(Effect.orDie),
     quotaThroughTs: () =>
