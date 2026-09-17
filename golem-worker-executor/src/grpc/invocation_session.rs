@@ -100,7 +100,12 @@ pub(super) async fn invoke_agent_session<
         async move {
             let scope = crate::worker::tasks::TaskScope::default();
             scope
-                .run(executor.run_agent_session(inbound, responses, handler_lease, &scope))
+                .run(Box::pin(executor.run_agent_session(
+                    inbound,
+                    responses,
+                    handler_lease,
+                    &scope,
+                )))
                 .await;
         }
         .instrument(span),
@@ -900,15 +905,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance_committed_tx, mut acceptance_committed_rx) =
             tokio::sync::oneshot::channel();
         let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel();
-        let invocation = self.invoke_agent_internal(
+        // Keep dispatch state off the transport's stack across its nested select loops.
+        let mut invocation = Box::pin(self.invoke_agent_internal(
             &start,
             input,
             input_encoded_len,
             acceptance_committed_tx,
             accepted_tx,
             scope,
-        );
-        tokio::pin!(invocation);
+        ));
         let acceptance = race_invocation_acceptance(
             &mut accepted_rx,
             &mut acceptance_committed_rx,
