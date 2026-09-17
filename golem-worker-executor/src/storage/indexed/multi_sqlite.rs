@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -284,55 +284,6 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await?
             .exists(svc_name, api_name, namespace, key)
             .await
-    }
-
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let matching_files = self.namespace_db_files(&namespace).await?;
-
-        // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
-        let file_index = (cursor >> 32) as usize;
-        let file_cursor = cursor & 0xFFFFFFFF;
-
-        let mut results = Vec::new();
-        let mut current_file_cursor = file_cursor;
-
-        for (idx, file_name) in matching_files.iter().enumerate().skip(file_index) {
-            let storage = self.storage_by_db_name(file_name.clone()).await?;
-
-            let (next_cursor, mut file_results) = storage
-                .scan(
-                    svc_name,
-                    api_name,
-                    namespace.clone(),
-                    prefix,
-                    current_file_cursor,
-                    count - results.len() as u64,
-                )
-                .await?;
-
-            results.append(&mut file_results);
-
-            if results.len() as u64 >= count {
-                // Encode next cursor: file index in upper 32 bits, file cursor in lower 32 bits
-                let next_combined_cursor = ((idx as u64) << 32) | (next_cursor & 0xFFFFFFFF);
-                return Ok((
-                    next_combined_cursor,
-                    results.into_iter().take(count as usize).collect(),
-                ));
-            }
-
-            current_file_cursor = 0;
-        }
-
-        Ok((0, results))
     }
 
     async fn scan_stable(

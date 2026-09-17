@@ -43,6 +43,7 @@ use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
+    ScanCursor,
 };
 use crate::oplog_payload;
 use crate::schema::tool::DiscoveredTool;
@@ -62,7 +63,7 @@ pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
 pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
 pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
 pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
-pub type AgentsPage = (Option<(u64, u64)>, Vec<AgentMetadataForGuests>);
+pub type AgentsPage = (Option<ScanCursor>, Vec<AgentMetadataForGuests>);
 
 oplog_payload! {
     HostRequest => {

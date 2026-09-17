@@ -6803,18 +6803,7 @@ components:
         snapshot:
           $ref: '#/components/schemas/PublicSnapshotData'
     ScanCursor:
-      type: object
-      title: ScanCursor
-      required:
-      - cursor
-      - layer
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
+      type: string
     SchemaGraph:
       type: object
       required:

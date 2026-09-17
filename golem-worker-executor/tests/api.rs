@@ -2840,6 +2840,61 @@ async fn get_workers_from_worker(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn get_workers_opaque_cursor_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "opaque-cursor-replay");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+
+    for index in 0..50 {
+        executor
+            .start_agent(
+                &component.id,
+                agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}")),
+            )
+            .await?;
+    }
+
+    let first_page_size = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "get_agents_next_result",
+            data_value!(component.id),
+        )
+        .await?
+        .into_typed::<Result<u64, String>>()?;
+    assert_eq!(first_page_size, Ok(50));
+    executor.check_oplog_is_queryable(&caller_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let self_id = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "get_self_metadata_result",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(self_id, Ok(caller.to_string()));
+    executor.check_oplog_is_queryable(&caller_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

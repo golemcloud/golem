@@ -1248,13 +1248,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &environment_id,
                 &component_id,
                 filter,
-                request
-                    .cursor
-                    .map(|cursor| ScanCursor {
-                        cursor: cursor.cursor,
-                        layer: cursor.layer as usize,
-                    })
-                    .unwrap_or_default(),
+                request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,
                 request.precise,
             )
@@ -1276,13 +1270,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result.push(metadata);
         }
 
-        Ok((
-            new_cursor.map(|cursor| Cursor {
-                layer: cursor.layer as u64,
-                cursor: cursor.cursor,
-            }),
-            result,
-        ))
+        Ok((new_cursor.map(Cursor::from), result))
     }
 
     async fn update_worker_internal(

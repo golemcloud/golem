@@ -18147,18 +18147,7 @@ components:
       required:
       - snapshot
     ScanCursor:
-      title: ScanCursor
-      type: object
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
-      required:
-      - cursor
-      - layer
+      type: string
     SchemaGraph:
       type: object
       properties:

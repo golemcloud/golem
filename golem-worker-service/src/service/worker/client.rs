@@ -1094,7 +1094,15 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        if filter.as_ref().is_some_and(is_filter_with_running_status) {
+        if count == 0 || count > i64::MAX as u64 {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Agent enumeration count must be between 1 and {}",
+                i64::MAX
+            ))
+            .into());
+        }
+
+        if can_use_running_metadata_fast_path(&filter, &cursor) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
@@ -2245,6 +2253,37 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
         }
         AgentFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
+    }
+}
+
+fn can_use_running_metadata_fast_path(filter: &Option<AgentFilter>, cursor: &ScanCursor) -> bool {
+    cursor.is_finished() && filter.as_ref().is_some_and(is_filter_with_running_status)
+}
+
+#[cfg(test)]
+mod running_metadata_fast_path_tests {
+    use super::can_use_running_metadata_fast_path;
+    use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::{AgentFilter, AgentStatus, ScanCursor};
+    use test_r::test;
+
+    fn running_filter() -> Option<AgentFilter> {
+        Some(AgentFilter::new_status(
+            FilterComparator::Equal,
+            AgentStatus::Running,
+        ))
+    }
+
+    #[test]
+    fn running_filter_uses_fast_path_only_without_a_cursor() {
+        assert!(can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::default()
+        ));
+        assert!(!can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::new("malformed".to_string())
+        ));
     }
 }
 

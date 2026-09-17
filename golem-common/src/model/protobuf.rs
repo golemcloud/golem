@@ -537,18 +537,14 @@ impl From<FilterComparator> for golem::common::FilterComparator {
 
 impl From<Cursor> for ScanCursor {
     fn from(value: Cursor) -> Self {
-        Self {
-            cursor: value.cursor,
-            layer: value.layer as usize,
-        }
+        Self::new(value.value)
     }
 }
 
 impl From<ScanCursor> for Cursor {
     fn from(value: ScanCursor) -> Self {
         Self {
-            cursor: value.cursor,
-            layer: value.layer as u64,
+            value: value.into_inner(),
         }
     }
 }

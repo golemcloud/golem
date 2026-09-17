@@ -17,7 +17,9 @@ use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::reader::{
     OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
 };
-use crate::services::oplog::{PrimaryOplogService, cursor_value, next_scan_cursor, scan_modes};
+use crate::services::oplog::{
+    PrimaryOplogService, decode_scan_cursor, next_scan_cursor, retry_scan_storage_op,
+};
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
     IndexedStorageNamespace,
@@ -192,35 +194,36 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        let layer = cursor.layer;
-        let (active_mode, next_mode) = scan_modes(modes, cursor.cursor);
-        let cursor_val = cursor_value(cursor.cursor);
+        let state = decode_scan_cursor(&cursor, modes)?;
+        let active_mode = state.mode;
 
-        let (next_cursor_val, keys) = {
+        let (next_resume, keys) = {
             let is = self.indexed_storage.clone();
             let level = self.level;
             let prefix = PrimaryOplogService::key_prefix(component_id);
-            retry_storage_op(&self.retry_config, "compressed_scan", &prefix, || {
+            let resume = state.resume.clone();
+            retry_scan_storage_op(&self.retry_config, "compressed_scan", &prefix, || {
                 let is = is.clone();
                 let prefix = prefix.clone();
+                let resume = resume.clone();
                 async move {
                     is.with("compressed_oplog", "scan")
-                        .scan(
+                        .scan_stable(
                             IndexedStorageMetaNamespace::CompressedOplog {
                                 agent_mode: active_mode,
                                 level,
                             },
                             Some(&prefix),
-                            cursor_val,
+                            resume,
                             count,
                         )
                         .await
                 }
             })
-            .await
+            .await?
         };
 
-        let next_cursor = next_scan_cursor(next_cursor_val, active_mode, next_mode, layer);
+        let next_cursor = next_scan_cursor(state, modes, next_resume)?;
         Ok((
             next_cursor,
             keys.into_iter()

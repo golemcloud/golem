@@ -29,8 +29,6 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
-pub type ScanCursor = u64;
-
 /// Typed error for [`IndexedStorage`] operations.
 ///
 /// `Transient` errors are safe to retry. `Indeterminate` errors can only be retried by callers
@@ -43,6 +41,8 @@ pub enum IndexedStorageError {
     Indeterminate(String),
     /// The requested index already exists.
     Conflict(String),
+    /// A scan resume token is not valid for this backend.
+    InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
 }
@@ -61,6 +61,7 @@ impl Display for IndexedStorageError {
                 write!(f, "Indeterminate storage error: {msg}")
             }
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
+            IndexedStorageError::InvalidResume(msg) => write!(f, "Invalid scan resume: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
         }
     }
@@ -76,13 +77,14 @@ impl From<String> for IndexedStorageError {
 
 /// Where a [`IndexedStorage::scan_stable`] walk left off. Only the backend that produced it can
 /// read it; a caller passes it back unchanged.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ScanResume {
     /// The last position reached in the backend's walk order: usually the last key handed back,
     /// but the multi-SQLite backend names the last file it finished.
     Marker(String),
     /// The iteration cursor of a backend with no key order to seek in.
-    Cursor(ScanCursor),
+    Cursor(u64),
 }
 
 impl ScanResume {
@@ -90,6 +92,9 @@ impl ScanResume {
     /// produce.
     pub fn into_marker(self, backend: &str) -> Result<String, IndexedStorageError> {
         match self {
+            ScanResume::Marker(marker) if marker.contains('\0') => Err(
+                IndexedStorageError::InvalidResume(format!("{backend} marker contains NUL")),
+            ),
             ScanResume::Marker(marker) => Ok(marker),
             ScanResume::Cursor(_) => Err(Self::foreign(backend)),
         }
@@ -97,7 +102,7 @@ impl ScanResume {
 
     /// The cursor this token carries, or an error if `backend` was handed a token it did not
     /// produce.
-    pub fn into_cursor(self, backend: &str) -> Result<ScanCursor, IndexedStorageError> {
+    pub fn into_cursor(self, backend: &str) -> Result<u64, IndexedStorageError> {
         match self {
             ScanResume::Cursor(cursor) => Ok(cursor),
             ScanResume::Marker(_) => Err(Self::foreign(backend)),
@@ -105,7 +110,7 @@ impl ScanResume {
     }
 
     fn foreign(backend: &str) -> IndexedStorageError {
-        IndexedStorageError::Other(format!(
+        IndexedStorageError::InvalidResume(format!(
             "{backend} indexed storage was handed a resume token it did not produce"
         ))
     }
@@ -145,21 +150,8 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<bool, IndexedStorageError>;
 
-    /// Returns keys in the given meta-namespace, optionally filtered by key prefix, in a
-    /// paginated way. If there are no more pages to scan, the returned cursor will be 0.
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
-
     /// Pages the keys of a namespace so that the caller can delete the keys it was handed without
-    /// the walk skipping any. [`Self::scan`] cannot: its cursor is a position, so a delete behind
-    /// it makes the next page step over keys nothing has seen.
+    /// the walk skipping any.
     ///
     /// `resume` is `None` for the first page, then whatever the previous call returned; the
     /// returned token is `None` once the walk is done. A backend that pages in key order only
@@ -365,25 +357,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     ) -> Result<bool, IndexedStorageError> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
-            .await
-    }
-
-    pub async fn scan(
-        &self,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        self.storage
-            .scan(
-                self.svc_name,
-                self.api_name,
-                namespace,
-                prefix,
-                cursor,
-                count,
-            )
             .await
     }
 

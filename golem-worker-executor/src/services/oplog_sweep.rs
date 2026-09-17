@@ -952,7 +952,7 @@ mod tests {
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace, ScanCursor};
+    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::Principal;
@@ -1440,20 +1440,6 @@ mod tests {
             key: &str,
         ) -> Result<bool, IndexedStorageError> {
             self.inner.exists(svc_name, api_name, namespace, key).await
-        }
-
-        async fn scan(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: IndexedStorageMetaNamespace,
-            prefix: Option<&str>,
-            cursor: ScanCursor,
-            count: u64,
-        ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-            self.inner
-                .scan(svc_name, api_name, namespace, prefix, cursor, count)
-                .await
         }
 
         async fn scan_stable(

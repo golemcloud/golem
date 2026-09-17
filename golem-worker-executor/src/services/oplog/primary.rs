@@ -24,8 +24,8 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogLifecycleGuard, OplogService,
-    OrderedOplogStart, PendingUpload, ReservedPayload, ReservedRawStartBuilder, cursor_value,
-    next_scan_cursor, scan_modes,
+    OrderedOplogStart, PendingUpload, ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor,
+    next_scan_cursor, retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -205,7 +205,7 @@ async fn retry_oplog_append(
                 }
                 false
             }
-            IndexedStorageError::Other(_) => {
+            IndexedStorageError::InvalidResume(_) | IndexedStorageError::Other(_) => {
                 if !write_may_have_committed {
                     panic!("Indexed storage operation '{op_name}' failed for key '{key}': {error}");
                 }
@@ -731,32 +731,39 @@ impl OplogService for PrimaryOplogService {
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         record_oplog_call("scan");
 
-        let (active_mode, next_mode) = scan_modes(modes, cursor.cursor);
-        let cursor_val = cursor_value(cursor.cursor);
+        let state = decode_scan_cursor(&cursor, modes)?;
+        if state.layer != 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "Primary oplog scan cursor must name layer 0",
+            ));
+        }
+        let active_mode = state.mode;
 
-        let (next_cursor_val, keys) = {
+        let (next_resume, keys) = {
             let is = self.indexed_storage.clone();
             let prefix = Self::key_prefix(component_id);
-            retry_storage_op(&self.retry_config, "scan", &prefix, || {
+            let resume = state.resume.clone();
+            retry_scan_storage_op(&self.retry_config, "scan", &prefix, || {
                 let is = is.clone();
                 let prefix = prefix.clone();
+                let resume = resume.clone();
                 async move {
                     is.with("oplog", "scan")
-                        .scan(
+                        .scan_stable(
                             IndexedStorageMetaNamespace::Oplog {
                                 agent_mode: active_mode,
                             },
                             Some(&prefix),
-                            cursor_val,
+                            resume,
                             count,
                         )
                         .await
                 }
             })
-            .await
+            .await?
         };
 
-        let next_cursor = next_scan_cursor(next_cursor_val, active_mode, next_mode, cursor.layer);
+        let next_cursor = next_scan_cursor(state, modes, next_resume)?;
         let owned_agent_ids = keys
             .into_iter()
             .map(|key| OwnedAgentId {

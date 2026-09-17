@@ -29,7 +29,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanCursor,
+    IndexedStorageNamespace,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -372,14 +372,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
             Some((17, value.to_vec()))
         );
         let (_, keys) = storage
-            .scan(
-                "svc",
-                "api",
-                ns.meta.clone(),
-                Some("singleton"),
-                ScanCursor::default(),
-                10,
-            )
+            .scan_stable("svc", "api", ns.meta.clone(), Some("singleton"), None, 10)
             .await
             .unwrap();
         assert_eq!(keys, vec!["singleton".to_string()]);
@@ -681,17 +674,17 @@ async fn scan_empty(
     let is = is.get_indexed_storage().await;
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     assert_eq!(result, Vec::<String>::new());
@@ -720,17 +713,17 @@ async fn scan_with_no_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
@@ -801,16 +794,16 @@ async fn scan_with_no_pattern_paginated(
     .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if !r1.is_empty() || cursor == 0 {
+        if !r1.is_empty() || resume.is_none() {
             break;
         }
     }
@@ -818,13 +811,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -832,13 +825,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r3: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r3.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -1171,17 +1164,17 @@ async fn scan_with_prefix_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
@@ -1217,16 +1210,16 @@ async fn scan_with_prefix_pattern_paginated(
         .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if r1.len() == 1 || cursor == 0 {
+        if r1.len() == 1 || resume.is_none() {
             break;
         }
     }
@@ -1234,13 +1227,13 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }

@@ -301,6 +301,13 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        if count == 0 || count > i64::MAX as u64 {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Agent enumeration count must be between 1 and {}",
+                i64::MAX
+            )));
+        }
+
         info!(
             environment_id = %environment_id,
             component_id = %component_id,

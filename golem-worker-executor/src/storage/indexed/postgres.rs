@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -219,58 +219,6 @@ impl IndexedStorage for PostgresIndexedStorage {
             .await
             .map(|row| row.0)
             .map_err(Self::classify_repo_error_general)
-    }
-
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let _permit = self.acquire_permit().await;
-        let count_i64 = Self::to_i64(count, "count")?;
-        let cursor_i64 = Self::to_i64(cursor, "cursor")?;
-        let query = match prefix {
-            Some(prefix) => {
-                let key = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(key)
-                .bind(count_i64)
-                .bind(cursor_i64)
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 ORDER BY key LIMIT $2 OFFSET $3;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(count_i64)
-            .bind(cursor_i64),
-        };
-
-        let keys = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(Self::classify_repo_error_general)?;
-
-        let new_cursor = if keys.len() < count as usize {
-            0
-        } else {
-            cursor.checked_add(count).ok_or_else(|| {
-                IndexedStorageError::Other(
-                    "Postgres indexed storage scan cursor overflow".to_string(),
-                )
-            })?
-        };
-
-        Ok((new_cursor, keys))
     }
 
     async fn scan_stable(
