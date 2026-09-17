@@ -176,6 +176,19 @@ impl AgentTypeSchemaResolver for &ComponentMetadata {
     }
 }
 
+impl AgentTypeSchemaResolver for &AgentTypeSchema {
+    fn resolve_agent_type_schema_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentTypeSchema, String> {
+        if &self.type_name == agent_type {
+            Ok((*self).clone())
+        } else {
+            Err(format!("Agent type not found: {agent_type}"))
+        }
+    }
+}
+
 impl ParsedAgentId {
     pub fn try_new(
         agent_type: AgentTypeName,

@@ -72,7 +72,19 @@ try {
     const stamp = Date.now().toString(36)
     const invoke = (agent, method, ...args) =>
       run("--local", "agent", "invoke", "--no-stream", agent, method, ...args)
-    if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
+    if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
+      const caller = `EffectConsumer("effect-${stamp}")`
+      const first = invoke(caller, "reflectedRoundTrip", '"reflected"')
+      assert.ok(first.includes(`TsPeer:echo:ts:effect-${stamp}:reflected`), first)
+      const second = invoke(caller, "reflectedRoundTrip", '"repeated"')
+      assert.ok(second.includes(`TsPeer:echo:ts:effect-${stamp}:repeated`), second)
+      const ephemeral = invoke(caller, "ephemeralRoundTrip", '"one-shot"')
+      assert.ok(ephemeral.includes(`ephemeral:effect-${stamp}:one-shot`), ephemeral)
+      assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
+      const nonfinite = invoke(caller, "nonfiniteReflection")
+      assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
+      console.log("Deployed Effect reflected agent calls and ephemeral lifecycle passed")
+    } else if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
       const ts = invoke(`TsPeer("ts-${stamp}")`, "callEffect", `"ts-${stamp}"`, '"request-ts"')
       assert.ok(ts.includes(`ts-override:ts-${stamp}:2:5`), ts)
       const rust = invoke(
@@ -199,52 +211,54 @@ try {
         "Cross-SDK RPC passed: TS/Rust ↔ Effect streams, Effect snapshot restoration, direct rich schema values, tools, capabilities, reflection, and typed failures",
       )
     }
-    const reflectedEffectTool = invoke(
-      `TsPeer("ts-${stamp}")`,
-      "reflectedEffectTool",
-      '"reflection"',
-    )
-    assert.ok(
-      reflectedEffectTool.includes(
-        `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|true`,
-      ),
-      reflectedEffectTool,
-    )
-    const reflectedTsTool = invoke(
-      `EffectConsumer("effect-${stamp}")`,
-      "reflectedTsTool",
-      '"reflection"',
-    )
-    assert.ok(
-      reflectedTsTool.includes(
-        `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|true`,
-      ),
-      reflectedTsTool,
-    )
-    const generatedTsTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"typed"')
-    assert.ok(
-      generatedTsTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:TYPED`),
-      generatedTsTool,
-    )
-    const callerAuthoredEffectTool = invoke(
-      `EffectConsumer("effect-${stamp}")`,
-      "callTsTool",
-      '"typed"',
-    )
-    assert.ok(
-      callerAuthoredEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
-      callerAuthoredEffectTool,
-    )
-    const generatedEffectTool = invoke(
-      `EffectConsumer("effect-${stamp}")`,
-      "toolRoundTrip",
-      '"typed"',
-    )
-    assert.ok(
-      generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
-      generatedEffectTool,
-    )
-    console.log("Deployed TS and Effect typed, reflected, and dynamic tool calls passed")
+    if (process.env.RUN_AGENT_REFLECTION_ONLY !== "1") {
+      const reflectedEffectTool = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "reflectedEffectTool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedEffectTool.includes(
+          `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|true`,
+        ),
+        reflectedEffectTool,
+      )
+      const reflectedTsTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "reflectedTsTool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedTsTool.includes(
+          `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|true`,
+        ),
+        reflectedTsTool,
+      )
+      const generatedTsTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"typed"')
+      assert.ok(
+        generatedTsTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:TYPED`),
+        generatedTsTool,
+      )
+      const callerAuthoredEffectTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "callTsTool",
+        '"typed"',
+      )
+      assert.ok(
+        callerAuthoredEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+        callerAuthoredEffectTool,
+      )
+      const generatedEffectTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "toolRoundTrip",
+        '"typed"',
+      )
+      assert.ok(
+        generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+        generatedEffectTool,
+      )
+      console.log("Deployed TS and Effect typed, reflected, and dynamic tool calls passed")
+    }
   }
 } finally {
   if (server) {
