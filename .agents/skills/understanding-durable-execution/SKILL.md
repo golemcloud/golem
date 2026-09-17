@@ -148,6 +148,54 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
+shared attempt independently of request cancellation. `finish_construction` prepares resolved data
+privately; failure drains and joins attempt-owned work before returning to `Unresolved`, without
+deleting persisted data. Existing waiters receive that attempt's error; later explicit demand
+retries by reloading persisted identity and pending initialization. Local success publishes the
+resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
+run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
+acquire mutually referring cold workers on different executors, so awaiting them before publication
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
+existing-only acquisition, and reciprocal cold topologies.
+
+Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
+interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
+is owned by that worker: concurrent callers share its retained attempt result, a later call retries
+only unfinished cleanup stages after failure, and successful cleanup retires active-worker and
+open-oplog cache entries only for the generation being deleted. A stale `Arc<Worker>` therefore
+cannot continue deletion against, or evict cache state belonging to, a replacement with the same
+`AgentId`.
+
+The bounded unload result and final cleanup completion are separate facts. An unload timeout
+permanently fails that deletion attempt, while module-owned cleanup continues. A later explicit
+delete joins the retained completion, or retries a failed filesystem deletion through the owning
+filesystem generation. Durable storage and cache authority remain fenced until verified cleanup
+succeeds; old attempt handles retain their original error. Cleanup with no verifiable
+owning-component repair remains a failure: successful filesystem deletion cannot erase an
+unverified metering settlement, including `ObserverLost` during startup rollback.
+
+Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
+lifecycle guard. Fork reads persisted source history without constructing an absent source;
+target construction and rollback are not atomic and are not protected across executor ownership
+changes. Archival is routed through the existing worker owner. No lifecycle lock is taken for
+individual stream items, oplog reads, or replay steps.
+
+`Oplog::stop_and_wait` closes admission and joins work associated with the actual open oplog
+generation, including tasks belonging to older worker shells removed from the active cache.
+Transport roots are cancelled and their children joined without waiting for client IO. Invocation
+loops are joined, not cancelled: their final commits, state destruction, and panic cleanup must finish.
+Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
+cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
+queries. Attachment queries may spawn every time. Worker-state actors register once at construction
+and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
+drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+An error is reported only after all owned work finishes. Deletion records that completion separately
+so an explicit retry can remove storage without reusing a retained stop error; the original attempt
+keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped
+generation's error.
+
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
 underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:

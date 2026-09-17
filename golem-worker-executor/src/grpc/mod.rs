@@ -584,7 +584,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Principal::anonymous(),
         )
         .await?;
-        worker.control_durable_stream_attachment(control).await
+        let scope = crate::worker::tasks::TaskScope::default();
+        scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        scope
+            .run(worker.control_durable_stream_attachment(control))
+            .await
+            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
     }
 
     async fn read_durable_stream_segment_internal(
