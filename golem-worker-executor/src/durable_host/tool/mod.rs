@@ -20,6 +20,7 @@
 //! which is implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
+mod mcp;
 pub(crate) mod operation;
 
 pub use attachment::{
@@ -60,6 +61,7 @@ use crate::preview2::golem::tool::host::{
 use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_exports;
 use crate::services::environment_state::{
     ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
+    get_accessible_tool_from_deployment, get_accessible_tools_from_deployment,
 };
 use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
@@ -86,16 +88,16 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableEntityBodyExecution, SerializableToolDiscoverySnapshot, SerializableToolError,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemToolGetTool, HostRequestGolemToolInvocationRejected,
     HostRequestNoInput, HostResponseEntityInvocation, HostResponseGolemToolTool,
     HostResponseGolemToolTools,
 };
-use golem_common::model::tool::ToolName;
+use golem_common::model::tool::{ToolDeploymentState, ToolName};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
@@ -111,7 +113,9 @@ use golem_common::schema::wit::{decode_graph, decode_value_with, encode_graph, e
 use golem_common::schema::{
     FromSchema, SchemaType, SchemaValue, TypedSchemaValue as ModelTypedSchemaValue,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -1419,6 +1423,86 @@ fn rejected_tool_call(
     }
 }
 
+async fn resolve_tool_activation<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    rpc: &ToolRpcEntry,
+) -> Result<ToolActivationOutcome, ToolDiscoveryError>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    use crate::services::environment_state::{
+        ToolActivationSnapshot, get_tool_activation_from_deployment,
+    };
+    use golem_common::model::mcp_import::McpImportSource;
+
+    let (service, owner) = accessor.with(|mut access| {
+        let ctx = access.get();
+        (
+            ctx.state.environment_state_service.clone(),
+            ctx.owner_component_metadata().clone(),
+        )
+    });
+    let deployment = service
+        .get_live_tool_deployment_state(rpc.owner.owner_id.environment_id, owner.id, owner.revision)
+        .await?;
+    let fixed = get_tool_activation_from_deployment(
+        deployment.as_deref(),
+        &rpc.owner.agent_type,
+        &rpc.tool_name,
+    )?;
+    if !matches!(fixed, ToolActivationOutcome::NotRegistered) {
+        return Ok(fixed);
+    }
+    let Some(deployment) = deployment.filter(|deployment| !deployment.mcp_imports.is_empty())
+    else {
+        return Ok(fixed);
+    };
+    let auth = crate::durable_host::call_coordinator::agent_auth_ctx_at_serialized_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await?;
+    for index in 0..deployment.mcp_imports.len() {
+        let source = McpImportSource {
+            environment_id: rpc.owner.owner_id.environment_id,
+            deployment_revision: deployment.deployment_revision,
+            import_index: index.try_into().map_err(|_| {
+                ToolDiscoveryError::InconsistentSnapshot {
+                    details: "too many MCP imports".into(),
+                }
+            })?,
+            upstream_tool_name: String::new(),
+        };
+        let observation = service
+            .resolve_mcp_import(&source, &auth, false)
+            .await
+            .map_err(ToolDiscoveryError::Mcp)?;
+        if let Some(tool) = observation
+            .tools
+            .into_iter()
+            .find(|tool| tool.definition.name() == Some(rpc.tool_name.as_str()))
+        {
+            let agent_type = rpc.owner.agent_type.clone();
+            return tokio::task::spawn_blocking(move || {
+                ToolActivationSnapshot::from_mcp(
+                    source,
+                    observation.protocol_version,
+                    tool,
+                    &owner,
+                    &agent_type,
+                )
+                .map(|activation| ToolActivationOutcome::Ready(Box::new(activation)))
+            })
+            .await
+            .map_err(|error| {
+                ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime(error.to_string()))
+            })?;
+        }
+    }
+    Ok(ToolActivationOutcome::NotRegistered)
+}
+
 async fn prepare_tool_call<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     attempt: ToolInvocationAttempt,
@@ -1438,12 +1522,6 @@ where
         parent,
         attempt_ordinal,
     } = attempt;
-    let environment_state_service =
-        accessor.with(|mut access| access.get().state.environment_state_service.clone());
-    let (owner_component_id, owner_component_revision) = accessor.with(|mut access| {
-        let component = access.get().owner_component_metadata();
-        (component.id, component.revision)
-    });
     let input = match input {
         Ok(input) => input,
         Err(error) => {
@@ -1471,16 +1549,7 @@ where
         }
     };
 
-    let activation_snapshot = match environment_state_service
-        .get_tool_activation(
-            rpc.owner.owner_id.environment_id,
-            owner_component_id,
-            owner_component_revision,
-            &rpc.owner.agent_type,
-            &rpc.tool_name,
-        )
-        .await
-    {
+    let activation_snapshot = match resolve_tool_activation(accessor, &rpc).await {
         Ok(ToolActivationOutcome::Ready(activation)) => *activation,
         Ok(ToolActivationOutcome::NotBound) => {
             return Ok(rejected_tool_call(
@@ -1513,6 +1582,31 @@ where
                     "tool '{}' is not registered",
                     rpc.tool_name
                 )),
+                stdin,
+            ));
+        }
+        Err(ToolDiscoveryError::Mcp(
+            golem_service_base::clients::registry::RegistryServiceError::LimitExceeded(_),
+        )) => {
+            return Err(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted.into());
+        }
+        Err(ToolDiscoveryError::Mcp(error))
+            if matches!(
+                classify_tool_discovery_error(&ToolDiscoveryError::Mcp(error.clone())),
+                HostFailureKind::Permanent
+            ) =>
+        {
+            let rpc_error = mcp::registry_failure(&error);
+            return Ok(rejected_tool_call(
+                &rpc,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                call_mode,
+                rpc_error,
                 stdin,
             ));
         }
@@ -1575,12 +1669,17 @@ where
             provision,
             binding,
             filesystem,
+            mcp_import,
         }) => Arc::new(
             golem_common::model::entity::EntityActivation::new_host(
                 host_tool_id,
                 implementation_version,
                 deployment_revision,
-                golem_common::model::entity::EntityActivationPolicy::Tool { provision, binding },
+                golem_common::model::entity::EntityActivationPolicy::Tool {
+                    provision,
+                    binding,
+                    mcp_import,
+                },
                 filesystem,
             )
             .map_err(|error| anyhow!("invalid host tool activation: {error}"))?,
@@ -2022,18 +2121,11 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
-    let native_tool_catalog = worker.native_tool_catalog();
-    let Some(native_registration) = native_tool_catalog.get(&key) else {
-        return (
-            Err(WorkerExecutorError::runtime(format!(
-                "native tool implementation '{:?}@{}' is not installed",
-                key.host_tool_id, key.implementation_version
-            ))),
-            None,
-        );
-    };
-    let golem_common::model::entity::EntityActivationPolicy::Tool { binding, .. } =
-        scope.activation().policy()
+    let golem_common::model::entity::EntityActivationPolicy::Tool {
+        binding,
+        mcp_import,
+        ..
+    } = scope.activation().policy()
     else {
         return (
             Err(WorkerExecutorError::runtime(
@@ -2042,10 +2134,23 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             None,
         );
     };
-    if let Err(error) = native_registration.validate_dispatch(binding) {
-        return (Err(WorkerExecutorError::runtime(error)), None);
-    }
-    let handler = native_registration.handler;
+    let handler = if mcp_import.is_some() {
+        None
+    } else {
+        let Some(registration) = worker.native_tool_catalog().get(&key) else {
+            return (
+                Err(WorkerExecutorError::runtime(format!(
+                    "native tool implementation '{:?}@{}' is not installed",
+                    key.host_tool_id, key.implementation_version
+                ))),
+                None,
+            );
+        };
+        if let Err(error) = registration.validate_dispatch(binding) {
+            return (Err(WorkerExecutorError::runtime(error)), None);
+        }
+        Some(registration.handler)
+    };
     let executable = WorkerCtxExecutable::Native {
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
@@ -2108,10 +2213,16 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             .as_ref()
             .map(ToolStdoutWriterEntry::native_writer),
     };
-    let result = await_native_entity_body(
-        &runner_abort,
-        handler.invoke(retained.context_mut(), native_invocation),
-    )
+    let result = await_native_entity_body(&runner_abort, async {
+        match handler {
+            Some(handler) => {
+                handler
+                    .invoke(retained.context_mut(), native_invocation)
+                    .await
+            }
+            None => mcp::invoke(retained.context_mut(), native_invocation).await,
+        }
+    })
     .await;
     retained
         .context_mut()
@@ -3397,6 +3508,12 @@ where
                     let _ = started.send(());
                 }
             },
+            {
+                let operation = operation.clone();
+                move || {
+                    operation.begin_cancel();
+                }
+            },
             move |error| async move {
                 let terminal = terminal_for_completed_failure.lock().unwrap().take();
                 if let Some(terminal) = terminal {
@@ -4110,6 +4227,13 @@ impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
 fn classify_tool_discovery_error(error: &ToolDiscoveryError) -> HostFailureKind {
     match error {
         ToolDiscoveryError::Retrieval(_) => HostFailureKind::Transient,
+        ToolDiscoveryError::Mcp(error) => match error {
+            golem_service_base::clients::registry::RegistryServiceError::InternalServerError(_)
+            | golem_service_base::clients::registry::RegistryServiceError::InternalClientError(_) => {
+                HostFailureKind::Transient
+            }
+            _ => HostFailureKind::Permanent,
+        },
         ToolDiscoveryError::AgentContextRequired
         | ToolDiscoveryError::MissingDeploymentRevision { .. }
         | ToolDiscoveryError::InconsistentSnapshot { .. } => HostFailureKind::Permanent,
@@ -4124,6 +4248,113 @@ fn terminal_tool_discovery_error(message: String) -> anyhow::Error {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn observe_mcp_tools(
+        &mut self,
+        deployment: Option<&ToolDeploymentState>,
+        name: Option<&ToolName>,
+    ) -> Result<
+        Vec<golem_common::model::oplog::payload::types::SerializableMcpImportDiscovery>,
+        ToolDiscoveryError,
+    > {
+        use golem_common::model::mcp_import::{McpImportSource, mcp_import_bridge_source};
+        use golem_common::model::oplog::payload::types::{
+            SerializableDiscoveredTools, SerializableMcpImportDiscovery,
+        };
+
+        let Some(deployment) = deployment else {
+            return Ok(Vec::new());
+        };
+        if deployment.mcp_imports.is_empty()
+            || name.is_some_and(|name| deployment.registered_tools.contains_key(name))
+        {
+            return Ok(Vec::new());
+        }
+        let auth = self
+            .capture_agent_auth_ctx_at_boundary()
+            .await?
+            .ok_or(ToolDiscoveryError::AgentContextRequired)?;
+        let mut observations = Vec::new();
+        for index in 0..deployment.mcp_imports.len() {
+            let source = McpImportSource {
+                environment_id: self.state.owned_agent_id.environment_id,
+                deployment_revision: deployment.deployment_revision,
+                import_index: index.try_into().map_err(|_| {
+                    ToolDiscoveryError::InconsistentSnapshot {
+                        details: "too many MCP imports".into(),
+                    }
+                })?,
+                upstream_tool_name: String::new(),
+            };
+            let observation = self
+                .state
+                .environment_state_service
+                .resolve_mcp_import(&source, &auth, false)
+                .await
+                .map_err(ToolDiscoveryError::Mcp)?;
+            let found = name.is_some_and(|name| {
+                observation
+                    .tools
+                    .iter()
+                    .any(|tool| tool.definition.name() == Some(name.as_str()))
+            });
+            observations.push(SerializableMcpImportDiscovery {
+                import_index: source.import_index,
+                tools: SerializableDiscoveredTools(
+                    observation
+                        .tools
+                        .into_iter()
+                        .map(|tool| {
+                            DiscoveredTool::new(tool.definition, mcp_import_bridge_source())
+                        })
+                        .collect(),
+                ),
+                exclusions: observation
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| (diagnostic.upstream_name, diagnostic.reason))
+                    .collect(),
+            });
+            if found {
+                break;
+            }
+        }
+        Ok(observations)
+    }
+
+    async fn rehydrate_tool_discovery(
+        &mut self,
+        revision: Option<u64>,
+        live: Option<Arc<ToolDeploymentState>>,
+    ) -> anyhow::Result<Option<Arc<ToolDeploymentState>>> {
+        let Some(revision) = revision else {
+            return Ok(None);
+        };
+        let revision = revision.try_into().map_err(|error| {
+            terminal_tool_discovery_error(format!(
+                "recorded invalid tool deployment revision {revision}: {error}"
+            ))
+        })?;
+        if let Some(deployment) = live.filter(|state| state.deployment_revision == revision) {
+            return Ok(Some(deployment));
+        }
+        self.state
+            .environment_state_service
+            .get_tool_deployment_state_at_revision(
+                self.state.owned_agent_id.environment_id,
+                revision,
+            )
+            .await
+            .map(Some)
+            .map_err(|error| {
+                anyhow::Error::new(ClassifiedHostError {
+                    kind: classify_tool_discovery_error(&error),
+                    message: format!(
+                        "failed to rehydrate recorded tool deployment revision {revision}: {error}"
+                    ),
+                })
+            })
+    }
+
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
@@ -4136,6 +4367,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadRemote,
         )
         .await?;
+        let mut live_deployment = None;
 
         let response = 'result: {
             if !handle.is_live() {
@@ -4150,13 +4382,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     let result = self
                         .state
                         .environment_state_service
-                        .get_accessible_tools(
+                        .get_live_tool_deployment_state(
                             environment_id,
                             component_id,
                             component_revision,
-                            agent_type,
                         )
                         .await;
+                    let result = async {
+                        let deployment = result?;
+                        get_accessible_tools_from_deployment(deployment.as_deref(), agent_type)?;
+                        let dynamic_tools =
+                            self.observe_mcp_tools(deployment.as_deref(), None).await?;
+                        let deployment_revision = deployment
+                            .as_ref()
+                            .map(|deployment| deployment.deployment_revision.get());
+                        live_deployment = deployment;
+                        Ok(SerializableToolDiscoverySnapshot {
+                            deployment_revision,
+                            dynamic_tools,
+                        })
+                    }
+                    .await;
+                    if matches!(&result, Err(ToolDiscoveryError::Mcp(golem_service_base::clients::registry::RegistryServiceError::LimitExceeded(_)))) {
+                        return Err(handle.trap(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted));
+                    }
                     match handle
                         .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
                         .await?
@@ -4179,7 +4428,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        response.result.map_err(|error| {
+        let snapshot = response.result.map_err(|error| {
             let agent_type = agent_type
                 .as_ref()
                 .map_or("<missing>", |agent_type| agent_type.0.as_str());
@@ -4187,7 +4436,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "failed to discover tools for agent type '{}' in environment '{environment_id}': {error}",
                 agent_type
             ))
-        })
+        })?;
+        let agent_type = agent_type.ok_or_else(|| {
+            terminal_tool_discovery_error("tool discovery requires an agent context".to_string())
+        })?;
+        let deployment = self
+            .rehydrate_tool_discovery(snapshot.deployment_revision, live_deployment)
+            .await?;
+        merge_discovered_tools(deployment.as_deref(), &agent_type, None, snapshot)
+            .map_err(|error| terminal_tool_discovery_error(error.to_string()))
     }
 
     pub(crate) async fn get_tool_model(
@@ -4208,6 +4465,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadRemote,
         )
         .await?;
+        let mut live_deployment = None;
 
         let response = 'result: {
             if !handle.is_live() {
@@ -4218,19 +4476,47 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
 
             let result = if let Some(agent_type) = &agent_type {
-                if let Some(valid_tool_name) = &valid_tool_name {
+                if valid_tool_name.is_none() {
+                    Ok(SerializableToolDiscoverySnapshot {
+                        deployment_revision: None,
+                        dynamic_tools: Vec::new(),
+                    })
+                } else {
                     loop {
                         let result = self
                             .state
                             .environment_state_service
-                            .get_accessible_tool(
+                            .get_live_tool_deployment_state(
                                 environment_id,
                                 component_id,
                                 component_revision,
-                                agent_type,
-                                valid_tool_name,
                             )
                             .await;
+                        let result = async {
+                            let deployment = result?;
+                            if let Some(valid_tool_name) = &valid_tool_name {
+                                get_accessible_tool_from_deployment(
+                                    deployment.as_deref(),
+                                    agent_type,
+                                    valid_tool_name,
+                                )?;
+                            }
+                            let dynamic_tools = self
+                                .observe_mcp_tools(deployment.as_deref(), valid_tool_name.as_ref())
+                                .await?;
+                            let deployment_revision = deployment
+                                .as_ref()
+                                .map(|deployment| deployment.deployment_revision.get());
+                            live_deployment = deployment;
+                            Ok(SerializableToolDiscoverySnapshot {
+                                deployment_revision,
+                                dynamic_tools,
+                            })
+                        }
+                        .await;
+                        if matches!(&result, Err(ToolDiscoveryError::Mcp(golem_service_base::clients::registry::RegistryServiceError::LimitExceeded(_)))) {
+                            return Err(handle.trap(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted));
+                        }
                         match handle
                             .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
                             .await?
@@ -4239,8 +4525,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             InternalRetryResult::RetryInternally => continue,
                         }
                     }
-                } else {
-                    Ok(None)
                 }
             } else {
                 Err(ToolDiscoveryError::AgentContextRequired)
@@ -4256,7 +4540,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        response.result.map_err(|error| {
+        let snapshot = response.result.map_err(|error| {
             let agent_type = agent_type
                 .as_ref()
                 .map_or("<missing>", |agent_type| agent_type.0.as_str());
@@ -4264,8 +4548,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "failed to discover tool '{}' for agent type '{}' in environment '{environment_id}': {error}",
                 tool_name, agent_type
             ))
-        })
+        })?;
+        let agent_type = agent_type.ok_or_else(|| {
+            terminal_tool_discovery_error("tool discovery requires an agent context".to_string())
+        })?;
+        let Some(valid_tool_name) = valid_tool_name else {
+            return Ok(None);
+        };
+        let deployment = self
+            .rehydrate_tool_discovery(snapshot.deployment_revision, live_deployment)
+            .await?;
+        Ok(merge_discovered_tools(
+            deployment.as_deref(),
+            &agent_type,
+            Some(&valid_tool_name),
+            snapshot,
+        )
+        .map_err(|error| terminal_tool_discovery_error(error.to_string()))?
+        .into_iter()
+        .find(|tool| tool.definition.name() == Some(valid_tool_name.as_str())))
     }
+}
+
+fn merge_discovered_tools(
+    deployment: Option<&ToolDeploymentState>,
+    agent_type: &golem_common::model::agent::AgentTypeName,
+    selected_name: Option<&ToolName>,
+    snapshot: SerializableToolDiscoverySnapshot,
+) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+    let mut tools = match selected_name {
+        Some(name) => get_accessible_tool_from_deployment(deployment, agent_type, name)?
+            .into_iter()
+            .collect(),
+        None => get_accessible_tools_from_deployment(deployment, agent_type)?,
+    };
+    // A native name remains reserved even when it is not bound to this agent.
+    let mut names = deployment
+        .into_iter()
+        .flat_map(|state| state.registered_tools.keys())
+        .map(|name| name.as_str().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    for observation in snapshot.dynamic_tools {
+        for tool in observation.tools.0 {
+            if let Some(name) = tool.definition.name()
+                && selected_name.is_none_or(|selected| selected.as_str() == name)
+                && names.insert(name.to_owned())
+            {
+                tools.push(Arc::new(tool));
+            }
+        }
+    }
+    Ok(tools)
 }
 
 impl<Ctx: WorkerCtx> HostToolStdinWriter for DurableWorkerCtx<Ctx> {

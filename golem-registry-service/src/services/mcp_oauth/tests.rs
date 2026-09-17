@@ -1084,6 +1084,132 @@ async fn runtime_credentials_require_resource_permission_and_owner_without_admin
 }
 
 #[test]
+async fn declared_consent_and_refresh_work_before_first_deployment_and_grant_is_reused() {
+    let fixture = Fixture::new().await;
+    let target = McpImportTarget::Declared {
+        environment_id: fixture.source.environment_id,
+        import: fixture
+            .service
+            .resolve(&fixture.source)
+            .await
+            .unwrap()
+            .import,
+    };
+    let mut db = fixture.pool.with_rw("oauth-service-test", "undeploy");
+    db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_revisions"))
+        .await
+        .unwrap();
+    drop(db);
+    let url = fixture
+        .service
+        .begin(target.clone(), &fixture.operator, &mut Queue::discovery())
+        .await
+        .unwrap();
+    fixture
+        .service
+        .complete(
+            target.clone(),
+            callback(&url),
+            &fixture.operator,
+            &mut Queue::token(),
+        )
+        .await
+        .unwrap();
+    let key = fixture
+        .service
+        .resolve_target(&target)
+        .await
+        .unwrap()
+        .oauth()
+        .unwrap()
+        .1;
+    let grant = fixture.service.grants.load(&key).await.unwrap().unwrap();
+    assert_eq!(key.credential_owner_account_id, fixture.owner.0);
+    assert!(grant.tokens.as_ref().unwrap().session.target == target);
+    assert_eq!(
+        grant.tokens.unwrap().session.authorized_by,
+        fixture.operator.actor_account_id().0
+    );
+    fixture.expire(&key).await;
+    let mut sender = Queue::token();
+    let refreshed = fixture
+        .service
+        .credential_target(&target, fixture.owner, None, &mut sender)
+        .await
+        .unwrap();
+    assert_eq!(sender.requests.len(), 1);
+    let form: BTreeMap<_, _> = url::form_urlencoded::parse(sender.requests[0].body())
+        .into_owned()
+        .collect();
+    assert_eq!(form["grant_type"], "refresh_token");
+    let generation = refreshed.oauth_grant.unwrap().generation;
+    fixture.pool.with_rw("oauth-service-test", "deploy").execute(
+        sqlx::query("INSERT INTO deployment_revisions (environment_id,revision_id,version,hash,created_at,created_by) VALUES ($1,1,'v1',$2,$3,$4)")
+            .bind(fixture.source.environment_id.0).bind(vec![0_u8;32]).bind(SqlDateTime::now()).bind(fixture.owner.0)
+    ).await.unwrap();
+    fixture.insert_import(1, 0, Some("oauth"), None).await;
+    let mut no_network = Queue::token();
+    let runtime = fixture
+        .service
+        .credential(&fixture.source, fixture.owner, &mut no_network)
+        .await
+        .unwrap();
+    assert_eq!(runtime.oauth_grant.unwrap().generation, generation);
+    assert!(no_network.requests.is_empty());
+    fixture
+        .service
+        .disconnect(target, &fixture.operator)
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .service
+            .credential(&fixture.source, fixture.owner, &mut no_network)
+            .await,
+        Err(McpOAuthError::AuthorizationRequired(_))
+    ));
+}
+
+#[test]
+async fn declared_callback_rejects_changed_declaration_before_token_exchange() {
+    let fixture = Fixture::new().await;
+    let import = fixture
+        .service
+        .resolve(&fixture.source)
+        .await
+        .unwrap()
+        .import;
+    let target = McpImportTarget::Declared {
+        environment_id: fixture.source.environment_id,
+        import: import.clone(),
+    };
+    let url = fixture
+        .service
+        .begin(target, &fixture.operator, &mut Queue::discovery())
+        .await
+        .unwrap();
+    let changed = McpImportTarget::Declared {
+        environment_id: fixture.source.environment_id,
+        import: McpImport {
+            prefix: Some("changed".into()),
+            ..import
+        },
+    };
+    let mut sender = Queue::token();
+    assert!(matches!(
+        fixture
+            .service
+            .complete(changed, callback(&url), &fixture.operator, &mut sender)
+            .await,
+        Err(McpOAuthError::InvalidCallback)
+    ));
+    assert!(sender.requests.is_empty());
+}
+
+#[test]
 async fn resource_rejection_expires_only_used_generation_and_refresh_keeps_provider_policy() {
     let fixture = Fixture::new().await;
     let key = fixture.grant().await;

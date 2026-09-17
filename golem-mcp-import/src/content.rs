@@ -2,6 +2,9 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use golem_schema::schema::unstructured::{
+    unstructured_binary_schema_type, unstructured_inline_value,
+};
 use golem_schema::schema::{
     BinaryRestrictions, BinaryValuePayload, MetadataEnvelope, NamedFieldType, SchemaType,
     SchemaValue, VariantCaseType, VariantValuePayload,
@@ -179,10 +182,10 @@ fn block(
         "image" | "audio" => {
             let kind = string(obj, "type", index)?;
             let bytes = decode(string(obj, "data", index)?, limits, index, decoded_total)?;
-            let payload = SchemaValue::Binary(BinaryValuePayload {
+            let payload = unstructured_inline_value(SchemaValue::Binary(BinaryValuePayload {
                 bytes,
                 mime_type: Some(string(obj, "mimeType", index)?.into()),
-            });
+            }));
             tagged(
                 if kind == "image" { 1 } else { 2 },
                 Some(record_value(vec![payload, annotations, ext])),
@@ -234,13 +237,15 @@ fn embedded(
         }
         (None, Some(Value::String(blob))) => tagged(
             1,
-            Some(SchemaValue::Binary(BinaryValuePayload {
-                bytes: decode(blob, limits, index, decoded_total)?,
-                mime_type: resource
-                    .get("mimeType")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            })),
+            Some(unstructured_inline_value(SchemaValue::Binary(
+                BinaryValuePayload {
+                    bytes: decode(blob, limits, index, decoded_total)?,
+                    mime_type: resource
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                },
+            ))),
         ),
         _ => {
             return Err(malformed(
@@ -274,7 +279,7 @@ fn block_schema() -> SchemaType {
     let binary = || {
         let mut f = vec![field(
             "data",
-            SchemaType::binary(BinaryRestrictions::default()),
+            unstructured_binary_schema_type(BinaryRestrictions::default()),
         )];
         f.extend(meta());
         f
@@ -307,7 +312,9 @@ fn block_schema() -> SchemaType {
                         case("text", Some(SchemaType::string())),
                         case(
                             "blob",
-                            Some(SchemaType::binary(BinaryRestrictions::default())),
+                            Some(unstructured_binary_schema_type(
+                                BinaryRestrictions::default(),
+                            )),
                         ),
                     ]),
                 ),
@@ -556,6 +563,57 @@ mod tests {
             assert!(s.contains("etag") && s.contains("lastModified") && s.contains("id"));
         }
     }
+
+    #[test]
+    fn mixed_binary_fields_use_inline_sdk_carriers_without_losing_bytes_or_mime() {
+        use golem_schema::schema::unstructured::{
+            UnstructuredValueCase, decode_unstructured_value,
+        };
+        let projected = p(vec![
+            json!({"type":"image","data":"AP8=","mimeType":"image/png"}),
+            json!({"type":"audio","data":"AQI=","mimeType":"audio/wav"}),
+            json!({"type":"resource","resource":{"uri":"u","blob":"Aw=="}}),
+        ])
+        .unwrap();
+        valid(&projected);
+        assert!(projected.stdout.is_none());
+        let SchemaValue::Variant(content) = projected.value else {
+            panic!()
+        };
+        let SchemaValue::List { elements } = *content.payload.unwrap() else {
+            panic!()
+        };
+        for (block, (case, expected_bytes, expected_mime)) in elements.iter().zip([
+            (1, vec![0, 255], Some("image/png")),
+            (2, vec![1, 2], Some("audio/wav")),
+            (4, vec![3], None),
+        ]) {
+            let SchemaValue::Variant(block) = block else {
+                panic!()
+            };
+            assert_eq!(block.case, case);
+            let SchemaValue::Record { fields } = block.payload.as_deref().unwrap() else {
+                panic!()
+            };
+            let carrier = if case == 4 {
+                let SchemaValue::Variant(body) = &fields[2] else {
+                    panic!()
+                };
+                assert_eq!(body.case, 1);
+                body.payload.as_deref().unwrap()
+            } else {
+                &fields[0]
+            };
+            let UnstructuredValueCase::Inline(SchemaValue::Binary(binary)) =
+                decode_unstructured_value(carrier).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(binary.bytes, expected_bytes);
+            assert_eq!(binary.mime_type.as_deref(), expected_mime);
+        }
+    }
+
     #[test]
     fn malformed_inputs() {
         assert!(

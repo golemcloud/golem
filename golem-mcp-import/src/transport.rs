@@ -5,6 +5,7 @@ use crate::tool::{ProjectedTool, encode_header_value};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
+pub use golem_common::base_model::mcp_import::{PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS};
 use headers::HeaderMapExt;
 use http::{HeaderValue, Request, Response, StatusCode, header};
 use http_body::Body;
@@ -28,9 +29,6 @@ use tokio::sync::Semaphore;
 
 pub mod sender;
 
-pub const PROTOCOL_VERSION: &str = "2026-07-28";
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION];
-
 /// Every invocation sends exactly one request, without redirects, authentication
 /// retries, reconnects, proxies with independent credentials, or request replay.
 /// Implementations must authorize the target before charging network quotas and
@@ -48,7 +46,7 @@ pub trait HttpSend {
     ) -> impl Future<Output = Result<Response<Self::Body>, Self::Error>> + Send;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub response_bytes: usize,
     pub request_bytes: usize,
@@ -58,6 +56,7 @@ pub struct Limits {
     pub notifications: usize,
     pub json_depth: usize,
     pub concurrency: usize,
+    #[serde(with = "humantime_serde")]
     pub timeout: Duration,
 }
 
@@ -73,6 +72,26 @@ impl Default for Limits {
             json_depth: 512,
             concurrency: 16,
             timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl Limits {
+    pub fn validate(&self) -> Result<(), TransportError> {
+        if self.json_depth == 0
+            || self.json_depth > 512
+            || self.concurrency == 0
+            || self.concurrency > Semaphore::MAX_PERMITS
+            || self.timeout.is_zero()
+            || std::time::Instant::now()
+                .checked_add(self.timeout)
+                .is_none()
+        {
+            Err(TransportError::Configuration(
+                "invalid transport limits".into(),
+            ))
+        } else {
+            Ok(())
         }
     }
 }
@@ -154,14 +173,7 @@ impl Client {
         {
             return Err(configuration("invalid endpoint"));
         }
-        if limits.json_depth == 0
-            || limits.json_depth > 512
-            || limits.concurrency == 0
-            || limits.concurrency > Semaphore::MAX_PERMITS
-            || limits.timeout.is_zero()
-        {
-            return Err(configuration("invalid transport limits"));
-        }
+        limits.validate()?;
         Ok(Self {
             url,
             authorization: None,

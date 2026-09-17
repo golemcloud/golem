@@ -55,6 +55,7 @@ pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
     resolved_tool_grants: Option<&'a ResolvedToolGrants>,
+    mcp_tools: &'a [golem_client::model::McpResolvedTool],
 }
 
 impl<'a> BuildContext<'a> {
@@ -63,6 +64,7 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: None,
+            mcp_tools: &[],
         }
     }
 
@@ -75,7 +77,25 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: Some(resolved_tool_grants),
+            mcp_tools: &[],
         }
+    }
+
+    pub fn with_mcp_tools(mut self, tools: &'a [golem_client::model::McpResolvedTool]) -> Self {
+        self.mcp_tools = tools;
+        self
+    }
+
+    pub fn mcp_tools(&self) -> &[golem_client::model::McpResolvedTool] {
+        self.mcp_tools
+    }
+
+    pub fn mcp_tool(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> anyhow::Result<&golem_client::model::McpResolvedTool> {
+        self.mcp_tools.iter().find(|tool| tool.definition.name() == Some(name.as_str()))
+            .ok_or_else(|| anyhow!("MCP tool dependency '{name}' was not found in the selected environment's imports; declare it under tools: or check mcp.imports for the selected environment"))
     }
 
     pub fn application_context(&self) -> &ApplicationContext {
@@ -203,6 +223,27 @@ pub struct ApplicationContext {
 }
 
 impl ApplicationContext {
+    #[cfg(test)]
+    pub(crate) fn for_test(application: Application) -> Self {
+        Self {
+            calling_working_dir: application.app_root_dir().to_path_buf(),
+            selected_component_names: application.component_names().cloned().collect(),
+            application,
+            loaded_with_warnings: false,
+            config: ApplicationConfig {
+                offline: true,
+                dev_mode: false,
+                should_colorize: false,
+                enable_wasmtime_fs_cache: false,
+            },
+            component_metadata: crate::app::component_metadata::ComponentMetadataRegistry::new(
+                false,
+            ),
+            builtin_local_url: "http://localhost:9881".parse().unwrap(),
+            tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
+        }
+    }
+
     pub fn plan_and_apply_manifest_upgrades_before_load(
         source_mode: ApplicationSourceMode,
         yes: bool,
@@ -531,12 +572,12 @@ impl ApplicationContext {
         &self,
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
+        mcp_tools: &[golem_client::model::McpResolvedTool],
     ) -> anyhow::Result<()> {
-        build_app(&BuildContext::new_with_resolved_tool_grants(
-            self,
-            build_config,
-            resolved_tool_grants,
-        ))
+        build_app(
+            &BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
+                .with_mcp_tools(mcp_tools),
+        )
         .await
     }
 

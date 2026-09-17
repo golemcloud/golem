@@ -19,6 +19,7 @@ use crate::model::agent_secret::AgentSecret;
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
+use crate::model::mcp_import::McpImportObservation;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
@@ -33,10 +34,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
-    RevokeCardRequest, RuntimeCardData, UpdateWorkerConnectionLimitRequest,
-    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
-    batch_update_resource_usage_response, create_runtime_card_response,
-    download_component_response, get_active_mcp_for_domain_response,
+    ResolveMcpImportRequest, RevokeCardRequest, RuntimeCardData,
+    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
+    batch_get_existing_cards_response, batch_update_resource_usage_response,
+    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
@@ -45,7 +46,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_resource_definition_by_name_response, get_resource_limits_response,
     get_tool_deployment_state_response, mcp_runtime_credential,
     report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
-    resolve_component_response, revoke_card_response, update_worker_connection_limit_response,
+    resolve_component_response, resolve_mcp_import_response, revoke_card_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -269,6 +271,13 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
         oauth_grant_generation: Option<uuid::Uuid>,
     ) -> Result<(), RegistryServiceError>;
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError>;
 
     async fn resolve_agent_type_by_names(
         &self,
@@ -1177,6 +1186,52 @@ impl RegistryService for GrpcRegistryService {
                 })
             }
             Some(get_mcp_runtime_credential_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError> {
+        let request = ResolveMcpImportRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: String::new(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            refresh,
+        };
+        let response = self
+            .client
+            .call("resolve_mcp_import", move |client| {
+                Box::pin(client.resolve_mcp_import(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(resolve_mcp_import_response::Result::ObservationJson(bytes)) => {
+                let observation = McpImportObservation::from_json(&bytes).map_err(|_| {
+                    RegistryServiceError::internal_client_error("invalid MCP observation")
+                })?;
+                if observation.source.environment_id != source.environment_id
+                    || observation.source.deployment_revision != source.deployment_revision
+                    || observation.source.import_index != source.import_index
+                    || !observation.source.upstream_tool_name.is_empty()
+                {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "mismatched MCP observation source",
+                    ));
+                }
+                Ok(observation)
+            }
+            Some(resolve_mcp_import_response::Result::Error(error)) => Err(error.into()),
             None => Err(RegistryServiceError::empty_response()),
         }
     }

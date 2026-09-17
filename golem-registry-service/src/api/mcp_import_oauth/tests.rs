@@ -116,6 +116,75 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
     let api = TestClient::new(make_open_api_service(&services));
     let path = format!("/v1/envs/{}/deployments/1/mcp-imports/3/oauth", env.id);
     let bearer = format!("Bearer {}", root.token.as_ref().unwrap().secret());
+    let declared_path = format!("/v1/envs/{}/mcp-imports/oauth", env.id);
+    let declared_import = json!({
+        "import": {
+            "url": "https://resource.invalid/mcp",
+            "securityScheme": "provider"
+        }
+    });
+    api.post(format!("{declared_path}/status"))
+        .body_json(&declared_import)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    for (suffix, body) in [
+        ("authorize", declared_import.clone()),
+        (
+            "complete",
+            json!({
+                "import": declared_import["import"].clone(),
+                "callback": {"state": "private-state", "code": "private-code"}
+            }),
+        ),
+        ("disconnect", declared_import.clone()),
+    ] {
+        api.post(format!("{declared_path}/{suffix}"))
+            .body_json(&body)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    let declared_status = api
+        .post(format!("{declared_path}/status"))
+        .header("Authorization", &bearer)
+        .body_json(&declared_import)
+        .send()
+        .await;
+    declared_status.assert_status_is_ok();
+    declared_status
+        .assert_json(json!({
+            "environmentId": env.id.0,
+            "securityScheme": "provider",
+            "status": "authorization-required"
+        }))
+        .await;
+    let declared_disconnected = api
+        .post(format!("{declared_path}/disconnect"))
+        .header("Authorization", &bearer)
+        .body_json(&declared_import)
+        .send()
+        .await;
+    declared_disconnected.assert_status_is_ok();
+    declared_disconnected
+        .assert_json(json!({
+            "environmentId": env.id.0,
+            "securityScheme": "provider",
+            "status": "revoked"
+        }))
+        .await;
+    api.post(format!("{declared_path}/authorize"))
+        .header("Authorization", &bearer)
+        .body_json(&json!({
+            "import": {
+                "url": "https://resource.invalid/mcp",
+                "auth": {"bearer": "private-bearer"},
+                "securityScheme": "provider"
+            }
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
     api.get(&path)
         .send()
         .await
@@ -139,7 +208,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
             "deploymentRevision": 1,
             "importIndex": 3,
             "securityScheme": "provider",
-            "status": "authorization-required"
+            "status": "revoked"
         }))
         .await;
     let missing = path.replace("/mcp-imports/3/", "/mcp-imports/0/");

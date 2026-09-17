@@ -59,6 +59,21 @@ pub struct ProjectedResult {
 }
 
 impl ProjectedTool {
+    /// Decodes an internal admission snapshot, not an untrusted upstream definition.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        stacker::maybe_grow(2 << 20, 64 << 20, || {
+            let mut decoder = serde_json::Deserializer::from_slice(bytes);
+            decoder.disable_recursion_limit();
+            let tool = Self::deserialize(&mut decoder)?;
+            decoder.end()?;
+            Ok(tool)
+        })
+    }
+
+    pub fn to_json(&self) -> Result<Vec<u8>, serde_json::Error> {
+        stacker::maybe_grow(2 << 20, 64 << 20, || serde_json::to_vec(self))
+    }
+
     pub fn new(upstream: &Value, name: &str, limits: Limits) -> Result<Self, String> {
         crate::limits::check(
             upstream,
@@ -134,9 +149,6 @@ impl ProjectedTool {
             .map(|value| schema::Projection::new(value.clone(), limits.schema))
             .transpose()
             .map_err(|e| e.to_string())?;
-        if output.as_ref().is_some_and(|p| !p.is_object()) {
-            return Err("outputSchema must project to an object".into());
-        }
         let structured = output
             .as_ref()
             .map(|p| p.root().clone())
@@ -294,12 +306,6 @@ impl ProjectedTool {
             }
             None | Some(Value::Bool(false)) => {}
             _ => return Err(invalid("isError must be boolean".into())),
-        }
-        if response
-            .get("structuredContent")
-            .is_some_and(|v| !v.is_object())
-        {
-            return Err(invalid("structuredContent must be an object".into()));
         }
         let structured = match (&self.output, response.get("structuredContent")) {
             (Some(projection), Some(value)) => projection

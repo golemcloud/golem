@@ -30,6 +30,7 @@ use crate::services::environment_tool_grant::{
 };
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
+use crate::services::mcp_import::McpImportResolverError;
 use crate::services::mcp_oauth::McpOAuthError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::permission_share::PermissionShareError;
@@ -48,6 +49,7 @@ use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -286,7 +288,12 @@ impl ApiErrorDetails for ApiError {
             Self::BadRequest(_) => true,
             Self::NotFound(_) => true,
             Self::Unauthorized(_) => true,
-            Self::InternalError(_) => false,
+            Self::InternalError(body) => matches!(
+                body.code.as_str(),
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE
+                    | api::error_code::MCP_IMPORT_UPSTREAM_REJECTED
+                    | api::error_code::MCP_IMPORT_PROJECTION_FAILED
+            ),
             Self::Forbidden(_) => true,
             Self::Conflict(_) => true,
             Self::LimitExceeded(_) => true,
@@ -1166,8 +1173,14 @@ impl From<SecuritySchemeError> for ApiError {
 
 impl From<McpOAuthError> for ApiError {
     fn from(value: McpOAuthError) -> Self {
+        Arc::new(value).into()
+    }
+}
+
+impl From<Arc<McpOAuthError>> for ApiError {
+    fn from(value: Arc<McpOAuthError>) -> Self {
         let error = value.to_safe_string();
-        match value {
+        match value.as_ref() {
             McpOAuthError::ImportNotFound => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
@@ -1185,25 +1198,91 @@ impl From<McpOAuthError> for ApiError {
             McpOAuthError::AuthorizationRequired(_) => {
                 Self::conflict(api::error_code::INVALID_OAUTH_SESSION, error)
             }
-            McpOAuthError::OwnerMismatch => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
-            McpOAuthError::Unauthorized(inner) => inner.into(),
-            McpOAuthError::AccountUsage(inner) => inner.into(),
+            McpOAuthError::OwnerMismatch | McpOAuthError::Unauthorized(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            McpOAuthError::AccountUsage(inner) => match inner {
+                AccountUsageError::LimitExceeded(_) => Self::LimitExceeded(Json(ErrorBody {
+                    error,
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
+                    cause: None,
+                })),
+                AccountUsageError::ComponentTooLarge(_) => {
+                    Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
+                }
+                AccountUsageError::AccountNotfound(_) => {
+                    Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+                }
+                AccountUsageError::Unauthorized(_) => {
+                    Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+                }
+                AccountUsageError::InternalError(_) => Self::internal(
+                    api::error_code::INTERNAL_UNKNOWN,
+                    error,
+                    Some(anyhow::Error::new(value)),
+                ),
+            },
             McpOAuthError::Transport(golem_mcp_import::transport::TransportError::Denied) => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
             McpOAuthError::Transport(
                 golem_mcp_import::transport::TransportError::Configuration(_)
-                | golem_mcp_import::transport::TransportError::InvalidInput(_)
-                | golem_mcp_import::transport::TransportError::OAuthGrantRejected
-                | golem_mcp_import::transport::TransportError::AuthorizationRequired(_),
+                | golem_mcp_import::transport::TransportError::InvalidInput(_),
             ) => Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error),
-            McpOAuthError::Transport(_) => {
-                Self::internal(api::error_code::INTERNAL_UNKNOWN, error, None)
-            }
+            McpOAuthError::Transport(
+                golem_mcp_import::transport::TransportError::OAuthGrantRejected
+                | golem_mcp_import::transport::TransportError::AuthorizationRequired(_),
+            ) => Self::internal(api::error_code::MCP_IMPORT_UPSTREAM_REJECTED, error, None),
+            McpOAuthError::Transport(_) => Self::internal(
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+                error,
+                None,
+            ),
             McpOAuthError::InternalError(_) => Self::internal(
                 api::error_code::INTERNAL_UNKNOWN,
                 error,
-                Some(value.into_anyhow()),
+                Some(anyhow::Error::new(value)),
+            ),
+        }
+    }
+}
+
+impl From<McpImportResolverError> for ApiError {
+    fn from(value: McpImportResolverError) -> Self {
+        match value {
+            McpImportResolverError::OAuth(error) => error.into(),
+            McpImportResolverError::SourceUnavailable {
+                import_index,
+                error,
+            } => {
+                let mut error = Self::from(*error);
+                match &mut error {
+                    Self::BadRequest(body) => {
+                        for message in &mut body.0.errors {
+                            *message = format!("MCP import {import_index}: {message}");
+                        }
+                    }
+                    Self::Unauthorized(body)
+                    | Self::Forbidden(body)
+                    | Self::NotFound(body)
+                    | Self::Conflict(body)
+                    | Self::LimitExceeded(body)
+                    | Self::InternalError(body) => {
+                        body.0.error = format!("MCP import {import_index}: {}", body.0.error);
+                    }
+                }
+                error
+            }
+            McpImportResolverError::Projection(error) => {
+                Self::internal(api::error_code::MCP_IMPORT_PROJECTION_FAILED, error, None)
+            }
+            McpImportResolverError::Fetch(error) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error, None)
+            }
+            other => Self::internal(
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+                other.to_string(),
+                None,
             ),
         }
     }
@@ -1634,6 +1713,47 @@ mod tests {
         );
         assert_eq!(status, "not_found");
         assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn mcp_import_errors_distinguish_upstream_projection_and_internal_failures() {
+        use golem_mcp_import::transport::TransportError;
+
+        for (error, expected_code) in [
+            (
+                McpImportResolverError::Timeout,
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+            ),
+            (
+                McpOAuthError::Transport(TransportError::Network).into(),
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+            ),
+            (
+                McpOAuthError::Transport(TransportError::AuthorizationRequired(401)).into(),
+                api::error_code::MCP_IMPORT_UPSTREAM_REJECTED,
+            ),
+            (
+                McpImportResolverError::Projection("listing exceeds limit".into()),
+                api::error_code::MCP_IMPORT_PROJECTION_FAILED,
+            ),
+            (
+                McpOAuthError::InternalError(anyhow::anyhow!("private-token")).into(),
+                api::error_code::INTERNAL_UNKNOWN,
+            ),
+        ] {
+            let api_error = ApiError::from(error);
+            assert_eq!(
+                api_error.is_expected(),
+                expected_code != api::error_code::INTERNAL_UNKNOWN
+            );
+            match &api_error {
+                ApiError::InternalError(body) => {
+                    assert_eq!(body.code, expected_code);
+                    assert!(!body.error.contains("private-token"));
+                }
+                other => panic!("expected server-side error, got {other:?}"),
+            }
+        }
     }
 
     #[test]

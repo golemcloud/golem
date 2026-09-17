@@ -1767,10 +1767,10 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
-        /// Authorize MCP imports that use an OAuth security scheme
+        /// Inspect, refresh and authorize MCP imports
         McpImport {
             #[clap(subcommand)]
-            subcommand: McpImportOAuthSubcommand,
+            subcommand: McpImportSubcommand,
         },
         /// Manage API Domains
         Domain {
@@ -1780,31 +1780,68 @@ pub mod api {
     }
 
     #[derive(Debug, Subcommand)]
-    pub enum McpImportOAuthSubcommand {
-        /// Start authorization and print the provider consent URL
-        Authorize {
+    pub enum McpImportSubcommand {
+        /// Inspect an import's projected tool definitions
+        Tools {
+            /// Zero-based index in the target deployment's MCP imports
             import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Fetch fresh upstream definitions for an import
+        Refresh {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Start authorization and print the provider consent URL
+        Authorize {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
         /// Complete authorization from the exact provider callback URL
         Complete {
+            /// Zero-based import index in the target deployment or selected manifest
             import_index: u32,
+            /// Exact provider callback URL received after consent, including query parameters
             callback_url: OAuthCallbackUrl,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
         /// Show non-secret authorization state
         Status {
+            /// Zero-based import index in the target deployment or selected manifest
             import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
         /// Revoke the stored grant
         Disconnect {
+            /// Zero-based import index in the target deployment or selected manifest
             import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
     }
 

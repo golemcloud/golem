@@ -382,6 +382,7 @@ fn activation_with_policy(
         EntityActivationPolicy::Tool {
             provision,
             binding: Box::new(binding),
+            mcp_import: None,
         },
         filesystem,
     )
@@ -491,6 +492,9 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        true,
+        false,
     )
     .unwrap()
 }
@@ -516,6 +520,9 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
+        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        true,
+        false,
     )
     .unwrap()
 }
@@ -614,6 +621,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("owner-entity-scope".to_string()),
+        true,
+        false,
     )
     .unwrap();
 
@@ -706,6 +716,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("second-entity-scope".to_string()),
+        true,
+        false,
     )
     .unwrap();
     let expected_error = second_hosted
@@ -744,6 +757,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        true,
+        false,
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -824,6 +840,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        true,
+        false,
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();

@@ -68,6 +68,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::mcp_import::McpImportResolver;
 use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
@@ -125,6 +126,7 @@ pub struct Services {
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub mcp_oauth_service: Arc<McpOAuthService>,
+    pub mcp_import_resolver: Arc<McpImportResolver>,
     pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
@@ -174,6 +176,7 @@ impl Services {
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
         config.mcp_oauth.validate()?;
+        config.mcp_import.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
@@ -390,6 +393,11 @@ impl Services {
             config.mcp_oauth,
             account_usage_service.clone(),
         ));
+        let mcp_import_resolver = Arc::new(McpImportResolver::new(
+            mcp_oauth_service.clone(),
+            config.mcp_import,
+        )?);
+        McpImportResolver::start_background_tasks(&mcp_import_resolver, join_set);
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
             repos.http_api_deployment_repo.clone(),
@@ -437,6 +445,7 @@ impl Services {
             environment_tool_grant_service.clone(),
             tool_release_service.clone(),
             native_tool_catalog.clone(),
+            mcp_import_resolver.clone(),
         ));
 
         let deployed_routes_service =
@@ -536,6 +545,7 @@ impl Services {
             http_api_deployment_service,
             mcp_deployment_service,
             mcp_oauth_service,
+            mcp_import_resolver,
             native_tool_catalog,
             login_system,
             permission_share_service,

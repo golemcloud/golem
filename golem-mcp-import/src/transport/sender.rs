@@ -16,13 +16,28 @@ pub trait HttpPolicy: Send {
 /// The client cannot be supplied externally: its retry, redirect, proxy, and
 /// decoding settings are part of the durable host's dispatch contract.
 pub struct HttpSender<P> {
-    client: reqwest::Client,
+    client: HttpClient,
     policy: P,
 }
 
-impl<P: HttpPolicy> HttpSender<P> {
-    pub fn new(policy: P) -> Result<Self, TransportError> {
-        let client = reqwest::Client::builder()
+/// A cloneable, contract-preserving HTTP client for sharing connection pools.
+/// Its underlying reqwest client cannot be supplied by callers.
+#[derive(Clone)]
+pub struct HttpClient(reqwest::Client);
+
+impl HttpClient {
+    pub fn new() -> Result<Self, TransportError> {
+        Self::build(reqwest::Client::builder())
+    }
+
+    pub fn with_root_certificate(
+        certificate: reqwest::Certificate,
+    ) -> Result<Self, TransportError> {
+        Self::build(reqwest::Client::builder().add_root_certificate(certificate))
+    }
+
+    fn build(builder: reqwest::ClientBuilder) -> Result<Self, TransportError> {
+        builder
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .no_gzip()
@@ -32,10 +47,28 @@ impl<P: HttpPolicy> HttpSender<P> {
             .no_proxy()
             .referer(false)
             .build()
-            .map_err(|_| {
-                TransportError::Configuration("HTTP client initialization failed".into())
-            })?;
-        Ok(Self { client, policy })
+            .map(Self)
+            .map_err(|_| TransportError::Configuration("HTTP client initialization failed".into()))
+    }
+
+    pub fn sender<P: HttpPolicy>(&self, policy: P) -> HttpSender<P> {
+        HttpSender {
+            client: self.clone(),
+            policy,
+        }
+    }
+}
+
+impl<P: HttpPolicy> HttpSender<P> {
+    pub fn new(policy: P) -> Result<Self, TransportError> {
+        Ok(HttpClient::new()?.sender(policy))
+    }
+
+    pub fn with_root_certificate(
+        policy: P,
+        certificate: reqwest::Certificate,
+    ) -> Result<Self, TransportError> {
+        Ok(HttpClient::with_root_certificate(certificate)?.sender(policy))
     }
 }
 
@@ -50,6 +83,7 @@ impl<P: HttpPolicy> HttpSend for HttpSender<P> {
         self.policy.admit(&target).await?;
         let response = self
             .client
+            .0
             .execute(request)
             .await
             .map_err(|_| TransportError::Network)?;

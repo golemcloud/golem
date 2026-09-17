@@ -21,6 +21,7 @@ use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_state::EnvironmentStateError;
+use crate::services::mcp_import::McpImportResolverError;
 use crate::services::mcp_oauth::McpOAuthError;
 use crate::services::resource_definition::ResourceDefinitionError;
 use golem_common::base_model::api;
@@ -213,8 +214,14 @@ impl From<AccountUsageError> for GrpcApiError {
 
 impl From<McpOAuthError> for GrpcApiError {
     fn from(value: McpOAuthError) -> Self {
+        std::sync::Arc::new(value).into()
+    }
+}
+
+impl From<std::sync::Arc<McpOAuthError>> for GrpcApiError {
+    fn from(value: std::sync::Arc<McpOAuthError>) -> Self {
         let error = value.to_safe_string();
-        match value {
+        match value.as_ref() {
             McpOAuthError::ImportNotFound | McpOAuthError::SchemeNotFound => {
                 Self::NotFound(ErrorBody {
                     error,
@@ -222,7 +229,14 @@ impl From<McpOAuthError> for GrpcApiError {
                     cause: None,
                 })
             }
-            McpOAuthError::Unauthorized(inner) => inner.into(),
+            McpOAuthError::Unauthorized(_)
+            | McpOAuthError::AccountUsage(AccountUsageError::Unauthorized(_)) => {
+                Self::Unauthorized(ErrorBody {
+                    error,
+                    code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+                    cause: None,
+                })
+            }
             McpOAuthError::OwnerMismatch
             | McpOAuthError::Transport(golem_mcp_import::transport::TransportError::Denied) => {
                 Self::Unauthorized(ErrorBody {
@@ -231,7 +245,20 @@ impl From<McpOAuthError> for GrpcApiError {
                     cause: None,
                 })
             }
-            McpOAuthError::AccountUsage(inner) => inner.into(),
+            McpOAuthError::AccountUsage(AccountUsageError::AccountNotfound(_)) => {
+                Self::NotFound(ErrorBody {
+                    error,
+                    code: api::error_code::ACCOUNT_NOT_FOUND.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::AccountUsage(AccountUsageError::LimitExceeded(_)) => {
+                Self::LimitExceeded(ErrorBody {
+                    error,
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
+                    cause: None,
+                })
+            }
             McpOAuthError::NotOAuth
             | McpOAuthError::ContextChanged
             | McpOAuthError::AuthorizationRequired(_)
@@ -242,7 +269,7 @@ impl From<McpOAuthError> for GrpcApiError {
                 code: api::error_code::VALIDATION_ERROR.to_string(),
                 cause: None,
             }),
-            McpOAuthError::Transport(ref transport)
+            McpOAuthError::Transport(transport)
                 if !matches!(
                     transport,
                     golem_mcp_import::transport::TransportError::Network
@@ -255,10 +282,29 @@ impl From<McpOAuthError> for GrpcApiError {
                     cause: None,
                 })
             }
-            other => Self::InternalError(ErrorBody {
+            _ => Self::InternalError(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
-                cause: Some(anyhow::Error::new(other)),
+                cause: Some(anyhow::Error::new(value)),
+            }),
+        }
+    }
+}
+
+impl From<McpImportResolverError> for GrpcApiError {
+    fn from(value: McpImportResolverError) -> Self {
+        match value {
+            McpImportResolverError::OAuth(error) => error.into(),
+            McpImportResolverError::SourceUnavailable { error, .. } => (*error).into(),
+            McpImportResolverError::Projection(error) => Self::BadRequest(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+                cause: None,
+            }),
+            other => Self::InternalError(ErrorBody {
+                error: other.to_string(),
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: None,
             }),
         }
     }

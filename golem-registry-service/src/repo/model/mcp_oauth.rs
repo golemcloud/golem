@@ -5,6 +5,8 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use chrono::{DateTime, Utc};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_mcp_import::oauth::AuthorizationServerMetadata;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter};
@@ -26,9 +28,34 @@ pub struct McpOAuthFlowSecrets {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpImportTarget {
+    Deployed(McpImportSource),
+    Declared {
+        environment_id: EnvironmentId,
+        import: McpImport,
+    },
+}
+
+impl McpImportTarget {
+    pub fn environment_id(&self) -> EnvironmentId {
+        match self {
+            Self::Deployed(source) => source.environment_id,
+            Self::Declared { environment_id, .. } => *environment_id,
+        }
+    }
+}
+
+impl From<&McpImportSource> for McpImportTarget {
+    fn from(source: &McpImportSource) -> Self {
+        let mut source = source.clone();
+        source.upstream_tool_name.clear();
+        Self::Deployed(source)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpOAuthSession {
-    pub deployment_revision: i64,
-    pub import_index: u32,
+    pub target: McpImportTarget,
     pub authorized_by: Uuid,
     pub server: AuthorizationServerMetadata,
     pub scopes: Vec<String>,

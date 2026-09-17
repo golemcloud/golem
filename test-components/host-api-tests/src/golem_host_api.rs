@@ -1,5 +1,6 @@
 use crate::raw_http;
 use crate::raw_http::Method;
+use futures_concurrency::future::Join;
 use golem_rust::bindings::golem::agent::host::{Datetime, WasmRpc};
 use golem_rust::bindings::golem::api::oplog::{GetOplog, OplogReadError, SearchOplog};
 use golem_rust::bindings::golem::tool::host as tool_host;
@@ -195,6 +196,21 @@ pub trait GolemHostApi {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String>;
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String>;
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
 }
 
 pub struct GolemHostApiImpl {
@@ -999,6 +1015,108 @@ impl GolemHostApi for GolemHostApiImpl {
             .await
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String> {
+        let _idempotence = use_idempotence_mode(idempotent);
+        let _atomic = atomic.then(golem_rust::mark_atomic_operation);
+        self.tool_rpc_invoke_and_await_result(tool_name, Vec::new(), String::new())
+            .await
+    }
+
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
+            &[],
+            encode_tool_input(String::new()).expect("encode empty tool input"),
+            None,
+            Some(stdout_target),
+        );
+        if let Some(checkpoint) = checkpoint {
+            let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+                .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+            raw_http::request_async(
+                Method::Get,
+                &format!("localhost:{port}"),
+                &format!("/checkpoint/{checkpoint}"),
+                None,
+                None,
+            )
+            .await;
+        }
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
+    }
+
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
+            &[],
+            encode_tool_input(String::new()).expect("encode empty tool input"),
+            None,
+            Some(stdout_target),
+        );
+        let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+            .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+        raw_http::request_async(
+            Method::Get,
+            &format!("localhost:{port}"),
+            "/checkpoint/cancel",
+            None,
+            None,
+        )
+        .await;
+        result.cancel();
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        // Make the observed stream terminal part of a subsequent durable claim.
+        // Returning it alone does not validate what reconstruction recomputes.
+        let _ = tool_host::ToolRpc::new(&tool_name)
+            .invoke_and_await(
+                vec![format!("observed-{stdout:?}")],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                None,
+            )
+            .await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
     }
 }
 

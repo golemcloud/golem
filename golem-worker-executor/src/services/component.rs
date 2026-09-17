@@ -518,6 +518,15 @@ mod tests {
 
     #[async_trait]
     impl RegistryService for MockRegistryService {
+        async fn resolve_mcp_import(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: bool,
+        ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+        {
+            panic!("unexpected MCP discovery")
+        }
         async fn get_mcp_runtime_credential(
             &self,
             _: &golem_common::model::mcp_import::McpImportSource,

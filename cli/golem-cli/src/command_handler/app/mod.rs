@@ -107,7 +107,7 @@ mod deploy_diff;
 mod template;
 mod version_strategy;
 
-fn resolve_mcp_import_env_vars(
+pub(crate) fn resolve_mcp_import_env_vars(
     import: McpImportDeployment,
     index: usize,
 ) -> anyhow::Result<McpImportDeployment> {
@@ -2992,6 +2992,7 @@ impl AppCommandHandler {
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<()> {
+        let mcp_tools = self.resolve_build_mcp_tools(build_config).await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -3001,7 +3002,78 @@ impl AppCommandHandler {
             self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
         }
 
-        app_ctx.build(build_config, resolved_tool_grants).await
+        app_ctx
+            .build(build_config, resolved_tool_grants, &mcp_tools)
+            .await
+    }
+
+    async fn resolve_build_mcp_tools(
+        &self,
+        build_config: &BuildConfig,
+    ) -> anyhow::Result<Vec<golem_client::model::McpResolvedTool>> {
+        if !build_config.should_run_step(AppBuildStep::GenBridge) {
+            return Ok(vec![]);
+        }
+        let (imports, mut native_names) = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            let app = app_ctx.application();
+            if !app.requires_mcp_import_bridge_metadata(app_ctx.selected_component_names()) {
+                return Ok(vec![]);
+            }
+            (
+                app.mcp_imports(app.environment_name())
+                    .cloned()
+                    .unwrap_or_default(),
+                app.tool_declarations()
+                    .keys()
+                    .map(ToString::to_string)
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
+        let imports = imports
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+        let clients = self.ctx.golem_clients().await?;
+        let plan = clients
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await
+            .map_service_error()?;
+        native_names.extend(
+            plan.ambient_tools
+                .into_iter()
+                .map(|tool| tool.name.to_string()),
+        );
+        log_action(
+            "Resolving",
+            "MCP import metadata for generated tool clients",
+        );
+        let resolution = clients
+            .environment
+            .resolve_mcp_imports(
+                &environment.environment_id.0,
+                &golem_client::model::McpImportResolutionRequest {
+                    imports,
+                    native_tool_names: native_names.into_iter().collect(),
+                },
+            )
+            .await
+            .map_service_error()?;
+        for diagnostic in resolution.diagnostics {
+            log_warn(format!(
+                "MCP import {} tool '{}': {}",
+                diagnostic.import_index, diagnostic.upstream_name, diagnostic.reason
+            ));
+        }
+        Ok(resolution.tools)
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {

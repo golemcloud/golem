@@ -219,6 +219,11 @@ impl<Ctx: WorkerCtx> NativeToolCatalog<Ctx> {
         let mut entries = BTreeMap::new();
         for registration in registrations {
             registration.definition.validate()?;
+            if registration.definition.id
+                == golem_common::model::mcp_import::MCP_IMPORT_BRIDGE_HOST_TOOL_ID
+            {
+                return Err("mcp-import is reserved for the dynamic MCP bridge".into());
+            }
             let key = NativeToolKey {
                 host_tool_id: HostToolId::try_from(registration.definition.id.clone())?,
                 implementation_version: registration.definition.implementation_version.clone(),

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
-use crate::model::OwnedAgentId;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -21,6 +20,7 @@ use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
 };
+use crate::model::{IdempotencyKey, OwnedAgentId};
 use crate::schema::TypedSchemaValue;
 use desert_rust::BinaryCodec;
 use serde::de::Error;
@@ -244,11 +244,21 @@ pub enum FilesystemCapability {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportActivation {
+    pub source: crate::model::mcp_import::McpImportSource,
+    pub protocol_version: String,
+    pub projected_tool: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntityActivationPolicy {
     Tool {
         provision: ToolProvisionConfig,
         binding: Box<CompiledToolBinding>,
+        mcp_import: Option<Box<McpImportActivation>>,
     },
     ToolMiddleware {
         middleware_name: ToolMiddlewareName,
@@ -427,7 +437,11 @@ impl EntityActivation {
         }
 
         match policy {
-            EntityActivationPolicy::Tool { provision, binding } => {
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import,
+            } => {
                 if binding.deployment_revision != deployment_revision {
                     return Err(
                         "Entity activation and tool binding deployment revisions differ"
@@ -473,6 +487,21 @@ impl EntityActivation {
                                 .to_string(),
                         );
                     }
+                }
+                let is_mcp_bridge =
+                    binding.source == crate::model::mcp_import::mcp_import_bridge_source();
+                if is_mcp_bridge != mcp_import.is_some() {
+                    return Err(
+                        "MCP bridge activation requires its dynamic projection exclusively".into(),
+                    );
+                }
+                if let Some(import) = mcp_import
+                    && (import.source.deployment_revision != deployment_revision
+                        || import.source.upstream_tool_name.is_empty()
+                        || import.protocol_version.is_empty()
+                        || import.projected_tool.is_empty())
+                {
+                    return Err("Invalid MCP import activation snapshot".into());
                 }
                 if !binding
                     .secret_keys_revealable
@@ -746,10 +775,6 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-#[desert(evolution(
-    FieldAdded("operation", None::<EntityInvocationDescriptor>),
-    FieldAdded("principal", None::<Principal>)
-))]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
     pub activation: EntityActivation,
@@ -757,6 +782,7 @@ pub struct EntityInvocationRequest {
     pub call_mode: EntityCallMode,
     pub operation: Option<EntityInvocationDescriptor>,
     pub principal: Option<Principal>,
+    pub assume_idempotence: bool,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -769,6 +795,9 @@ pub struct EntityInvocationScope {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
 }
 
 impl EntityInvocationScope {
@@ -778,6 +807,9 @@ impl EntityInvocationScope {
         activation: Arc<EntityActivation>,
         calling_principal: CallingAgentPrincipal,
         mode: InvocationExecutionMode,
+        idempotency_key: IdempotencyKey,
+        assume_idempotence: bool,
+        logical_key_positions: bool,
     ) -> Result<Self, String> {
         if parent_start_index == OplogIndex::NONE {
             return Err("Entity invocation parent Start index cannot be zero".to_string());
@@ -791,6 +823,14 @@ impl EntityInvocationScope {
             return Err(
                 "Entity invocation selector does not match the activation policy".to_string(),
             );
+        }
+        if let EntityActivationPolicy::Tool {
+            mcp_import: Some(import),
+            ..
+        } = activation.policy()
+            && import.source.environment_id != invocation_id.owner_id().environment_id
+        {
+            return Err("MCP import activation belongs to a different environment".into());
         }
         match &calling_principal {
             Principal::Agent(principal)
@@ -807,6 +847,9 @@ impl EntityInvocationScope {
             activation,
             calling_principal,
             mode,
+            idempotency_key,
+            assume_idempotence,
+            logical_key_positions,
         })
     }
 
@@ -833,6 +876,18 @@ impl EntityInvocationScope {
     pub fn mode(&self) -> InvocationExecutionMode {
         self.mode
     }
+
+    pub fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
+    }
+
+    pub fn assume_idempotence(&self) -> bool {
+        self.assume_idempotence
+    }
+
+    pub fn logical_key_positions(&self) -> bool {
+        self.logical_key_positions
+    }
 }
 
 #[derive(Deserialize)]
@@ -843,6 +898,9 @@ struct EntityInvocationScopeWire {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
 }
 
 impl<'de> Deserialize<'de> for EntityInvocationScope {
@@ -857,6 +915,9 @@ impl<'de> Deserialize<'de> for EntityInvocationScope {
             wire.activation,
             wire.calling_principal,
             wire.mode,
+            wire.idempotency_key,
+            wire.assume_idempotence,
+            wire.logical_key_positions,
         )
         .map_err(D::Error::custom)
     }
@@ -1033,10 +1094,24 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
         use golem_api_grpc::proto::golem::worker::entity_activation_policy::Value;
 
         let value = match value {
-            EntityActivationPolicy::Tool { provision, binding } => Value::Tool(
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import,
+            } => Value::Tool(
                 golem_api_grpc::proto::golem::worker::ToolEntityActivationPolicy {
                     provision: Some(provision.into()),
                     binding: Some((*binding).into()),
+                    mcp_import: mcp_import.map(|import| {
+                        golem_api_grpc::proto::golem::worker::McpImportActivation {
+                            environment_id: Some(import.source.environment_id.into()),
+                            deployment_revision: import.source.deployment_revision.into(),
+                            import_index: import.source.import_index,
+                            upstream_tool_name: import.source.upstream_tool_name,
+                            protocol_version: import.protocol_version,
+                            projected_tool: import.projected_tool,
+                        }
+                    }),
                 },
             ),
             EntityActivationPolicy::ToolMiddleware {
@@ -1083,6 +1158,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationPolicy>
                         .ok_or("Missing ToolEntityActivationPolicy.binding")?
                         .try_into()?,
                 ),
+                mcp_import: tool
+                    .mcp_import
+                    .map(|import| -> Result<_, String> {
+                        Ok(Box::new(McpImportActivation {
+                            source: crate::model::mcp_import::McpImportSource {
+                                environment_id: import
+                                    .environment_id
+                                    .ok_or("Missing MCP environment")?
+                                    .try_into()?,
+                                deployment_revision: import.deployment_revision.try_into()?,
+                                import_index: import.import_index,
+                                upstream_tool_name: import.upstream_tool_name,
+                            },
+                            protocol_version: import.protocol_version,
+                            projected_tool: import.projected_tool,
+                        }))
+                    })
+                    .transpose()?,
             }),
             Value::ToolMiddleware(middleware) => Ok(Self::ToolMiddleware {
                 middleware_name: ToolMiddlewareName::try_from(middleware.middleware_name)?,
@@ -1245,6 +1338,9 @@ impl From<EntityInvocationScope> for golem_api_grpc::proto::golem::worker::Entit
             calling_principal: Some(value.calling_principal.into()),
             mode: golem_api_grpc::proto::golem::worker::InvocationExecutionMode::from(value.mode)
                 as i32,
+            idempotency_key: Some(value.idempotency_key.into()),
+            assume_idempotence: value.assume_idempotence,
+            logical_key_positions: value.logical_key_positions,
         }
     }
 }
@@ -1278,6 +1374,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityInvocationScope>
                 .ok_or("Missing EntityInvocationScope.calling_principal")?
                 .try_into()?,
             mode,
+            value
+                .idempotency_key
+                .ok_or("Missing EntityInvocationScope.idempotency_key")?
+                .into(),
+            value.assume_idempotence,
+            value.logical_key_positions,
         )
     }
 }
@@ -1337,6 +1439,7 @@ mod tests {
             EntityActivationPolicy::Tool {
                 provision: ToolProvisionConfig::default(),
                 binding: Box::new(binding),
+                mcp_import: None,
             },
             FilesystemCapability::Incapable,
         )
@@ -1469,6 +1572,7 @@ mod tests {
             principal: Some(Principal::GolemUser(GolemUserPrincipal {
                 account_id: AccountId::new(),
             })),
+            assume_idempotence: false,
         };
 
         let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -1502,6 +1606,7 @@ mod tests {
                 declares_stdout: false,
             })),
             principal: None,
+            assume_idempotence: true,
         };
         let identity = EntityInvocationRequestIdentity {
             entity: request.entity.clone(),
@@ -1559,37 +1664,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_entity_invocation_request_decodes_without_operation_descriptor() {
-        #[derive(BinaryCodec)]
-        #[desert(evolution())]
-        struct LegacyEntityInvocationRequest {
-            entity: AgentEntity,
-            activation: EntityActivation,
-            calling_principal: CallingAgentPrincipal,
-            call_mode: EntityCallMode,
-        }
-
-        let owner = owner();
-        let legacy = LegacyEntityInvocationRequest {
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            call_mode: EntityCallMode::Synchronous,
-        };
-        let bytes = desert_rust::serialize_to_byte_vec(&legacy).unwrap();
-        let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
-
-        assert_eq!(decoded.entity, legacy.entity);
-        assert_eq!(decoded.activation, legacy.activation);
-        assert_eq!(decoded.calling_principal, legacy.calling_principal);
-        assert_eq!(decoded.call_mode, legacy.call_mode);
-        assert_eq!(decoded.operation, None);
-        assert_eq!(decoded.principal, None);
-    }
-
-    #[test]
     fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
         let owner = owner();
         let scope = EntityInvocationScope::new(
@@ -1607,14 +1681,56 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             InvocationExecutionMode::ReplayingCompleted,
+            IdempotencyKey::new("scope-protobuf-seed".to_string()),
+            false,
+            true,
         )
         .unwrap();
 
         let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
             scope.clone().into();
         let decoded: EntityInvocationScope = protobuf.try_into().unwrap();
+        let json = serde_json::to_string(&scope).unwrap();
+        let json_decoded: EntityInvocationScope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded, scope);
+        assert_eq!(json_decoded, scope);
+        assert_eq!(scope.idempotency_key().value, "scope-protobuf-seed");
+        assert!(!scope.assume_idempotence());
+        assert!(scope.logical_key_positions());
+    }
+
+    #[test]
+    fn invocation_scope_protobuf_requires_idempotency_key() {
+        let owner = owner();
+        let scope = EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner.clone(),
+                    entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
+                },
+                OplogIndex::from_u64(84),
+            )
+            .unwrap(),
+            OplogIndex::from_u64(81),
+            Arc::new(activation()),
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            InvocationExecutionMode::Live,
+            IdempotencyKey::new("required-protobuf-seed".to_string()),
+            true,
+            false,
+        )
+        .unwrap();
+        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
+            scope.into();
+        protobuf.idempotency_key = None;
+
+        assert_eq!(
+            EntityInvocationScope::try_from(protobuf).unwrap_err(),
+            "Missing EntityInvocationScope.idempotency_key"
+        );
     }
 
     #[test]
@@ -1638,6 +1754,9 @@ mod tests {
                 agent_id: owner.agent_id.clone(),
             }),
             InvocationExecutionMode::ReplayingIncomplete,
+            IdempotencyKey::new("middleware-roundtrip-seed".to_string()),
+            false,
+            true,
         )
         .unwrap();
         let request = EntityInvocationRequest {
@@ -1647,6 +1766,7 @@ mod tests {
             call_mode: EntityCallMode::Synchronous,
             operation: None,
             principal: None,
+            assume_idempotence: false,
         };
 
         let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -1672,6 +1792,135 @@ mod tests {
             result.unwrap_err(),
             "EntityActivation fingerprint does not match its contents"
         );
+    }
+
+    #[test]
+    fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment() {
+        use crate::model::mcp_import::{McpImportSource, mcp_import_bridge_source};
+        let owner = owner();
+        let base = host_activation();
+        let ToolSource::Host {
+            host_tool_id,
+            implementation_version,
+        } = mcp_import_bridge_source()
+        else {
+            unreachable!()
+        };
+        let mut policy = base.policy.clone();
+        let EntityActivationPolicy::Tool {
+            binding,
+            mcp_import,
+            ..
+        } = &mut policy
+        else {
+            unreachable!()
+        };
+        binding.source = mcp_import_bridge_source();
+        *mcp_import = Some(Box::new(McpImportActivation {
+            source: McpImportSource {
+                environment_id: owner.environment_id,
+                deployment_revision: base.deployment_revision,
+                import_index: 3,
+                upstream_tool_name: "Search_Remote".into(),
+            },
+            protocol_version: "2026-07-28".into(),
+            projected_tool: b"projection snapshot".to_vec(),
+        }));
+        let make = |policy| {
+            EntityActivation::new_host(
+                host_tool_id.clone(),
+                implementation_version.clone(),
+                base.deployment_revision,
+                policy,
+                FilesystemCapability::Incapable,
+            )
+        };
+        let activation = make(policy.clone()).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&activation).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<EntityActivation>(&bytes).unwrap(),
+            activation
+        );
+        let proto: golem_api_grpc::proto::golem::worker::EntityActivation =
+            activation.clone().into();
+        assert_eq!(EntityActivation::try_from(proto).unwrap(), activation);
+
+        for mutation in 0..5 {
+            let mut changed = policy.clone();
+            let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+                unreachable!()
+            };
+            match mutation {
+                0 => *mcp_import = None,
+                1 => {
+                    mcp_import.as_mut().unwrap().source.deployment_revision =
+                        99_u64.try_into().unwrap()
+                }
+                2 => mcp_import
+                    .as_mut()
+                    .unwrap()
+                    .source
+                    .upstream_tool_name
+                    .clear(),
+                3 => mcp_import.as_mut().unwrap().projected_tool.clear(),
+                _ => mcp_import.as_mut().unwrap().protocol_version.clear(),
+            }
+            assert!(make(changed).is_err(), "invalid mutation {mutation}");
+        }
+        let mut changed = policy.clone();
+        let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+            unreachable!()
+        };
+        mcp_import.as_mut().unwrap().projected_tool.push(1);
+        assert_ne!(
+            make(changed).unwrap().fingerprint(),
+            activation.fingerprint()
+        );
+        let EntityActivationPolicy::Tool { binding, .. } = &mut policy else {
+            unreachable!()
+        };
+        binding.source = ToolSource::Host {
+            host_tool_id: HostToolId::try_from("native-search".to_string()).unwrap(),
+            implementation_version: "1.2.3".into(),
+        };
+        assert!(
+            EntityActivation::new_host(
+                HostToolId::try_from("native-search".to_string()).unwrap(),
+                "1.2.3".into(),
+                base.deployment_revision,
+                policy,
+                FilesystemCapability::Incapable,
+            )
+            .is_err()
+        );
+
+        let make_scope = |owner: OwnedAgentId| {
+            EntityInvocationScope::new(
+                EntityInvocationId::new(
+                    OwnedAgentEntityId {
+                        owner: owner.clone(),
+                        entity: activation.entity(),
+                    },
+                    OplogIndex::from_u64(8),
+                )
+                .unwrap(),
+                OplogIndex::from_u64(7),
+                Arc::new(activation.clone()),
+                Principal::Agent(AgentPrincipal {
+                    agent_id: owner.agent_id,
+                }),
+                InvocationExecutionMode::ReplayingCompleted,
+                IdempotencyKey::new("mcp-activation-scope-seed".to_string()),
+                false,
+                true,
+            )
+        };
+        assert!(make_scope(owner.clone()).is_ok());
+        let other_environment = OwnedAgentId {
+            environment_id: EnvironmentId::new(),
+            ..owner
+        };
+        assert!(make_scope(other_environment).is_err());
     }
 
     #[test]
@@ -1703,7 +1952,10 @@ mod tests {
     #[test]
     fn host_activation_rejects_source_policy_identity_mismatches() {
         let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+        let EntityActivationPolicy::Tool {
+            provision, binding, ..
+        } = activation.policy
+        else {
             unreachable!()
         };
 
@@ -1724,6 +1976,7 @@ mod tests {
                 EntityActivationPolicy::Tool {
                     provision: provision.clone(),
                     binding: binding.clone(),
+                    mcp_import: None,
                 },
                 activation.filesystem,
             );
@@ -1737,7 +1990,10 @@ mod tests {
     #[test]
     fn host_activation_rejects_invalid_source_contracts() {
         let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+        let EntityActivationPolicy::Tool {
+            provision, binding, ..
+        } = activation.policy
+        else {
             unreachable!()
         };
         let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
@@ -1747,7 +2003,11 @@ mod tests {
                 host_tool_id.clone(),
                 "  ".to_string(),
                 activation.deployment_revision,
-                EntityActivationPolicy::Tool { provision, binding },
+                EntityActivationPolicy::Tool {
+                    provision,
+                    binding,
+                    mcp_import: None
+                },
                 activation.filesystem,
             )
             .unwrap_err(),
@@ -1843,6 +2103,9 @@ mod tests {
                 activation.clone(),
                 principal.clone(),
                 InvocationExecutionMode::Live,
+                IdempotencyKey::new("invalid-parent-scope-seed".to_string()),
+                false,
+                true,
             );
 
             assert!(

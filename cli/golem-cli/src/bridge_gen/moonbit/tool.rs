@@ -112,19 +112,28 @@ impl MoonBitToolBridgeGenerator {
     fn write_client(&mut self) -> anyhow::Result<()> {
         let client_dir = self.target_path.join("client");
         fs::create_dir_all(&client_dir)?;
+        let content = self.generate_client_source()?;
+        let imports = [
+            (
+                "@asyncCore.",
+                "\"golemcloud/golem_sdk/async-core\" @asyncCore",
+            ),
+            (
+                "@types.",
+                "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
+            ),
+            ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+            ("@tool.", "\"golemcloud/golem_sdk/tool\""),
+        ]
+        .into_iter()
+        .filter_map(|(usage, import)| content.contains(usage).then_some(import))
+        .map(|import| format!("  {import},"))
+        .collect::<Vec<_>>()
+        .join("\n");
         fs::write_str(
             client_dir.join("moon.pkg"),
-            r#"import {
-  "golemcloud/golem_sdk/async-core" @asyncCore,
-  "golemcloud/golem_sdk/interface/golem/core/types" @types,
-  "golemcloud/golem_sdk/schema_model" @model,
-  "golemcloud/golem_sdk/tool",
-}
-
-supported_targets = "+wasm"
-"#,
+            format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n"),
         )?;
-        let content = self.generate_client_source()?;
         fs::write_str(client_dir.join("client.mbt"), content)?;
         Ok(())
     }

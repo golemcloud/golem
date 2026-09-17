@@ -151,6 +151,8 @@ impl EntityInvocationDurability {
             call_mode,
             operation,
             principal: Some(principal),
+            assume_idempotence: store
+                .with(|mut access| get_ctx(access.data_mut()).state.assume_idempotence),
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -336,8 +338,26 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let owner =
-            store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        // Reserve the caller's logical position on both live and replay paths,
+        // as for RPC. Each entity Store derives its child calls under this seed.
+        let (owner, idempotency_key, logical_key_positions) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                WorkerExecutorError::runtime("entity invocation requires an active caller key")
+            })?;
+            let logical = ctx
+                .state
+                .current_atomic_region_idempotency_key_oplog_index()
+                .is_some();
+            let position = ctx
+                .state
+                .current_idempotency_key_oplog_index(handle.start_index());
+            Ok::<_, WorkerExecutorError>((
+                ctx.state.owned_agent_id.clone(),
+                golem_common::model::IdempotencyKey::derived(&caller_key, position),
+                logical,
+            ))
+        })?;
         let operation = metadata.operation;
         let historical_reconstruction = if handle.is_live() {
             None
@@ -376,6 +396,9 @@ impl EntityInvocationDurability {
             Arc::new(metadata.activation),
             metadata.calling_principal,
             execution_mode,
+            idempotency_key,
+            metadata.assume_idempotence,
+            logical_key_positions,
         )
         .map_err(WorkerExecutorError::runtime)?;
         Ok(Self {
@@ -475,6 +498,9 @@ impl EntityInvocationDurability {
             scope.activation().clone(),
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
+            scope.idempotency_key().clone(),
+            scope.assume_idempotence(),
+            scope.logical_key_positions(),
         )
         .map_err(WorkerExecutorError::runtime)?;
 
@@ -689,6 +715,7 @@ impl EntityInvocationDurability {
         D,
         Ctx,
         OnCompletedStarted,
+        OnCompletedCancelled,
         OnCompletedFailure,
         CompletedFailureFuture,
     >(
@@ -698,6 +725,7 @@ impl EntityInvocationDurability {
         body: EntityInvocationHandle<HostResponseEntityInvocation>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
         on_completed_started: OnCompletedStarted,
+        on_completed_cancelled: OnCompletedCancelled,
         on_completed_failure: OnCompletedFailure,
     ) -> Result<EntityInvocationDurabilityOutcome, EntityInvocationDurabilityFailure>
     where
@@ -705,6 +733,7 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         OnCompletedStarted: FnOnce() + Send,
+        OnCompletedCancelled: FnOnce() + Send + 'static,
         OnCompletedFailure: FnOnce(WorkerExecutorError) -> CompletedFailureFuture + Send + 'static,
         CompletedFailureFuture: Future<Output = ()> + Send + 'static,
     {
@@ -762,6 +791,9 @@ impl EntityInvocationDurability {
                 let cancelled = terminal.cancelled();
                 *replay_terminal.lock().unwrap() = Some(terminal);
                 Ok(if cancelled {
+                    // Select attachment cancellation before the coordinator
+                    // aborts the body and drops its producer resources.
+                    on_completed_cancelled();
                     EntityReconstructionResolution::<
                         _,
                         DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,

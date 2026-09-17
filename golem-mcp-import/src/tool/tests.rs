@@ -198,7 +198,7 @@ fn snapshot_reconstruction_keeps_mappings_and_digests() {
     upstream["outputSchema"] = json!({"$defs":{"item":{"type":"integer"}},"type":"object","properties":{"y":{"$ref":"#/$defs/item"}},"required":["y"],"additionalProperties":false});
     let p = ProjectedTool::new(&upstream, "snap", Limits::default()).unwrap();
     assert_eq!(p.definition.schema.defs.len(), 2);
-    let restored: ProjectedTool = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
+    let restored = ProjectedTool::from_json(&p.to_json().unwrap()).unwrap();
     assert_eq!(restored.digest, p.digest);
     assert_eq!(
         restored
@@ -285,16 +285,67 @@ fn object_contracts_optional_docs_and_read_only_defaults() {
         })
     );
     for value in [json!(null), json!("string"), json!([1])] {
-        assert!(matches!(
-            projected.response(&json!({"content":[],"structuredContent":value})),
-            Err(CallError::InvalidResult(_))
-        ));
+        let response = projected
+            .response(&json!({"content":[],"structuredContent":value}))
+            .unwrap();
+        let SchemaValue::Record { fields } = response.value else {
+            panic!("expected result record");
+        };
+        assert_eq!(
+            fields[0],
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String(value.to_string())))
+            }
+        );
     }
     upstream["inputSchema"] = json!({"type":"null"});
     assert!(ProjectedTool::new(&upstream, "weather", Limits::default()).is_err());
-    upstream["inputSchema"] = definition("weather")["inputSchema"].clone();
-    upstream["outputSchema"] = json!({"type":"null"});
-    assert!(ProjectedTool::new(&upstream, "weather", Limits::default()).is_err());
+}
+
+#[test]
+fn structured_output_supports_non_object_schemas() {
+    for (schema, value, expected, invalid) in [
+        (
+            json!({"type":"string"}),
+            json!("answer"),
+            SchemaValue::String("answer".into()),
+            json!(17),
+        ),
+        (
+            json!({"type":"array","items":{"type":"integer"}}),
+            json!([7, -3]),
+            SchemaValue::List {
+                elements: vec![SchemaValue::S64(7), SchemaValue::S64(-3)],
+            },
+            json!(["wrong"]),
+        ),
+        (
+            json!({"type":"null"}),
+            Value::Null,
+            SchemaValue::Tuple { elements: vec![] },
+            json!({}),
+        ),
+    ] {
+        let mut upstream = definition("output");
+        upstream["outputSchema"] = schema;
+        let projected = ProjectedTool::new(&upstream, "output", Limits::default()).unwrap();
+        let response = projected
+            .response(&json!({"content":[],"structuredContent":value}))
+            .unwrap();
+        let SchemaValue::Record { fields } = response.value else {
+            panic!("expected result record");
+        };
+        assert_eq!(fields[0], expected);
+        assert_eq!(response.stdout, None);
+        assert!(matches!(
+            projected.response(&json!({"content":[],"structuredContent":invalid})),
+            Err(CallError::InvalidResult(_))
+        ));
+        assert!(matches!(
+            projected.response(&json!({"content":[]})),
+            Err(CallError::InvalidResult(_))
+        ));
+    }
 }
 
 #[test]

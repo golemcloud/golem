@@ -154,6 +154,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
     let policy = match entity {
         AgentEntity::Tool(tool_name) => EntityActivationPolicy::Tool {
             provision: ToolProvisionConfig::default(),
+            mcp_import: None,
             binding: Box::new(CompiledToolBinding {
                 deployment_revision,
                 release_id: None,
@@ -209,6 +210,7 @@ fn test_entity_request(
         call_mode,
         operation,
         principal: None,
+        assume_idempotence: true,
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
@@ -1177,6 +1179,37 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     );
     expected_ends.insert(entity_end_idx, entity_terminal);
 
+    let mut input_type = SchemaType::string();
+    let mut input_value = SchemaValue::String("nested MCP input".into());
+    for _ in 0..20 {
+        input_type = SchemaType::list(input_type);
+        input_value = SchemaValue::List {
+            elements: vec![input_value],
+        };
+    }
+    let input = TypedSchemaValue::new(SchemaGraph::anonymous(input_type), input_value);
+    let request: HostRequest = golem_common::model::oplog::HostRequestMcpToolCall {
+        input: input.clone(),
+    }
+    .into();
+    let response: HostResponse = golem_common::model::oplog::HostResponseMcpToolCall {
+        result: Ok(b"{\"content\":[]}".to_vec()),
+    }
+    .into();
+    let expected_response = response.clone().into_typed_schema_value().unwrap();
+    let (start, end) = oplog
+        .add_completed_host_call(
+            HostFunctionName::McpToolCall,
+            &request,
+            &response,
+            DurableFunctionType::WriteRemote,
+            None,
+        )
+        .await
+        .unwrap();
+    expected_starts.insert(start, (HostFunctionName::McpToolCall.to_string(), input));
+    expected_ends.insert(end, expected_response);
+
     // A host call terminated by `Cancelled` instead of `End`: a standalone
     // `Start` for a consume-body-chunk call, cancelled with a matching
     // partial P3 payload — the sequence the executor emits when a durable
@@ -1306,4 +1339,129 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     assert_eq!(seen_starts, expected_starts.len());
     assert_eq!(seen_ends, expected_ends.len());
     assert_eq!(seen_cancelled, 1);
+}
+
+#[test]
+fn mcp_discovery_metadata_roundtrips_public_oplog_without_recursive_type_values() {
+    use golem_common::model::mcp_import::mcp_import_bridge_source;
+    use golem_common::model::oplog::payload::types::{
+        SerializableDiscoveredTools, SerializableMcpImportDiscovery,
+        SerializableToolDiscoverySnapshot,
+    };
+    use golem_common::model::oplog::{HostResponseGolemToolTool, HostResponseGolemToolTools};
+    use golem_common::schema::tool::DiscoveredTool;
+    use golem_common::schema::{FromSchema, IntoSchema, SchemaValue};
+    use golem_mcp_import::tool::{Limits, ProjectedTool};
+    use serde_json::json;
+
+    #[derive(FromSchema)]
+    struct DiscoveryResponse {
+        result: Result<SerializableToolDiscoverySnapshot, String>,
+    }
+
+    let mut tools = Vec::new();
+    for depth in [0, 40] {
+        let mut output = json!({"type":"string"});
+        for _ in 0..depth {
+            output = json!({"type":"object","properties":{"nested":output},"required":["nested"],"additionalProperties":false});
+        }
+        let tool = ProjectedTool::new(
+            &json!({
+                "name":"lookup",
+                "description":"quoted \"text\" and \\ path — λ",
+                "inputSchema":{
+                    "type":"object", "properties":{"query":{"$ref":"#/$defs/Query"}},
+                    "required":["query"], "additionalProperties":false,
+                    "$defs":{"Query":{"type":"string"}}
+                },
+                "outputSchema":output
+            }),
+            "lookup",
+            Limits::default(),
+        )
+        .unwrap();
+        tools.push(DiscoveredTool::new(
+            tool.definition,
+            mcp_import_bridge_source(),
+        ));
+    }
+    let serialized_tools = SerializableDiscoveredTools(tools);
+    assert!(matches!(
+        serialized_tools.to_value(),
+        SchemaValue::String(_)
+    ));
+    assert_eq!(
+        SerializableDiscoveredTools::from_value(&serialized_tools.to_value()).unwrap(),
+        serialized_tools,
+    );
+    assert!(
+        SerializableDiscoveredTools::from_value(&SchemaValue::String("[] trailing".into()))
+            .is_err()
+    );
+    assert!(SerializableDiscoveredTools::from_value(&SchemaValue::String("{".into())).is_err());
+    assert!(
+        SerializableDiscoveredTools::from_value(&SchemaValue::List {
+            elements: Vec::new()
+        })
+        .is_err()
+    );
+    let snapshot = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(37),
+        dynamic_tools: vec![
+            SerializableMcpImportDiscovery {
+                import_index: 0,
+                tools: serialized_tools.clone(),
+                exclusions: Vec::new(),
+            },
+            SerializableMcpImportDiscovery {
+                import_index: 1,
+                tools: SerializableDiscoveredTools::default(),
+                exclusions: vec![("excluded".into(), "unrepresentable schema".into())],
+            },
+            SerializableMcpImportDiscovery {
+                import_index: 2,
+                tools: serialized_tools,
+                exclusions: Vec::new(),
+            },
+        ],
+    };
+    for result in [
+        Ok(snapshot),
+        Ok(SerializableToolDiscoverySnapshot {
+            deployment_revision: None,
+            dynamic_tools: Vec::new(),
+        }),
+        Err("registry unavailable".into()),
+    ] {
+        for response in [
+            HostResponse::from(HostResponseGolemToolTools {
+                result: result.clone(),
+            }),
+            HostResponse::from(HostResponseGolemToolTool {
+                result: result.clone(),
+            }),
+        ] {
+            let public_entry = PublicOplogEntry::End(EndParams {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::INITIAL,
+                response: Some(host_response_to_public_value(response).unwrap()),
+                forced_commit: false,
+            });
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                public_entry.clone().try_into().unwrap();
+            let decoded = golem_api_grpc::proto::golem::worker::OplogEntry::decode(
+                proto.encode_to_vec().as_slice(),
+            )
+            .unwrap();
+            let roundtripped: PublicOplogEntry = decoded.try_into().unwrap();
+            assert_eq!(roundtripped, public_entry);
+            let PublicOplogEntry::End(end) = roundtripped else {
+                panic!("expected End");
+            };
+            let restored = DiscoveryResponse::from_value(end.response.unwrap().value()).unwrap();
+            assert_eq!(restored.result, result);
+            let _: crate::preview2::golem_api_1_x::oplog::PublicOplogEntry =
+                public_entry.try_into().unwrap();
+        }
+    }
 }

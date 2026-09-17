@@ -18,13 +18,109 @@ use std::collections::BTreeMap;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text_format::{FieldsBuilder, MessageWithFields, format_message_highlight};
-use golem_client::model::{McpImportAuthorization, McpImportOAuthStatus};
+use golem_client::model::McpImportTools;
 use serde_derive::Serialize;
 use std::fmt::{Debug, Formatter};
 
 #[derive(Clone, Debug)]
 pub struct McpDeploymentDeployProperties {
     pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct McpImportToolsView(pub McpImportTools);
+
+impl StructuredOutput for McpImportToolsView {
+    const KIND: &'static str = "api.mcp-import.tools";
+}
+
+impl Masked for McpImportToolsView {}
+
+impl MessageWithFields for McpImportToolsView {
+    fn message(&self) -> String {
+        "MCP import tools (before native and earlier-import precedence)".into()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields
+            .field("Environment ID", &self.0.environment_id)
+            .field("Deployment revision", &self.0.deployment_revision)
+            .field("Import index", &self.0.import_index)
+            .field("Protocol version", &self.0.protocol_version)
+            .field(
+                "Tools",
+                &self
+                    .0
+                    .tools
+                    .iter()
+                    .filter_map(|tool| tool.definition.name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        for diagnostic in &self.0.diagnostics {
+            fields.field(
+                "Warning",
+                &format!("{}: {}", diagnostic.upstream_name, diagnostic.reason),
+            );
+        }
+        fields.build()
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportAuthorization {
+    pub authorization_url: String,
+    pub import_index: u32,
+    pub deployment_revision: Option<u64>,
+}
+
+impl From<golem_client::model::McpImportAuthorization> for McpImportAuthorization {
+    fn from(value: golem_client::model::McpImportAuthorization) -> Self {
+        Self {
+            authorization_url: value.authorization_url,
+            import_index: value.import_index,
+            deployment_revision: Some(value.deployment_revision),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportOAuthStatus {
+    pub environment_id: uuid::Uuid,
+    pub import_index: u32,
+    pub deployment_revision: Option<u64>,
+    pub security_scheme: String,
+    pub status: String,
+}
+
+impl From<golem_client::model::McpImportOAuthStatus> for McpImportOAuthStatus {
+    fn from(value: golem_client::model::McpImportOAuthStatus) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            import_index: value.import_index,
+            deployment_revision: Some(value.deployment_revision),
+            security_scheme: value.security_scheme,
+            status: value.status,
+        }
+    }
+}
+
+impl McpImportOAuthStatus {
+    pub fn declared(
+        value: golem_client::model::DeclaredMcpImportOAuthStatus,
+        import_index: u32,
+    ) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            import_index,
+            deployment_revision: None,
+            security_scheme: value.security_scheme,
+            status: value.status,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -45,13 +141,18 @@ impl MessageWithFields for McpImportAuthorizeView {
 
     fn fields(&self) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
+        let target = self
+            .0
+            .deployment_revision
+            .map(|revision| format!("--revision {revision}"))
+            .unwrap_or_else(|| "--manifest".into());
         fields
             .field("Authorization URL", &self.0.authorization_url)
             .field(
                 "Complete with",
                 &format!(
-                    "golem api mcp-import complete {} --revision {} '<callback-url>'",
-                    self.0.import_index, self.0.deployment_revision
+                    "golem api mcp-import complete {} {target} '<callback-url>'",
+                    self.0.import_index
                 ),
             );
         fields.build()
@@ -96,7 +197,14 @@ macro_rules! mcp_import_status_view {
                 let mut fields = FieldsBuilder::new();
                 fields
                     .field("Environment ID", &self.0.environment_id)
-                    .field("Deployment revision", &self.0.deployment_revision)
+                    .field(
+                        "Target",
+                        &self
+                            .0
+                            .deployment_revision
+                            .map(|revision| format!("Deployment {revision}"))
+                            .unwrap_or_else(|| "Manifest declaration".into()),
+                    )
                     .field("Import index", &self.0.import_index)
                     .field("Security scheme", &self.0.security_scheme)
                     .fmt_field("Status", &self.0.status, format_message_highlight);
@@ -122,6 +230,32 @@ impl McpDeploymentAgentOptions {
     pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
         golem_common::model::diff::McpDeploymentAgentOptions {
             security_scheme: self.security_scheme.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn mcp_authorize_completion_command_preserves_target() {
+        for (revision, expected) in [(None, "--manifest"), (Some(42), "--revision 42")] {
+            let view = McpImportAuthorizeView(McpImportAuthorization {
+                authorization_url: "https://provider.example/authorize?state=private".into(),
+                import_index: 3,
+                deployment_revision: revision,
+            });
+            let fields = view.fields();
+            assert_eq!(
+                fields[1].1,
+                format!("golem api mcp-import complete 3 {expected} '<callback-url>'")
+            );
+            assert!(!format!("{view:?}").contains("private"));
+            let value = serde_json::to_value(&view).unwrap();
+            assert_eq!(value["deploymentRevision"], serde_json::json!(revision));
+            assert_eq!(value["importIndex"], 3);
         }
     }
 }

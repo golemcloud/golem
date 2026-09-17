@@ -5,10 +5,11 @@
 
 use super::McpOAuthError;
 use crate::services::account_usage::AccountUsageService;
+use crate::services::deployment::authorize_environment_permission;
 use crate::services::security_scheme::authorize_security_scheme_permission;
 use golem_common::model::account::AccountId;
-use golem_common::model::card::EnvironmentSecuritySchemeVerb;
 use golem_common::model::card::network_target::http_target;
+use golem_common::model::card::{EnvironmentSecuritySchemeVerb, EnvironmentVerb};
 use golem_common::model::environment::Environment;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_mcp_import::transport::TransportError;
@@ -57,6 +58,39 @@ impl McpHttpPolicy {
             Some(scheme),
             EnvironmentSecuritySchemeVerb::Update,
         )?;
+        Ok(Self {
+            runtime_auth: None,
+            owner: environment.owner_account_id,
+            usage,
+        })
+    }
+
+    pub fn inspection(
+        auth: &AuthCtx,
+        environment: &Environment,
+        usage: Arc<AccountUsageService>,
+    ) -> Result<Self, McpOAuthError> {
+        for verb in [EnvironmentVerb::View, EnvironmentVerb::ViewDeployment] {
+            authorize_environment_permission(auth, environment, verb)
+                .map_err(|_| McpOAuthError::ImportNotFound)?;
+        }
+        authorize_environment_permission(auth, environment, EnvironmentVerb::ViewTools)?;
+        Ok(Self {
+            runtime_auth: None,
+            owner: environment.owner_account_id,
+            usage,
+        })
+    }
+
+    pub fn preview(
+        auth: &AuthCtx,
+        environment: &Environment,
+        usage: Arc<AccountUsageService>,
+    ) -> Result<Self, McpOAuthError> {
+        authorize_environment_permission(auth, environment, EnvironmentVerb::View)
+            .map_err(|_| McpOAuthError::ImportNotFound)?;
+        authorize_environment_permission(auth, environment, EnvironmentVerb::Deploy)?;
+        authorize_environment_permission(auth, environment, EnvironmentVerb::ViewTools)?;
         Ok(Self {
             runtime_auth: None,
             owner: environment.owner_account_id,

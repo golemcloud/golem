@@ -21,6 +21,21 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter};
 use url::Url;
 
+pub const MCP_IMPORT_BRIDGE_HOST_TOOL_ID: &str = "mcp-import";
+pub const MCP_IMPORT_BRIDGE_IMPLEMENTATION_VERSION: &str = "1";
+pub const PROTOCOL_VERSION: &str = "2026-07-28";
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION];
+
+pub fn mcp_import_bridge_source() -> super::tool::ToolSource {
+    super::tool::ToolSource::Host {
+        host_tool_id: MCP_IMPORT_BRIDGE_HOST_TOOL_ID
+            .to_string()
+            .try_into()
+            .expect("valid bridge identifier"),
+        implementation_version: MCP_IMPORT_BRIDGE_IMPLEMENTATION_VERSION.to_string(),
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -188,10 +203,10 @@ impl McpImportDeployment {
         if let Some(scheme) = &self.security_scheme {
             SecuritySchemeName::try_from(scheme.0.clone())?;
         }
-        if let Some(version) = &self.version {
-            if version.is_empty() || has_header_controls(version) {
-                return Err("MCP protocol version must be nonempty and contain no header control characters".into());
-            }
+        if let Some(version) = &self.version
+            && !SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str())
+        {
+            return Err("unsupported MCP protocol version".into());
         }
 
         let (auth, credential) = match self.auth {
@@ -264,7 +279,7 @@ mod tests {
             prefix: Some("upstream-tools".to_string()),
             include: Some(vec!["read-*".to_string()]),
             exclude: None,
-            version: Some("2025-06-18".to_string()),
+            version: Some(PROTOCOL_VERSION.to_string()),
         }
     }
 
@@ -421,5 +436,32 @@ mod tests {
         };
 
         assert!(input.into_parts(EnvironmentId::new()).is_err());
+    }
+
+    #[test]
+    fn accepts_supported_and_default_protocol_versions() {
+        for version in [Some(PROTOCOL_VERSION.to_string()), None] {
+            let input = McpImportDeployment {
+                version: version.clone(),
+                ..deployment()
+            };
+            let (import, _) = input.into_parts(EnvironmentId::new()).unwrap();
+            assert_eq!(import.version, version);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_protocol_versions_without_echoing_them() {
+        for version in ["2025-06-18", "", "secret\rvalue"] {
+            let input = McpImportDeployment {
+                version: Some(version.to_string()),
+                ..deployment()
+            };
+            let error = input.into_parts(EnvironmentId::new()).unwrap_err();
+            assert_eq!(error, "unsupported MCP protocol version");
+            if !version.is_empty() {
+                assert!(!error.contains(version));
+            }
+        }
     }
 }

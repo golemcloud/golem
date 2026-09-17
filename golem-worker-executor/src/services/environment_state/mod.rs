@@ -24,17 +24,20 @@ use golem_common::model::entity::{
     EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::mcp_import::McpImportSource;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess,
     ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::tool::DiscoveredTool;
-use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::environment::EnvironmentState;
+use golem_service_base::model::mcp_import::McpImportObservation;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -130,6 +133,7 @@ impl ToolDiscoveryCache {
 #[derive(Clone, Debug)]
 pub enum ToolDiscoveryError {
     Retrieval(WorkerExecutorError),
+    Mcp(RegistryServiceError),
     AgentContextRequired,
     MissingDeploymentRevision {
         environment_id: EnvironmentId,
@@ -155,6 +159,7 @@ impl Display for ToolDiscoveryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Retrieval(error) => error.fmt(f),
+            Self::Mcp(error) => error.fmt(f),
             Self::AgentContextRequired => write!(f, "Tool discovery requires an agent context"),
             Self::MissingDeploymentRevision {
                 environment_id,
@@ -174,6 +179,7 @@ impl Error for ToolDiscoveryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Retrieval(error) => Some(error),
+            Self::Mcp(error) => Some(error),
             Self::AgentContextRequired
             | Self::MissingDeploymentRevision { .. }
             | Self::InconsistentSnapshot { .. } => None,
@@ -197,6 +203,7 @@ pub struct ToolActivationSnapshot {
     registered_tool: RegisteredTool,
     binding: CompiledToolBinding,
     filesystem: FilesystemCapability,
+    mcp_import: Option<Box<golem_common::model::entity::McpImportActivation>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,10 +223,76 @@ pub enum ToolDispatchTarget {
         provision: ToolProvisionConfig,
         binding: Box<CompiledToolBinding>,
         filesystem: FilesystemCapability,
+        mcp_import: Option<Box<golem_common::model::entity::McpImportActivation>>,
     },
 }
 
 impl ToolActivationSnapshot {
+    pub fn from_mcp(
+        mut source: McpImportSource,
+        protocol_version: String,
+        tool: golem_mcp_import::tool::ProjectedTool,
+        owner: &golem_service_base::model::component::Component,
+        agent_type: &AgentTypeName,
+    ) -> Result<Self, ToolDiscoveryError> {
+        use golem_common::model::entity::McpImportActivation;
+        use golem_common::model::mcp_import::mcp_import_bridge_source;
+        use golem_common::model::tool::{
+            ConfigKeyScope, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
+        };
+        let invalid = |details: String| ToolDiscoveryError::InconsistentSnapshot { details };
+        let tool_name = ToolName::try_from(
+            tool.definition
+                .name()
+                .ok_or_else(|| invalid("unnamed MCP projection".into()))?,
+        )
+        .map_err(invalid)?;
+        let metadata_digest = tool
+            .digest
+            .parse()
+            .map_err(|error| invalid(format!("invalid MCP projection digest: {error}")))?;
+        let projected_tool = tool.to_json().map_err(|error| invalid(error.to_string()))?;
+        source.upstream_tool_name = tool.upstream_name;
+        let registered_tool = RegisteredTool {
+            deployment_revision: source.deployment_revision,
+            release_id: None,
+            definition: tool.definition,
+            provision: ToolProvisionConfig::default(),
+            source: mcp_import_bridge_source(),
+            owner_account_id: owner.account_id,
+            owner_account_email: owner.account_email.clone(),
+            metadata_version: TOOL_METADATA_WIT_VERSION.into(),
+            metadata_digest,
+        };
+        let binding = CompiledToolBinding {
+            deployment_revision: source.deployment_revision,
+            release_id: None,
+            agent_type_name: agent_type.clone(),
+            tool_name,
+            version: registered_tool.definition.version.clone(),
+            metadata_version: registered_tool.metadata_version.clone(),
+            metadata_digest,
+            account_id: owner.account_id,
+            account_email: owner.account_email.clone(),
+            parameters: golem_common::model::json::NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
+            secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
+            filesystem_access: ToolFilesystemAccess::Denied,
+            source: mcp_import_bridge_source(),
+        };
+        Ok(Self {
+            registered_tool,
+            binding,
+            filesystem: FilesystemCapability::Incapable,
+            mcp_import: Some(Box::new(McpImportActivation {
+                source,
+                protocol_version,
+                projected_tool,
+            })),
+        })
+    }
+
     pub fn registered_tool(&self) -> &RegisteredTool {
         &self.registered_tool
     }
@@ -244,6 +317,7 @@ impl ToolActivationSnapshot {
                 EntityActivationPolicy::Tool {
                     provision: self.registered_tool.provision,
                     binding: Box::new(self.binding),
+                    mcp_import: self.mcp_import,
                 },
                 self.filesystem,
             )
@@ -259,6 +333,7 @@ impl ToolActivationSnapshot {
                 provision: self.registered_tool.provision,
                 binding: Box::new(self.binding),
                 filesystem: self.filesystem,
+                mcp_import: self.mcp_import,
             }),
         }
     }
@@ -341,6 +416,7 @@ pub fn get_tool_activation_from_deployment(
             filesystem,
             registered_tool: registered_tool.clone(),
             binding: binding.clone(),
+            mcp_import: None,
         },
     )))
 }
@@ -412,6 +488,48 @@ pub fn get_accessible_tool_from_snapshot(
         .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
 }
 
+pub fn get_accessible_tools_from_deployment(
+    deployment: Option<&ToolDeploymentState>,
+    agent_type: &AgentTypeName,
+) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+    let Some(deployment) = deployment else {
+        return Ok(Vec::new());
+    };
+    deployment
+        .agent_tool_bindings
+        .get(agent_type)
+        .into_iter()
+        .flat_map(|bindings| bindings.keys())
+        .map(|name| {
+            get_accessible_tool_from_deployment(Some(deployment), agent_type, name).and_then(
+                |tool| tool.ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, name)),
+            )
+        })
+        .collect()
+}
+
+pub fn get_accessible_tool_from_deployment(
+    deployment: Option<&ToolDeploymentState>,
+    agent_type: &AgentTypeName,
+    tool_name: &ToolName,
+) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+    let Some(deployment) = deployment else {
+        return Ok(None);
+    };
+    if !deployment
+        .agent_tool_bindings
+        .get(agent_type)
+        .is_some_and(|bindings| bindings.contains_key(tool_name))
+    {
+        return Ok(None);
+    }
+    deployment
+        .registered_tools
+        .get(tool_name)
+        .map(|tool| Some(Arc::new(DiscoveredTool::from(tool.clone()))))
+        .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
+}
+
 #[async_trait]
 pub trait EnvironmentStateService: Send + Sync {
     /// Get the current deployment of the agent.
@@ -447,6 +565,39 @@ pub trait EnvironmentStateService: Send + Sync {
         _component_revision: ComponentRevision,
     ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
         Ok(None)
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        _source: &McpImportSource,
+        _auth: &AuthCtx,
+        _refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "MCP resolution is unavailable",
+        ))
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        _source: &McpImportSource,
+        _auth: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        Err(RegistryServiceError::internal_client_error(
+            "MCP credentials are unavailable",
+        ))
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _source: &McpImportSource,
+        _auth: &AuthCtx,
+        _generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "MCP authorization feedback is unavailable",
+        ))
     }
 
     async fn get_tool_deployment_state_at_revision(
@@ -588,6 +739,42 @@ impl GrpcEnvironmentStateService {
 
 #[async_trait]
 impl EnvironmentStateService for GrpcEnvironmentStateService {
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        self.client.get_mcp_runtime_credential(source, auth).await
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+        generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        self.client
+            .report_mcp_resource_unauthorized(source, auth, generation)
+            .await
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError> {
+        let client = self.client.clone();
+        let source = source.clone();
+        let auth = auth.clone();
+        tokio::spawn(async move { client.resolve_mcp_import(&source, &auth, refresh).await })
+            .await
+            .map_err(|_| {
+                RegistryServiceError::internal_client_error("MCP resolution task failed")
+            })?
+    }
+
     async fn get_agent_deployment(
         &self,
         environment_id: EnvironmentId,

@@ -31,6 +31,82 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use uuid::uuid;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct McpImportResolverConfig {
+    pub cache_entries: usize,
+    pub fetch_concurrency: usize,
+    #[serde(with = "humantime_serde")]
+    pub refresh_interval: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub operation_timeout: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_ttl: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub failure_ttl: std::time::Duration,
+    pub transport: golem_mcp_import::transport::Limits,
+    pub projection: golem_mcp_import::tool::Limits,
+}
+
+impl Default for McpImportResolverConfig {
+    fn default() -> Self {
+        Self {
+            cache_entries: 128,
+            fetch_concurrency: 16,
+            refresh_interval: std::time::Duration::from_secs(60),
+            operation_timeout: std::time::Duration::from_secs(25),
+            cache_ttl: std::time::Duration::from_secs(300),
+            failure_ttl: std::time::Duration::from_secs(1),
+            transport: golem_mcp_import::transport::Limits {
+                timeout: std::time::Duration::from_secs(20),
+                ..Default::default()
+            },
+            projection: Default::default(),
+        }
+    }
+}
+
+impl McpImportResolverConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.cache_entries > 0,
+            "MCP import cache_entries must be positive"
+        );
+        anyhow::ensure!(
+            self.fetch_concurrency > 0
+                && self.fetch_concurrency <= tokio::sync::Semaphore::MAX_PERMITS,
+            "MCP import fetch_concurrency is out of range"
+        );
+        anyhow::ensure!(
+            !self.refresh_interval.is_zero()
+                && self.refresh_interval <= std::time::Duration::from_secs(86_400),
+            "MCP import refresh_interval must be positive and at most one day"
+        );
+        anyhow::ensure!(
+            !self.operation_timeout.is_zero()
+                && self.operation_timeout <= std::time::Duration::from_secs(86_400),
+            "MCP import operation_timeout must be positive and at most one day"
+        );
+        anyhow::ensure!(
+            !self.cache_ttl.is_zero(),
+            "MCP import cache_ttl must be positive"
+        );
+        anyhow::ensure!(
+            !self.failure_ttl.is_zero(),
+            "MCP import failure_ttl must be positive"
+        );
+        anyhow::ensure!(
+            self.transport.timeout <= self.operation_timeout,
+            "MCP transport timeout exceeds operation timeout"
+        );
+        golem_mcp_import::transport::Client::new(
+            "https://config.invalid/mcp",
+            None,
+            self.transport,
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
     pub tracing: TracingConfig,
@@ -53,6 +129,8 @@ pub struct RegistryServiceConfig {
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
     pub mcp_oauth: golem_mcp_import::oauth::Limits,
+    #[serde(default)]
+    pub mcp_import: McpImportResolverConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -120,6 +198,7 @@ impl SafeDisplay for RegistryServiceConfig {
             self.security_scheme.strict_issuer_url_validation
         );
         let _ = writeln!(&mut result, "MCP OAuth limits: {:?}", self.mcp_oauth);
+        let _ = writeln!(&mut result, "MCP import resolver: {:?}", self.mcp_import);
 
         result
     }
@@ -231,6 +310,7 @@ impl Default for RegistryServiceConfig {
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
             mcp_oauth: golem_mcp_import::oauth::Limits::default(),
+            mcp_import: McpImportResolverConfig::default(),
         }
     }
 }
@@ -595,6 +675,111 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn mcp_import_resolver_bounds_are_finite_and_validated() {
+        use std::time::Duration;
+
+        let defaults = RegistryServiceConfig::default().mcp_import;
+        assert!(defaults.cache_entries > 0);
+        assert!(defaults.fetch_concurrency > 0);
+        assert!(!defaults.refresh_interval.is_zero());
+        assert!(defaults.transport.timeout < Duration::from_secs(30));
+        defaults.validate().unwrap();
+
+        crate::config::McpImportResolverConfig {
+            cache_ttl: Duration::MAX,
+            failure_ttl: Duration::MAX,
+            ..defaults
+        }
+        .validate()
+        .unwrap();
+
+        for invalid in [
+            crate::config::McpImportResolverConfig {
+                cache_entries: 0,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                fetch_concurrency: 0,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                refresh_interval: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                refresh_interval: Duration::MAX,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                operation_timeout: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                cache_ttl: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                failure_ttl: Duration::ZERO,
+                ..defaults
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
+        use crate::bootstrap::Services;
+        use golem_common::config::{DbConfig, DbSqliteConfig};
+
+        let mut config = RegistryServiceConfig::default();
+        config.mcp_import.operation_timeout = std::time::Duration::MAX;
+        assert!(config.mcp_import.validate().is_err());
+
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("registry.db");
+        config.db = DbConfig::Sqlite(DbSqliteConfig {
+            database: database.to_str().unwrap().into(),
+            ..Default::default()
+        });
+        let mut tasks = tokio::task::JoinSet::new();
+        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        assert!(error.to_string().contains("operation_timeout"));
+        assert!(!database.exists());
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    pub fn mcp_import_resolver_deadline_limits_are_inclusive() {
+        use crate::config::McpImportResolverConfig;
+        use std::time::Duration;
+
+        let day = Duration::from_secs(24 * 60 * 60);
+        let config = McpImportResolverConfig {
+            refresh_interval: day,
+            operation_timeout: day,
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        for invalid in [
+            McpImportResolverConfig {
+                refresh_interval: day + Duration::from_nanos(1),
+                ..config
+            },
+            McpImportResolverConfig {
+                operation_timeout: day + Duration::from_nanos(1),
+                ..config
+            },
+            McpImportResolverConfig {
+                operation_timeout: Duration::from_secs(1),
+                ..config
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
     }
 
     #[test]

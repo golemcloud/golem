@@ -43,9 +43,12 @@ pub struct DiscoveredTool {
 
 impl From<RegisteredTool> for DiscoveredTool {
     fn from(value: RegisteredTool) -> Self {
-        let RegisteredTool {
-            definition, source, ..
-        } = value;
+        Self::new(value.definition, value.source)
+    }
+}
+
+impl DiscoveredTool {
+    pub fn new(definition: Tool, source: ToolSource) -> Self {
         let implemented_by = match source {
             ToolSource::Component { component_id, .. } => component_id,
             ToolSource::Host {

@@ -21,6 +21,7 @@ use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::mcp_import::McpImportResolver;
 use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::resource_definition::ResourceDefinitionService;
@@ -75,8 +76,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_api_grpc::proto::golem::registry::v1::{
     GetMcpRuntimeCredentialRequest, GetMcpRuntimeCredentialResponse, McpRuntimeBasicCredential,
     McpRuntimeCredential, ReportMcpResourceUnauthorizedRequest,
-    ReportMcpResourceUnauthorizedResponse, get_mcp_runtime_credential_response,
-    mcp_runtime_credential, report_mcp_resource_unauthorized_response,
+    ReportMcpResourceUnauthorizedResponse, ResolveMcpImportRequest, ResolveMcpImportResponse,
+    get_mcp_runtime_credential_response, mcp_runtime_credential,
+    report_mcp_resource_unauthorized_response, resolve_mcp_import_response,
 };
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
@@ -125,6 +127,7 @@ pub struct RegistryServiceGrpcApi {
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
     resource_definition_service: Arc<ResourceDefinitionService>,
     mcp_oauth_service: Arc<McpOAuthService>,
+    mcp_import_resolver: Arc<McpImportResolver>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -142,6 +145,7 @@ impl RegistryServiceGrpcApi {
         registry_change_repo: Arc<dyn RegistryChangeRepo>,
         resource_definition_service: Arc<ResourceDefinitionService>,
         mcp_oauth_service: Arc<McpOAuthService>,
+        mcp_import_resolver: Arc<McpImportResolver>,
     ) -> Self {
         Self {
             auth_service,
@@ -157,6 +161,7 @@ impl RegistryServiceGrpcApi {
             registry_change_repo,
             resource_definition_service,
             mcp_oauth_service,
+            mcp_import_resolver,
         }
     }
 
@@ -213,7 +218,7 @@ impl RegistryServiceGrpcApi {
             .auth_ctx
             .ok_or("missing auth_ctx field")?
             .try_into()?;
-        self.mcp_oauth_service
+        self.mcp_import_resolver
             .report_resource_unauthorized(
                 &source,
                 auth,
@@ -221,6 +226,27 @@ impl RegistryServiceGrpcApi {
             )
             .await?;
         Ok(EmptySuccessResponse {})
+    }
+
+    async fn resolve_mcp_import_internal(
+        &self,
+        request: ResolveMcpImportRequest,
+    ) -> Result<Vec<u8>, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        let observation = if request.refresh {
+            self.mcp_import_resolver.refresh(source, auth).await?
+        } else {
+            self.mcp_import_resolver
+                .resolve_observation(source, auth)
+                .await?
+        };
+        observation
+            .to_json()
+            .map_err(|error| GrpcApiError::from(error.to_string()))
     }
 
     async fn authenticate_token_internal(
@@ -1309,6 +1335,25 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
             Err(error) => report_mcp_resource_unauthorized_response::Result::Error(error.into()),
         };
         Ok(Response::new(ReportMcpResourceUnauthorizedResponse {
+            result: Some(result),
+        }))
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        request: Request<ResolveMcpImportRequest>,
+    ) -> Result<Response<ResolveMcpImportResponse>, Status> {
+        let record = recorded_grpc_api_request!("resolve_mcp_import",);
+        let result = match self
+            .resolve_mcp_import_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => resolve_mcp_import_response::Result::ObservationJson(value),
+            Err(error) => resolve_mcp_import_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveMcpImportResponse {
             result: Some(result),
         }))
     }

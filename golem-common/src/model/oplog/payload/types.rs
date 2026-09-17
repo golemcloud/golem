@@ -26,6 +26,7 @@ use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use crate::schema::tool::DiscoveredTool;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -62,6 +63,82 @@ use wasmtime_wasi_http::p2::bindings::http::types::{
 };
 use wasmtime_wasi_http::p2::body::HostIncomingBody;
 use wasmtime_wasi_http::p2::types::HostIncomingResponse;
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolDiscoverySnapshot {
+    pub deployment_revision: Option<u64>,
+    pub dynamic_tools: Vec<SerializableMcpImportDiscovery>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableMcpImportDiscovery {
+    pub import_index: u32,
+    pub tools: SerializableDiscoveredTools,
+    pub exclusions: Vec<(String, String)>,
+}
+
+/// Tool definitions remain structured in the durable payload, but use JSON text in the
+/// public schema representation so metadata type trees cannot exhaust Protobuf's depth limit.
+#[derive(Debug, Clone, PartialEq, Default, BinaryCodec)]
+#[desert(transparent)]
+pub struct SerializableDiscoveredTools(pub Vec<DiscoveredTool>);
+
+impl crate::schema::conversion::IntoSchema for SerializableDiscoveredTools {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableDiscoveredTools")
+    }
+
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        stacker::maybe_grow(2 << 20, 64 << 20, || {
+            SchemaValue::String(
+                serde_json::to_string(&self.0).expect("discovered tools are JSON-serializable"),
+            )
+        })
+    }
+}
+
+impl crate::schema::conversion::FromSchema for SerializableDiscoveredTools {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match value {
+            SchemaValue::String(json) => stacker::maybe_grow(2 << 20, 64 << 20, || {
+                // These are already validated internal definitions, not upstream MCP input.
+                let mut decoder = serde_json::Deserializer::from_str(json);
+                decoder.disable_recursion_limit();
+                let tools = <Vec<DiscoveredTool> as Deserialize>::deserialize(&mut decoder)
+                    .map_err(|error| FromSchemaError::custom(error.to_string()))?;
+                decoder
+                    .end()
+                    .map_err(|error| FromSchemaError::custom(error.to_string()))?;
+                Ok(Self(tools))
+            }),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "SerializableDiscoveredTools",
+            )),
+        }
+    }
+}
 
 #[derive(
     Debug,

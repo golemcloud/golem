@@ -367,7 +367,7 @@ mod tests {
             prefix: Some("upstream".to_string()),
             include: Some(vec!["read-*".to_string()]),
             exclude: None,
-            version: Some("2025-06-18".to_string()),
+            version: Some(crate::base_model::mcp_import::PROTOCOL_VERSION.to_string()),
         }
     }
 

@@ -207,6 +207,51 @@ fn launch_retained_crash_child() {
         .expect("launch retained incapable crash-checkpoint child");
 }
 
+fn launch_atomic_idempotency_child() {
+    ToolRpc::new("streaming")
+        .invoke(
+            &["run".to_string()],
+            raw_run_input("atomic-idempotency-child"),
+            Some(pump_tool_stdin(nested_input(Vec::new()))),
+        )
+        .expect("launch atomic idempotency child");
+}
+
+async fn send_idempotent_effect() {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port =
+        std::env::var("IDEMPOTENCY_EFFECT_PORT").expect("IDEMPOTENCY_EFFECT_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid effect fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set effect method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set effect scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set effect authority");
+    request
+        .set_path_with_query(Some("/effect"))
+        .expect("set effect path");
+    let receive_response =
+        async move { client::send(request).await.expect("send idempotent effect") };
+    let finish_request = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish effect request");
+        transmit.await.expect("transmit effect request");
+    };
+    let (response, ()) = (receive_response, finish_request).join().await;
+    assert_eq!(response.get_status_code(), 200);
+}
+
 fn principal_class(principal: &Principal) -> &'static str {
     match principal {
         Principal::Anonymous => "anonymous",
@@ -640,6 +685,10 @@ impl Streaming for StreamingImpl {
                 let _ = golem_rust::generate_idempotency_key();
                 wait_at_crash_checkpoint(&stdout, "capable-terminal-retained-child").await;
             }
+            "atomic-idempotency-child" => {
+                let _ = golem_rust::generate_idempotency_key();
+                send_idempotent_effect().await;
+            }
             "historical-reconstruction-gate" => {
                 while let Some(item) = stdin.next().await {
                     if let Ok(chunk) = item {
@@ -848,6 +897,12 @@ impl CapableStreaming for CapableStreamingImpl {
             write_owner_file(path, &bytes)
                 .expect("capable terminal checkpoint must share the owner filesystem");
             launch_retained_crash_child();
+            bytes.clone()
+        } else if path == "atomic-idempotency-parent" {
+            golem_rust::atomically_async(|| async {
+                launch_atomic_idempotency_child();
+            })
+            .await;
             bytes.clone()
         } else {
             write_owner_file(&path, &bytes).expect("capable tool must share the owner filesystem");

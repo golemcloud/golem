@@ -16,7 +16,10 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
+use super::{
+    HasAgentWebhooksService, HasEnvironmentStateService, HasMcpTransport,
+    HasWebSocketConnectionPool,
+};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::events::Events;
@@ -851,6 +854,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     agent_webhooks_service: Arc<AgentWebhooksService>,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
+    mcp_transport: Arc<super::mcp::McpTransport>,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -892,6 +896,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -1100,6 +1105,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasMcpTransport for DirectWorkerInvocationRpc<Ctx> {
+    fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
+        self.mcp_transport.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -1152,6 +1163,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<super::mcp::McpTransport>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -1190,6 +1202,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             agent_webhooks_service,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             extra_deps,
             leak_sentinel,
         }

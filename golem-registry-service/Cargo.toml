@@ -107,6 +107,7 @@ uuid = { workspace = true }
 assert2 = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
+poem = { workspace = true, features = ["rustls"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

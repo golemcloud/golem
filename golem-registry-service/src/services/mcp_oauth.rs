@@ -10,8 +10,8 @@ use crate::repo::environment::EnvironmentRepo;
 use crate::repo::mcp_oauth::McpOAuthGrantRepo;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::repo::model::mcp_oauth::{
-    McpOAuthAuthorization, McpOAuthFlowSecrets, McpOAuthGrantKey, McpOAuthGrantStatus,
-    McpOAuthSession, McpOAuthTokens,
+    McpImportTarget, McpOAuthAuthorization, McpOAuthFlowSecrets, McpOAuthGrantKey,
+    McpOAuthGrantStatus, McpOAuthSession, McpOAuthTokens,
 };
 use crate::repo::model::security_scheme::SecuritySchemeRepoError;
 use crate::repo::security_scheme::SecuritySchemeRepo;
@@ -21,7 +21,9 @@ use crate::services::security_scheme::authorize_security_scheme_permission;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_common::model::mcp_import::{McpImport, McpImportCredential, McpImportSource};
+use golem_common::model::mcp_import::{
+    McpImport, McpImportCredential, McpImportDeployment, McpImportSource,
+};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_mcp_import::oauth::{self, AuthorizationServer, OAuthClient};
@@ -94,6 +96,29 @@ pub struct McpCredential {
     pub oauth_grant: Option<McpOAuthAuthorization>,
 }
 
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub(crate) enum McpImportAuth {
+    Runtime(AuthCtx),
+    Operator(AuthCtx),
+}
+
+impl McpImportAuth {
+    fn policy(
+        &self,
+        environment: &Environment,
+        usage: Arc<AccountUsageService>,
+    ) -> Result<http_policy::McpHttpPolicy, McpOAuthError> {
+        match self {
+            Self::Runtime(auth) => {
+                http_policy::McpHttpPolicy::runtime(auth.clone(), environment, usage)
+            }
+            Self::Operator(auth) => {
+                http_policy::McpHttpPolicy::inspection(auth, environment, usage)
+            }
+        }
+    }
+}
+
 /// Values decoded once from the provider callback; descriptions are not retained.
 pub struct McpOAuthCallback {
     pub state: String,
@@ -109,6 +134,8 @@ pub struct McpOAuthService {
     grants: Arc<dyn McpOAuthGrantRepo>,
     limits: oauth::Limits,
     usage: Arc<AccountUsageService>,
+    #[cfg(test)]
+    trusted_certificate: std::sync::RwLock<Option<reqwest::Certificate>>,
 }
 
 struct ResolvedImport {
@@ -145,6 +172,121 @@ impl ResolvedImport {
 }
 
 impl McpOAuthService {
+    pub(crate) async fn preview_policy(
+        &self,
+        environment_id: EnvironmentId,
+        auth: &AuthCtx,
+    ) -> Result<http_policy::McpHttpPolicy, McpOAuthError> {
+        let environment = self.environment(environment_id).await?;
+        http_policy::McpHttpPolicy::preview(auth, &environment, self.usage.clone())
+    }
+
+    pub(crate) async fn preview_context(
+        &self,
+        environment_id: EnvironmentId,
+        deployment: McpImportDeployment,
+        auth: &AuthCtx,
+        transport_limits: golem_mcp_import::transport::Limits,
+    ) -> Result<McpRuntimeContext, McpOAuthError> {
+        let policy = self.preview_policy(environment_id, auth).await?;
+        let (import, inline) = deployment
+            .into_parts(environment_id)
+            .map_err(TransportError::InvalidInput)?;
+        self.context(
+            &McpImportTarget::Declared {
+                environment_id,
+                import,
+            },
+            policy,
+            inline,
+            transport_limits,
+        )
+        .await
+    }
+
+    pub(crate) async fn import_context(
+        &self,
+        source: &McpImportSource,
+        auth: McpImportAuth,
+        transport_limits: golem_mcp_import::transport::Limits,
+    ) -> Result<McpRuntimeContext, McpOAuthError> {
+        let environment = self.environment(source.environment_id).await?;
+        let policy = auth.policy(&environment, self.usage.clone())?;
+        self.context(&source.into(), policy, None, transport_limits)
+            .await
+    }
+
+    async fn context(
+        &self,
+        target: &McpImportTarget,
+        policy: http_policy::McpHttpPolicy,
+        inline: Option<McpImportCredential>,
+        transport_limits: golem_mcp_import::transport::Limits,
+    ) -> Result<McpRuntimeContext, McpOAuthError> {
+        let resolved = self.resolve_target(target).await?;
+        let uri = resolved
+            .import
+            .url
+            .parse()
+            .map_err(|_| TransportError::Denied)?;
+        policy.authorize(&uri)?;
+        let owner = resolved.environment.owner_account_id;
+        let mut credential_sender = self.sender(policy)?;
+        let credential = self
+            .credential_target(target, owner, inline, &mut credential_sender)
+            .await?;
+        // A scheme change or revocation during credential acquisition must not
+        // admit an observation under the old identity.
+        let current = self.resolve_target(target).await?;
+        if let Some(grant) = &credential.oauth_grant {
+            if current.oauth()?.1 != grant.key {
+                return Err(McpOAuthError::ContextChanged);
+            }
+            let stored = self
+                .grants
+                .load(&grant.key)
+                .await?
+                .ok_or(McpOAuthError::ContextChanged)?;
+            if stored.generation != grant.generation
+                || stored.status != McpOAuthGrantStatus::Granted
+            {
+                return Err(McpOAuthError::ContextChanged);
+            }
+        }
+        let identity = match (&current.import.auth, &credential.oauth_grant) {
+            (_, Some(grant)) => McpCredentialIdentity::OAuth {
+                environment_id: grant.key.environment_id,
+                security_scheme_id: grant.key.security_scheme_id,
+                security_scheme_revision: grant.key.security_scheme_revision,
+                credential_owner_account_id: grant.key.credential_owner_account_id,
+                resource_url: grant.key.resource_url.clone(),
+                generation: grant.generation,
+            },
+            (Some(inline), None) => {
+                McpCredentialIdentity::Inline(inline.credential_digest.to_string())
+            }
+            (None, None) => McpCredentialIdentity::Anonymous,
+        };
+        let mut client = golem_mcp_import::transport::Client::new(
+            &current.import.url,
+            current.import.version.as_deref(),
+            transport_limits,
+        )?;
+        match &credential.credential {
+            Some(McpImportCredential::Bearer { token }) => client = client.with_bearer(token)?,
+            Some(McpImportCredential::Basic { user, password }) => {
+                client = client.with_basic(user, password)?
+            }
+            None => {}
+        }
+        Ok(McpRuntimeContext {
+            import: current.import,
+            identity,
+            client,
+            sender: credential_sender,
+        })
+    }
+
     pub fn new(
         environments: Arc<dyn EnvironmentRepo>,
         deployments: Arc<dyn DeploymentRepo>,
@@ -160,15 +302,33 @@ impl McpOAuthService {
             grants,
             limits,
             usage,
+            #[cfg(test)]
+            trusted_certificate: std::sync::RwLock::new(None),
         }
+    }
+
+    fn sender(
+        &self,
+        policy: http_policy::McpHttpPolicy,
+    ) -> Result<HttpSender<http_policy::McpHttpPolicy>, TransportError> {
+        #[cfg(test)]
+        if let Some(certificate) = self.trusted_certificate.read().unwrap().clone() {
+            return HttpSender::with_root_certificate(policy, certificate);
+        }
+        HttpSender::new(policy)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trust_certificate(&self, certificate: reqwest::Certificate) {
+        *self.trusted_certificate.write().unwrap() = Some(certificate);
     }
 
     async fn operator_sender(
         &self,
-        source: &McpImportSource,
+        target: &McpImportTarget,
         auth: &AuthCtx,
     ) -> Result<HttpSender<http_policy::McpHttpPolicy>, McpOAuthError> {
-        let resolved = self.resolve(source).await?;
+        let resolved = self.resolve_target(target).await?;
         let (scheme, _) = resolved.oauth()?;
         let policy = http_policy::McpHttpPolicy::operator(
             auth,
@@ -176,34 +336,36 @@ impl McpOAuthService {
             &scheme.name,
             self.usage.clone(),
         )?;
-        Ok(HttpSender::new(policy)?)
+        Ok(self.sender(policy)?)
     }
 
     pub async fn authorize(
         &self,
-        source: &McpImportSource,
+        target: impl Into<McpImportTarget>,
         auth: &AuthCtx,
     ) -> Result<Url, McpOAuthError> {
-        let mut sender = self.operator_sender(source, auth).await?;
-        self.begin(source, auth, &mut sender).await
+        let target = target.into();
+        let mut sender = self.operator_sender(&target, auth).await?;
+        self.begin(target, auth, &mut sender).await
     }
 
     pub async fn complete_operator(
         &self,
-        source: &McpImportSource,
+        target: impl Into<McpImportTarget>,
         callback: McpOAuthCallback,
         auth: &AuthCtx,
     ) -> Result<SecuritySchemeName, McpOAuthError> {
-        let mut sender = self.operator_sender(source, auth).await?;
-        self.complete(source, callback, auth, &mut sender).await
+        let target = target.into();
+        let mut sender = self.operator_sender(&target, auth).await?;
+        self.complete(target, callback, auth, &mut sender).await
     }
 
     pub async fn status(
         &self,
-        source: &McpImportSource,
+        target: impl Into<McpImportTarget>,
         auth: &AuthCtx,
     ) -> Result<(SecuritySchemeName, McpOAuthGrantStatus), McpOAuthError> {
-        let resolved = self.resolve(source).await?;
+        let resolved = self.resolve_target(&target.into()).await?;
         resolved.authorize_operator(auth)?;
         let (scheme, key) = resolved.oauth()?;
         let status = self
@@ -215,13 +377,40 @@ impl McpOAuthService {
         Ok((scheme.name.clone(), status))
     }
 
-    async fn resolve(&self, source: &McpImportSource) -> Result<ResolvedImport, McpOAuthError> {
-        let environment: Environment = self
+    async fn environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) -> Result<Environment, McpOAuthError> {
+        Ok(self
             .environments
-            .get_by_id(source.environment_id.0, false)
+            .get_by_id(environment_id.0, false)
             .await?
             .ok_or(McpOAuthError::ImportNotFound)?
-            .try_into()?;
+            .try_into()?)
+    }
+
+    async fn resolve(&self, source: &McpImportSource) -> Result<ResolvedImport, McpOAuthError> {
+        self.resolve_target(&source.into()).await
+    }
+
+    async fn resolve_target(
+        &self,
+        target: &McpImportTarget,
+    ) -> Result<ResolvedImport, McpOAuthError> {
+        let environment = self.environment(target.environment_id()).await?;
+        match target {
+            McpImportTarget::Deployed(source) => self.resolve_import(source, environment).await,
+            McpImportTarget::Declared { import, .. } => {
+                self.resolve_declaration(environment, import.clone()).await
+            }
+        }
+    }
+
+    async fn resolve_import(
+        &self,
+        source: &McpImportSource,
+        environment: Environment,
+    ) -> Result<ResolvedImport, McpOAuthError> {
         let state = self
             .deployments
             .get_tool_deployment_state(source.environment_id.0, source.deployment_revision.into())
@@ -234,10 +423,18 @@ impl McpOAuthService {
             .ok_or(McpOAuthError::ImportNotFound)?
             .import_config
             .into_value();
+        self.resolve_declaration(environment, import).await
+    }
+
+    async fn resolve_declaration(
+        &self,
+        environment: Environment,
+        import: McpImport,
+    ) -> Result<ResolvedImport, McpOAuthError> {
         let scheme = match &import.security_scheme {
             Some(name) => Some(
                 self.schemes
-                    .get_for_environment_and_name(source.environment_id.0, &name.0)
+                    .get_for_environment_and_name(environment.id.0, &name.0)
                     .await?
                     .ok_or(McpOAuthError::SchemeNotFound)?
                     .try_into()?,
@@ -255,11 +452,12 @@ impl McpOAuthService {
     /// The sender admits every resource and provider request in this chain.
     pub async fn begin<S: HttpSend<Error = McpOAuthError> + Send>(
         &self,
-        source: &McpImportSource,
+        target: impl Into<McpImportTarget>,
         auth: &AuthCtx,
         sender: &mut S,
     ) -> Result<Url, McpOAuthError> {
-        let resolved = self.resolve(source).await?;
+        let target = target.into();
+        let resolved = self.resolve_target(&target).await?;
         resolved.authorize_operator(auth)?;
         let (scheme, key) = resolved.oauth()?;
         let issuer = scheme
@@ -300,7 +498,7 @@ impl McpOAuthService {
         let client = client(&discovery.server, scheme, &key.resource_url)?;
         let request = client.authorize(&scopes)?;
         // Discovery can take time; do not bind consent to a retired scheme.
-        let current = self.resolve(source).await?;
+        let current = self.resolve_target(&target).await?;
         current.authorize_operator(auth)?;
         if current.oauth()?.1 != key {
             return Err(McpOAuthError::ContextChanged);
@@ -313,8 +511,7 @@ impl McpOAuthService {
                 McpOAuthFlowSecrets {
                     pkce_verifier: request.verifier.secret().clone(),
                     session: McpOAuthSession {
-                        deployment_revision: source.deployment_revision.into(),
-                        import_index: source.import_index,
+                        target,
                         authorized_by: auth.actor_account_id().0,
                         server: discovery.server.metadata().clone(),
                         scopes,
@@ -329,15 +526,16 @@ impl McpOAuthService {
     /// Shared-store claiming precedes every token POST; crashes never release it.
     pub async fn complete<S: HttpSend<Error = McpOAuthError> + Send>(
         &self,
-        expected_source: &McpImportSource,
+        expected_target: impl Into<McpImportTarget>,
         callback: McpOAuthCallback,
         auth: &AuthCtx,
         sender: &mut S,
     ) -> Result<SecuritySchemeName, McpOAuthError> {
+        let expected_target = expected_target.into();
         let claim = self
             .grants
             .claim_callback(
-                expected_source.environment_id.0,
+                expected_target.environment_id().0,
                 &state_hash(&callback.state),
                 Utc::now().into(),
             )
@@ -348,14 +546,10 @@ impl McpOAuthService {
             if session.authorized_by != auth.actor_account_id().0 {
                 return Err(McpOAuthError::InvalidCallback);
             }
-            let source = session_source(&claim.key, session)?;
-            if source.environment_id != expected_source.environment_id
-                || source.deployment_revision != expected_source.deployment_revision
-                || source.import_index != expected_source.import_index
-            {
+            if session.target != expected_target {
                 return Err(McpOAuthError::InvalidCallback);
             }
-            let resolved = self.resolve(&source).await?;
+            let resolved = self.resolve_target(&session.target).await?;
             resolved.authorize_operator(auth)?;
             let (scheme, key) = resolved.oauth()?;
             if key != claim.key {
@@ -384,7 +578,7 @@ impl McpOAuthService {
                 )
                 .await?;
             let tokens = tokens(token, issued_at, session.clone(), None)?;
-            let current = self.resolve(&source).await?;
+            let current = self.resolve_target(&session.target).await?;
             current.authorize_operator(auth)?;
             if current.oauth()?.1 != key {
                 return Err(McpOAuthError::ContextChanged);
@@ -410,10 +604,10 @@ impl McpOAuthService {
 
     pub async fn disconnect(
         &self,
-        source: &McpImportSource,
+        target: impl Into<McpImportTarget>,
         auth: &AuthCtx,
     ) -> Result<SecuritySchemeName, McpOAuthError> {
-        let resolved = self.resolve(source).await?;
+        let resolved = self.resolve_target(&target.into()).await?;
         resolved.authorize_operator(auth)?;
         let (scheme, key) = resolved.oauth()?;
         self.grants.revoke(&key).await?;
@@ -435,7 +629,7 @@ impl McpOAuthService {
             .map_err(|_| TransportError::Denied)?;
         policy.authorize(&uri)?;
         let owner = resolved.environment.owner_account_id;
-        let mut sender = HttpSender::new(policy)?;
+        let mut sender = self.sender(policy)?;
         self.credential(source, owner, &mut sender).await
     }
 
@@ -445,9 +639,19 @@ impl McpOAuthService {
         auth: AuthCtx,
         used_generation: Option<uuid::Uuid>,
     ) -> Result<(), McpOAuthError> {
-        let resolved = self.resolve(source).await?;
-        let policy =
-            http_policy::McpHttpPolicy::runtime(auth, &resolved.environment, self.usage.clone())?;
+        self.report_import_unauthorized(source, McpImportAuth::Runtime(auth), used_generation)
+            .await
+    }
+
+    pub(crate) async fn report_import_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth: McpImportAuth,
+        used_generation: Option<uuid::Uuid>,
+    ) -> Result<(), McpOAuthError> {
+        let environment = self.environment(source.environment_id).await?;
+        let policy = auth.policy(&environment, self.usage.clone())?;
+        let resolved = self.resolve_import(source, environment).await?;
         let uri = resolved
             .import
             .url
@@ -463,6 +667,36 @@ impl McpOAuthService {
         Ok(())
     }
 
+    pub(crate) async fn expire_observed_credential(
+        &self,
+        identity: &McpCredentialIdentity,
+    ) -> Result<(), McpOAuthError> {
+        if let McpCredentialIdentity::OAuth {
+            environment_id,
+            security_scheme_id,
+            security_scheme_revision,
+            credential_owner_account_id,
+            resource_url,
+            generation,
+        } = identity
+        {
+            self.grants
+                .expire_access_token(
+                    &McpOAuthGrantKey {
+                        environment_id: *environment_id,
+                        security_scheme_id: *security_scheme_id,
+                        security_scheme_revision: *security_scheme_revision,
+                        credential_owner_account_id: *credential_owner_account_id,
+                        resource_url: resource_url.clone(),
+                    },
+                    *generation,
+                    Utc::now().into(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Trusted runtime path after tool admission, never an administrative token
     /// API. The sender carries the live calling agent's network/quota context.
     pub async fn credential<S: HttpSend<Error = McpOAuthError> + Send>(
@@ -471,13 +705,25 @@ impl McpOAuthService {
         owner: AccountId,
         sender: &mut S,
     ) -> Result<McpCredential, McpOAuthError> {
-        let resolved = self.resolve(source).await?;
+        self.credential_target(&source.into(), owner, None, sender)
+            .await
+    }
+
+    async fn credential_target<S: HttpSend<Error = McpOAuthError> + Send>(
+        &self,
+        target: &McpImportTarget,
+        owner: AccountId,
+        inline: Option<McpImportCredential>,
+        sender: &mut S,
+    ) -> Result<McpCredential, McpOAuthError> {
+        let resolved = self.resolve_target(target).await?;
         if resolved.environment.owner_account_id != owner {
             return Err(McpOAuthError::OwnerMismatch);
         }
         if resolved.scheme.is_none() {
-            let credential = if resolved.import.auth.is_some() {
-                Some(
+            let credential = match target {
+                McpImportTarget::Declared { .. } => inline,
+                McpImportTarget::Deployed(source) if resolved.import.auth.is_some() => Some(
                     self.deployments
                         .get_deployment_mcp_import_credential(
                             source.environment_id.0,
@@ -486,9 +732,8 @@ impl McpOAuthService {
                         )
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("missing deployed MCP inline credential"))?,
-                )
-            } else {
-                None
+                ),
+                McpImportTarget::Deployed(_) => None,
             };
             return Ok(McpCredential {
                 credential,
@@ -511,7 +756,7 @@ impl McpOAuthService {
                         .tokens
                         .ok_or_else(|| anyhow::anyhow!("granted MCP OAuth token missing"))?;
                     if stored.expires_at.is_none_or(|expiry| expiry > Utc::now()) {
-                        if waited && self.resolve(source).await?.oauth()?.1 != key {
+                        if waited && self.resolve_target(target).await?.oauth()?.1 != key {
                             return Err(McpOAuthError::ContextChanged);
                         }
                         return Ok(McpCredential {
@@ -527,7 +772,7 @@ impl McpOAuthService {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(McpOAuthError::RefreshUnresolved(scheme.name.clone()));
                     }
-                    if self.resolve(source).await?.oauth()?.1 != key {
+                    if self.resolve_target(target).await?.oauth()?.1 != key {
                         return Err(McpOAuthError::ContextChanged);
                     }
                     let Some(claim) = self.grants.claim_refresh(&key, grant.generation).await?
@@ -563,7 +808,7 @@ impl McpOAuthService {
                             )
                             .await?;
                         let next = tokens(token, issued_at, session.clone(), Some(&claim.tokens))?;
-                        if self.resolve(source).await?.oauth()?.1 != key {
+                        if self.resolve_target(target).await?.oauth()?.1 != key {
                             return Err(McpOAuthError::ContextChanged);
                         }
                         let credential = McpCredential {
@@ -618,20 +863,29 @@ impl McpOAuthService {
     }
 }
 
-fn state_hash(state: &str) -> Vec<u8> {
-    blake3::derive_key("golem MCP OAuth callback state", state.as_bytes()).to_vec()
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum McpCredentialIdentity {
+    Anonymous,
+    Inline(String),
+    OAuth {
+        environment_id: uuid::Uuid,
+        security_scheme_id: uuid::Uuid,
+        security_scheme_revision: i64,
+        credential_owner_account_id: uuid::Uuid,
+        resource_url: String,
+        generation: uuid::Uuid,
+    },
 }
 
-fn session_source(
-    key: &McpOAuthGrantKey,
-    session: &McpOAuthSession,
-) -> Result<McpImportSource, McpOAuthError> {
-    Ok(McpImportSource {
-        environment_id: EnvironmentId(key.environment_id),
-        deployment_revision: session.deployment_revision.try_into()?,
-        import_index: session.import_index,
-        upstream_tool_name: String::new(),
-    })
+pub(crate) struct McpRuntimeContext {
+    pub(crate) import: McpImport,
+    pub(crate) identity: McpCredentialIdentity,
+    pub(crate) client: golem_mcp_import::transport::Client,
+    pub(crate) sender: HttpSender<http_policy::McpHttpPolicy>,
+}
+
+fn state_hash(state: &str) -> Vec<u8> {
+    blake3::derive_key("golem MCP OAuth callback state", state.as_bytes()).to_vec()
 }
 
 fn client(

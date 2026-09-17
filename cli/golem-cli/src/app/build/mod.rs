@@ -186,6 +186,15 @@ fn available_remote_tool_guest_bridge_dependencies(
         let component = ctx.application().component(component_name);
         for dependency in &component.properties().dependencies {
             if let ComponentDependency::Tool {
+                source: crate::model::app::SubjectSource::McpImport,
+                tool_name,
+            } = dependency
+                && ctx.should_run_step(AppBuildStep::GenBridge)
+            {
+                ctx.mcp_tool(tool_name)?;
+                available.insert(dependency.clone());
+            }
+            if let ComponentDependency::Tool {
                 source: crate::model::app::SubjectSource::RemoteRelease,
                 tool_name,
             } = dependency
@@ -447,6 +456,7 @@ fn format_subject_source(source: &crate::model::app::SubjectSource) -> String {
     match source {
         crate::model::app::SubjectSource::Local { component_name } => component_name.to_string(),
         crate::model::app::SubjectSource::RemoteRelease => "remote release".to_string(),
+        crate::model::app::SubjectSource::McpImport => "MCP import".to_string(),
     }
 }
 

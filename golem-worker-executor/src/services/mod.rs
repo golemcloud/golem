@@ -30,6 +30,7 @@ pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;
+pub mod mcp;
 pub mod oplog;
 pub mod promise;
 pub mod quota;
@@ -215,6 +216,10 @@ pub trait HasWebSocketConnectionPool {
     fn websocket_connection_pool(&self) -> WebSocketConnectionPool;
 }
 
+pub trait HasMcpTransport {
+    fn mcp_transport(&self) -> Arc<mcp::McpTransport>;
+}
+
 pub trait HasLeakSentinel {
     fn leak_sentinel(&self) -> Arc<()>;
 }
@@ -260,6 +265,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShutdownToken
     + HasHttpConnectionPool
     + HasWebSocketConnectionPool
+    + HasMcpTransport
     + HasEnvironmentStateService
     + HasExtraDeps<Ctx>
     + HasLeakSentinel
@@ -301,6 +307,7 @@ impl<
         + HasShutdownToken
         + HasHttpConnectionPool
         + HasWebSocketConnectionPool
+        + HasMcpTransport
         + HasEnvironmentStateService
         + HasExtraDeps<Ctx>
         + HasLeakSentinel
@@ -346,6 +353,7 @@ pub struct All<Ctx: WorkerCtx> {
     shutdown_token: CancellationToken,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
+    mcp_transport: Arc<mcp::McpTransport>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     extra_deps: Ctx::ExtraDeps,
@@ -390,6 +398,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             shutdown_token: self.shutdown_token.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             environment_state_service: self.environment_state_service.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
@@ -435,6 +444,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         shutdown_token: CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<mcp::McpTransport>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         extra_deps: Ctx::ExtraDeps,
@@ -473,6 +483,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             environment_state_service,
             native_tool_catalog,
             extra_deps,
@@ -521,6 +532,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.shutdown_token(),
             this.http_connection_pool(),
             this.websocket_connection_pool(),
+            this.mcp_transport(),
             this.environment_state_service(),
             this.native_tool_catalog(),
             this.extra_deps(),
@@ -730,6 +742,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasHttpConnectionPool for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T {
     fn websocket_connection_pool(&self) -> WebSocketConnectionPool {
         self.all().websocket_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasMcpTransport for T {
+    fn mcp_transport(&self) -> Arc<mcp::McpTransport> {
+        self.all().mcp_transport.clone()
     }
 }
 

@@ -460,8 +460,16 @@ mod tests {
         McpOAuthFlowSecrets {
             pkce_verifier: format!("pkce-{marker}"),
             session: crate::repo::model::mcp_oauth::McpOAuthSession {
-                deployment_revision: 1,
-                import_index: 0,
+                target: crate::repo::model::mcp_oauth::McpImportTarget::Deployed(
+                    golem_common::model::mcp_import::McpImportSource {
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            Uuid::new_v4(),
+                        ),
+                        deployment_revision: 1_i64.try_into().unwrap(),
+                        import_index: 0,
+                        upstream_tool_name: String::new(),
+                    },
+                ),
                 authorized_by: Uuid::new_v4(),
                 server: golem_mcp_import::oauth::AuthorizationServerMetadata {
                     issuer: "https://issuer".into(),

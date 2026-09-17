@@ -9,6 +9,7 @@ description = "MCP tool projection and value conversion for Golem hosts"
 harness = false
 
 [dependencies]
+golem-common = { workspace = true }
 golem-schema = { workspace = true }
 
 base64 = { workspace = true }

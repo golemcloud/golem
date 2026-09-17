@@ -320,6 +320,7 @@ fn component_dispatch_uses_one_pinned_consumer_snapshot() {
         &EntityActivationPolicy::Tool {
             provision: registered.provision,
             binding: Box::new(binding),
+            mcp_import: None,
         }
     );
 }
@@ -362,6 +363,7 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
         provision,
         binding,
         filesystem,
+        mcp_import,
     } = activation.into_dispatch_target().unwrap()
     else {
         panic!("host source must dispatch directly without a component activation")
@@ -373,6 +375,7 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
     assert_eq!(provision, expected_provision);
     assert_eq!(*binding, expected_binding);
     assert_eq!(filesystem, FilesystemCapability::Capable);
+    assert_eq!(mcp_import, None);
 }
 
 #[test]
@@ -762,6 +765,15 @@ impl MockRegistryService {
 
 #[async_trait::async_trait]
 impl RegistryService for MockRegistryService {
+    async fn resolve_mcp_import(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+        _: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
+        panic!("unexpected MCP discovery")
+    }
     async fn get_mcp_runtime_credential(
         &self,
         _: &golem_common::model::mcp_import::McpImportSource,

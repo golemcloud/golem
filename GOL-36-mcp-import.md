@@ -1,12 +1,20 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
-Status: implementation in progress. Steps 1–3 completed after tests, Oracle review,
-and the bug-finder loop. Step 4's approved header-parser revision is verified;
-the user approved proceeding beyond its design checkpoint to the remaining work.
+Status: implementation in progress. Steps 1–7 and 9 completed after tests, Oracle
+review and bounded bug-finder loops. Steps 8 and 10 remain open: the middleware
+dependency is not integration-ready, and final combined acceptance must include it.
 The resource-budget boundary has provisional user approval and must be revisited
 in the final review.
 Middleware remains an implementation dependency. The finalized planning snapshot
 is attached to GOL-36 in Linear.
+The user approved a fixed one-day limit for resolver operation timeouts and
+refresh intervals. The correction passed 28 targeted tests and Oracle review;
+periodic-refresh bug-finder run 5 resolved the timeout finding with no new
+findings or active checkpoint. Public metadata inspection, refresh, generated
+clients, deployment warnings and operator documentation are now implemented and
+verified. Combined OAuth/agent acceptance, quota enforcement, public-oplog
+rendering, protocol validation and generated config checks pass; middleware
+integration is still blocked on its dependency transfer.
 
 This is the living record of the requirements, decisions, implementation plan, and
 open details discussed in the planning thread. Update this file in place as the
@@ -588,24 +596,24 @@ Generated artifacts accompany each contract change.
   errors, typed upstream results, mixed-content variants, and simple text/binary
   stdout. Specify unsupported cases and bounds explicitly; test projection
   independently of network behavior.
-- [ ] **4. Implement policy-aware MCP transport and authentication.** Inspect SDK
+- [x] **4. Implement policy-aware MCP transport and authentication.** Inspect SDK
   customization before choosing an adapter. Support the selected full Streamable
   HTTP contract, per-call keys, cancellation, and network accounting without
   hidden retries. Implement bearer/basic and outbound OAuth as separately
   estimable work units, both in scope. Follow the OAuth workflow and protocol
   boundaries above. Add an in-process mock upstream and provider fixture; the
   bearer/basic path can unblock resolver/bridge work while OAuth is implemented.
-- [ ] **5. Implement registry resolution on demand.** Share resolution across
+- [x] **5. Implement registry resolution on demand.** Share resolution across
   listing, lookup, invocation preparation, cache warming, and refresh. Handle
   pagination, auth-scoped caching, coalesced misses, successful empty lists,
   failures, precedence, and diagnostics. Do not rely on warm caches.
-- [ ] **6. Separate fixed and dynamic discovery persistence.** Rehydrate native
+- [x] **6. Separate fixed and dynamic discovery persistence.** Rehydrate native
   definitions from the compact exact-deployment reference recorded for the
   observation/admission. Record dynamic MCP observations, rejections, and
   invocation snapshots with full metadata required by replay. Reuse existing
   activation references; retain non-derivable state. Preserve normal durable-call
   sequencing and infrastructure retry behavior, without a new owner association.
-- [ ] **7. Connect the special native MCP bridge.** Reuse native execution,
+- [x] **7. Connect the special native MCP bridge.** Reuse native execution,
   authorization, accounting, cancellation, and existing HTTP/RPC idempotency
   techniques. Persist/replay the nested remote result, including structured content
   and simple-output stdout, without repeating completed upstream effects.
@@ -613,7 +621,7 @@ Generated artifacts accompany each contract change.
   baseline, apply universal and per-tool chains, supply recorded layer-appropriate
   metadata, and dispatch through runtime-minted underlying handles. Revalidate
   on refresh and surface incompatible drift without bypassing middleware.
-- [ ] **9. Add operator and codegen surfaces.** Manual refresh, periodic host
+- [x] **9. Add operator and codegen surfaces.** Manual refresh, periodic host
   refresh policy, inspection, warnings, projected-metadata codegen consumption,
   and documentation. These use the same resolver rather than independent paths.
 - [ ] **10. Verify the combined behavior.** Run focused projection, registry,
@@ -867,7 +875,10 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   optional-carrier conventions; strict canonical-value tests alone do not close
   that integration gate.
 
-### Step 4 — in progress: transport foundation
+### Step 4 — completed
+
+The chronological evidence below records intermediate gates. Final transport/auth
+acceptance and the closing Oracle/bug-finder results are recorded under step 10.
 
 - Official live versioning now identifies **2026-07-28** as current. Imports
   support only that released revision: self-contained request metadata, required
@@ -1162,6 +1173,497 @@ conflict or unsupported prerequisite, not ordinary implementation detail.
   and metadata-cache invalidation; provider fixtures and combined validation.
   The coordinator is an intermediate checkpoint, not completion of step 4 or
   evidence of end-to-end OAuth operation.
+- Combined resolver/OAuth verification now uses an in-process HTTPS provider and
+  resource with a test-owned CA. Consent, metadata discovery, code exchange,
+  generation-keyed cache hits, resource-401 invalidation, refresh rotation, and
+  stale-401 fencing execute through the production coordinator and resolver.
+  A 401 performs no same-call refresh/retry; the next resolution refreshes once.
+  `HttpSender` can add a trust root without changing retry/redirect/decoding policy;
+  the service's fixture trust hook exists only in test builds.
+- Oracle found the new fixture's challenge incorrectly applied to anonymous
+  imports too. The challenge is now opt-in. The full registry MCP/OAuth suite
+  passes **37 tests, none ignored**; sender tests pass **6 tests**. The dedicated
+  HTTPS integration bug-finder loop confirmed the fixture fix and returned a
+  clean terminal result on run 2. Bridge-side 401 feedback and full agent/provider
+  acceptance remain outstanding; this does not close step 4.
+
+### Step 5 — completed
+
+- Registry listing, lookup, refresh and the internal observation RPC share one
+  on-demand resolver. Complete pagination and projection precede publication;
+  successful empty lists and per-definition exclusions replace old observations.
+  Native names win without discovery; imported lookup stops at the first winner.
+  Whole listings resolve all imports concurrently, then merge in declaration order.
+  An unavailable import fails the listing rather than publishing a partial view.
+- Cache identity includes exact environment/deployment/import, the complete
+  effective authorization context, and inline-credential digest or OAuth grant
+  identity/generation. Runtime authority is checked even for hits. No credential
+  is included in the RPC observation. Defaults: 128 entries, 16 concurrent
+  context/fetch operations, 25-second operation budget, 300-second success TTL,
+  one-second failure TTL, and a 20-second transport budget. Config dumps are
+  generated from the newly built registry binary.
+- Coalesced fills survive caller cancellation, have bounded lifetimes, and retain
+  their capacity permit through CPU projection. Pending entries are never evicted;
+  saturation is explicit. Last-success metadata survives ordinary upstream,
+  protocol, projection and infrastructure errors. Authorization, changed context
+  and quota errors never fall back to stale data. Manual refresh reports failure.
+- OAuth credential acquisition retains the agreed cancellation behavior. A resolver
+  deadline can fence an interrupted refresh and require reauthorization. Oracle's
+  suggested detached refresh is not adopted. Its separate sibling-cancellation
+  finding was fixed: listing uses `join_all`, not short-circuiting `try_join_all`,
+  so one failed import does not cancel another import's credential acquisition.
+  A delayed-first/import-denial regression also proves ordered error reporting.
+- Resource 401 clears that cache entry and reports the used OAuth generation,
+  without retrying inside resolution. Combined OAuth generation/401/refresh/cache
+  validation remains step 4 integration; the anonymous 401 test is not that proof.
+- The RPC preserves typed quota, authorization, missing-source and invalid-input
+  categories. A real RPC regression exposed serde's default depth rejecting a
+  valid projected schema; internal snapshot serialization now uses the same
+  stack-growth technique as projection. Upstream depth/byte limits remain intact.
+- Targeted registry MCP/OAuth suite: **36 passed**. Registry binary build and
+  scoped config generation passed. Oracle confirmed its blockers resolved.
+  Bug-finder `gol36-step5-resolver` run 1 returned **no bugs found**, clean terminal
+  with no checkpoint. Scoped lint subsequently identified representation-only
+  fixes and a missing `mcp_imports` field in a step-2 service-base test constructor;
+  those are corrected. Strict all-target/no-deps Clippy passed for registry,
+  service-base and import. The affected service-base environment test passed;
+  executor and worker-service all-target consumer checks passed.
+- Availability tradeoff: the shared context/fetch semaphore can delay cache hits
+  behind active fills. Auth-context keys deliberately do not merge distinct
+  authority surfaces. Periodic/operator refresh surfaces and actual executor
+  discovery/admission consumers remain their later implementation steps.
+
+### Step 6 — completed
+
+- Fixed discovery now records an optional exact deployment revision rather than
+  native definitions. Four worker tests passed, including genuine executor
+  teardown/restart, N-to-N+1 live deployment changes, missing historical revision
+  failure without fallback, and no-deployment versus empty-deployment observations.
+  Tests decode actual discovery oplog responses to prove fixed metadata is absent.
+- Oracle reviewed the fixed scaffold and dynamic integration boundary. The bridge
+  will remain a Host executable (`mcp-import@1`), with a full dynamic projection
+  carried in its activation policy, not a mutable native catalog entry. All
+  imports use the bridge's stable synthetic discovery component identity.
+- Dynamic discovery is connected to the existing environment-state client.
+  Ordered per-import metadata, empty lists and exclusions are persisted; native
+  names (including unbound names) precede imports. Completed discovery replay
+  uses those observations and the exact native deployment, without MCP/OAuth.
+  The discovery module passed all **6 tests**, including dynamic restart, cold
+  ordered lookup and fail-closed behavior. Native streaming and reordered
+  admission/replay regressions passed **2 tests**; executor all-target check passed.
+- Admission now selects one coherent deployment and synthesizes the MCP bridge
+  binding/projection. The activation fingerprint and protobuf include the dynamic
+  source and full projection; common-model validation checks bridge identity,
+  deployment and owner environment. A separate bug-finder run returned a clean
+  terminal result. Its retained tests cover monthly-budget suspension with an
+  incomplete discovery Start and cold invocation reaching native bridge dispatch.
+- Oracle found the discovery quota branch violated the unfinished-session drop
+  contract and the reordered-admission interceptor still used the old lookup API.
+  Both are fixed, and its follow-up confirmed resolution. Quota egress additionally
+  uses the call-owned trap marker, covering ephemeral agents where quota exhaustion
+  is an error rather than suspension.
+- Combined discovery/admission verification now passes **8 tests**, including
+  cold MCP invocation and genuine executor reconstruction after stopping upstream
+  and clearing credentials/observations. The bridge makes no additional HTTP,
+  credential, metadata, live-deployment or exact-deployment lookup on completed
+  replay. The earlier failing test called an uninitialized guest getter; its first
+  correction accidentally added discovery, whose exact-revision replay lookup is
+  required. The final test invokes cold and triggers recovery through the existing
+  self-metadata method instead. Log: `/tmp/gol36-bridge-discovery-fixed2.log`.
+
+### Step 7 — completed
+
+The chronological evidence below records intermediate gates. Final quota, OAuth,
+public-oplog and config acceptance closes this step; middleware remains step 8.
+
+- Native dispatch recognizes the MCP activation and uses the existing native
+  context, retained entity state and attachments. A nested `WriteRemote` call
+  derives the ordinary HTTP/RPC key on both live and replay, records the complete
+  transport result, and commits it before projecting values or writing stdout.
+  Credentials and exact endpoint lookup occur only in its live arm. Resource-401
+  feedback follows the committed response and never resends that call.
+- Projection decoding checks the binding name/digest/upstream identity on a
+  blocking stack; typed results use the recorded result schema and ordinary custom
+  errors use the declared string payload. Cancellation records its outcome inside
+  the remote boundary; attachment failures are arbitrated by the owner operation.
+- First Oracle review found no blocker in the nested durability/key/replay design.
+  Accepted follow-ups preserve exact quota traps, classify immutable snapshot
+  failures and unify admission/credential error mapping. Its suggestion to map
+  missing consent to `Denied` conflicts with the settled contract above: missing
+  upstream grants remain `RemoteInternalError`, while caller denials use `Denied`.
+  No compatibility encoding is added; the repository permits format replacement.
+- The initial HTTP/restart test build exposed missing imports, a test error
+  constructor mismatch, and use of Poem in an Axum-based test crate; corrected.
+  Production compilation and completed-call restart now pass (see step 6).
+  Stdout/crash, lost-response, cancellation, quotas, 401 integration,
+  configured transport bounds and final protocol-drift mapping remain to verify.
+  Step 7 is not complete; subsequent review and regression results follow below.
+- Resource-401 cache invalidation is now wired through the registry resolver.
+  Authorized feedback clears matching completed entries and fences pending fills;
+  both new demand and manual refresh avoid invalidated fills. Late completion
+  cannot overwrite a replacement, while original waiters can finish. Tests force
+  the replacement to complete before releasing the old response. **16 resolver
+  tests passed**, Oracle found no blockers, and the dedicated cache-feedback
+  bug-finder run returned clean. OAuth generation and auth-context isolation remain
+  intact. Full agent-to-provider 401 acceptance is still outstanding.
+- Executor transport now has configurable bounds, an executor-wide semaphore and
+  a shared single-attempt HTTP client; bridge integration uses these resources
+  only for live attempts. Initial transport/config tests passed (**3 executor,
+  6 sender**). Config generation ran out of disk; obsolete build binaries were
+  removed. Combined verification and regeneration are pending, not waived.
+- Protocol `-32602` now triggers a separate durable `ReadRemote` presence lookup
+  after the response commit. It forces a charged, fully paginated refresh of the
+  admitted source; observed absence maps to `InvalidToolName`, while presence or
+  unavailable evidence preserves `InvalidInput`. Projection exclusions count as
+  present upstream definitions. No message heuristic is used; MCP `isError`
+  remains a custom tool error. The forced refresh is an additional HTTP cost on
+  each such protocol rejection, not an uncharged cache check.
+- The presence regression passed with removal versus exclusion, quota suspension
+  after the remote End but before the presence End, executor reconstruction, and
+  completed offline replay. Log: `/tmp/gol36-presence-acceptance.log` (**1 passed**).
+- The current MCP 2026-07-28 tools specification permits any JSON value for
+  `structuredContent`. Declared strings, arrays and null remain typed; undeclared
+  nonobjects retain the JSON-string convention. The import suite passed **84
+  tests** after removing object-only restrictions. This corrects an obsolete
+  protocol assumption, not the structured-versus-stdout user decision.
+- Initial step-7 bug-finder run returned clean, but the parallel Oracle review
+  identified missing entity-context idempotency seeds. A stronger retained test
+  proved it: lose one response, then restart the executor with the retried request
+  held after the upstream effect and before End. Recovery produced **two effects
+  instead of one** (`/tmp/gol36-crash-key-before.log`). The clean bug-finder result
+  is not sufficient evidence for completion.
+- The shared entity boundary now derives a child seed using the caller's normal
+  physical/atomic logical position on live and replay, records the admitted
+  idempotence mode, and installs that context for native and guest bodies. Entities
+  admitted inside caller atomic regions use a Store-local logical child counter;
+  mutable atomic leases are not copied across Stores. Wire/payload regressions
+  pass **23 tests** (`/tmp/gol36-entity-wire-tests.log`). The stronger lost-response
+  and executor-reconstruction regression now observes one effect across retries.
+- Shared entity-context verification passed **3 crash tests**: in-process retry
+  plus actual executor drop/restart; atomic rollback with a fresh physical Start
+  and the same key; and non-idempotent no-resend. The third test nests a guest
+  entity in a completed atomic admission, replays a completed generated-key call,
+  and repairs unfinished outgoing HTTP with one upstream effect. It exposed the
+  need for `generate_idempotency_key` to reserve its logical position before its
+  live-only closure, including completed replay. Oracle confirmed the correction
+  with no blockers; dedicated entity-idempotency bug-finder run 1 returned clean.
+  Log: `/tmp/gol36-entity-review-tests.log`.
+- Stdout reconstruction passes with a numbered multi-chunk payload, binary,
+  mixed content, empty text and custom error; a committed remote response survives
+  executor reconstruction before stdout consumption without another upstream call.
+  Log: `/tmp/gol36-policy-stdout.log` (**2 passed**, including policy coverage).
+  Cancellation acceptance is being added. Initial runs exposed a stale copied
+  fixture and an incorrect test expectation: ordinary cancelled stdout settles
+  with `ByteStreamFailure::Cancelled`, not clean EOF.
+  Completed reconstruction then exposed attachment cancellation selected after
+  aborting the producer, which could choose `Abandoned` first. The shared entity
+  coordinator now selects operation cancellation before abort; the MCP body also
+  selects cancelled stdout from a recorded cancelled call or presence observation.
+  Presence cancellation is no longer swallowed into unavailable evidence.
+- The rebuilt guest makes its observed stdout terminal part of a subsequent
+  rejected tool-command identity, so a changed replay observation fails a durable
+  claim rather than hiding behind a recorded invocation result. The expanded
+  regression passes for a pending MCP call, pending presence refresh, and
+  backpressured output after the remote End, followed by actual executor teardown
+  and offline reconstruction. Log: `/tmp/gol36-cancel-three-windows.log`.
+  Oracle found no blockers in the bounded correction, but noted a possible broader
+  body-wins terminal race when the nested call succeeded; the dedicated
+  `gol36-cancellation-replay` bug-finder run investigated and returned clean.
+  This is evidence for the exercised cancellation windows, not proof of every
+  ordinary-tool attachment interleaving. Updated walkthrough rendering is pending.
+  Step 7 remains open for combined quotas, transport/auth acceptance and review.
+
+### Step 8 — dependency integration pending
+
+- The dependency status changed during implementation: GOL-39 is merged in
+  [PR 3842](https://github.com/golemcloud/golem/pull/3842), but this orb checkout
+  predates it. GOL-439 is actively implementing the chain dispatcher in the
+  [middleware thread](https://ampcode.com/threads/T-01a0a94d-ba14-716c-9f45-1f7766424d43).
+  Coordinate and integrate that baseline rather than build another dispatcher.
+- Its recorded root-chain plan/descendant-position model, typed installation
+  parameters, and WIT `streams`/`underlying` split must be reconciled with MCP's
+  dynamic leaf activation and the shared entity seed fix. A coordination message
+  was sent with the crash reproducer and ownership boundaries. The dependency is
+  unfinished; neither its plan nor SDK scaffolding closes MCP middleware acceptance.
+- The validated entity seed/scope/proto correction and a standalone guest
+  regression were packaged as focused patches against this orb's exact local
+  baseline and offered to the middleware thread. No pushes or old whole-file
+  replacements. Both patches application-check against that baseline. The other
+  thread must adapt its required plan/operation/principal fields and preserve
+  generic Host dispatch. Host-side descendants admitted in a different Store or
+  later invocation must derive context from recorded root/descendant state, not
+  unrelated ambient caller state.
+- The middleware thread reports it has adapted the transfer with required
+  operation/principal/root-plan fields retained. Common entity and entity/claim
+  checks pass there, as does the standalone generated-key crash regression with
+  fresh fixtures. Descendants use their parent entity Store's recorded context;
+  generic Host leaf activation remains intact.
+- The latest middleware-thread report supersedes the earlier fail-closed status:
+  a real universal → monomorphic → parameterized → component-leaf chain passes
+  all three outer modes there, as do overlapping results after correcting test
+  history assertions. This is reported evidence from that checkout, not local
+  verification or MCP Host-leaf acceptance. No integration-ready transfer has
+  arrived; step 8 remains incomplete.
+- Its Oracle review identified a further concurrent idempotency issue:
+  `from_started_request` reserves the logical position after asynchronous
+  Start/claim resolution, whose completion order can differ on replay. That
+  thread owns capturing the caller key, logical position and idempotence mode
+  synchronously with the tool attempt ordinal, carrying the capture through
+  admission, and adding reordered-claim/atomic coverage. Do not duplicate that
+  correction here; integrate it with the eventual dispatcher transfer.
+- The subsequent GOL439 report confirms fresh passing idempotency, real typed
+  middleware-chain dispatch and overlapping-replay tests in its unpushed local
+  `main`, not `origin/main`. Generic Host dispatch remains, but it has not imported
+  MCP activation implementation. Its remaining contract question is typed
+  schema-value stream readiness versus full settlement of admitted children;
+  that question is recorded in its Linear plan for user clarification.
+  It reports TypeScript **835 passed, 20 skipped**, Effect **864 passed**, refreshed
+  runtime templates, and fixes for borrowed-observer disposal and Scala admission
+  stdout. The broader entity suite is **10/11**; the remaining white-box fixture
+  lacks a required live-admission operation and is being repaired there without
+  weakening the invariant. No ready transfer or push exists, and these reports
+  do not establish completion of GOL439 steps 7/9/10 or GOL-36 acceptance.
+- The latest dependency read confirms the stream-settlement decision is resolved:
+  reuse agent RPC semantics, exposing available stream-bearing results early while
+  keeping producers/children alive until settlement. No new public completion API.
+  A real typed-output-through-middleware test still hangs before the caller's
+  first item; that thread owns debugging it and its remaining crash matrix.
+  There is still no integration-ready patch/bundle. Its new async Rust tool-start
+  API also requires adaptation of generated consumers during eventual integration.
+
+### Step 9 — completed
+
+- Periodic refresh now targets active successful cached views, including
+  historical deployments, using their authorized context and the shared refresh
+  path. The default interval is one minute; existing cache/fetch bounds apply.
+  The loop is owned by the registry task set and retains only a weak service
+  reference between refresh rounds. Failed upstream refresh retains prior usable
+  metadata; authorization failures evict the view. Focused replacement/removal/
+  failure and config checks passed **2 tests** before the final interval-range
+  validation addition. Full resolver review, bug-finder and generated-config
+  comparison remain pending. Disk-full linking was recovered by removing only
+  disposable build artifacts.
+- Periodic work now uses bounded background concurrency and only refreshes views
+  used within the cache TTL; background work never renews that demand window.
+  OAuth rotation uses the actual resolved credential identity, preserving the
+  current generation when an older failed sibling exists. Foreground demand
+  timestamps survive a background replacement. Oracle follow-up found no blockers.
+- Periodic-refresh bug-finder run 1 found queued work could resurrect an evicted
+  historical view. The original cache key now crosses context resolution and is
+  checked under the insertion mutex: the view must still be valid, successful and
+  recently used. Run 2 confirmed resolution, then found saturation blocked an
+  invalidated pending entry's same-key replacement. Saturation now rejects only
+  new-key insertion; superseded fills remain fenced by channel identity.
+  All **25 resolver tests passed** (`/tmp/gol36-periodic-capacity.log`), and Oracle
+  confirmed both corrections without blockers.
+- Run 3 confirmed the saturation fix and found that `operation_timeout =
+  Duration::MAX` passes `McpImportResolverConfig::validate` despite overflowing
+  deadline construction. Its retained failing regression is
+  `config::tests::mcp_import_resolver_rejects_unrepresentable_operation_timeout`.
+  Fingerprint: `mcp-import-operation-timeout-unrepresentable`.
+  Three successive runs with new findings triggered the mandatory design
+  checkpoint; implementation paused without overriding it.
+- Checkpoint assessment: the first two findings share cache-admission semantics
+  (obsolete work is not demand; replacing a key does not consume another slot).
+  Those invariants now live at mutex-protected insertion. The remaining finding
+  is a separate validation gap, not evidence that the cache needs another layer.
+  Proposed correction: validate every resolver duration used to construct an
+  absolute deadline at its owning configuration boundary, rejecting values that
+  cannot be represented; retain elapsed-time-only TTL semantics and defaults.
+  Exercise rejection through startup validation and retain the overflow
+  regression. This boundary review and a further bounded run require explicit
+  user approval. Generated-config comparison remains outstanding.
+- The user approved the validation correction. `operation_timeout` now rejects
+  zero and values for which `Instant::checked_add` fails, matching the existing
+  refresh-interval check. Shared transport already checks its own timeout;
+  elapsed-time-only TTLs deliberately still accept `Duration::MAX`. The retained
+  regression also verifies startup fails before DB creation or background tasks.
+  **27 targeted tests passed** (`/tmp/gol36-deadline-validation.log`), and Oracle
+  found no blockers. Defaults and serialization are unchanged by this correction.
+- Authorized bug-finder run 4 found a remaining time-of-check/time-of-use edge:
+  a duration one second below the clock's maximum representable deadline passes
+  validation, then overflows two seconds later. This is approximately 292 billion
+  years on this platform, not an ordinary timeout. It reused fingerprint
+  `mcp-import-operation-timeout-unrepresentable`; the design checkpoint remains
+  active. The provisional test
+  `mcp_import_validation_does_not_accept_a_timeout_that_soon_becomes_unrepresentable`
+  remains failing; it will need to expect rejection under a fixed-limit fix,
+  rather than unconditionally unwrapping validation success.
+  Proposed resolution: impose a fixed one-day supported ceiling on resolver
+  operation timeouts and refresh intervals, retaining defaults and TTL semantics.
+  This enforces a practical supported range instead of a time-dependent maximum.
+  The user approved this limit. Both durations now accept only positive values
+  at most 86,400 seconds. Tests cover the exact limit, one nanosecond above it,
+  transport/operation ordering and startup rejection before database creation.
+  **28 targeted tests passed** (`/tmp/gol36-deadline-cap.log`); Oracle approved.
+  Bug-finder run 5 resolved the timeout finding with no new findings, no design
+  checkpoint and no non-convergence signal. This bounded review is closed.
+- Deployment-pinned public inspection (`GET .../mcp-imports/:index/tools`) and
+  explicit refresh (`POST .../mcp-imports/:index/refresh`) now share the resolver.
+  Responses expose public Tool definitions, upstream names, projection digests
+  and per-import diagnostics, not credentials or internal mapping trees.
+  Environment/deployment visibility is required (otherwise 404), followed by
+  ViewTools (otherwise 403). Refresh uses these same permissions and the owner's
+  HTTP quota; failures are explicit, whereas ordinary reads can retain usable
+  stale metadata. Operator and runtime cache contexts remain separate. Named
+  MCP import error codes distinguish upstream rejection/unavailability and
+  projection failure from internal errors.
+  **49 MCP/OAuth/route/error tests passed** serially. Oracle follow-up found no
+  design blockers. Bug-finder caught scheme resolution preceding visibility;
+  authorization now precedes import/scheme resolution. Run 2 confirmed that
+  regression resolved with no new findings and **6 current targeted tests passed**.
+  This bounded review is closed; generated OpenAPI/client/docs work follows.
+- Codegen bootstrap investigation confirmed there is no staged import declaration:
+  build precedes deployment, and the deployment plan only contains current imports.
+  Using that revision would break first build and silently use old declarations
+  after edits. Oracle recommends environment-scoped declaration resolution before
+  build, with deployment-write and tool-view permissions, shared owner credential/
+  quota/projection machinery, and no deployment mutation or preview cache.
+  OAuth consent must also be possible for a declared target before first deploy;
+  grants already bind environment/scheme revision/owner/resource independently of
+  deployment. Existing deployed-target operations and declared-target operations
+  serve distinct lifecycles, not old/new protocol compatibility, and must share
+  the same credential and consent implementation.
+  Imports not consumed by codegen may still deploy without consent. Generating
+  typed clients for protected imports requires consent first; unavailable metadata
+  fails that build rather than silently generating stale or partial definitions.
+- Declaration resolution and declared OAuth routes are implemented with shared
+  credential refresh, owner quota and projection. The sanitized consent session
+  binds the exact declared/deployed target; the grant remains independent of a
+  deployment. Tests exercise consent/refresh before any deployment and subsequent
+  deployed reuse, changed-target rejection, preview pagination/precedence/cache
+  isolation, route shapes, individual permission requirements and 401 invalidation.
+  Preview currently resolves sequentially under one deadline, with at most 128
+  declarations, request limits and aggregate listing budgets. Consent retains
+  the specified security-scheme Update permission; preview additionally requires
+  View, Deploy and ViewTools. Oracle found no blockers; its indexed HTTP error
+  and missing boundary-test findings were fixed. The combined MCP/OAuth suite
+  passed **64 tests**. Bug-finder found validation after native-name deduplication;
+  validation now runs on the original list. Count, byte and valid-duplicate
+  regressions passed with **10 focused tests**. Run 2 resolved the finding with
+  no new or recurring findings; this bounded review is closed. OpenAPI/client/docs
+  regeneration and the CLI codegen consumer follow; this does not complete step 9.
+- CLI declaration-based codegen now feeds the ordinary bridge planner and all five
+  generators. Bare imported dependencies are resolved before consumer builds;
+  explicit native/release declarations reserve names. Freshness uses the declaring
+  manifest file plus import index/projection digest, never the application tree.
+  **32 targeted CLI tests passed** (`/tmp/gol36-codegen-tests.log`). Oracle's
+  freshness and test-compilation blockers were fixed; follow-up found no blockers.
+  The dedicated `gol36-cli-codegen` bug-finder run returned clean.
+- CLI declared consent adds `--manifest` to authorize/complete/status/disconnect,
+  mutually exclusive with `--revision`. Exact selected-environment declarations
+  use the shared environment-variable renderer and declared OAuth routes without
+  requiring deployment. Structured OAuth outputs use a null deployment revision
+  for manifest targets. **34 MCP/output-schema tests passed**
+  (`/tmp/gol36-cli-consent.log`). Oracle verified target/secret/schema contracts
+  and found missing help text; the correction and **38 MCP/command tests** passed
+  (`/tmp/gol36-cli-consent-docs.log`). Oracle follow-up found no blockers and
+  `gol36-cli-consent` bug-finder run 1 returned clean.
+- Projected-client acceptance now compiles actual consumers in all five languages.
+  The tests exposed bare binary fields in mixed content, now represented using
+  the canonical SDK unstructured-binary carrier, an unused MoonBit import, and
+  Effect wrapper narrowing in the shared TypeScript encoder. **29 projection
+  tests** and **9 compiler/adjacent regressions** passed. Oracle's Scala shared
+  build-directory concurrency finding was fixed by moving that test into the
+  existing sequential suite. The final **5/5 consumer rerun** passed
+  (`/tmp/gol36-mcp-consumer-final.log`); Oracle follow-up approved the slice and
+  `gol36-projected-consumers` bug-finder run 1 returned clean.
+- Deployment discovery now produces ordinary `McpImportDiscovery` validation
+  warnings through the shared declaration preview, preserving operator permissions
+  and environment-owner billing. Missing consent or unavailable providers do not
+  prevent storing valid declarations. Native/earlier-import collisions carry
+  index/name diagnostics. **58 resolver/OAuth/API/deployment tests passed**
+  (`/tmp/gol36-deployment-warnings-final.log`). Oracle's assertion correction was
+  applied; `gol36-deployment-warnings` bug-finder run 1 returned clean. Preview
+  remains all-or-nothing under one 25-second deadline: a later failure can replace
+  earlier diagnostics with the import failure, but never publish partial tools.
+- The operator guide explains predeployment consent, provider network permission,
+  owner credentials/billing, refresh/revocation, typed clients and structured versus
+  stdout output. Prettier, docs-version and link checks passed. Rendered content
+  was inspected; a clipped code comment was fixed and reinspected. Representative
+  screenshot: `.amp/in/artifacts/gol36-mcp-import-docs.png`.
+- OpenAPI, generated clients and REST environment docs are regenerated. Structured
+  CLI schema now models deployment warnings, including nullable index/name and
+  the u32 index bound. **17 schema tests and 3 extra generated-example property
+  runs passed**, as did `check-cli-output-schema` and schema summary generation
+  (`/tmp/gol36-output-schema-tests.log`, `/tmp/gol36-output-schema-check-task.log`,
+  `/tmp/gol36-output-summary-task.log`). Fresh registry TOML/env dumps exactly
+  match both checked-in configuration references, including MCP/OAuth defaults.
+- A real CLI-to-Golem-to-provider acceptance test generates Rust clients before
+  initial deployment, exercises bearer/basic runtime credentials, asymmetric
+  structured output, simple stdout/MIME and ordered typed mixed content without
+  stdout. Four calls carry four distinct keys. Provider shutdown and a Golem
+  restart reconstruct prior agent state offline. Final strengthened run passed
+  in **125.7 seconds** (`/tmp/gol36-mcp-e2e-final.log`). Oracle found no blockers;
+  its fail-fast request/MIME/ordering/warning suggestions were applied, and
+  `gol36-cli-e2e` bug-finder run 1 returned clean for acceptance/schema changes.
+  This closes step 9, not OAuth combined acceptance or middleware integration.
+
+### Step 10 — combined acceptance in progress
+
+- The real CLI OAuth acceptance test uses predeployment manifest consent, an HTTPS
+  provider, generated Rust clients and the registry credential RPC. It independently
+  checks PKCE, client authentication, resource/redirect parameters and discovery.
+  A successful call is followed by a resource 401 without automatic resend; a
+  later call refreshes once with the rotated token. Provider shutdown and Golem
+  reconstruction preserve the success/error/success history offline.
+  The targeted run passed in **115.2 seconds** (`/tmp/gol36-oauth-final-e2e.log`).
+  Oracle's background-refresh race finding was then fixed by capturing token
+  counts at the rejected request rather than after unrelated background work.
+  The corrected test passed the `gol36-cli-oauth-e2e` bug-finder baseline; run 1
+  returned clean. The test trusts the fixture CA explicitly, without disabling TLS
+  validation. This closes the combined OAuth acceptance case, not step 10.
+- Combined executor testing exposed a public-oplog protobuf depth failure for
+  discovery metadata. `SerializableDiscoveredTools` preserves structured binary
+  payloads but renders complete JSON text in the public schema; MCP call Starts
+  render their already-typed input directly. Three focused payload/public-oplog
+  tests pass, including deep real projected metadata and protobuf/WIT conversion
+  (`/tmp/gol36-discovery-public-oplog-tests.log`). Oracle found no blockers.
+- The first combined rerun passed **12 of 13 tests**. Its new quota test revealed
+  that the test worker constructor ignored per-invocation limits even with the
+  new resource-limit override. The constructor now reads the same account limits
+  as production; all **13 combined executor tests passed**, including unchanged
+  zero/one/monthly-exhausted assertions (`/tmp/gol36-quota-combined-corrected.log`).
+  The bug-finder's proposed error-category conflict
+  was a mistaken diagnosis: the actual observed tool result was successful, not
+  a tool error. Oracle approved the correction and `gol36-oplog-quota-acceptance`
+  bug-finder run 2 returned clean, closing this slice.
+- Final Step 4/7 Oracle review approved the bridge subject to the now-passing quota
+  test. It requested live revoked-grant recovery acceptance, deployment-time
+  rejection of unsupported protocol versions, and missing executor/debug-service
+  config references. All three corrections are now implemented and verified.
+  The extended OAuth test passes in **156.1 seconds**, with three successful calls,
+  three token exchanges and one rejected upstream request; disconnect prevents
+  dispatch/exchange, fresh consent restores access, and the full history replays
+  offline (`/tmp/gol36-oauth-revoked-fresh-e2e.log`).
+- Protocol constants now have one source of truth shared by deployment validation
+  and runtime transport. Unsupported overrides fail deployment instead of becoming
+  discovery warnings. All **85 import tests** and **29 common-model/entity/diff
+  fingerprint tests** pass; the import crate also builds standalone against the
+  non-full common model. The diff fingerprint is unchanged because only test
+  fixtures changed in diff modules. Scoped strict library Clippy fixed the two
+  nested-if lints; strict **all-target common/import Clippy passed**
+  (`/tmp/gol36-common-import-clippy.log`).
+- Fresh executor/debugging binaries regenerated their TOML/env references, with
+  no default changes beyond the new MCP transport fields. Oracle approved the
+  protocol/revocation corrections and `gol36-auth-completion` bug-finder run 1
+  returned clean. No additional autonomous review loop is needed for this slice.
+  All **3 executor/debug config tests passed** (`/tmp/gol36-config-tests.log`),
+  closing the final review conditions for steps 4 and 7. Scoped formatting and
+  diff checks pass. Broader executor compilation still reports three existing
+  warnings in untouched reconstruction/instance code; repository-wide CI has
+  not been run or claimed green.
+- The durability walkthrough and skill now explain the metadata representation
+  and HTTP budget ordering. Both affected rendered walkthrough sections were
+  inspected at 2× scale (`.amp/in/artifacts/gol36-durable-discovery.png` and
+  `.amp/in/artifacts/gol36-durable-mcp-execution.png`).
+- Middleware dependency status: the RPC-style early-result contract is decided
+  and the promise-gated typed-stream restart test passes. GOL-439 also found an
+  overlapping entity atomic rollback could erase sibling history; its scoped
+  rollback correction and explicit atomic-overlap/crash acceptance remain with
+  that thread. No integration-ready patch/bundle is available yet; no remote
+  branch contains that local unpushed work. Step 8 remains required, and its
+  dispatcher/rollback work must not be duplicated in the MCP bridge.
 
 ## Review and decision history
 

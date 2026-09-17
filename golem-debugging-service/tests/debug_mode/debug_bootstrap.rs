@@ -184,6 +184,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<golem_worker_executor::services::mcp::McpTransport>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
@@ -221,6 +222,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             leak_sentinel,
         )
         .await

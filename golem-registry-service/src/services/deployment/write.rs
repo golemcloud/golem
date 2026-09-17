@@ -26,6 +26,7 @@ use crate::services::environment_tool_grant::{
 };
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::mcp_import::McpImportResolver;
 use crate::services::native_tool_catalog::NativeToolCatalog;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
@@ -141,6 +142,7 @@ pub struct DeploymentWriteService {
     environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
     tool_release_service: Arc<ToolReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
+    mcp_import_resolver: Arc<McpImportResolver>,
 }
 
 impl DeploymentWriteService {
@@ -158,6 +160,7 @@ impl DeploymentWriteService {
         environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
         tool_release_service: Arc<ToolReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
+        mcp_import_resolver: Arc<McpImportResolver>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -173,6 +176,7 @@ impl DeploymentWriteService {
             environment_tool_grant_service,
             tool_release_service,
             native_tool_catalog,
+            mcp_import_resolver,
         }
     }
 
@@ -517,6 +521,21 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
 
+        warnings.extend(
+            self.mcp_import_resolver
+                .deployment_warnings(
+                    environment_id,
+                    data.mcp_imports,
+                    compiled_tools
+                        .registered_tools
+                        .iter()
+                        .filter_map(|tool| tool.definition.name().map(str::to_owned))
+                        .collect(),
+                    auth.clone(),
+                )
+                .await,
+        );
+
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
             next_deployment_revision,
@@ -584,6 +603,19 @@ impl DeploymentWriteService {
 
         let mut deployment: CurrentDeployment = ext_revision.try_into()?;
         deployment.validation_warnings = warnings;
+
+        for warning in &deployment.validation_warnings {
+            if let super::DeployValidationWarning::McpImportDiscovery(warning) = warning {
+                tracing::warn!(
+                    environment_id = %environment_id,
+                    deployment_revision = %deployment.revision,
+                    import_index = ?warning.import_index,
+                    upstream_tool_name = ?warning.upstream_tool_name,
+                    reason = %warning.reason,
+                    "MCP import deployment discovery warning"
+                );
+            }
+        }
 
         Ok(deployment)
     }

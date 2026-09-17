@@ -239,6 +239,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeployedRegisteredTool",
                 "golem_common::model::tool::DeployedRegisteredTool",
             ),
+            ("Tool", "golem_common::schema::tool::Tool"),
             ("ToolSource", "golem_common::model::tool::ToolSource"),
             (
                 "ToolRelease",

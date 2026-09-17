@@ -133,6 +133,42 @@ allowed_redirect_domains = ["localhost", "golem.cloud"]
 cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
 
+[mcp_import]
+cache_entries = 128
+cache_ttl = "5m"
+failure_ttl = "1s"
+fetch_concurrency = 16
+operation_timeout = "25s"
+refresh_interval = "1m"
+
+[mcp_import.projection]
+max_listing_bytes = 8388608
+max_tools = 1024
+
+[mcp_import.projection.content]
+max_blocks = 256
+max_decoded_bytes = 4194304
+max_json_depth = 32
+max_total_bytes = 8388608
+
+[mcp_import.projection.schema]
+instanceBytes = 4194304
+instanceDepth = 256
+schemaBytes = 1048576
+schemaDepth = 128
+schemaNodes = 16384
+
+[mcp_import.transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "20s"
+tools = 1024
+
 [mcp_oauth]
 challenge_bytes = 16384
 document_bytes = 1048576
