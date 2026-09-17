@@ -15,10 +15,10 @@
 //! Finds oplog layers holding entries for agents that have gone quiet, and runs one archive step
 //! against each.
 //!
-//! `MultiLayerOplog::try_archive_blocking` and `EphemeralOplog::try_archive_blocking` do the
-//! moving. Where `ScheduledAction::ArchiveOplog` needs a row written on the oplog commit path, the
-//! sweep finds its work by scanning the layer itself. An archive step ends in `drop_prefix`, which
-//! removes the key, so the scan enumerates work rather than agents.
+//! `Worker::archive_oplog` does the moving, as it does for `ScheduledAction::ArchiveOplog`, but the
+//! sweep waits for each transfer. Where the scheduled action needs a row written on the oplog
+//! commit path, the sweep finds its work by scanning the layer itself. An archive step ends in
+//! `drop_prefix`, which removes the key, so the scan enumerates work rather than agents.
 //!
 //! # Agent modes
 //!
@@ -40,9 +40,10 @@
 //! # Memory
 //!
 //! An archive step reads a whole source layer into one `Vec`, as `archive_ephemeral_oplog` does on
-//! teardown, and a tick runs at most `max_concurrency` of them. Each archived agent also leaves the
-//! suspended `Worker` that `open_oplog` builds in `ActiveAgents`, where memory-pressure eviction
-//! never takes it, until `active_agents.ttl` evicts it.
+//! teardown, and a tick runs at most `max_concurrency` of them, since each step waits for its
+//! transfer. Each archived agent also leaves the `Worker` that archiving acquires in
+//! `ActiveAgents`, where memory-pressure eviction never takes it, until `active_agents.ttl` evicts
+//! it.
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
@@ -63,7 +64,7 @@ use uuid::Uuid;
 use crate::metrics::oplog::{record_oplog_sweep_outcome, record_oplog_sweep_tick};
 use crate::services::component::ComponentService;
 use crate::services::golem_config::OplogSweepConfig;
-use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, OplogArchiveService};
+use crate::services::oplog::{ArchiveWait, OplogArchiveService};
 use crate::services::scheduler::SchedulerWorkerAccess;
 use crate::services::shard::ShardService;
 use crate::storage::indexed::{
@@ -106,8 +107,10 @@ enum Outcome {
     Resident,
     /// The agent's component could not be resolved, so its environment is unknown.
     Unaddressable,
-    /// The agent was not drained: its oplog would not open, no archive step recognised it, or the
-    /// step bound was reached.
+    /// The agent's worker declined the archive: it is being deleted, its oplog was retired, its
+    /// index moved, it no longer exists, or no archive step recognised its oplog.
+    Declined,
+    /// The agent was not drained: the archive call failed or the step bound was reached.
     ArchiveFailed,
     /// The agent's entries were moved out of every layer that could pass them on.
     Archived,
@@ -115,13 +118,14 @@ enum Outcome {
 
 impl Outcome {
     /// Every outcome, in declaration order, which is also the order [`RouteReport`] counts them in.
-    const ALL: [Outcome; 8] = [
+    const ALL: [Outcome; 9] = [
         Outcome::Unparseable,
         Outcome::NotOwned,
         Outcome::Empty,
         Outcome::Waiting,
         Outcome::Resident,
         Outcome::Unaddressable,
+        Outcome::Declined,
         Outcome::ArchiveFailed,
         Outcome::Archived,
     ];
@@ -135,15 +139,19 @@ impl Outcome {
             Outcome::Waiting => "waiting",
             Outcome::Resident => "resident",
             Outcome::Unaddressable => "unaddressable",
+            Outcome::Declined => "declined",
             Outcome::ArchiveFailed => "archive_failed",
             Outcome::Archived => "archived",
         }
     }
 
     /// Whether deciding this agent cost an archive attempt, which is what both archive budgets are
-    /// charged. A failed archive counts, since it will be attempted again.
+    /// charged. A declined or failed archive counts, since it will be attempted again.
     fn reached_the_store(self) -> bool {
-        matches!(self, Outcome::Archived | Outcome::ArchiveFailed)
+        matches!(
+            self,
+            Outcome::Archived | Outcome::Declined | Outcome::ArchiveFailed
+        )
     }
 }
 
@@ -708,7 +716,7 @@ impl OplogSweeper {
     /// it paid for.
     ///
     /// Residency and the layer index can go stale, so they are checked last, back to back, right
-    /// before the `open_oplog` they guard, which must not run under a live writer.
+    /// before the archive they guard, which must not run under a live writer.
     async fn sweep_agent(
         &self,
         route: &Route,
@@ -758,7 +766,7 @@ impl OplogSweeper {
         // Restamped before archiving: a failed archive leaves the agent in the layer, and on the
         // old stamp `finish_pass` would drop it and restart its gate every pass.
         self.remember(route.id, &agent_id, current, pass).await;
-        Some(self.archive_agent(route, owned_agent_id).await)
+        Some(self.archive_agent(route, owned_agent_id, current).await)
     }
 
     /// Whether `ActiveAgents` holds a worker for the agent, running or suspended.
@@ -773,39 +781,41 @@ impl OplogSweeper {
     /// Moves one agent's entries down through every layer below, up to
     /// [`OplogSweeper::max_archive_steps`] steps.
     ///
-    /// It drains fully in one visit because `open_oplog` leaves a suspended worker in
+    /// Each step waits for its transfer, so `max_concurrency` and `max_tick_duration` bound the
+    /// transfers themselves. It drains fully in one visit because archiving leaves the worker in
     /// `ActiveAgents`, and until that worker expires later ticks skip the agent as resident.
-    async fn archive_agent(&self, route: &Route, owned_agent_id: OwnedAgentId) -> Outcome {
+    async fn archive_agent(
+        &self,
+        route: &Route,
+        owned_agent_id: OwnedAgentId,
+        last_oplog_index: OplogIndex,
+    ) -> Outcome {
         let agent_id = &owned_agent_id.agent_id;
-
-        // Building the suspended `Worker` is the mutual exclusion, as it is for
-        // `ScheduledAction::ArchiveOplog`.
-        let oplog = match self.worker_access.open_oplog(&owned_agent_id).await {
-            Ok(oplog) => oplog,
-            Err(error) => {
-                warn!(
-                    agent_id = %agent_id,
-                    error = %error,
-                    "Oplog sweep could not open the oplog for archiving"
-                );
-                return Outcome::ArchiveFailed;
-            }
-        };
 
         let mut more = true;
         let mut steps = 0;
         while more && steps < self.max_archive_steps {
-            let stepped = match MultiLayerOplog::try_archive_blocking(&oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&oplog).await,
-            };
-            match stepped {
-                Some(remaining) => more = remaining,
-                // Neither archive step recognised the oplog, so nothing moved.
-                None => {
+            // The worker's oplog lifecycle lock is the mutual exclusion, as it is for
+            // `ScheduledAction::ArchiveOplog`.
+            match self
+                .worker_access
+                .archive_oplog(&owned_agent_id, last_oplog_index, ArchiveWait::Finished)
+                .await
+            {
+                Ok(Some(remaining)) => more = remaining,
+                Ok(None) => {
+                    debug!(
+                        agent_id = %agent_id,
+                        steps,
+                        "Oplog sweep archive declined by the agent's worker"
+                    );
+                    return Outcome::Declined;
+                }
+                Err(error) => {
                     warn!(
                         agent_id = %agent_id,
-                        "Oplog sweep found a layer it cannot archive"
+                        error = %error,
+                        "Oplog sweep could not archive an agent"
                     );
                     return Outcome::ArchiveFailed;
                 }
@@ -935,8 +945,8 @@ mod tests {
     use crate::model::ExecutionStatus;
 
     use crate::services::oplog::{
-        BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService,
-        MultiLayerOplogService, Oplog, OplogArchive, OplogService, PrimaryOplogService,
+        BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService, EphemeralOplog,
+        MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogService, PrimaryOplogService,
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -1217,6 +1227,7 @@ mod tests {
             Outcome::Waiting,
             Outcome::Resident,
             Outcome::Unaddressable,
+            Outcome::Declined,
             Outcome::ArchiveFailed,
             Outcome::Archived,
             Outcome::Archived,
@@ -1225,12 +1236,12 @@ mod tests {
         assert_eq!(report.count(Outcome::Archived), 2);
         assert_eq!(
             report.outcomes.iter().sum::<u64>(),
-            9,
+            10,
             "every outcome lands in exactly one counter"
         );
         assert_eq!(
-            report.store_visits, 3,
-            "and the two that spent an archive attempt are counted again there"
+            report.store_visits, 4,
+            "and the ones that spent an archive attempt are counted again there"
         );
         assert_eq!(
             report.scanned, 0,
@@ -1251,21 +1262,21 @@ mod tests {
         // Distinct non-zero values, so a wrongly added field cannot match by coincidence.
         let left = RouteReport {
             scanned: 2,
-            outcomes: [3, 4, 5, 6, 7, 8, 9, 10],
-            store_visits: 11,
+            outcomes: [3, 4, 5, 6, 7, 8, 9, 10, 11],
+            store_visits: 12,
             truncated: false,
         };
         let right = RouteReport {
-            scanned: 12,
-            outcomes: [13, 14, 15, 16, 17, 18, 19, 20],
-            store_visits: 21,
+            scanned: 13,
+            outcomes: [14, 15, 16, 17, 18, 19, 20, 21, 22],
+            store_visits: 23,
             truncated: true,
         };
 
         let merged = merge(left, right);
-        assert_eq!(merged.scanned, 14);
-        assert_eq!(merged.outcomes, [16, 18, 20, 22, 24, 26, 28, 30]);
-        assert_eq!(merged.store_visits, 32);
+        assert_eq!(merged.scanned, 15);
+        assert_eq!(merged.outcomes, [17, 19, 21, 23, 25, 27, 29, 31, 33]);
+        assert_eq!(merged.store_visits, 35);
         assert!(merged.truncated, "truncation is sticky");
     }
 
@@ -1774,15 +1785,17 @@ mod tests {
         async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
-    /// Opens the oplog directly instead of building a `Worker` around it, handing the sweep the
-    /// same `Arc<dyn Oplog>` the production adapter does.
+    /// Archives without building a `Worker`: it opens the oplog under the agent's lifecycle guard
+    /// and runs the same blocking steps as `Worker::archive_oplog` with `ArchiveWait::Finished`.
     struct DirectAccess {
         oplog_service: Arc<dyn OplogService>,
         /// Shared, so a test can start running an agent between ticks.
         resident: Arc<std::sync::Mutex<HashSet<AgentId>>>,
-        /// Agents whose oplog will not open, the one cause of [`Outcome::ArchiveFailed`] a test
+        /// Agents whose archive call fails, the one cause of [`Outcome::ArchiveFailed`] a test
         /// double can force.
-        refuse_open: HashSet<AgentId>,
+        refuse_archive: HashSet<AgentId>,
+        /// Agents whose worker declines the archive.
+        decline_archive: HashSet<AgentId>,
     }
 
     type ResidentSet = Arc<std::sync::Mutex<HashSet<AgentId>>>;
@@ -1817,16 +1830,31 @@ mod tests {
             unreachable!("the sweep never activates an agent")
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-            if self.refuse_open.contains(&owned_agent_id.agent_id) {
-                return Err(WorkerExecutorError::runtime("oplog will not open"));
+            _last_oplog_index: OplogIndex,
+            wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
+            assert_eq!(
+                wait,
+                ArchiveWait::Finished,
+                "the sweep waits for every transfer"
+            );
+            if self.refuse_archive.contains(&owned_agent_id.agent_id) {
+                return Err(WorkerExecutorError::runtime("archive refused"));
             }
-            Ok(self
+            if self.decline_archive.contains(&owned_agent_id.agent_id) {
+                return Ok(None);
+            }
+            let mut lifecycle = self
+                .oplog_service
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await;
+            let oplog = self
                 .oplog_service
                 .open(
+                    &mut lifecycle,
                     owned_agent_id,
                     AgentMode::Ephemeral,
                     None,
@@ -1834,7 +1862,11 @@ mod tests {
                     status_lock(),
                     execution_lock(),
                 )
-                .await)
+                .await;
+            Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
+                Some(more) => Some(more),
+                None => EphemeralOplog::try_archive_blocking(&oplog).await,
+            })
         }
 
         async fn enqueue_invocation(
@@ -1903,7 +1935,8 @@ mod tests {
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident: resident_set(resident),
             }),
         )
@@ -1928,6 +1961,7 @@ mod tests {
         let oplog = layers
             .oplog_service
             .create(
+                &mut layers.oplog_service.lock_lifecycle(agent_id).await,
                 &owned_agent_id,
                 AgentMode::Ephemeral,
                 create_entry(agent_id, environment_id),
@@ -2211,7 +2245,8 @@ mod tests {
             components.clone(),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );
@@ -2268,7 +2303,8 @@ mod tests {
             components.clone(),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );
@@ -2312,7 +2348,8 @@ mod tests {
             components,
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident,
             }),
         )
@@ -2485,7 +2522,7 @@ mod tests {
     /// without moving anything.
     #[test]
     fn only_an_archive_attempt_costs_archive_budget() {
-        for outcome in [Outcome::Archived, Outcome::ArchiveFailed] {
+        for outcome in [Outcome::Archived, Outcome::Declined, Outcome::ArchiveFailed] {
             assert!(outcome.reached_the_store(), "{outcome:?}");
         }
         for outcome in [
@@ -2612,7 +2649,8 @@ mod tests {
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
                 // So the deeper agent reaches `archive_agent` and fails there.
-                refuse_open: HashSet::from([deep_agent.clone()]),
+                refuse_archive: HashSet::from([deep_agent.clone()]),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );
@@ -2770,6 +2808,7 @@ mod tests {
         let oplog = layers
             .oplog_service
             .open(
+                &mut layers.oplog_service.lock_lifecycle(&agent_id).await,
                 &owned_agent_id,
                 AgentMode::Ephemeral,
                 None,
@@ -2865,7 +2904,8 @@ mod tests {
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );
@@ -2945,7 +2985,8 @@ mod tests {
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::from([agent_id.clone()]),
+                refuse_archive: HashSet::from([agent_id.clone()]),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );
@@ -2965,6 +3006,57 @@ mod tests {
                 "tick {tick} lost the sighting and restarted the quiet gate"
             );
         }
+    }
+
+    #[test]
+    async fn a_declined_archive_moves_nothing_and_is_asked_again() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let sweeper = OplogSweeper::over_layers(
+            manual(),
+            layers.indexed_storage.clone(),
+            &layers.archives,
+            all_shards(),
+            Arc::new(FixedEnvironment {
+                environment_id,
+                fails: false,
+                deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
+                resident_on_lookup: std::sync::Mutex::new(None),
+                grow_on_lookup: std::sync::Mutex::new(None),
+            }),
+            Arc::new(DirectAccess {
+                oplog_service: layers.oplog_service.clone(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::from([agent_id.clone()]),
+                resident: resident_set(HashSet::new()),
+            }),
+        );
+
+        // A worker being deleted, or one whose index moved, declines; the next pass asks again.
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        for tick in 2..=3 {
+            let report = sweeper.sweep_once(&CancellationToken::new()).await;
+            assert_eq!(
+                report.route(EPHEMERAL_L1).count(Outcome::Declined),
+                1,
+                "tick {tick} should still be asking the worker"
+            );
+            assert_eq!(report.archived(), 0);
+        }
+        assert_ne!(
+            layers.archives[0]
+                .get_last_index(
+                    &OwnedAgentId::new(environment_id, &agent_id),
+                    AgentMode::Ephemeral
+                )
+                .await,
+            OplogIndex::NONE,
+            "the entries stay in the layer"
+        );
     }
 
     #[test]
@@ -2999,6 +3091,7 @@ mod tests {
         let oplog = layers
             .oplog_service
             .open(
+                &mut layers.oplog_service.lock_lifecycle(agent_id).await,
                 &OwnedAgentId::new(environment_id, agent_id),
                 AgentMode::Ephemeral,
                 None,
@@ -3835,7 +3928,8 @@ mod tests {
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                refuse_open: HashSet::new(),
+                refuse_archive: HashSet::new(),
+                decline_archive: HashSet::new(),
                 resident: resident_set(HashSet::new()),
             }),
         );

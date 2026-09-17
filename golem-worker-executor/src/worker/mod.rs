@@ -72,8 +72,8 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
-    CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogLifecycleGuard, OplogOps,
-    downcast_oplog,
+    ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogLifecycleGuard,
+    OplogOps, downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -2040,6 +2040,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn archive_oplog(
         self: &Arc<Self>,
         last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
         let _lifecycle = self
             .oplog_service()
@@ -2063,9 +2064,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Ok(None);
         }
-        let result = match MultiLayerOplog::try_archive(&self.oplog).await {
-            Some(more) => Some(more),
-            None => EphemeralOplog::try_archive(&self.oplog).await,
+        let result = match wait {
+            ArchiveWait::Queued => match MultiLayerOplog::try_archive(&self.oplog).await {
+                Some(more) => Some(more),
+                None => EphemeralOplog::try_archive(&self.oplog).await,
+            },
+            ArchiveWait::Finished => match MultiLayerOplog::try_archive_blocking(&self.oplog).await
+            {
+                Some(more) => Some(more),
+                None => EphemeralOplog::try_archive_blocking(&self.oplog).await,
+            },
         };
         if result == Some(false) {
             self.worker_service()
