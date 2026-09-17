@@ -81,6 +81,11 @@ try {
         tsSecond.includes("EffectSnapshotFixture|EffectSnapshotFixture|1|1|2|2|2"),
         tsSecond,
       )
+      const principalFirst = invoke(tsCaller, "principalIdentityRoundTrip")
+      const tenant = `principal-ts-${stamp}`
+      assert.ok(principalFirst.includes(Array(4).fill(tenant).join("|")), principalFirst)
+      const principalSecond = invoke(tsCaller, "principalIdentityRoundTrip")
+      assert.ok(principalSecond.includes(Array(4).fill(tenant).join("|")), principalSecond)
       console.log("Deployed TS reflected agent JSON, native, and dynamic calls passed")
     } else if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
       const caller = `EffectConsumer("effect-${stamp}")`

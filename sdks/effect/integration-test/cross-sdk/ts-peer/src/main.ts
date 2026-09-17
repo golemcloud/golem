@@ -56,6 +56,21 @@ TsEphemeralPeer.implement({
   },
 })
 
+export const TsPrincipalPeer = defineAgent({
+  name: "TsPrincipalPeer",
+  id: { tenant: z.string(), caller: s.principal() },
+  methods: { value: method({ input: {}, returns: z.string() }) },
+})
+
+TsPrincipalPeer.implement({
+  init: ({ id }) => ({ tenant: id.tenant }),
+  methods: {
+    value() {
+      return this.tenant
+    },
+  },
+})
+
 export const TsPeer = defineAgent({
   name: "TsPeer",
   id: { name: z.string() },
@@ -89,6 +104,7 @@ export const TsPeer = defineAgent({
     callEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
     reflectedEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
     reflectedEffectAgent: method({ input: {}, returns: z.string() }),
+    principalIdentityRoundTrip: method({ input: {}, returns: z.string() }),
     quotaThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     richCorpusThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     snapshotAdd: method({
@@ -251,6 +267,27 @@ TsPeer.implement({
         .invokeValue(empty)
       const output = value.definition.output
       return `${parts.typeName}|${discovered.name}|${beforeJson.value}|${output.unpackJson(beforeNative.value!)}|${afterJson.value}|${output.unpackJson(reboundValue.value!)}|${output.unpackJson(dynamicValue.value!)}`
+    },
+    async principalIdentityRoundTrip() {
+      const tenant = `principal-${this.name}`
+      const complete = await TsPrincipalPeer.client.get({ tenant }).value()
+      const discovered = reflection.getAgentType("TsPrincipalPeer")
+      if (!discovered) return "missing-principal-type"
+      const reflected = await discovered.client.get({ tenant }).method("value").invokeJson({})
+      const identity = new ParsedAgentId(reflected.metadata.agentId)
+      const parts = identity.parts()
+      if (
+        parts.typeName !== "TsPrincipalPeer" ||
+        parts.constructorValue.tag !== "record" ||
+        parts.constructorValue.fields.length !== 1 ||
+        parts.constructorValue.fields[0]?.tag !== "string" ||
+        parts.constructorValue.fields[0].value !== tenant
+      ) {
+        return "invalid-principal-identity"
+      }
+      const completeById = await identity.client(TsPrincipalPeer).value()
+      const reflectedById = await identity.client(discovered).method("value").invokeJson({})
+      return `${complete}|${reflected.value}|${completeById}|${reflectedById.value}`
     },
     async quotaThroughEffect({ tenant }) {
       const token = acquireQuotaToken("cross-sdk-quota", 2n)

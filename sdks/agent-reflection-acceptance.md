@@ -70,13 +70,17 @@ twice from one durable caller against a fresh deployment. It discovered and boun
 `EffectSnapshotFixture`, called its declared methods through canonical JSON and native schema
 values, parsed the host-produced remote ID, rebound the discovered type, and read the same
 persisted state through a schema-free dynamic client. The count advanced from `0` to `1` and
-then from `1` to `2`. Principal-injected identities and negative host cases remain pending.
+then from `1` to `2`. The same deployed caller also invoked `TsPrincipalPeer`, whose constructor
+declares a host-injected principal. The host-produced ID parsed into exactly one caller-supplied
+tenant field. Complete and reflected clients, including bindings through that ID, returned the
+same tenant on two repeated invocations. Principal identity checks in the other SDKs and negative
+host cases remain pending.
 
 ## Behavior checklist
 
 | Behavior | Local evidence | Host evidence still required |
 | --- | --- | --- |
-| Principal-scoped identity: only caller-supplied constructor fields appear in IDs; host-produced IDs round-trip through complete and reflected bindings | Shared `golem-common` regression, TypeScript and Effect focused checks | Deployment with a host-injected principal, both bindings, and repeated invocation from one durable caller in each SDK |
+| Principal-scoped identity: only caller-supplied constructor fields appear in IDs; host-produced IDs round-trip through complete and reflected bindings | Shared `golem-common` regression, TypeScript and Effect focused checks | TypeScript deployment passed; other SDK callers remain pending |
 | Durable, ephemeral, and known phantom lifecycle | Factory and binding unit checks in TypeScript, Effect, Scala, and MoonBit; Rust SDK and test targets compile | Final ephemeral identity from invocation metadata, one-shot known phantom, durable resume, and duplicate invocation against a deployed target |
 | Required, optional, defaulted, unknown, invalid, and secret config | Local negative/positive tests in TypeScript, Effect, Scala, and MoonBit; Rust config checks compile | Reflected-caller new-worker config, host-provisioned secrets, and missing-required rejection; direct TS/Rust RPC new-worker overrides and persisted existing-worker config passed |
 | Local rejection before an RPC opens | TypeScript, Effect, Scala, and MoonBit focused checks | Deployed callers with a connection/open counter or equivalent host observation |
