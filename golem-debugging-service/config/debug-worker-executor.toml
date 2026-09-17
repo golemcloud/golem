@@ -146,7 +146,7 @@ type = "EveryNInvocation"
 count = 10
 
 [oplog.sweep]
-enabled = true
+enabled = false
 interval = "1m"
 max_archives_per_tick = 256
 max_backoff_intervals = 8
@@ -453,7 +453,7 @@ without_time = false
 # count = 10
 #
 # [oplog.sweep]
-# enabled = true
+# enabled = false
 # interval = "1m"
 # max_archives_per_tick = 256
 # max_backoff_intervals = 8
