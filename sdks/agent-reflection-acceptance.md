@@ -13,7 +13,7 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 | 2. Caller-authored | Binding-only | Typed | F | F | C | F | F |
 | 3. Reflected | Complete deployed schema | JSON | H+ | H+ | C | F | F |
 | 3. Reflected | Complete deployed schema | Native | H+ | H+ | C | F | F |
-| 4. Dynamic | Binding-only | Native | H+ | F | C | F | F |
+| 4. Dynamic | Binding-only | Native | H+ | H+ | C | F | F |
 
 Every other agent level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the complete schema published by the deployed type rather than a caller-authored partial contract; dynamic clients deliberately have no schema to validate canonical JSON.
 
@@ -58,7 +58,8 @@ deployed fixture and reported local input rejection. Focused mock-host tests ass
 invalid calls do not open an RPC.
 
 The deployed cross-SDK fixture's `RUN_AGENT_REFLECTION_ONLY=1` path invoked `TsPeer` twice from
-the same durable Effect caller, parsed the host-produced remote ID, and resolved its deployed type.
+the same durable Effect caller, parsed the host-produced remote ID, resolved its deployed type,
+and invoked it again through a schema-free dynamic client bound to that ID.
 It also invoked a reflected ephemeral phantom and checked its final ID. Reflected JSON input and
 native nonfinite output passed for TS and Rust peers, while the declared JSON nonfinite output was
 rejected. This path isolates agent reflection from the earlier large-stream case that stalls the

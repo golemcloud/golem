@@ -85,9 +85,15 @@ try {
     } else if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
       const caller = `EffectConsumer("effect-${stamp}")`
       const first = invoke(caller, "reflectedRoundTrip", '"reflected"')
-      assert.ok(first.includes(`TsPeer:echo:ts:effect-${stamp}:reflected`), first)
+      assert.ok(
+        first.includes(`TsPeer:echo:ts:effect-${stamp}:reflected|ts:effect-${stamp}:reflected`),
+        first,
+      )
       const second = invoke(caller, "reflectedRoundTrip", '"repeated"')
-      assert.ok(second.includes(`TsPeer:echo:ts:effect-${stamp}:repeated`), second)
+      assert.ok(
+        second.includes(`TsPeer:echo:ts:effect-${stamp}:repeated|ts:effect-${stamp}:repeated`),
+        second,
+      )
       const ephemeral = invoke(caller, "ephemeralRoundTrip", '"one-shot"')
       assert.ok(ephemeral.includes(`ephemeral:effect-${stamp}:one-shot`), ephemeral)
       assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)

@@ -96,14 +96,22 @@ defineAgent({
           const method = yield* client.method("echo")
           const result = yield* method.invoke({ value })
           const output = result.value as { language: string; value: string }
-          const byId = yield* Reflection.getAgentTypeByAgentId(
-            yield* AgentIdentity.parse(result.metadata.agentId),
-          )
+          const identity = yield* AgentIdentity.parse(result.metadata.agentId)
+          const byId = yield* Reflection.getAgentTypeByAgentId(identity)
           const all = yield* Reflection.getAllAgentTypes
           if (byId?.name !== "TsPeer" || !all.some((type) => type.name === "RustPeer")) {
             return "discovery-mismatch"
           }
-          return `${reflected.name}:${echo.name}:${output.language}:${output.value}`
+          const dynamic = yield* identity.dynamicClient()
+          const dynamicResult = yield* dynamic.method("echo").invoke(echo.input.packJson({ value }))
+          if (echo.output === undefined || dynamicResult.value === undefined) {
+            return "missing:dynamic-output"
+          }
+          const dynamicOutput = echo.output.unpackJson(dynamicResult.value) as {
+            language: string
+            value: string
+          }
+          return `${reflected.name}:${echo.name}:${output.language}:${output.value}|${dynamicOutput.language}:${dynamicOutput.value}`
         }),
       ),
     ephemeralRoundTrip: ({ value }) =>
