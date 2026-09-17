@@ -837,7 +837,14 @@ async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
         }),
         "a nonempty middleware chain must fail closed before base tool dispatch: {result:?}"
     );
-    assert_eq!(service.tool_activation_calls(), 1);
+    assert_eq!(
+        service.tool_deployment_lookups(),
+        vec![(
+            context.default_environment_id,
+            component.id,
+            component.revision
+        )]
+    );
 
     Ok(())
 }
@@ -2049,13 +2056,14 @@ async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
             .await;
         if atomic {
             assert_eq!(result?.into_typed::<Result<(), String>>()?, Ok(()));
-            let requests = requests.lock().unwrap();
-            assert_eq!(requests.len(), 2);
-            assert_eq!(
-                requests[0], requests[1],
-                "atomic rollback changed the child key"
-            );
-            drop(requests);
+            {
+                let requests = requests.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                assert_eq!(
+                    requests[0], requests[1],
+                    "atomic rollback changed the child key"
+                );
+            }
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert!(oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call" && entry.oplog_index != original)), "atomic retry must run under a new physical Start");
         } else {

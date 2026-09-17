@@ -26,7 +26,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -4588,7 +4588,26 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 34 * 65536);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
     Ok(())
 }
 

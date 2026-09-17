@@ -1687,6 +1687,31 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   Local validation passed 30 CLI, 38 common, 27 executor, 1 environment roundtrip,
   85 MCP, 44 registry MCP/OAuth, and 2 SQLite snapshot/accounting tests (227 total),
   plus registry library Clippy and scoped formatting. CI rerun remains pending.
+- Subsequent CI passes exposed test-only lint and merge repairs: an incomplete
+  entity replay test now supplies the same seed and modes as its live scope,
+  and the middleware fail-closed test checks the coherent owner-component
+  deployment lookup instead of the replaced activation API. Both repairs passed
+  focused Oracle and bug-finder reviews. The replay-authorization test, all 12
+  discovery integration tests, and MCP stdout integration passed locally after
+  rebuilding fixtures against the merged WIT. Executor all-target Clippy passed,
+  as did 23 environment-state tests, the generated-key/incomplete-HTTP replay
+  regression, and the TypeScript bridge compile check after correcting its stale
+  source assertion.
+- CI's full build, unit/generated checks, and 49 jobs passed. Remaining failures
+  identified a snapshot-test metadata race, a fixture-size-dependent memory
+  assertion, the already-corrected lookup assertion and test lint, and a genuine
+  nested-output mapping race. Separate session runtimes now refresh their mapping
+  tables under the shared lock before allocating nested transport IDs. Internal
+  mapping recovery uses the authoritative epoch after resume; transport-bound
+  runtimes remain fenced to their accepted epoch. Oracle approved this correction
+  and bug-finder resolved its epoch finding with no new findings. All 62 durable
+  session unit tests and 4 metadata/snapshot/nested-stream integration tests pass.
+  The nested-stream restart regression also passed 20 consecutive targeted runs
+  (the unfixed version failed 3 of 11). The next CI run remains pending.
+- Follow-up observations outside this CI fix: other unbound foreign-stream
+  attachment/reader paths still use their resident default epoch, and generic
+  mid-stream protocol-failure terminalization needs separate investigation.
+  These are not claims that the deferred GOL-439 integration is complete.
 - Registered tool chains remain fail-closed until middleware runtime integration.
   Dynamically discovered MCP tools do not yet receive universal middleware chains;
   step 8 must explicitly construct their dynamic Host leaf plans through GOL-439.

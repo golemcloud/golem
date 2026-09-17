@@ -788,12 +788,11 @@ async fn tool_discovery_cache_retains_background_ttl_eviction() {
 
 type ExactKey = (EnvironmentId, DeploymentRevision);
 type LiveKey = (EnvironmentId, ComponentId, ComponentRevision);
+type DeploymentResponse = Result<Option<ToolDeploymentState>, RegistryServiceError>;
 
 #[derive(Default)]
 struct MockRegistryService {
-    exact: std::sync::Mutex<
-        HashMap<ExactKey, VecDeque<Result<Option<ToolDeploymentState>, RegistryServiceError>>>,
-    >,
+    exact: std::sync::Mutex<HashMap<ExactKey, VecDeque<DeploymentResponse>>>,
     live: std::sync::Mutex<HashMap<LiveKey, Option<ToolDeploymentState>>>,
     exact_calls: std::sync::Mutex<Vec<ExactKey>>,
     live_calls: std::sync::Mutex<Vec<LiveKey>>,
@@ -810,11 +809,7 @@ impl MockRegistryService {
         ))
     }
 
-    fn script_exact(
-        &self,
-        key: ExactKey,
-        responses: impl IntoIterator<Item = Result<Option<ToolDeploymentState>, RegistryServiceError>>,
-    ) {
+    fn script_exact(&self, key: ExactKey, responses: impl IntoIterator<Item = DeploymentResponse>) {
         self.exact
             .lock()
             .unwrap()
