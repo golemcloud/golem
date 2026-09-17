@@ -49,6 +49,8 @@ object ToolError {
   final case class RemoteTool(error: ToolInvokeError[TypedSchemaValue])      extends ToolError[Nothing]
   final case class Tool[E](error: E)                                         extends ToolError[E]
   final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolError[Nothing]
+  final case class InvalidInput(message: String)                             extends ToolError[Nothing]
+  final case class MalformedRemoteOutput(message: String)                    extends ToolError[Nothing]
 }
 
 /**

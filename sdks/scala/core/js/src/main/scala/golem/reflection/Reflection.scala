@@ -22,6 +22,7 @@ import golem.host.js.schema.{
 }
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
 import golem.runtime.rpc.{CancellationToken, InvocationReceipt}
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
 import golem.schema.validation.ValueValidation
@@ -209,6 +210,18 @@ final case class ReflectedConfigDeclaration(path: List[String], source: String, 
 final case class ReflectedConfigJson(path: List[String], value: Json)
 
 object Reflection {
+  def getAllToolTypes(): Either[GolemReflectError, List[ToolType]] =
+    try sequence(ToolHostApi.getAllTools().map(ToolType.fromRegistered))
+    catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
+
+  def getToolType(name: String): Either[GolemReflectError, ToolType] =
+    try
+      ToolHostApi
+        .getTool(name)
+        .toRight(GolemReflectError.Discovery(s"Tool '$name' was not found"))
+        .flatMap(ToolType.fromRegistered)
+    catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
+
   def getAllAgentTypes(): Either[GolemReflectError, List[AgentType]] =
     try sequence(AgentHostApi.getAllAgentTypes().map(decodeAgentType))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }

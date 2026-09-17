@@ -68,6 +68,16 @@ Module._load = function (request) {
       parseAgentId: missingHostImport("parseAgentId"),
     };
   }
+  if (request === "golem:tool/host@0.1.0") {
+    return {
+      getAllTools: missingHostImport("getAllTools"),
+      getTool: missingHostImport("getTool"),
+      createStdin: missingHostImport("createStdin"),
+      createStdout: missingHostImport("createStdout"),
+      ToolRpc: { create: missingHostImport("createToolRpc") },
+      FutureInvokeResult: {},
+    };
+  }
   if (request === "golem:api/host@1.5.0") {
     return { getSelfMetadata: missingHostImport("getSelfMetadata") };
   }
