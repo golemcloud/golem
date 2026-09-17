@@ -118,7 +118,14 @@ try {
       assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
       const nonfinite = invoke(caller, "nonfiniteReflection")
       assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
-      console.log("Deployed Effect reflected agent calls and ephemeral lifecycle passed")
+      const rustCaller = `RustPeer("rust-${stamp}")`
+      const rustFirst = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustFirst.includes("TsPeer|TsPeer|0.0|Some(F64(0"), rustFirst)
+      assert.ok(rustFirst.includes("|1.0|Some(F64(1"), rustFirst)
+      const rustSecond = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustSecond.includes("TsPeer|TsPeer|1.0|Some(F64(1"), rustSecond)
+      assert.ok(rustSecond.includes("|2.0|Some(F64(2"), rustSecond)
+      console.log("Deployed Effect and Rust reflected agent calls and ephemeral lifecycle passed")
     } else if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
       const ts = invoke(`TsPeer("ts-${stamp}")`, "callEffect", `"ts-${stamp}"`, '"request-ts"')
       assert.ok(ts.includes(`ts-override:ts-${stamp}:2:5`), ts)

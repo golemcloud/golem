@@ -5,7 +5,10 @@ use effect_fixture_guest_client::{
 use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
 use golem_rust::bindings::golem::permissions::{derive, types};
 use golem_rust::schema::wit::GuestPermissionCardHandle;
-use golem_rust::{SchemaValue, TypedSchemaValue, agent_definition, agent_implementation};
+use golem_rust::{
+    GolemReflectError, SchemaValue, TypedSchemaValue, agent_definition, agent_implementation,
+    get_agent_type, get_agent_type_for,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -19,6 +22,7 @@ pub trait RustPeer {
     async fn nonfinite(&self, kind: String) -> f64;
     async fn permission_card_through_effect(&self, tenant: String) -> String;
     async fn reflected_ts_tool(&self, label: String) -> String;
+    async fn reflected_ts_agent(&self) -> String;
 }
 
 struct RustPeerImpl {
@@ -32,6 +36,46 @@ impl RustPeer for RustPeerImpl {
     }
     async fn echo(&self, value: String) -> String {
         format!("rust:{}:{value}", self.name)
+    }
+    async fn reflected_ts_agent(&self) -> String {
+        let result = async {
+            let agent_type = get_agent_type("TsPeer")?;
+            let client = agent_type.client().get_json(
+                &serde_json::json!({ "name": format!("rust-reflected-{}", self.name) }),
+            )?;
+            let count = client.method("scheduledCount")?;
+            let mark = client.method("markScheduled")?;
+            let empty = SchemaValue::Record { fields: vec![] };
+            let before_json = count.invoke_json(&serde_json::json!({})).await?;
+            let before_native = count.invoke_value(empty.clone()).await?;
+            mark.invoke_value(empty.clone()).await?;
+            let after_json = count.invoke_json(&serde_json::json!({})).await?;
+            let parts = before_json.metadata.agent_id.parts()?;
+            let discovered = get_agent_type_for(&before_json.metadata.agent_id)?;
+            let rebound = discovered.bind(&before_json.metadata.agent_id)?;
+            let rebound_count = rebound
+                .method("scheduledCount")?
+                .invoke_value(empty.clone())
+                .await?;
+            let dynamic = before_json.metadata.agent_id.dynamic_client()?;
+            let dynamic_count = dynamic.method("scheduledCount").invoke_value(empty).await?;
+            Ok::<_, GolemReflectError>(format!(
+                "{}|{}|{}|{:?}|{}|{:?}|{:?}",
+                parts.type_name,
+                discovered.name(),
+                before_json
+                    .value
+                    .map_or("unit".to_string(), |value| value.to_string()),
+                before_native.value,
+                after_json
+                    .value
+                    .map_or("unit".to_string(), |value| value.to_string()),
+                rebound_count.value,
+                dynamic_count.value,
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
     }
     async fn reflected_ts_tool(&self, label: String) -> String {
         let result = async {
