@@ -8281,6 +8281,22 @@ impl<Ctx: WorkerCtx> Drop for LinearMemoryGrantRegistration<Ctx> {
     }
 }
 
+/// The oplog index where the agent's own history begins: the first `AgentInvocationStarted`
+/// (the agent's constructor invocation). Everything before it is the component runtime's
+/// bootstrap, recorded during instantiation. Bounded by `until` (the snapshot index); if no
+/// invocation start is found — which a snapshot always follows, so only a corrupt history —
+/// falls back to skipping from right after `Create`, the pre-existing behaviour.
+async fn first_agent_invocation_index(oplog: &Arc<dyn Oplog>, until: OplogIndex) -> OplogIndex {
+    let mut idx = OplogIndex::INITIAL.next();
+    while idx <= until {
+        if let OplogEntry::AgentInvocationStarted { .. } = oplog.read(idx).await {
+            return idx;
+        }
+        idx = idx.next();
+    }
+    OplogIndex::INITIAL.next()
+}
+
 impl RunningWorker {
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
@@ -8547,9 +8563,21 @@ impl RunningWorker {
         // are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
         if let Some((snapshot_idx, _)) = automatic_snapshot {
+            // A snapshot substitutes for the AGENT's history, not for the component runtime's
+            // bootstrap. The host calls the runtime makes while the component is instantiated
+            // (before the first agent invocation: clocks, random seeds, environment reads) are
+            // not captured by save-snapshot, yet the guest derives state from them — e.g. a
+            // language runtime seeds its PRNG from `random_get`, and later scheduling decisions,
+            // some of which reach the host as durable calls, follow from that seed. Skipping
+            // them would force the recovering instance to re-run its bootstrap against live
+            // host responses and diverge from the recording during tail replay. So the skip
+            // starts at the first agent invocation: the bootstrap prefix replays positionally,
+            // exactly as on a plain restart (automatic snapshots are revision-scoped, so the
+            // recorded bootstrap belongs to the component being instantiated).
+            let skip_start = first_agent_invocation_index(&parent.oplog, snapshot_idx).await;
             let snapshot_skip =
                 DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
+                    skip_start..=snapshot_idx,
                 )])
                 .build();
             skipped_regions.set_override(snapshot_skip);
@@ -8792,10 +8820,15 @@ impl RunningWorker {
                 );
             }
         };
-        if last_snapshot_index.is_some() {
-            // Core initializers run before load-snapshot, but their recorded host calls are
-            // already inside the skipped snapshot history. Recreate that runtime state with
-            // the same durability suppression as snapshot loading, without consuming the tail.
+        // For a manual-update snapshot the bootstrap prefix was recorded by a DIFFERENT component
+        // revision and lies inside the skipped history, so the initializer's host calls have no
+        // counterpart to replay: recreate that runtime state with the same durability suppression
+        // as snapshot loading, without consuming the tail. An automatic snapshot leaves the
+        // bootstrap prefix outside its skip (see the skip computation above), so the initializer
+        // replays it positionally like any restart and must NOT be suppressed.
+        let suppress_initializer =
+            matches!(last_snapshot_source, Some(SnapshotSource::ManualUpdate));
+        if suppress_initializer {
             context.begin_call_snapshotting_function();
         }
         let mut hosted = match instance_host.instantiate(context, &component).await {
@@ -8813,7 +8846,7 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
-        if last_snapshot_index.is_some() {
+        if suppress_initializer {
             store.data_mut().end_call_snapshotting_function();
         }
         if let Some((active_agent, generation)) = entity_generation {

@@ -1,10 +1,23 @@
 use golem_rust::{agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
+/// State the component initializer derives from a host input. Language runtimes do this for
+/// real (Go seeds its scheduler's PRNG from `random_get` during `_initialize`); this hash
+/// stands in for that: it is a pure function of the `insecure-seed` host call made while the
+/// component is instantiated, so after any restart it must equal the live value — including a
+/// restart that recovers from a snapshot, which skips the invocations but not the instantiation.
+static INITIALIZER_SEED_HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
 #[unsafe(export_name = "_initialize")]
 pub extern "C" fn initialize_snapshot_clock() {
     // The reactor initializer runs during core instantiation, before snapshot loading.
     std::hint::black_box(std::time::Instant::now());
+    // `RandomState::new` draws its keys from the platform random source (`insecure-seed` on
+    // wasi), so this is host-input-derived initializer state.
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::hash::RandomState::new().build_hasher();
+    hasher.write_u32(0x5eed);
+    let _ = INITIALIZER_SEED_HASH.set(hasher.finish());
 }
 
 #[agent_definition(snapshotting = "enabled")]
@@ -72,6 +85,8 @@ trait JsonSnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    /// The initializer's host-input-derived state (see `INITIALIZER_SEED_HASH`).
+    fn initializer_seed_hash(&self) -> u64;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,5 +109,11 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
 
     fn get(&self) -> u32 {
         self.count
+    }
+
+    fn initializer_seed_hash(&self) -> u64 {
+        *INITIALIZER_SEED_HASH
+            .get()
+            .expect("the component initializer did not run")
     }
 }

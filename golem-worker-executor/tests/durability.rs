@@ -730,10 +730,19 @@ async fn automatic_snapshot_every_2nd_invocation(
         .await?;
 
     // Construction counts as an invocation; align subsequent snapshots with even increments.
-    let initial = executor
-        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
-        .await?;
-    assert_eq!(initial.into_typed::<u32>()?, 0);
+    // This read also captures the state the component initializer derived from a host input
+    // (`insecure-seed`) while the component was instantiated: it is recorded before the first
+    // snapshot, so a recovering instance must reproduce it by replay — not by re-running the
+    // initializer against live host responses, which would hand it a different seed.
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
@@ -796,6 +805,19 @@ async fn automatic_snapshot_every_2nd_invocation(
         result_after_restart.into_typed::<u32>()?,
         11,
         "Counter should include the increment replayed after the automatic snapshot"
+    );
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "initializer state derived from a recorded host input must survive snapshot recovery"
     );
 
     drop(executor);
