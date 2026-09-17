@@ -10,10 +10,10 @@ use crate::Tracing;
 use crate::tool_discovery::deployment_state;
 use golem_common::agent_id;
 use golem_common::data_value;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::{IdempotencyKey, OwnedAgentId};
 use golem_mcp_import::tool::{Limits, ProjectedTool};
 use golem_service_base::clients::registry::McpRuntimeCredential;
 use golem_service_base::model::mcp_import::McpImportObservation;
@@ -67,6 +67,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    const ATTACHMENT_BYTES: usize = 64 * 1024;
     const NAMES: [&str; 9] = [
         "crash",
         "text",
@@ -126,18 +127,15 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
 
     let checkpoint_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let checkpoint_port = checkpoint_listener.local_addr()?.port();
-    let (arrived_tx, mut arrived_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let release = Arc::new(tokio::sync::Notify::new());
-    let checkpoint_handler = axum::routing::get({
-        let release = release.clone();
-        move || {
-            let arrived_tx = arrived_tx.clone();
-            let release = release.clone();
-            async move {
-                arrived_tx.send(()).unwrap();
-                release.notified().await;
-                "ok"
-            }
+    let (arrived_tx, mut arrived_rx) =
+        tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
+    let checkpoint_handler = axum::routing::get(move || {
+        let arrived_tx = arrived_tx.clone();
+        async move {
+            let (release, wait) = tokio::sync::oneshot::channel();
+            arrived_tx.send(release).unwrap();
+            let _ = wait.await;
+            "ok"
         }
     });
     let checkpoint_server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -153,6 +151,9 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     let service = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(service.clone()),
+        configure: Some(Arc::new(|config| {
+            config.limits.max_tool_attachment_bytes = ATTACHMENT_BYTES;
+        })),
         ..Default::default()
     };
     let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -211,6 +212,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             Vec::new(),
         )
         .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let key = IdempotencyKey::fresh();
     let waiter = {
         let executor = executor.clone();
@@ -229,7 +231,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
+    let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
         .await?
         .expect("checkpoint server stopped");
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -242,7 +244,15 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             if start.is_some_and(|start| oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start))) {
                 let entity = oplog.iter().find(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")).expect("outer entity Start");
                 assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == entity.oplog_index)), "crash must precede entity completion while stdout is backpressured");
-                break;
+                if let Some(stdout) = executor.active_entity_metadata(&owned_agent_id).await
+                    .and_then(|active| active.tool_operations.operations.into_iter().next())
+                    .and_then(|operation| operation.stdout)
+                    && stdout.buffered_bytes == ATTACHMENT_BYTES
+                {
+                    assert_eq!(stdout.delivered_bytes, 0);
+                    assert!(!stdout.terminal_selected);
+                    break;
+                }
             }
             tokio::task::yield_now().await;
         }
@@ -251,7 +261,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     waiter.abort();
     let _ = waiter.await;
     drop(executor);
-    release.notify_one();
+    drop(release);
 
     executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let recovery = {
@@ -270,10 +280,10 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
+    let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
         .await?
         .expect("replayed checkpoint server stopped");
-    release.notify_one();
+    release.send(()).expect("replayed checkpoint disconnected");
     let recovered = recovery
         .await??
         .into_typed::<(Result<(), String>, Result<Vec<u8>, String>)>()?;
@@ -335,7 +345,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                     .await
             })
         };
-        tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
+        let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
             .await?
             .expect("cancellation checkpoint server stopped");
         tokio::time::timeout(Duration::from_secs(30), async {
@@ -345,8 +355,14 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 "cancel-output" => {
                     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await.unwrap();
                     let start = oplog.iter().rev().find(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call"));
-                    calls.lock().unwrap().iter().any(|called| called == name)
+                    let called = calls.lock().unwrap().iter().any(|called| called == name);
+                    called
                         && start.is_some_and(|start| oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start.oplog_index)))
+                        && executor.active_entity_metadata(&owned_agent_id).await
+                            .and_then(|active| active.tool_operations.operations.into_iter().next())
+                            .and_then(|operation| operation.stdout)
+                            .is_some_and(|stdout| stdout.buffered_bytes == ATTACHMENT_BYTES
+                                && stdout.delivered_bytes == 0 && !stdout.terminal_selected)
                 }
                 _ => calls.lock().unwrap().iter().any(|called| called == name),
             };
@@ -357,8 +373,10 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
         }
     })
     .await
-    .expect("MCP request was not dispatched before cancellation");
-        release.notify_one();
+    .expect("MCP invocation did not reach its cancellation checkpoint");
+        release
+            .send(())
+            .expect("cancellation checkpoint disconnected");
         let cancelled = cancelled
             .await??
             .into_typed::<(Result<(), String>, Result<Vec<u8>, String>)>()?;
@@ -367,7 +385,8 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 .0
                 .as_ref()
                 .is_err_and(|error| error.contains("Cancelled")),
-            "ordinary ToolRpc cancellation must settle the result: {cancelled:?}"
+            "{name}: ordinary ToolRpc cancellation must settle the result: {:?}",
+            cancelled.0
         );
         assert_eq!(
             cancelled.1,

@@ -1708,6 +1708,14 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   session unit tests and 4 metadata/snapshot/nested-stream integration tests pass.
   The nested-stream restart regression also passed 20 consecutive targeted runs
   (the unfixed version failed 3 of 11). The next CI run remains pending.
+- The next CI run passed 53 jobs; only MCP stdout cancellation failed. Its
+  448 KiB payload fit the default 16 MiB attachment buffer, so cancellation could
+  legitimately arrive after completion. The test now uses a 64 KiB buffer and
+  verifies full, unread, unterminated stdout before crashing or cancelling.
+  Bug-finder also reproduced a checkpoint release leaking between HTTP requests
+  through the shared `Notify`; per-request oneshot releases remove that race.
+  The corrected integration test and eight consecutive repetitions pass, Oracle
+  approved the follow-up, and bug-finder run 2 is clean. CI revalidation follows.
 - Follow-up observations outside this CI fix: other unbound foreign-stream
   attachment/reader paths still use their resident default epoch, and generic
   mid-stream protocol-failure terminalization needs separate investigation.
