@@ -976,6 +976,7 @@ impl WorkerCtx for Context {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        _native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -998,7 +999,7 @@ impl WorkerCtx for Context {
         owner_execution: Arc<crate::worker::instance::OwnerExecution>,
         owner_resources: Arc<crate::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
@@ -1051,7 +1052,7 @@ impl WorkerCtx for Context {
             owner_resources,
             None,
             filesystem_capability,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -1096,6 +1097,10 @@ impl WorkerCtx for Context {
 
     fn created_by_email(&self) -> &AccountEmail {
         self.durable_ctx.created_by_email()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn component_metadata(&self) -> &Component {

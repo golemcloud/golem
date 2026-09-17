@@ -88,6 +88,22 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Restart])
     },
+    test("Resumed from dynamic") {
+      val raw    = wrapEntry("resumed", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Resumed],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
+    test("RecoverySucceeded from dynamic") {
+      val raw    = wrapEntry("recovery-succeeded", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.RecoverySucceeded],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     // --- Single-field parameter entries ---
 
     test("Error from dynamic") {
@@ -95,6 +111,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "error",
         js.Dynamic.literal(
           timestamp = ts(),
+          kind = "recovery",
           error = "something failed",
           retryFrom = js.BigInt("5")
         )
@@ -103,6 +120,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val e      = parsed.asInstanceOf[OplogEntry.Error]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Error],
+        e.params.kind == OplogErrorKind.Recovery,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
       )

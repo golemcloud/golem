@@ -113,7 +113,7 @@ object ToolProjectionRendering {
     }
     errorType match {
       case Some(error) =>
-        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorPayloadValue(_))"
+        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorValue(_))"
       case None =>
         s"${policy.runtime}.runInfallible($arguments)"
     }
@@ -127,11 +127,11 @@ object ToolProjectionRendering {
     val okType = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
     (okType, codec.hasStdout) match {
       case (Some(ok), true) =>
-        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, true) =>
         s"${policy.runtime}.decodeStdoutResult($result)"
       case (Some(ok), false) =>
-        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, false) =>
         s"${policy.runtime}.decodeUnitResult($result)"
     }

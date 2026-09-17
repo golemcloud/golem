@@ -424,6 +424,7 @@ pub(all) struct ToolMiddlewareCommandInfo {
 pub(all) struct ToolMiddlewareInfo {
   source_name : String
   name : String
+  version : String
   aliases : Array[String]
   description : String
   scope : ToolMiddlewareScopeInfo

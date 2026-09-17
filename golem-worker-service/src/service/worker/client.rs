@@ -138,7 +138,17 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
         Ok(InvocationRejectionReason::Unauthorized) => {
             WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
         }
-        Ok(InvocationRejectionReason::Internal) => WorkerServiceError::Internal(rejected.error),
+        Ok(InvocationRejectionReason::Internal) => match rejected.worker_error {
+            Some(worker_error) => worker_error
+                .try_into()
+                .map(WorkerServiceError::GolemError)
+                .unwrap_or_else(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "failed to decode worker execution error: {error}"
+                    ))
+                }),
+            None => WorkerServiceError::Internal(rejected.error),
+        },
         _ => WorkerServiceError::TypeChecker(rejected.error),
     }
 }
@@ -286,6 +296,19 @@ where
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -709,6 +732,56 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 
 #[async_trait]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let agent_id_clone = agent_id.clone();
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "prepare_worker",
+                move |client| {
+                    Box::pin(client.prepare_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        env: environment_variables.clone(),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(id),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint(id.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(error)),
+                    } => Err(error.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok((agent_id.clone(), fingerprint))
+    }
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -796,10 +869,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
                 |error| match error {
-                    CallWorkerExecutorError::FailedToConnectToPod(status)
-                        if status.code() == Code::NotFound =>
-                    {
-                        WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                    CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                        if status.code() == Code::NotFound {
+                            WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                        } else if let Some(error) =
+                            WorkerExecutorError::from_status_details(&status)
+                        {
+                            WorkerServiceError::GolemError(error)
+                        } else {
+                            WorkerServiceError::InternalCallError(
+                                CallWorkerExecutorError::FailedToConnectToPod(status),
+                            )
+                        }
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -2473,11 +2554,14 @@ mod rejection_mapping_tests {
     use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-    use golem_common::model::{AgentId, RetryConfig, RoutingTable};
+    use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_service_base::clients::shard_manager::{
-        BatchRenewalEntry, QuotaError, ShardManager, ShardManagerError,
+        BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
+        ShardManagerError, ShardRegistration,
     };
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
@@ -2511,6 +2595,52 @@ mod rejection_mapping_tests {
     }
 
     #[test]
+    fn typed_pre_acceptance_rejection_preserves_previous_invocation_failure() {
+        let expected = WorkerExecutorError::PreviousInvocationFailed {
+            error: OplogAgentError::Unknown("guest failure".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: expected.to_string(),
+            worker_error: Some(expected.clone().into()),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            decode_invocation_rejection(rejection),
+            super::WorkerServiceError::GolemError(error) if error == expected
+        ));
+    }
+
+    #[test]
+    fn rejection_reason_remains_authoritative_with_typed_worker_error() {
+        let validation: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Validation as i32,
+            error: "invalid request".to_string(),
+            worker_error: Some(WorkerExecutorError::invalid_request("invalid request").into()),
+            ..Default::default()
+        })
+        .into();
+        let unauthorized: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Unauthorized as i32,
+            error: "unauthorized".to_string(),
+            worker_error: Some(WorkerExecutorError::InvalidAccount.into()),
+            ..Default::default()
+        })
+        .into();
+
+        assert!(matches!(
+            validation.error,
+            Some(agent_error::Error::BadRequest(_))
+        ));
+        assert!(matches!(
+            unauthorized.error,
+            Some(agent_error::Error::Unauthorized(_))
+        ));
+    }
+
+    #[test]
     fn unauthorized_rejection_remains_unauthorized() {
         assert!(matches!(
             public_error_for_rejection(InvocationRejectionReason::Unauthorized),
@@ -2539,7 +2669,24 @@ mod rejection_mapping_tests {
             &self,
             _port: u16,
             _pod_name: Option<String>,
-        ) -> Result<u32, ShardManagerError> {
+            _executor_id: uuid::Uuid,
+        ) -> Result<ShardRegistration, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn renew_shard_lease(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<ShardLease, ShardLeaseError> {
+            unreachable!()
+        }
+
+        async fn deregister(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<(), ShardLeaseError> {
             unreachable!()
         }
 
@@ -2620,6 +2767,7 @@ mod rejection_mapping_tests {
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
 
         unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
         unimplemented_unary!(
             complete_promise,
@@ -2633,11 +2781,6 @@ mod rejection_mapping_tests {
         );
         unimplemented_unary!(revoke_shards, RevokeShardsRequest, RevokeShardsResponse);
         unimplemented_unary!(assign_shards, AssignShardsRequest, AssignShardsResponse);
-        unimplemented_unary!(
-            set_shard_assignment,
-            SetShardAssignmentRequest,
-            SetShardAssignmentResponse
-        );
         unimplemented_unary!(
             get_agent_metadata,
             GetAgentMetadataRequest,
@@ -2745,6 +2888,7 @@ mod rejection_mapping_tests {
                             idempotency_key,
                             agent_id,
                             component_revision: None,
+                            worker_error: None,
                         },
                     )),
                 },

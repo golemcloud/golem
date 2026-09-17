@@ -1025,6 +1025,7 @@ async fn a_dead_member_in_the_endpoint_list_does_not_fail_startup(etcd: &Arc<Doc
         probe,
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
+        0,
     );
     for read in 0..PROBE_READS {
         persistence.read().await.unwrap_or_else(|err| {
@@ -1079,6 +1080,7 @@ async fn a_read_through_a_stalled_etcd_survives_it(etcd: &Arc<DockerEtcd>) {
         client,
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
+        0,
     );
     persistence
         .read()
@@ -1648,6 +1650,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         connect_timeout: Duration::from_millis(200),
         request_timeout: Duration::from_millis(200),
         leader_lease_ttl: LEASE_TTL,
+        compaction_retention_revisions: 0,
     });
 
     let shutdown = CancellationToken::new();

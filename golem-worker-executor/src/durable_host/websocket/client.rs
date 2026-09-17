@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, NotCancellable,
+    CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, NotCancellable, ResolvedCall,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::websocket::client::{
@@ -112,41 +112,42 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             )
             .await?;
 
-        let mut call = if begun.is_live() {
-            let denied = match websocket_target(&url) {
-                Ok(normalized) => !matches!(
-                    self.authorize_live_permission(&normalized.permission).await,
-                    Ok(Ok(_))
-                ),
-                Err(_) => true,
-            };
-            let call = begun
-                .start_live(
-                    self,
-                    HostRequestWebsocketConnect {
-                        url: url.clone(),
-                        headers: headers.clone(),
-                    },
-                )
-                .await?;
-            if denied {
-                let response = call
-                    .complete(
+        let mut call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let denied = match websocket_target(&url) {
+                    Ok(normalized) => !matches!(
+                        self.authorize_live_permission(&normalized.permission).await,
+                        Ok(Ok(_))
+                    ),
+                    Err(_) => true,
+                };
+                let call = begun
+                    .start_live(
                         self,
-                        HostResponseWebsocketConnectResponse {
-                            result: Err(SerializableWebsocketError::Other(
-                                "permission denied".into(),
-                            )),
+                        HostRequestWebsocketConnect {
+                            url: url.clone(),
+                            headers: headers.clone(),
                         },
                     )
                     .await?;
-                return Ok(Err(serializable_error_to_error(
-                    response.result.unwrap_err(),
-                )));
+                if denied {
+                    let response = call
+                        .complete(
+                            self,
+                            HostResponseWebsocketConnectResponse {
+                                result: Err(SerializableWebsocketError::Other(
+                                    "permission denied".into(),
+                                )),
+                            },
+                        )
+                        .await?;
+                    return Ok(Err(serializable_error_to_error(
+                        response.result.unwrap_err(),
+                    )));
+                }
+                call
             }
-            call
-        } else {
-            begun.start_replay(self).await?
+            ResolvedCall::Replay(call) => call,
         };
 
         if !call.is_live() {

@@ -281,10 +281,10 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     Doc(summary, description, examplesOf(sym))
   }
 
-  def toolMiddlewareMetadata(sym: Symbol): (String, List[String], Doc) =
+  def toolMiddlewareMetadata(sym: Symbol): (String, String, List[String], Doc) =
     middlewareMetadata(sym, ToolMiddlewareFQN, "tool middleware", "@toolMiddleware")
 
-  def universalToolMiddlewareMetadata(sym: Symbol): (String, List[String], Doc) =
+  def universalToolMiddlewareMetadata(sym: Symbol): (String, String, List[String], Doc) =
     middlewareMetadata(
       sym,
       UniversalToolMiddlewareFQN,
@@ -297,7 +297,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     annotationFqn: String,
     label: String,
     annotationLabel: String
-  ): (String, List[String], Doc) = {
+  ): (String, String, List[String], Doc) = {
     val annotations = annotationsOf(sym, annotationFqn)
     if (annotations.size != 1)
       report.errorAndAbort(
@@ -305,12 +305,16 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
         sym.pos.getOrElse(Position.ofMacroExpansion)
       )
     val annotation = annotations.head
-    val values     = annotationValues(annotation, List("name", "aliases"))
+    val values     = annotationValues(annotation, List("name", "version", "aliases"))
     val name       = values
       .get("name")
       .map(constString(_, s"$label name", annotation.pos))
       .filter(_.trim.nonEmpty)
       .getOrElse(report.errorAndAbort(s"$label name must not be empty", annotation.pos))
+    val version = values
+      .get("version")
+      .map(constString(_, s"$label version", annotation.pos))
+      .getOrElse("0.0.0")
     val aliases = values
       .get("aliases")
       .map(stringArray(_, s"$label aliases", annotation.pos))
@@ -320,7 +324,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       .flatMap(annotationValues(_, List("value")).get("value"))
       .map(constString(_, s"$label description", annotation.pos))
       .getOrElse(baseDoc.description)
-    (name, aliases, baseDoc.copy(description = description))
+    (name, version, aliases, baseDoc.copy(description = description))
   }
 
   def toolMiddlewareFieldMetadata(sym: Symbol): Option[(String, Boolean)] =

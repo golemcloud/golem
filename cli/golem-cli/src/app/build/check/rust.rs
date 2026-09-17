@@ -230,6 +230,9 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             path: path.clone(),
             features: vec![],
         },
+        ExpectedDependencyKind::ExactValue(_) => {
+            unreachable!("Rust dependencies never use exact npm values")
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,

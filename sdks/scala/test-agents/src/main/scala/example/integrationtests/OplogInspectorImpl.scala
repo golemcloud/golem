@@ -101,8 +101,10 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"
 
-      case OplogApi.OplogEntry.Suspend(t)                => s"SUSPEND @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Error(p)                  => s"ERROR @ $ts '${p.error}' retryFrom=${p.retryFrom}"
+      case OplogApi.OplogEntry.Suspend(t) => s"SUSPEND @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Error(p)   =>
+        s"ERROR @ $ts kind=${p.kind} '${p.error}' retryFrom=${p.retryFrom}"
+      case OplogApi.OplogEntry.RecoverySucceeded(t)      => s"RECOVERY_SUCCEEDED @ ${t.seconds}s"
       case OplogApi.OplogEntry.NoOp(t)                   => s"NOOP @ ${t.seconds}s"
       case OplogApi.OplogEntry.Jump(p)                   => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
       case OplogApi.OplogEntry.Interrupted(t)            => s"INTERRUPTED @ ${t.seconds}s"

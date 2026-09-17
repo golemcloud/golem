@@ -124,7 +124,9 @@ async fn quota_token_capability_round_trips_and_is_redacted(
             2u64,
             "localhost".to_string(),
             port,
-            4u64
+            // Each agent can make at most two calls, so reaching four requires
+            // the receiver to use the transferred token. Expected-use is not a call cap.
+            2u64
         ),
     )
     .await?;

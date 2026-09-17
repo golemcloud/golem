@@ -10626,7 +10626,7 @@ environments:
 "#,
         )
         .expect("write manifest");
-        Config::set_profile(
+        Config::add_profile(
             ProfileName("prod".to_string()),
             Profile {
                 custom_url: Some(Url::parse("http://localhost:9882").expect("profile url")),
@@ -10635,6 +10635,7 @@ environments:
                 config: Default::default(),
                 auth: AuthenticationConfig::static_builtin_local(),
             },
+            false,
             config_dir.path(),
         )
         .expect("write profile");
@@ -10764,6 +10765,7 @@ environments:
             updates: Vec::new(),
             created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
             last_error: None,
+            last_error_kind: None,
             component_size: 0,
             total_linear_memory_size: 0,
             exported_resource_instances: BTreeMap::new().into_iter().collect(),
@@ -10785,6 +10787,7 @@ environments:
                 ),
                 diff_model_version: 0,
                 compatibility_check: true,
+                tool_compatibility_mode: Default::default(),
                 version_check: true,
                 security_overrides: false,
                 current_deployment: None,

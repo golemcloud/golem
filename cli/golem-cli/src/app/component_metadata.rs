@@ -35,6 +35,7 @@ struct UniquenessIndex {
     agent_type_wrapper_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
     agent_type_name_sources: BTreeMap<AgentTypeName, BTreeSet<ComponentName>>,
     tool_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
+    tool_middleware_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
 }
 
 impl UniquenessIndex {
@@ -42,6 +43,7 @@ impl UniquenessIndex {
         remove_component_from_index(&mut self.agent_type_wrapper_name_sources, component_name);
         remove_component_from_index(&mut self.agent_type_name_sources, component_name);
         remove_component_from_index(&mut self.tool_name_sources, component_name);
+        remove_component_from_index(&mut self.tool_middleware_name_sources, component_name);
     }
 }
 
@@ -92,6 +94,7 @@ impl ComponentMetadataRegistry {
         let normalized = ExtractedComponentMetadata {
             agent_types: AgentTypeSchema::normalized_vec(metadata.agent_types),
             tools: metadata.tools,
+            tool_middlewares: metadata.tool_middlewares,
         };
 
         self.update_uniqueness(component_name, &normalized, true)
@@ -113,6 +116,16 @@ impl ComponentMetadataRegistry {
             .read()
             .await
             .agent_type_name_sources
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn get_all_extracted_tool_middleware_names(&self) -> Vec<String> {
+        self.uniqueness
+            .read()
+            .await
+            .tool_middleware_name_sources
             .keys()
             .cloned()
             .collect()
@@ -195,6 +208,37 @@ impl ComponentMetadataRegistry {
             }
         }
 
+        let mut middleware_names_in_component = BTreeSet::new();
+        for middleware in &metadata.tool_middlewares {
+            for name in std::iter::once(&middleware.name).chain(&middleware.aliases) {
+                if !middleware_names_in_component.insert(name) {
+                    bail!(
+                        "Tool middleware name or alias {} is declared more than once by component {}",
+                        name.log_color_highlight(),
+                        component_name.as_str().log_color_highlight()
+                    );
+                }
+                if let Some(existing) = index.tool_middleware_name_sources.get(name)
+                    && !existing.contains(component_name)
+                {
+                    let mut all = existing.clone();
+                    all.insert(component_name.clone());
+                    bail!(
+                        "Tool middleware name or alias {} is defined by multiple components: {}",
+                        name.log_color_highlight(),
+                        all.iter()
+                            .map(|s| s.as_str().log_color_highlight())
+                            .join(", ")
+                    );
+                }
+                index
+                    .tool_middleware_name_sources
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(component_name.clone());
+            }
+        }
+
         *index_guard = index;
 
         Ok(())
@@ -224,6 +268,7 @@ async fn extract(
     Ok(ExtractedComponentMetadata {
         agent_types: AgentTypeSchema::normalized_vec(metadata.agent_types),
         tools: metadata.tools,
+        tool_middlewares: metadata.tool_middlewares,
     })
 }
 
@@ -347,6 +392,7 @@ mod tests {
         ExtractedComponentMetadata {
             agent_types: vec![],
             tools: vec![],
+            tool_middlewares: vec![],
         }
     }
 
@@ -371,6 +417,7 @@ mod tests {
                 config: vec![],
             }],
             tools: vec![],
+            tool_middlewares: vec![],
         }
     }
 }

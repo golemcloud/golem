@@ -23,6 +23,8 @@ steps:
          - Deployment options: enable `compatibilityCheck` and enable `versionCheck`
          - Component presets: `staging`
 
+      Define the `staging` component preset if it does not exist, inheriting the existing
+      optimized production build settings (`optimized` in the Effect template).
       Do not change any source code files. Only modify `golem.yaml`.
     expectedSkills:
       - "golem-profiles-and-environments"

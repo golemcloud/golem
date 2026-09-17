@@ -184,8 +184,26 @@ pub(all) struct ErrorCaseDef {
 /// generated for error enums referenced by tool commands.
 pub(open) trait ToolErrorSchema {
   fn error_cases() -> Result[Array[ErrorCaseDef], ToolBuildError]
-  fn to_error_payload_value(Self) -> Result[@model.TypedSchemaValue, String]
-  fn from_error_payload_value(@model.TypedSchemaValue) -> Result[Self, String]
+  fn to_error_payload_value(Self) -> Result[
+    (String, @model.TypedSchemaValue),
+    String,
+  ]
+  fn from_error_payload_value(String, @model.TypedSchemaValue) -> Result[
+    Self,
+    String,
+  ]
+}
+
+///|
+pub fn[E : ToolErrorSchema] decode_named_tool_error(
+  name : String,
+  value : @model.TypedSchemaValue,
+) -> Result[E, String]? {
+  match E::error_cases() {
+    Ok(cases) if cases.any(case => case.name == name) =>
+      Some(E::from_error_payload_value(name, value))
+    _ => None
+  }
 }
 
 ///|

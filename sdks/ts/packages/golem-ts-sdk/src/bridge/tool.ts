@@ -195,7 +195,11 @@ function isToolError(value: unknown): value is ToolError {
     case 'invalid-command-path':
       return isDenseStringList(value.val);
     case 'custom-error':
-      return isTypedSchemaValue(value.val);
+      return (
+        implementationObject(value.val) &&
+        typeof value.val.name === 'string' &&
+        isTypedSchemaValue(value.val.payload)
+      );
     default:
       return false;
   }
@@ -219,10 +223,13 @@ export function isRpcError(value: unknown): value is RpcError {
 }
 export function splitToolRpcError<Declared>(
   error: RpcError,
-  decodeCustomError: (payload: TypedSchemaValue) => Declared,
+  decodeCustomError: (name: string, payload: TypedSchemaValue) => Declared,
 ): ToolRuntimeError<Declared> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
     return { tag: 'rpc', error };
-  return { tag: 'tool', error: decodeCustomError(typedSchemaValueFromWit(error.val.val)) };
+  return {
+    tag: 'tool',
+    error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
+  };
 }
 export type { RpcError, ToolError };

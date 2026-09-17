@@ -28,6 +28,7 @@ use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepo;
+use golem_registry_service::repo::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
@@ -49,6 +50,7 @@ use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::repo::retry_policy::RetryPolicyRepo;
+use golem_registry_service::repo::tool_middleware_release::ToolMiddlewareReleaseRepo;
 use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
@@ -80,6 +82,7 @@ pub struct Deps {
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub environment_tool_grant_repo: Box<dyn EnvironmentToolGrantRepo>,
+    pub environment_tool_middleware_grant_repo: Box<dyn EnvironmentToolMiddlewareGrantRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
@@ -89,6 +92,7 @@ pub struct Deps {
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
     pub tool_release_repo: Box<dyn ToolReleaseRepo>,
+    pub tool_middleware_release_repo: Box<dyn ToolMiddlewareReleaseRepo>,
     pub test_db: TestDb,
 }
 
@@ -300,6 +304,7 @@ impl Deps {
             name: format!("env-{}", new_repo_uuid()),
             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             compatibility_check: true,
+            tool_compatibility_mode: "structural-subtype".to_string(),
             version_check: true,
             security_overrides: true,
             hash: blake3::hash("test".as_bytes()).into(),

@@ -22,10 +22,10 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala", "moonbit"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
 
 /**
- * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "...", scala: "..." }).
+ * Checks if a value is a language-keyed map (e.g., { ts: "...", effect: "...", rust: "..." }).
  * Returns true only if the value is a plain object whose keys are all known language codes.
  */
 function isLanguageMap(value: unknown): value is Record<string, unknown> {
@@ -50,19 +50,32 @@ function resolveByLanguage<T>(
   return value as T;
 }
 
-function tryParseJson<T>(value: string): T | undefined {
+function tryParseJson<T>(value: string, exactDurations = false): T | undefined {
   try {
-    return JSON.parse(value) as T;
+    if (!exactDurations) return JSON.parse(value) as T;
+    const integerTokens = new WeakMap<object, Map<string, string>>();
+    return JSON.parse(value, function (key, parsed, context?: { source: string }) {
+      if (typeof parsed === "number" && context && /^-?\d+$/.test(context.source)) {
+        const tokens = integerTokens.get(this) ?? new Map<string, string>();
+        tokens.set(key, context.source);
+        integerTokens.set(this, tokens);
+      }
+      if (parsed?.kind === "duration" && typeof parsed.value === "object" && parsed.value) {
+        const token = integerTokens.get(parsed.value)?.get("nanoseconds");
+        if (token !== undefined) parsed.value.nanoseconds = BigInt(token);
+      }
+      return parsed;
+    }) as T;
   } catch {
     return undefined;
   }
 }
 
-function parseJsonCommandOutput<T>(output: string): T | undefined {
+function parseJsonCommandOutput<T>(output: string, exactDurations = false): T | undefined {
   const trimmed = output.trim();
   if (!trimmed) return undefined;
 
-  const direct = tryParseJson<T>(trimmed);
+  const direct = tryParseJson<T>(trimmed, exactDurations);
   if (direct !== undefined) {
     return direct;
   }
@@ -73,7 +86,7 @@ function parseJsonCommandOutput<T>(output: string): T | undefined {
     .filter((line) => line.length > 0);
 
   for (let i = lines.length - 1; i >= 0; i--) {
-    const parsed = tryParseJson<T>(lines[i]);
+    const parsed = tryParseJson<T>(lines[i], exactDurations);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -82,7 +95,180 @@ function parseJsonCommandOutput<T>(output: string): T | undefined {
   return undefined;
 }
 
-function extractInvokeJsonResult(output: string): unknown {
+type SchemaNode = { kind: string; value?: unknown };
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function decodeSchemaValue(graphValue: unknown, schemaValue: unknown): unknown {
+  const graph = asObject(graphValue);
+  const defs = Array.isArray(graph?.defs) ? graph.defs : [];
+
+  const decode = (
+    schemaInput: unknown,
+    valueInput: unknown,
+    resolving = new Set<unknown>(),
+  ): unknown => {
+    const schema = asObject(schemaInput) as SchemaNode | undefined;
+    const encoded = asObject(valueInput) as SchemaNode | undefined;
+    if (!schema || !encoded || typeof schema.kind !== "string") {
+      return undefined;
+    }
+
+    if (schema.kind === "ref") {
+      const id = asObject(schema.value)?.id;
+      if (id === undefined || resolving.has(id)) return undefined;
+      const definition = defs.map(asObject).find((candidate) => candidate?.id === id);
+      if (!definition) return undefined;
+      const next = new Set(resolving);
+      next.add(id);
+      return decode(definition.body, valueInput, next);
+    }
+
+    if (schema.kind !== encoded.kind) return undefined;
+
+    // Only consecutive ref hops can cycle without consuming a value node.
+    resolving = new Set();
+    const schemaBody = asObject(schema.value) ?? {};
+    const valueBody = asObject(encoded.value);
+    switch (schema.kind) {
+      case "bool":
+      case "s8":
+      case "s16":
+      case "s32":
+      case "s64":
+      case "u8":
+      case "u16":
+      case "u32":
+      case "u64":
+      case "f32":
+      case "f64":
+      case "char":
+      case "string":
+        return encoded.value;
+      case "record": {
+        const fields = Array.isArray(schemaBody.fields) ? schemaBody.fields : [];
+        const values = Array.isArray(valueBody?.fields) ? valueBody.fields : [];
+        if (fields.length !== values.length) return undefined;
+        return Object.fromEntries(
+          fields.map((field, index) => {
+            const descriptor = asObject(field);
+            return [descriptor?.name, decode(descriptor?.body, values[index], resolving)];
+          }),
+        );
+      }
+      case "tuple":
+        return decodeSequence(schemaBody.elements, valueBody?.elements, resolving, true);
+      case "list":
+        return decodeSequence(schemaBody.element, valueBody?.elements, resolving);
+      case "fixed-list":
+        return decodeSequence(schemaBody.element, valueBody?.elements, resolving);
+      case "map": {
+        const entries = Array.isArray(valueBody?.entries) ? valueBody.entries : [];
+        return entries.map((entry) => {
+          const pair = Array.isArray(entry) ? entry : [];
+          return [
+            decode(schemaBody.key, pair[0], resolving),
+            decode(schemaBody.value, pair[1], resolving),
+          ];
+        });
+      }
+      case "option":
+        return valueBody?.inner == null
+          ? null
+          : decode(schemaBody.inner, valueBody.inner, resolving);
+      case "enum":
+        return Array.isArray(schemaBody.cases)
+          ? schemaBody.cases[valueBody?.case as number]
+          : undefined;
+      case "flags": {
+        const flags = Array.isArray(schemaBody.flags) ? schemaBody.flags : [];
+        const bits = Array.isArray(valueBody?.bits) ? valueBody.bits : [];
+        return flags.filter((_, index) => bits[index] === true);
+      }
+      case "variant": {
+        const cases = Array.isArray(schemaBody.cases) ? schemaBody.cases : [];
+        const variantCase = asObject(cases[valueBody?.case as number]);
+        if (!variantCase || typeof variantCase.name !== "string") return undefined;
+        if (variantCase.payload === undefined && valueBody?.payload === undefined)
+          return variantCase.name;
+        return { [variantCase.name]: decode(variantCase.payload, valueBody?.payload, resolving) };
+      }
+      case "result": {
+        const spec = asObject(schemaBody.spec);
+        const tag = valueBody?.tag;
+        if (tag !== "ok" && tag !== "err") return undefined;
+        return {
+          [tag]: valueBody?.value == null ? null : decode(spec?.[tag], valueBody.value, resolving),
+        };
+      }
+      case "union": {
+        const tag = valueBody?.tag;
+        const branches = Array.isArray(asObject(schemaBody.spec)?.branches)
+          ? (asObject(schemaBody.spec)?.branches as unknown[])
+          : [];
+        const branch = branches.map(asObject).find((candidate) => candidate?.tag === tag);
+        return branch ? decode(branch.body, valueBody?.body, resolving) : undefined;
+      }
+      case "text":
+        return valueBody && typeof valueBody.text === "string" ? valueBody : undefined;
+      case "binary":
+        return Array.isArray(valueBody?.bytes)
+          ? { ...valueBody, bytes: Buffer.from(valueBody.bytes).toString("base64url") }
+          : undefined;
+      case "quantity":
+        return valueBody;
+      case "duration": {
+        if (typeof valueBody?.nanoseconds !== "bigint") return undefined;
+        const total = BigInt(valueBody.nanoseconds);
+        if (total === 0n) return "PT0S";
+        let remaining = total < 0n ? -total : total;
+        const days = remaining / 86_400_000_000_000n;
+        remaining %= 86_400_000_000_000n;
+        const hours = remaining / 3_600_000_000_000n;
+        remaining %= 3_600_000_000_000n;
+        const minutes = remaining / 60_000_000_000n;
+        remaining %= 60_000_000_000n;
+        const seconds = remaining / 1_000_000_000n;
+        const nanos = remaining % 1_000_000_000n;
+        const fraction =
+          nanos === 0n ? "" : `.${String(nanos).padStart(9, "0").replace(/0+$/, "")}`;
+        const time = `${hours ? `${hours}H` : ""}${minutes ? `${minutes}M` : ""}${seconds || nanos ? `${seconds}${fraction}S` : ""}`;
+        return `${total < 0n ? "-" : ""}P${days ? `${days}D` : ""}${time ? `T${time}` : ""}`;
+      }
+      case "path":
+        return valueBody?.path;
+      case "url":
+        return valueBody?.url;
+      case "datetime":
+        return valueBody?.value;
+      default:
+        return undefined;
+    }
+  };
+
+  const decodeSequence = (
+    schemas: unknown,
+    valuesInput: unknown,
+    resolving: Set<unknown>,
+    positional = false,
+  ): unknown[] | undefined => {
+    const values = Array.isArray(valuesInput) ? valuesInput : [];
+    if (positional) {
+      const elements = Array.isArray(schemas) ? schemas : [];
+      if (elements.length !== values.length) return undefined;
+      return values.map((value, index) => decode(elements[index], value, resolving));
+    }
+    return values.map((value) => decode(schemas, value, resolving));
+  };
+
+  return decode(graph?.root, schemaValue);
+}
+
+export function extractInvokeJsonResult(output: string): unknown {
   const lifecycleResult = output
     .trim()
     .split(/\r?\n/)
@@ -99,7 +285,7 @@ function extractInvokeJsonResult(output: string): unknown {
     return (lifecycleResult as Record<string, unknown>).value;
   }
 
-  const parsed = parseJsonCommandOutput<unknown>(output);
+  const parsed = parseJsonCommandOutput<unknown>(output, true);
   if (!parsed || typeof parsed !== "object") {
     return parsed;
   }
@@ -109,22 +295,18 @@ function extractInvokeJsonResult(output: string): unknown {
     return undefined;
   }
 
-  const unwrapValueAndType = (valueAndType: unknown): unknown => {
-    if (!valueAndType || typeof valueAndType !== "object") {
-      return undefined;
-    }
-
-    return "value" in valueAndType ? (valueAndType as Record<string, unknown>).value : undefined;
-  };
-
   const resultJson = document.resultJson;
-  if (resultJson && typeof resultJson === "object") {
-    return unwrapValueAndType(resultJson);
+  const result = asObject(resultJson);
+  if (result) {
+    return decodeSchemaValue(result.graph, result.value);
   }
 
   const resultsJson = document.resultsJson;
   if (Array.isArray(resultsJson)) {
-    return resultsJson.map(unwrapValueAndType);
+    return resultsJson.map((item) => {
+      const result = asObject(item);
+      return decodeSchemaValue(result?.graph, result?.value);
+    });
   }
 
   return undefined;
@@ -161,7 +343,7 @@ const McpCallSchema = z.object({
 });
 
 const InvokeSchema = z.object({
-  agent: z.string(),
+  agent: langConditional(z.string()),
   method: langConditional(z.string()),
   args: langConditional(z.string()).optional(),
 });
@@ -173,7 +355,7 @@ const ShellSchema = z.object({
 });
 
 const TriggerSchema = z.object({
-  agent: z.string(),
+  agent: langConditional(z.string()),
   method: langConditional(z.string()),
   args: langConditional(z.string()).optional(),
 });
@@ -211,7 +393,7 @@ const ACTION_FIELDS = [
   "mcp_call",
 ] as const;
 
-// Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
+// Language-conditional: accepts either T or { ts: T, effect: T, rust: T, ... }
 function langConditional<T extends z.ZodType>(schema: T) {
   return z.union([schema, z.record(z.string(), schema)]);
 }
@@ -328,14 +510,14 @@ interface StepCommon {
 }
 
 type InvokeSpec = {
-  agent: string;
+  agent: LangConditional<string>;
   method: LangConditional<string>;
   args?: LangConditional<string>;
 };
 type ShellSpec = { command: string; args?: LangConditional<string[]>; cwd?: string };
 type ResolvedShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = {
-  agent: string;
+  agent: LangConditional<string>;
   method: LangConditional<string>;
   args?: LangConditional<string>;
 };
@@ -413,6 +595,32 @@ export interface ScenarioSpec {
   skip_if?: StepCondition;
   steps: StepSpec[];
   finally?: StepSpec[];
+}
+
+export function resolveGolemCommandEnv(
+  spec: ScenarioSpec,
+  runEnv: NodeJS.ProcessEnv,
+  serviceEnv?: Record<string, string>,
+): Record<string, string> {
+  const env: Record<string, string> = { ...(serviceEnv ?? {}) };
+  if (spec.prerequisites?.env) Object.assign(env, spec.prerequisites.env);
+  const scenarioRouterPort = spec.settings?.golem_server?.router_port;
+  const routerPort =
+    runEnv.GOLEM_ROUTER_PORT ?? env["GOLEM_ROUTER_PORT"] ?? String(scenarioRouterPort ?? 9881);
+  env["GOLEM_ROUTER_PORT"] = routerPort;
+  env["GOLEM_BUILTIN_LOCAL_URL"] = `http://localhost:${routerPort}`;
+
+  const customRequestPort =
+    runEnv.GOLEM_CUSTOM_REQUEST_PORT ??
+    env["GOLEM_CUSTOM_REQUEST_PORT"] ??
+    spec.settings?.golem_server?.custom_request_port;
+  if (customRequestPort !== undefined) {
+    env["GOLEM_CUSTOM_REQUEST_PORT"] = String(customRequestPort);
+  }
+  if (runEnv.GOLEM_MCP_PORT !== undefined) {
+    env["GOLEM_MCP_PORT"] = runEnv.GOLEM_MCP_PORT;
+  }
+  return env;
 }
 
 export function parseStep(raw: RawStepSpec): StepSpec {
@@ -652,7 +860,7 @@ export class ScenarioExecutor {
         return {
           ...step,
           invoke: {
-            agent: substituteVariables(step.invoke.agent, variables),
+            agent: subLangStr(step.invoke.agent),
             method: subLangStr(step.invoke.method),
             args: subLangStrOpt(step.invoke.args),
           },
@@ -661,7 +869,7 @@ export class ScenarioExecutor {
         return {
           ...step,
           invoke_json: {
-            agent: substituteVariables(step.invoke_json.agent, variables),
+            agent: subLangStr(step.invoke_json.agent),
             method: subLangStr(step.invoke_json.method),
             args: subLangStrOpt(step.invoke_json.args),
           },
@@ -679,7 +887,7 @@ export class ScenarioExecutor {
         return {
           ...step,
           trigger: {
-            agent: substituteVariables(step.trigger.agent, variables),
+            agent: subLangStr(step.trigger.agent),
             method: subLangStr(step.trigger.method),
             args: subLangStrOpt(step.trigger.args),
           },
@@ -778,6 +986,7 @@ export class ScenarioExecutor {
         tag: "invoke",
         invoke: {
           ...step.invoke,
+          agent: resolveByLanguage(step.invoke.agent, lang)!,
           method: resolveByLanguage(step.invoke.method, lang)!,
           args: resolveByLanguage(step.invoke.args, lang),
         },
@@ -789,6 +998,7 @@ export class ScenarioExecutor {
         tag: "invoke_json",
         invoke_json: {
           ...step.invoke_json,
+          agent: resolveByLanguage(step.invoke_json.agent, lang)!,
           method: resolveByLanguage(step.invoke_json.method, lang)!,
           args: resolveByLanguage(step.invoke_json.args, lang),
         },
@@ -800,6 +1010,7 @@ export class ScenarioExecutor {
         tag: "trigger",
         trigger: {
           ...step.trigger,
+          agent: resolveByLanguage(step.trigger.agent, lang)!,
           method: resolveByLanguage(step.trigger.method, lang)!,
           args: resolveByLanguage(step.trigger.args, lang),
         },
@@ -829,6 +1040,9 @@ export class ScenarioExecutor {
   }
 
   private ensureResolvedInvokeSpec(invoke: InvokeSpec): ResolvedInvokeSpec {
+    if (typeof invoke.agent !== "string") {
+      throw new Error("Invoke agent must resolve to a string for the current language");
+    }
     if (typeof invoke.method !== "string") {
       throw new Error("Invoke method must resolve to a string for the current language");
     }
@@ -838,6 +1052,7 @@ export class ScenarioExecutor {
 
     return {
       ...invoke,
+      agent: invoke.agent,
       method: invoke.method,
       args: invoke.args as string | undefined,
     };
@@ -854,6 +1069,9 @@ export class ScenarioExecutor {
   }
 
   private ensureResolvedTriggerSpec(trigger: TriggerSpec): ResolvedTriggerSpec {
+    if (typeof trigger.agent !== "string") {
+      throw new Error("Trigger agent must resolve to a string for the current language");
+    }
     if (typeof trigger.method !== "string") {
       throw new Error("Trigger method must resolve to a string for the current language");
     }
@@ -863,6 +1081,7 @@ export class ScenarioExecutor {
 
     return {
       ...trigger,
+      agent: trigger.agent,
       method: trigger.method,
       args: trigger.args as string | undefined,
     };
@@ -975,16 +1194,20 @@ export class ScenarioExecutor {
     let resumeReached = !this.options.resumeFromStepId;
     let creditInsufficient = false;
     // Build env and variables early so finalizers can use them even if setup fails
-    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
-    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
-    const variables = this.buildVariables(spec.name, startedServices.variables);
+    const commandEnv = resolveGolemCommandEnv(spec, process.env, startedServices.env);
+    this.routerPort = Number(commandEnv["GOLEM_ROUTER_PORT"]);
+    const variables = this.buildVariables(spec.name, {
+      ...startedServices.variables,
+      custom_request_port: commandEnv["GOLEM_CUSTOM_REQUEST_PORT"] ?? "9006",
+      mcp_port: commandEnv["GOLEM_MCP_PORT"] ?? "9007",
+    });
 
     try {
       // Setup workspace (each run gets a unique ID so no cleanup needed)
       this.currentSkillSessionBaseline = undefined;
       await fs.mkdir(this.workspace, { recursive: true });
       await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
-      await this.verifyGolemConnectivity(spec);
+      await this.verifyGolemConnectivity(commandEnv);
       const conditionContext = {
         agent: this.options.agent,
         language: this.options.language,
@@ -2222,31 +2445,15 @@ export class ScenarioExecutor {
     return undefined;
   }
 
-  private buildCommandEnv(
-    spec: ScenarioSpec,
-    serviceEnv?: Record<string, string>,
-  ): Record<string, string> {
-    const env: Record<string, string> = { ...(serviceEnv ?? {}) };
-    if (spec.settings?.golem_server?.router_port) {
-      env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
-    }
-    if (spec.settings?.golem_server?.custom_request_port) {
-      env["GOLEM_CUSTOM_REQUEST_PORT"] = String(spec.settings.golem_server.custom_request_port);
-    }
-    if (spec.prerequisites?.env) {
-      Object.assign(env, spec.prerequisites.env);
-    }
-    return env;
-  }
-
-  private async verifyGolemConnectivity(spec?: ScenarioSpec): Promise<void> {
-    const routerPort = spec?.settings?.golem_server?.router_port ?? 9881;
+  private async verifyGolemConnectivity(commandEnv: Record<string, string>): Promise<void> {
+    const routerPort = this.routerPort;
 
     const profileCheck = await this.runLocalCommand(
       "golem",
       ["profile", "get", "--profile", "local"],
       30,
       this.workspace,
+      commandEnv,
     );
     if (!profileCheck.success) {
       throw new Error(`Failed to verify local Golem profile: ${profileCheck.output}`);

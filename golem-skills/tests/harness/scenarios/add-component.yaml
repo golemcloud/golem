@@ -33,7 +33,12 @@ steps:
 
   - id: "invoke-counter"
     invoke_json:
-      agent: 'CounterAgent("test")'
+      agent:
+        effect: 'Counter("test")'
+        rust: 'CounterAgent("test")'
+        ts: 'CounterAgent("test")'
+        scala: 'CounterAgent("test")'
+        moonbit: 'CounterAgent("test")'
       method: "increment"
     expect:
       result_json:

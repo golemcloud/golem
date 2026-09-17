@@ -524,6 +524,10 @@ pub(super) fn environment_from_component_record(
         name: EnvironmentName(record.environment_name.clone()),
         diff_model_version: DIFF_MODEL_VERSION,
         compatibility_check: record.environment_compatibility_check,
+        tool_compatibility_mode: crate::repo::model::deployment::compatibility_mode(
+            &record.environment_tool_compatibility_mode,
+        )
+        .map_err(anyhow::Error::new)?,
         version_check: record.environment_version_check,
         security_overrides: record.environment_security_overrides,
         owner_account_id: AccountId(record.owner_account_id),

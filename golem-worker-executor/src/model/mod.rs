@@ -53,12 +53,12 @@ pub trait ShardAssignmentCheck {
 impl ShardAssignmentCheck for ShardAssignment {
     fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         let shard_id = ShardId::from_agent_id(agent_id, self.number_of_shards);
-        if self.shard_ids.contains(&shard_id) {
+        if self.contains(&shard_id) {
             Ok(())
         } else {
             Err(WorkerExecutorError::invalid_shard_id(
                 shard_id,
-                self.shard_ids.clone(),
+                self.shard_id_set(),
             ))
         }
     }

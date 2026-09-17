@@ -15,7 +15,9 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -79,26 +81,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await?;
 
         let result = 'resp: {
-            let (mut handle, denied) = if begun.is_live() {
-                let denied = match dns_target(&name) {
-                    Ok(target) => {
-                        !matches!(self.authorize_live_permission(&target).await, Ok(Ok(_)))
-                    }
-                    Err(_) => true,
-                };
-                (
-                    begun
-                        .start_live(self, HostRequestSocketsResolveName { name: name.clone() })
-                        .await?,
-                    denied,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let (mut handle, denied) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match dns_target(&name) {
+                        Ok(target) => {
+                            !matches!(self.authorize_live_permission(&target).await, Ok(Ok(_)))
+                        }
+                        Err(_) => true,
+                    };
+                    (
+                        begun
+                            .start_live(self, HostRequestSocketsResolveName { name: name.clone() })
+                            .await?,
+                        denied,
+                    )
                 }
-                (handle, false)
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    (handle, false)
+                }
             };
 
             if denied {

@@ -10,7 +10,9 @@ description: "Add a new npm package dependency to a TypeScript Golem project. Us
 - Golem TypeScript runs inside a [QuickJS](https://github.com/DelSkayn/rquickjs/) WebAssembly runtime, NOT Node.js.
 - The runtime implements a broad set of Browser and Node.js APIs. Most packages targeting browsers or standard Node.js APIs will work.
 - Packages that use native Node.js C++ addons **will not work** (no native compilation in WASM).
-- Some modules are stubs that throw for compatibility: `node:child_process`, `node:cluster`, `node:http2`, `node:worker_threads`.
+- `node:child_process` supports constrained JavaScript and simple npm script execution inside the
+  runtime. It cannot create host processes or run a general shell. `node:cluster`, `node:http2`, and
+  `node:worker_threads` remain unsupported or stubbed.
 
 ### Supported runtime APIs
 

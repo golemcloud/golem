@@ -11,7 +11,7 @@ A durable host call that fails with a retryable error can recover in two ways:
 | | In-function (inline) retry | Trap-based retry |
 |---|---|---|
 | Where | Inside the same host function, under the **same** `Start` | The invocation traps; the worker is torn down and reconstructed |
-| Oplog | Appends and commits one `OplogEntry::Error { retry_from, inside_atomic_region, retry_policy_state }` hint per attempt (`InFunctionRetryHost::append_retry_error_entry`) | Appends `OplogEntry::Error` in `on_invocation_failure`, then the outer loop replays to `retry_from` |
+| Oplog | Appends and commits one `OplogEntry::Error { kind: Invocation, retry_from, inside_atomic_region, retry_policy_state }` hint per attempt (`InFunctionRetryHost::append_retry_error_entry`) | Appends `OplogEntry::Error { kind: Invocation, .. }` in `on_invocation_failure`, then the outer loop replays to `retry_from` |
 | Cost | A sleep and a second live action | Full `Store` teardown, instance creation, replay of all history since the last baseline |
 | Decided by | `InFunctionRetryState::decide_retry_with_properties` → `AsyncRetryDecision::{Retry, FallBackToTrap, Exhausted}` | `try_trigger_host_trap_retry` attaches a `SemanticTrapRetryOverride`; `on_invocation_failure` turns it into a `RetryDecision` (`Immediate`, `Delayed`, `None`, …) |
 
@@ -19,6 +19,15 @@ The two paths share one retry budget: `retry_count` (in-memory attempts of this 
 the number of recorded `Error` entries with the same `retry_from`
 (`count_oplog_errors_for`, `current_retry_state_for`). After a trap and replay the in-memory
 count resets but the oplog count does not, so a policy exhausted inline stays exhausted.
+
+Startup and replay infrastructure failures are separate from both paths. They append
+`Error { kind: Recovery, retry_policy_state: None, .. }`, so metadata truthfully remains
+`Retrying` but the failure neither reads nor advances the agent's semantic invocation retry
+budget. Recovery retrying is demand-driven: invoke, explicit resume, scheduler activation, or
+shard reassignment starts another reconstruction attempt. The executor does not retain the
+instance or schedule an unbounded timer loop during an infrastructure outage. Permanent recovery
+failures, including replay divergence and invalid manual-update snapshot baselines, append a
+terminal retry state and report `Failed`.
 
 ## When inline retry is allowed
 

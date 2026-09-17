@@ -344,7 +344,9 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
     ) = accessor.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
-            ctx.state.component_metadata.metadata.has_oplog_processor(),
+            ctx.owner_component_metadata()
+                .metadata
+                .has_oplog_processor(),
             ctx.owned_agent_id.clone(),
             ctx.public_state.clone(),
             ctx.state.replay_state.clone(),

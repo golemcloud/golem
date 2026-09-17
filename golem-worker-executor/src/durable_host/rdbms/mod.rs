@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
@@ -229,22 +231,23 @@ where
         DurableFunctionType::ReadLocal,
     )
     .await?;
-    let (mut handle, mut pool_key, authorization) = if begun.is_live() {
-        let pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsConnection<T>>(entry)?
-            .pool_key
-            .clone();
-        let authorization = authorize_transaction::<Ctx, T>(ctx, &pool_key).await?;
-        let handle = begun.start_live(ctx, HostRequestNoInput {}).await?;
-        (handle, Some(pool_key), Some(authorization))
-    } else {
-        (
-            begun.start_replay(ctx).await?,
+    let (mut handle, mut pool_key, authorization) = match begun.resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            let pool_key = ctx
+                .as_wasi_view()
+                .table()
+                .get::<RdbmsConnection<T>>(entry)?
+                .pool_key
+                .clone();
+            let authorization = authorize_transaction::<Ctx, T>(ctx, &pool_key).await?;
+            let handle = begun.start_live(ctx, HostRequestNoInput {}).await?;
+            (handle, Some(pool_key), Some(authorization))
+        }
+        ResolvedCall::Replay(handle) => (
+            handle,
             None,
             None::<Result<LiveAuthorizationPermit, RdbmsError>>,
-        )
+        ),
     };
 
     let admission = if !handle.is_live() {

@@ -17,11 +17,10 @@ use super::tool_middleware_registry::{
 };
 use super::wire;
 use super::{
-    InputStream, InvocationResult, Principal, ToolInvokeError, ToolMiddleware, ToolMiddlewareScope,
+    InputStream, InvocationResult, Principal, RawCustomToolError, ToolInvokeError, ToolMiddleware,
     UnderlyingTool,
 };
-use crate::schema::tool as native;
-use crate::schema::tool::wit::{decode_tool, encode_tool};
+use crate::schema::tool::wit::{decode_tool, tool_middleware_to_wit};
 use crate::{decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 
 pub(crate) fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {
@@ -71,41 +70,8 @@ pub(crate) async fn invoke_tool_middleware(
 }
 
 fn encode_middleware(middleware: &ToolMiddleware) -> Result<wire::ToolMiddleware, wire::ToolError> {
-    Ok(wire::ToolMiddleware {
-        name: middleware.name.clone(),
-        aliases: middleware.aliases.clone(),
-        doc: encode_doc(&middleware.doc),
-        scope: match &middleware.scope {
-            ToolMiddlewareScope::Monomorphic(scope) => {
-                wire::ToolMiddlewareScope::Monomorphic(wire::MonomorphicScope {
-                    presented: encode_tool(&scope.presented)
-                        .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))?,
-                    expected: scope
-                        .expected
-                        .as_ref()
-                        .map(encode_tool)
-                        .transpose()
-                        .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))?,
-                })
-            }
-            ToolMiddlewareScope::Universal => wire::ToolMiddlewareScope::Universal,
-        },
-    })
-}
-
-fn encode_doc(doc: &native::Doc) -> wire::Doc {
-    wire::Doc {
-        summary: doc.summary.clone(),
-        description: doc.description.clone(),
-        examples: doc
-            .examples
-            .iter()
-            .map(|example| wire::Example {
-                title: example.title.clone(),
-                body: example.body.clone(),
-            })
-            .collect(),
-    }
+    tool_middleware_to_wit(middleware)
+        .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))
 }
 
 fn encode_invocation_result(
@@ -121,7 +87,7 @@ fn encode_invocation_result(
     })
 }
 
-fn encode_invocation_error(error: ToolInvokeError<crate::TypedSchemaValue>) -> wire::ToolError {
+fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> wire::ToolError {
     match error {
         ToolInvokeError::InvalidToolName(name) => wire::ToolError::InvalidToolName(name),
         ToolInvokeError::InvalidCommandPath(path) => wire::ToolError::InvalidCommandPath(path),
@@ -130,10 +96,22 @@ fn encode_invocation_error(error: ToolInvokeError<crate::TypedSchemaValue>) -> w
             wire::ToolError::ConstraintViolation(message)
         }
         ToolInvokeError::InvalidResult(message) => wire::ToolError::InvalidResult(message),
-        ToolInvokeError::Tool(error) => match encode_typed_schema_value_owned(error) {
-            Ok(error) => wire::ToolError::CustomError(error),
+        ToolInvokeError::Tool(error) => match encode_typed_schema_value_owned(error.payload) {
+            Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
+                name: error.name,
+                payload,
+            }),
             Err(error) => wire::ToolError::InvalidResult(error.to_string()),
         },
+        ToolInvokeError::UnknownCustomError(error) => {
+            match encode_typed_schema_value_owned(error.payload) {
+                Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
+                    name: error.name,
+                    payload,
+                }),
+                Err(error) => wire::ToolError::InvalidResult(error.to_string()),
+            }
+        }
     }
 }
 
@@ -264,11 +242,15 @@ mod tests {
         ));
 
         let payload = "custom".to_string().into_typed_schema_value().unwrap();
-        let encoded = encode_invocation_error(ToolInvokeError::Tool(payload));
+        let encoded = encode_invocation_error(ToolInvokeError::Tool(RawCustomToolError {
+            name: "custom-name".to_string(),
+            payload,
+        }));
         let wire::ToolError::CustomError(encoded) = encoded else {
             panic!("custom middleware error was not preserved")
         };
-        let decoded = decode_typed_schema_value_owned(encoded).unwrap();
+        assert_eq!(encoded.name, "custom-name");
+        let decoded = decode_typed_schema_value_owned(encoded.payload).unwrap();
         assert_eq!(
             decoded.value(),
             &crate::SchemaValue::String("custom".to_string())

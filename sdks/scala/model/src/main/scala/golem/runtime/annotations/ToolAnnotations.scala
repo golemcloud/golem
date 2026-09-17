@@ -37,12 +37,14 @@ final class toolImplementation() extends StaticAnnotation
 /** Marks a concrete class as a monomorphic tool middleware implementation. */
 final class toolMiddleware(
   val name: String,
+  val version: String = "0.0.0",
   val aliases: Array[String] = Array()
 ) extends StaticAnnotation
 
 /** Marks a concrete class as a universal tool middleware implementation. */
 final class universalToolMiddleware(
   val name: String,
+  val version: String = "0.0.0",
   val aliases: Array[String] = Array()
 ) extends StaticAnnotation
 

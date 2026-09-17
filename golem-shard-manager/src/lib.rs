@@ -39,6 +39,7 @@ use etcd_client::Client;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
+use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
@@ -56,8 +57,9 @@ pub use sharding::persistence::{
 pub use sharding::shard_management::ShardManagement;
 pub use sharding::worker_executor::WorkerExecutorService;
 pub use sharding::{
-    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
-    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
+    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, RegisterAck,
+    ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
+    ShardLeaseState,
 };
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -75,6 +77,69 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(test)]
 test_r::enable!();
+
+#[cfg(test)]
+mod lease_timing_tests {
+    use super::validate_lease_timing;
+    use crate::config::ShardManagerConfig;
+    use golem_common::base_model::shard_lease;
+    use std::time::Duration;
+    use test_r::test;
+
+    fn config_with(shard_lease_duration: Duration) -> ShardManagerConfig {
+        ShardManagerConfig {
+            shard_lease_duration,
+            ..ShardManagerConfig::default()
+        }
+    }
+
+    /// The shipped default is the shortest lease that delivers the full renewal budget, so it must
+    /// start without so much as a warning - if it did not, every deployment would be told to tune
+    /// a value it never set.
+    #[test]
+    fn the_default_lease_starts_silently() {
+        let warnings = validate_lease_timing(&ShardManagerConfig::default())
+            .expect("the shipped default must be accepted");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    /// Between the minimum and the recommended minimum the protocol still works, it just survives
+    /// fewer consecutive shard-manager hiccups. That is availability, not correctness, so it warns
+    /// rather than refusing - and the warning names the key, or an operator is left guessing which
+    /// of several durations to move.
+    #[test]
+    fn a_short_but_workable_lease_warns_and_names_the_key() {
+        let warnings = validate_lease_timing(&config_with(shard_lease::min_shard_lease_duration()))
+            .expect("a lease at the minimum must still start");
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("shard_lease_duration"),
+            "the warning must name the key it is about: {}",
+            warnings[0]
+        );
+    }
+
+    /// Below the minimum an executor cannot finish one renewal attempt inside the gap between two
+    /// renewals, so every unanswered call costs the lease outright. Refused rather than degraded:
+    /// every replica shares the setting, so a cluster would fail the same way at the same time.
+    #[test]
+    fn a_lease_too_short_to_renew_is_refused() {
+        let error = validate_lease_timing(&config_with(
+            shard_lease::min_shard_lease_duration() - Duration::from_millis(1),
+        ))
+        .expect_err("a lease below the minimum must be refused");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("shard_lease_duration"),
+            "the refusal must name the key: {message}"
+        );
+    }
+
+    #[test]
+    fn a_zero_lease_is_still_refused() {
+        assert!(validate_lease_timing(&config_with(Duration::ZERO)).is_err());
+    }
+}
 
 pub static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -255,6 +320,49 @@ async fn start_distributed_mode(
     Ok((kv, elected.fence, leadership))
 }
 
+/// Checks `shard_lease_duration` against the timing the protocol derives from it, returning the
+/// warnings worth logging and refusing outright what cannot work.
+///
+/// The executor renews at a third of the lease and gives up on one attempt at half of that, never
+/// below a floor, and the shard manager needs its own write budget to fit inside that attempt.
+/// Those relations live in [`golem_common::base_model::shard_lease`]; this is where the configured
+/// duration meets them, because the lease duration is the shard manager's config and the executor
+/// only ever learns it from the wire.
+fn validate_lease_timing(config: &ShardManagerConfig) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(
+        !config.shard_lease_duration.is_zero(),
+        "shard_lease_duration must be greater than zero"
+    );
+    anyhow::ensure!(
+        chrono::Duration::from_std(config.shard_lease_duration).is_ok(),
+        "shard_lease_duration {:?} is out of range",
+        config.shard_lease_duration
+    );
+    anyhow::ensure!(
+        config.shard_lease_duration >= shard_lease::min_shard_lease_duration(),
+        "shard_lease_duration must be at least {:?}, but is {:?}. An executor gives up on one \
+         renewal after {:?} at the shortest, which is the whole gap between two renewals at this \
+         lease: a single unanswered call would cost the lease with no attempt left to save it.",
+        shard_lease::min_shard_lease_duration(),
+        config.shard_lease_duration,
+        shard_lease::rpc_deadline_floor(),
+    );
+
+    let mut warnings = Vec::new();
+    if config.shard_lease_duration < shard_lease::recommended_min_shard_lease_duration() {
+        warnings.push(format!(
+            "shard_lease_duration is {:?}; an executor gets fewer than the {} renewal attempts a \
+             lease is meant to survive, because the per-attempt deadline is held up by its {:?} \
+             floor. {:?} is the shortest lease that delivers all of them.",
+            config.shard_lease_duration,
+            shard_lease::SHARD_LEASE_RENEWAL_ATTEMPTS,
+            shard_lease::rpc_deadline_floor(),
+            shard_lease::recommended_min_shard_lease_duration(),
+        ));
+    }
+    Ok(warnings)
+}
+
 pub async fn run(
     shard_manager_config: &ShardManagerConfig,
     deployment: Deployment,
@@ -263,15 +371,9 @@ pub async fn run(
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing shard manager");
 
-    anyhow::ensure!(
-        !shard_manager_config.shard_lease_duration.is_zero(),
-        "shard_lease_duration must be greater than zero"
-    );
-    anyhow::ensure!(
-        chrono::Duration::from_std(shard_manager_config.shard_lease_duration).is_ok(),
-        "shard_lease_duration {:?} is out of range",
-        shard_manager_config.shard_lease_duration
-    );
+    for warning in validate_lease_timing(shard_manager_config)? {
+        warn!("{warning}");
+    }
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -369,6 +471,7 @@ pub async fn run(
                         kv,
                         shard_manager_config.number_of_shards,
                         fence,
+                        etcd.compaction_retention_revisions,
                     )),
                     Arc::new(UnavailableQuotaRepo),
                     Some(leadership),

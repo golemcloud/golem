@@ -1,0 +1,18 @@
+[package]
+name = "effect-cross-sdk-rust-peer"
+version = "0.0.1"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+golem-rust = { path = "../../../../rust/golem-rust", features = ["export_golem_agentic"] }
+effect-fixture-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/effect-fixture-guest-client" }
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[workspace]

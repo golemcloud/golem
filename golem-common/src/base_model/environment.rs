@@ -68,6 +68,7 @@ declare_structs! {
     pub struct EnvironmentCreation {
         pub name: EnvironmentName,
         pub compatibility_check: bool,
+        pub tool_compatibility_mode: crate::schema::tool::compatibility::ToolCompatibilityMode,
         pub version_check: bool,
         pub security_overrides: bool,
     }
@@ -76,6 +77,7 @@ declare_structs! {
         pub current_revision: EnvironmentRevision,
         pub name: Option<EnvironmentName>,
         pub compatibility_check: Option<bool>,
+        pub tool_compatibility_mode: Option<crate::schema::tool::compatibility::ToolCompatibilityMode>,
         pub version_check: Option<bool>,
         pub security_overrides: Option<bool>,
     }
@@ -95,6 +97,7 @@ declare_structs! {
         pub name: EnvironmentName,
         pub diff_model_version: u32,
         pub compatibility_check: bool,
+        pub tool_compatibility_mode: crate::schema::tool::compatibility::ToolCompatibilityMode,
         pub version_check: bool,
         pub security_overrides: bool,
 
@@ -110,6 +113,7 @@ declare_structs! {
         pub name: EnvironmentName,
         pub diff_model_version: u32,
         pub compatibility_check: bool,
+        pub tool_compatibility_mode: crate::schema::tool::compatibility::ToolCompatibilityMode,
         pub version_check: bool,
         pub security_overrides: bool,
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,

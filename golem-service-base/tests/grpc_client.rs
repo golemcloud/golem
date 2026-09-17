@@ -113,7 +113,7 @@ async fn ping(
 ) -> Result<(), tonic::Status> {
     client
         .call("assign_shards", target, move |executor| {
-            Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            Box::pin(executor.assign_shards(AssignShardsRequest::default()))
         })
         .await
         .map(|_| ())
@@ -122,7 +122,7 @@ async fn ping(
 async fn ping_single(client: &GrpcClient<ExecutorClient>) -> Result<(), tonic::Status> {
     client
         .call("assign_shards", move |executor| {
-            Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            Box::pin(executor.assign_shards(AssignShardsRequest::default()))
         })
         .await
         .map(|_| ())
@@ -209,7 +209,7 @@ async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
     let result = tokio::time::timeout(
         MUST_FAIL_WITHIN,
         client.call("assign_shards", uri, move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            Box::pin(client.assign_shards(AssignShardsRequest::default()))
         }),
     )
     .await;
@@ -1617,7 +1617,7 @@ async fn a_reset_of_one_stream_leaves_the_requests_beside_it_alone(
         async move {
             client
                 .call_without_retry("assign_shards", uri, move |executor| {
-                    Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                    Box::pin(executor.assign_shards(AssignShardsRequest::default()))
                 })
                 .await
                 .map(|_| ())

@@ -4,14 +4,13 @@
 
 This directory contains the Rust SDK for building Golem components:
 - `golem-rust` - Runtime API wrappers including the transaction API, durability, agentic framework, and value type conversions
-- `golem-rust-macro` - Procedural macros for agent definition, multimodal schema, and config schema support
+- `golem-rust-macro` is a root-workspace dependency containing the procedural macros
 
 ## Building
 
 ```shell
 cargo build              # Build all crates
 cargo build -p golem-rust        # Build runtime crate
-cargo build -p golem-rust-macro  # Build macro crate
 ```
 
 ## Testing
@@ -46,7 +45,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `agentic` | Agent framework (requires `export_golem_agentic` feature) |
 | `json` | JSON serialization helpers (requires `json` feature) |
 
-### golem-rust-macro
+### golem-rust-macro (root workspace)
 
 | Macro | Purpose |
 |-------|---------|

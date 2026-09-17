@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -236,6 +236,28 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok((cursor, keys))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
+        // nothing, and a key present for the whole iteration comes back at least once.
+        let cursor = resume
+            .map(|resume| resume.into_cursor("Redis"))
+            .transpose()?
+            .unwrap_or(0);
+        let (next, keys) = self
+            .scan(svc_name, api_name, namespace, prefix, cursor, count)
+            .await?;
+        let next = (next != 0).then_some(ScanResume::Cursor(next));
+        Ok((next, keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -393,6 +415,21 @@ impl IndexedStorage for RedisIndexedStorage {
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        // Streams have no id-only read, so this reads the payload too.
+        Ok(self
+            .last(svc_name, api_name, entity_name, namespace, key)
+            .await?
+            .map(|(id, _)| id))
     }
 
     async fn closest(

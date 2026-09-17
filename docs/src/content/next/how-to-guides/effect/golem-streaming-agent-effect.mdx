@@ -1,0 +1,26 @@
+# Effect agent streams
+
+Declare streams with the SDK schema and use native Effect streams:
+
+```ts
+import { Effect, Stream, Schema } from "effect"
+import { method, WitTypes } from "@golemcloud/effect-golem"
+
+const doubled = method({
+  input: { values: WitTypes.AgentStream(Schema.Number) },
+  success: WitTypes.AgentStream(Schema.Number),
+})
+
+const handler = ({ values }: { values: Stream.Stream<number, unknown> }) =>
+  Effect.succeed(values.pipe(Stream.map((value) => value * 2)))
+```
+
+Local streams are reusable. Streams received from Preview 3 endpoints are affine and single-reader:
+consume or forward them exactly once. Keep consumption and RPC clients scoped. Streams may be
+nested in structs. Never convert a potentially large stream to an array just to cross RPC;
+interruption must release the producer.
+
+Transformations remain lazy: a mapped or effectfully constructed stream claims its underlying
+received endpoint when execution reaches it, not when the program is encoded for RPC. Directly
+forwarding a known received endpoint transfers ownership immediately. Competing consumers fail;
+they never consume or close the endpoint owned by the successful reader.

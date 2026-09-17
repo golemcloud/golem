@@ -57,6 +57,7 @@ pub fn FutureInvokeResult::drop(Self) -> Unit
 pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, RpcError]
 
 pub(all) struct RegisteredTool {
+  lookup_name : String
   definition : @common.Tool
   implemented_by : @types.ComponentId
 } derive(Eq, @debug.Debug)

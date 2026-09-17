@@ -108,7 +108,9 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("trait GrepClient {"))
     assert(content.contains("object GrepClient {"))
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "grep""""))
-    assert(content.contains("def apply(): GrepClient = new Root()"))
+    assert(content.contains("def apply(): GrepClient = apply(toolName)"))
+    assert(content.contains("def apply(lookupName: _root_.scala.Predef.String): GrepClient = new Root(lookupName)"))
+    assert(content.contains("ToolRpcClient.transport(lookupName)"))
     assert(content.contains("_root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[Grep]"))
   }
 
@@ -141,7 +143,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     assert(content.contains("private lazy val __errorSchema_GrepError: _root_.golem.tool.ToolErrorSchema[GrepError]"))
     assert(content.contains("_root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[GrepError]"))
-    assert(content.contains("__errorSchema_GrepError.fromErrorPayloadValue(_)"))
+    assert(content.contains("__errorSchema_GrepError.fromErrorValue(_)"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -201,9 +203,9 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val prefixIdx  = content.indexOf("""prefixValue("git-dir"""")
     val verboseIdx = content.indexOf("""prefixValue("verbose"""")
     assert(prefixIdx >= 0 && verboseIdx >= 0 && prefixIdx < verboseIdx)
-    // navigation appends the child command name and creates a fresh transport
+    // navigation appends the child command name and preserves the selected transport
     assert(content.contains("""_root_.scala.List("remote")"""))
-    assert(content.contains("_root_.golem.runtime.tool.client.ToolRpcClient.transport(GitClient.toolName)"))
+    assert(content.contains("new GitClient.RemoteClient(\n        __transport,"))
   }
 
   test("wrapper leaf methods use the dynamic input path when a prefix is inherited") {

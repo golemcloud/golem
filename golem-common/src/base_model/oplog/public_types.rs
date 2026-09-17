@@ -618,6 +618,15 @@ pub enum LogLevel {
     Critical,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum OplogErrorKind {
+    Invocation,
+    Recovery,
+}
+
 /// Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs
 /// to. The kind determines how the entry's payload is interpreted.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

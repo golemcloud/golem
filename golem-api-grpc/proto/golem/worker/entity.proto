@@ -70,8 +70,16 @@ message EntityActivationFingerprint {
   bytes value = 1;
 }
 
+message HostEntityActivationSource {
+  string host_tool_id = 1;
+  string implementation_version = 2;
+}
+
 message EntityActivation {
-  ExecutableTarget executable = 1;
+  oneof source {
+    ExecutableTarget component = 1;
+    HostEntityActivationSource host = 6;
+  }
   uint64 deployment_revision = 2;
   EntityActivationPolicy policy = 3;
   FilesystemCapability filesystem = 4;

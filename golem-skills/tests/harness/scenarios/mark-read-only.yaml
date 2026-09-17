@@ -23,6 +23,12 @@ steps:
         value without modifying any state, and mark it as a read-only method using the default
         (until-write) cache policy so its result can be cached. Make sure the project builds and
         deploys successfully.
+      effect: >
+        The Effect-based test-app already contains a stateful `Counter` agent. Rename its declared
+        agent type to `CounterAgent`, then add a `getCount`
+        method that returns the current count as an Effect without modifying state, and declare it
+        read-only with the default until-write cache policy. Keep the implementation Effect-native
+        and make sure the project builds and deploys successfully.
       scala: >
         The test-app project already contains a stateful `CounterAgent` whose identity is a
         counter name and which has an `increment` method that mutates and returns the counter.
@@ -42,6 +48,8 @@ steps:
         - "golem-mark-read-only-rust"
       ts:
         - "golem-mark-read-only-ts"
+      effect:
+        - "golem-read-only-method-effect"
       scala:
         - "golem-mark-read-only-scala"
       moonbit:
@@ -56,7 +64,7 @@ steps:
       args: ["agent-type", "list", "--environment", "test-app/local", "--format", "json"]
     expect:
       exit_code: 0
-      stdout_contains: '"cachePolicy"'
+      stdout_contains: '"cachePolicy":{"type":"UntilWrite"}'
 
   - id: "increment-once"
     invoke_json:
@@ -82,6 +90,7 @@ steps:
       method:
         rust: "get_count"
         ts: "getCount"
+        effect: "getCount"
         scala: "getCount"
         moonbit: "get_count"
     expect:

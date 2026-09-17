@@ -419,6 +419,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
             &EnvironmentCreation {
                 name: EnvironmentName(format!("{prefix}env-warmup")),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },

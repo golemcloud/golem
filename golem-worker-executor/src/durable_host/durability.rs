@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogErrorKind, OplogIndex,
 };
 use golem_common::model::{
     IdempotencyKey, NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState,
@@ -1864,6 +1864,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index(),
+            OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
@@ -2379,6 +2380,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
+            OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,

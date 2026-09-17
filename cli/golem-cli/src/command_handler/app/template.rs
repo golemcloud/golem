@@ -208,11 +208,10 @@ impl TemplateHandler {
             (None, None) => match self.ctx.interactive_handler().select_new_app_path()? {
                 Some(application_path) => application_path,
                 None => {
-                    logln("");
-                    log_error(
-                        "In non-interactive mode, APPLICATION_PATH must be specified as '.' or a new directory path",
-                    );
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: "In non-interactive mode, APPLICATION_PATH must be specified as '.' or a new directory path".to_string(),
+                    });
                 }
             },
         };
@@ -342,12 +341,13 @@ impl TemplateHandler {
             {
                 Some(application_name) => application_name,
                 None => {
-                    logln("");
-                    log_error(format!(
-                        "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
-                        err
-                    ));
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: format!(
+                            "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
+                            err
+                        ),
+                    });
                 }
             },
         };
@@ -360,9 +360,11 @@ impl TemplateHandler {
             {
                 Some(template_names) => template_names,
                 None => {
-                    logln("");
-                    log_error("In non-interactive mode, at least one template must be specified");
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: "In non-interactive mode, at least one template must be specified"
+                            .to_string(),
+                    });
                 }
             }
         } else {
@@ -443,12 +445,13 @@ impl TemplateHandler {
                                 )?;
 
                             let Some(selected_component) = selected_component else {
-                                logln("");
-                                log_error(format!(
-                                    "In non-interactive mode, --component-name must be specified when template {} matches multiple components",
-                                    template_name.as_str().log_color_error_highlight()
-                                ));
-                                bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                                bail!(HintError::ShowClapHelp {
+                                    target: ShowClapHelpTarget::AppNew,
+                                    error: format!(
+                                        "In non-interactive mode, --component-name must be specified when template {} matches multiple components",
+                                        template_name.as_str().log_color_error_highlight()
+                                    ),
+                                });
                             };
 
                             template_to_component.insert(template_name.clone(), selected_component);
@@ -763,7 +766,7 @@ impl TemplateHandler {
         let mut upgrade_plan = MultiComponentLayoutUpgradePlan::new();
 
         match component.language {
-            GuestLanguage::TypeScript => {
+            GuestLanguage::TypeScript | GuestLanguage::Effect => {
                 let target_root = application_path.join(new_component_dir);
 
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {

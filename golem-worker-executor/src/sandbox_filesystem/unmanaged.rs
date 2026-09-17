@@ -32,7 +32,7 @@ impl UnmanagedProvisioning {
         &self,
         volume: FilesystemVolume,
         name: SandboxFilesystemName,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         match &self.deterministic_root {
             Some(storage_root) => {
                 let root = storage_root.join(name.relative_path());
@@ -60,7 +60,7 @@ impl UnmanagedProvisioning {
     async fn create_temporary(
         &self,
         volume: FilesystemVolume,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         let directory = tempfile::Builder::new()
             .prefix("golem")
             .tempdir()
@@ -79,7 +79,7 @@ impl UnmanagedProvisioning {
         volume: FilesystemVolume,
         root: PathBuf,
         lifecycle: OwnedMutexGuard<()>,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         remove_and_verify(
             &root,
             "remove stale unmanaged runtime directory",
@@ -113,7 +113,7 @@ impl UnmanagedProvisioning {
         volume: FilesystemVolume,
         root: PathBuf,
         lifecycle: OwnedMutexGuard<()>,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         let directory = match File::open(&root) {
             Ok(directory) => directory,
             Err(error) => {
@@ -129,7 +129,7 @@ impl UnmanagedProvisioning {
                 .await);
             }
         };
-        let filesystem = Arc::new(SandboxFilesystem::new(
+        let filesystem = SandboxFilesystem::new(
             NativeRoot::new(root.clone(), directory),
             LeaseState {
                 lifecycle,
@@ -142,14 +142,9 @@ impl UnmanagedProvisioning {
             FileCopyMode::Buffered,
             QuotaAuthority::Unsupported,
             NativeNameModeSource::NativeDetection,
-        ));
+        );
         if let Err(error) = verify_fresh_directory(filesystem.root()).await {
-            return Err(
-                match SandboxFilesystem::delete_and_verify(&filesystem).await {
-                    Ok(()) => error,
-                    Err(cleanup_error) => cleanup_error,
-                },
-            );
+            return Err(rollback_created_filesystem(filesystem, error).await);
         }
         Ok(filesystem)
     }

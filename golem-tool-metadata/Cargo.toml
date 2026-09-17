@@ -1,0 +1,17 @@
+[package]
+name = "golem-tool-metadata"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+harness = false
+
+[features]
+guest = ["golem-schema/guest"]
+
+[dependencies]
+golem-schema = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+test-r = { workspace = true }

@@ -14,7 +14,9 @@ use sqlparser::ast::{
     TableConstraint, TableFactor, TableObject, Visit, Visitor, visit_relations,
 };
 use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use std::fmt::{Display, Formatter};
 use std::net::IpAddr;
 use std::ops::ControlFlow;
@@ -418,14 +420,18 @@ pub fn rdbms_sql_targets(
     sql: &str,
 ) -> Result<Vec<PermissionTarget>, TargetError> {
     let statements = match engine {
-        RdbmsEngine::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
-        RdbmsEngine::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
-        RdbmsEngine::Ignite => Parser::parse_sql(&GenericDialect {}, sql),
+        RdbmsEngine::Postgres => {
+            Parser::parse_sql(&PostgreSqlDialect {}, sql).map_err(|error| error.to_string())
+        }
+        RdbmsEngine::Mysql => {
+            Parser::parse_sql(&MySqlDialect {}, sql).map_err(|error| error.to_string())
+        }
+        RdbmsEngine::Ignite => parse_ignite_sql(sql),
     };
     let mut statements = match statements {
         Ok(statements) if statements.len() == 1 => statements,
         Ok(_) => return sql_fallback("exactly one statement is required"),
-        Err(error) => return sql_fallback(&error.to_string()),
+        Err(error) => return sql_fallback(&error),
     };
     let statement = statements.pop().expect("one parsed statement");
     let names = match extract_sql_relations(&statement) {
@@ -461,6 +467,67 @@ pub fn rdbms_sql_targets(
         Ok(targets) => Ok(targets),
         Err(TargetError::SqlNotStaticallyExtractable(reason)) => sql_fallback(&reason),
         Err(error) => Err(error),
+    }
+}
+
+fn parse_ignite_sql(sql: &str) -> Result<Vec<Statement>, String> {
+    let dialect = GenericDialect {};
+    match Parser::parse_sql(&dialect, sql) {
+        Ok(statements) => Ok(statements),
+        Err(original_error) => {
+            let mut tokens = Tokenizer::new(&dialect, sql)
+                .tokenize()
+                .map_err(|error| error.to_string())?;
+            let first = tokens
+                .iter_mut()
+                .find(|token| !matches!(token, Token::Whitespace(_)))
+                .ok_or_else(|| original_error.to_string())?;
+            match first {
+                Token::Word(word)
+                    if word.quote_style.is_none() && word.keyword == Keyword::MERGE =>
+                {
+                    word.value = "INSERT".to_string();
+                    word.keyword = Keyword::INSERT;
+                }
+                _ => return Err(original_error.to_string()),
+            }
+
+            let statements = Parser::new(&dialect)
+                .with_tokens(tokens)
+                .parse_statements()
+                .map_err(|error| error.to_string())?;
+            let [Statement::Insert(insert)] = statements.as_slice() else {
+                return Err("Ignite MERGE shorthand must contain exactly one statement".to_string());
+            };
+            if !insert.into
+                || !matches!(insert.table, TableObject::TableName(_))
+                || insert.source.is_none()
+                || !insert.optimizer_hints.is_empty()
+                || insert.or.is_some()
+                || insert.ignore
+                || insert.table_alias.is_some()
+                || insert.overwrite
+                || !insert.assignments.is_empty()
+                || insert.partitioned.is_some()
+                || !insert.after_columns.is_empty()
+                || insert.has_table_keyword
+                || insert.on.is_some()
+                || insert.returning.is_some()
+                || insert.output.is_some()
+                || insert.replace_into
+                || insert.priority.is_some()
+                || insert.insert_alias.is_some()
+                || insert.settings.is_some()
+                || insert.format_clause.is_some()
+                || insert.multi_table_insert_type.is_some()
+                || !insert.multi_table_into_clauses.is_empty()
+                || !insert.multi_table_when_clauses.is_empty()
+                || insert.multi_table_else_clause.is_some()
+            {
+                return Err("unsupported Ignite MERGE shorthand form".to_string());
+            }
+            Ok(statements)
+        }
     }
 }
 
@@ -1153,6 +1220,93 @@ mod tests {
             })
             .collect()
     }
+
+    fn ignite_tables(sql: &str) -> Vec<(RdbmsVerb, String, String, String)> {
+        rdbms_sql_targets(env("prod"), RdbmsEngine::Ignite, "db", "PUBLIC", sql)
+            .unwrap()
+            .into_iter()
+            .map(|target| match target {
+                PermissionTarget::Rdbms(ClassPermissionTarget {
+                    verb: Some(verb),
+                    resource:
+                        RdbmsResourcePattern::Table {
+                            database,
+                            schema,
+                            table,
+                        },
+                    ..
+                }) => (verb, database, schema, table),
+                _ => panic!(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_extracts_parameterized_and_quoted_destinations() {
+        assert_eq!(
+            ignite_tables("MERGE INTO ignite_counters (id, count) VALUES (?, 0)"),
+            vec![(
+                RdbmsVerb::Mutate,
+                "db".to_string(),
+                "PUBLIC".to_string(),
+                "ignite_counters".to_string(),
+            )]
+        );
+        assert_eq!(
+            ignite_tables("MERGE INTO \"Counters\".\"Current\" (\"id\", \"count\") VALUES (?, ?)")
+                [0],
+            (
+                RdbmsVerb::Mutate,
+                "db".to_string(),
+                "Counters".to_string(),
+                "Current".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_extracts_select_sources() {
+        assert_eq!(
+            ignite_tables("MERGE INTO destination (id, count) SELECT id, count FROM source"),
+            vec![
+                (
+                    RdbmsVerb::Mutate,
+                    "db".to_string(),
+                    "PUBLIC".to_string(),
+                    "destination".to_string(),
+                ),
+                (
+                    RdbmsVerb::Query,
+                    "db".to_string(),
+                    "PUBLIC".to_string(),
+                    "source".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_rejects_malformed_batches_and_key_clause() {
+        for sql in [
+            "MERGE INTO destination (id, count) VALUES (?, 0); SELECT * FROM protected",
+            "MERGE INTO destination (id, count VALUES (?, 0)",
+            "MERGE INTO destination (id, count) KEY (id) VALUES (?, 0)",
+        ] {
+            assert!(
+                rdbms_sql_targets(env("prod"), RdbmsEngine::Ignite, "db", "PUBLIC", sql).is_err(),
+                "accepted unsupported Ignite MERGE: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_does_not_broaden_other_dialects() {
+        let sql = "MERGE INTO destination (id, count) VALUES (?, 0)";
+        for engine in [RdbmsEngine::Postgres, RdbmsEngine::Mysql] {
+            assert!(rdbms_sql_targets(env("prod"), engine, "db", "public", sql).is_err());
+        }
+    }
+
     #[test]
     fn sql_select_and_joins() {
         assert_eq!(

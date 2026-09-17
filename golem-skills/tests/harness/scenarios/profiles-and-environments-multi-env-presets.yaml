@@ -58,6 +58,14 @@ steps:
            - `prod` with `server: cloud` and `componentPresets: cloud`
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a durable `EnvReporter` with one `id` string
+        field using Effect Schema and `defineAgent`. Its Effect-based `getEnvInfo` method reads
+        `DEPLOY_TARGET` with Effect Config, defaulting to `unknown`. Configure its top-level agent
+        manifest entry with base value `base`, a default `local` preset set to `local-dev`, and a
+        `cloud` preset set to `production`. Add default environment `local` using server `local`
+        and componentPresets `local`, plus environment `prod` using server `cloud` and
+        componentPresets `cloud`. Import the implementation from `src/main.ts`, build, and deploy.
       scala: >
         In the test-app project, I need to set up multi-environment deployment with
         per-environment configuration. Do the following:
@@ -150,6 +158,7 @@ steps:
       method:
         rust: "get_env_info"
         ts: "getEnvInfo"
+        effect: "getEnvInfo"
         scala: "getEnvInfo"
         moonbit: "get_env_info"
     expect:

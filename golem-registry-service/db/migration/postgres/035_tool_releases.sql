@@ -65,27 +65,6 @@ CREATE UNIQUE INDEX tool_releases_owner_name_version_uk
 CREATE INDEX tool_releases_component_revision_idx
     ON tool_releases (component_id, component_revision);
 
-CREATE FUNCTION validate_tool_release_component_owner() RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.source_kind = 0 AND NOT EXISTS (
-        SELECT 1
-        FROM components c
-        JOIN environments e ON e.environment_id = c.environment_id
-        JOIN applications app ON app.application_id = e.application_id
-        WHERE c.component_id = NEW.component_id
-          AND app.account_id = NEW.owner_account_id
-    ) THEN
-        RAISE EXCEPTION 'component tool release source must belong to the release owner account';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER tool_releases_component_owner_check
-    BEFORE INSERT OR UPDATE OF owner_account_id, source_kind, component_id
-    ON tool_releases
-    FOR EACH ROW EXECUTE FUNCTION validate_tool_release_component_owner();
-
 CREATE TABLE environment_tool_grants
 (
     environment_tool_grant_id UUID      NOT NULL,

@@ -16,6 +16,7 @@ use anyhow::{Context as _, anyhow, bail};
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
 use golem_cli::command_handler::{CommandHandlerHooks, Handlers};
+use golem_cli::config::{DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT};
 use golem_cli::context::Context;
 use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
@@ -27,7 +28,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::compat::map_local_server_startup_error;
-use crate::launch::{LaunchArgs, launch_golem_services};
+use crate::launch::{LaunchArgs, StartupPorts, launch_golem_services};
 
 pub struct ServerCommandHandler;
 
@@ -54,9 +55,17 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     clean_data_dir(&ctx, &data_dir).await?;
                 };
 
-                let mut join_set = launch_golem_services(&launch_args)
+                let (mut join_set, startup_ports) = launch_golem_services(&launch_args)
                     .await
                     .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+
+                // Subdomains of the manifest's built-in local environments are expanded from
+                // the `localServer` ports or their defaults, so the check applies whenever the
+                // manifest has such an environment (with or without a `localServer` section);
+                // which environment the CLI has selected is irrelevant to the local server.
+                if ctx.manifest_has_builtin_local_environment() {
+                    warn_on_subdomain_port_mismatches(ctx.manifest_local_server(), &startup_ports);
+                }
 
                 while let Some(res) = join_set.join_next().await {
                     res??;
@@ -75,7 +84,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         let args = RunArgs::default().with_env_overrides()?;
         let data_dir = default_data_dir()?;
 
-        let mut join_set = launch_golem_services(&LaunchArgs {
+        let (mut join_set, _) = launch_golem_services(&LaunchArgs {
             system_memory_override: args.system_memory_override,
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
@@ -203,6 +212,85 @@ fn launch_args_from_run_args_and_local_server(
     })
 }
 
+/// A local server port that differs from the one the manifest's deployment `subdomain`
+/// expansion uses, e.g. because it was overridden with a flag or requested as `0`.
+#[derive(Debug, PartialEq, Eq)]
+struct SubdomainPortMismatch {
+    deployment_kind: &'static str,
+    manifest_field: &'static str,
+    flag: &'static str,
+    expanded_port: u16,
+    bound_port: u16,
+}
+
+/// Deployment subdomains expand to `<label>.localhost:<port>` using the manifest's
+/// `localServer.customRequestPort` / `localServer.mcpPort` (or their defaults), and a request is
+/// only routed when its `Host` header matches that expansion exactly. A server bound to a
+/// different port cannot serve those deployments, so the ports have to match. `local_server` is
+/// `None` when the manifest has no `localServer` section, in which case the defaults apply.
+fn subdomain_port_mismatches(
+    local_server: Option<&ResolvedLocalServer>,
+    startup_ports: &StartupPorts,
+) -> Vec<SubdomainPortMismatch> {
+    let checks = [
+        (
+            "HTTP API",
+            "localServer.customRequestPort",
+            "--custom-request-port",
+            local_server
+                .and_then(|local_server| local_server.custom_request_port)
+                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT),
+            startup_ports.custom_request_port,
+        ),
+        (
+            "MCP",
+            "localServer.mcpPort",
+            "--mcp-port",
+            local_server
+                .and_then(|local_server| local_server.mcp_port)
+                .unwrap_or(DEFAULT_LOCAL_MCP_PORT),
+            startup_ports.mcp_port,
+        ),
+    ];
+
+    checks
+        .into_iter()
+        .filter(|(_, _, _, expanded_port, bound_port)| expanded_port != bound_port)
+        .map(
+            |(deployment_kind, manifest_field, flag, expanded_port, bound_port)| {
+                SubdomainPortMismatch {
+                    deployment_kind,
+                    manifest_field,
+                    flag,
+                    expanded_port,
+                    bound_port,
+                }
+            },
+        )
+        .collect()
+}
+
+fn warn_on_subdomain_port_mismatches(
+    local_server: Option<&ResolvedLocalServer>,
+    startup_ports: &StartupPorts,
+) {
+    for mismatch in subdomain_port_mismatches(local_server, startup_ports) {
+        log_warn_action(
+            "Bound",
+            format!(
+                "{} port {} differs from port {} used by {} deployment subdomains ({}); those deployments are not reachable on this server, use the same value for {} and {}",
+                mismatch.deployment_kind,
+                mismatch.bound_port.to_string().log_color_highlight(),
+                mismatch.expanded_port.to_string().log_color_highlight(),
+                mismatch.deployment_kind,
+                mismatch.manifest_field.log_color_highlight(),
+                mismatch.manifest_field.log_color_highlight(),
+                mismatch.flag.log_color_highlight(),
+            ),
+        );
+    }
+}
+
 fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
     let data_dir = fs::absolute_lexical_path(data_dir)?;
     let Some(parent) = data_dir.parent() else {
@@ -295,6 +383,76 @@ mod tests {
         assert_eq!(
             args.agent_filesystem_root,
             Some(PathBuf::from("/tmp/test-app/.golem/agents"))
+        );
+    }
+
+    #[test]
+    fn subdomain_ports_match_when_bound_ports_equal_manifest_or_default_ports() {
+        let manifest = local_server(LocalServer {
+            custom_request_port: Some(9008),
+            ..LocalServer::default()
+        });
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 9008,
+            mcp_port: DEFAULT_LOCAL_MCP_PORT,
+        };
+
+        assert_eq!(subdomain_port_mismatches(Some(&manifest), &ports), vec![]);
+    }
+
+    #[test]
+    fn subdomain_ports_use_defaults_without_local_server_section() {
+        // e.g. `--custom-request-port 0` in an app whose manifest has no `localServer`
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 41235,
+            mcp_port: DEFAULT_LOCAL_MCP_PORT,
+        };
+
+        assert_eq!(
+            subdomain_port_mismatches(None, &ports),
+            vec![SubdomainPortMismatch {
+                deployment_kind: "HTTP API",
+                manifest_field: "localServer.customRequestPort",
+                flag: "--custom-request-port",
+                expanded_port: DEFAULT_LOCAL_CUSTOM_REQUEST_PORT,
+                bound_port: 41235,
+            }]
+        );
+    }
+
+    #[test]
+    fn subdomain_ports_mismatch_when_bound_ports_differ() {
+        let manifest = local_server(LocalServer {
+            custom_request_port: Some(9008),
+            ..LocalServer::default()
+        });
+        // e.g. `--custom-request-port 0 --mcp-port 0`, OS-assigned ports
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 41235,
+            mcp_port: 41236,
+        };
+
+        assert_eq!(
+            subdomain_port_mismatches(Some(&manifest), &ports),
+            vec![
+                SubdomainPortMismatch {
+                    deployment_kind: "HTTP API",
+                    manifest_field: "localServer.customRequestPort",
+                    flag: "--custom-request-port",
+                    expanded_port: 9008,
+                    bound_port: 41235,
+                },
+                SubdomainPortMismatch {
+                    deployment_kind: "MCP",
+                    manifest_field: "localServer.mcpPort",
+                    flag: "--mcp-port",
+                    expanded_port: DEFAULT_LOCAL_MCP_PORT,
+                    bound_port: 41236,
+                },
+            ]
         );
     }
 

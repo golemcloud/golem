@@ -146,12 +146,20 @@ impl AgentConnection {
     /// Creates a new worker connection and every time the connection is dropped tries to
     /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
     /// exits.
-    pub async fn run_forever(self) {
+    pub async fn run_forever(self) -> anyhow::Result<()> {
         while !self.goal_reached.load(Ordering::Acquire) {
-            let _ = self.run().await;
+            if let Err(error) = self.run().await
+                && error
+                    .downcast_ref::<crate::error::service::ServiceError>()
+                    .is_some_and(|error| error.is_previous_invocation_failed())
+            {
+                return Err(error);
+            }
             self.output.flush().await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+
+        Ok(())
     }
 
     /// Connects to the worker event stream and outputs incoming messages until the connection is dropped

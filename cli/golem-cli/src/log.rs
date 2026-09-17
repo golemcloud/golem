@@ -367,6 +367,19 @@ pub fn set_log_output(output: Output) {
     active_log_context().set_output(output);
 }
 
+/// Renders an error for structured (JSON / YAML / TOON) output: the full context chain, with
+/// any terminal styling removed. Error messages meant for the terminal (e.g. `ServiceError`)
+/// are colorized whenever the CLI output is colorized, which must not leak into output that is
+/// consumed as data.
+pub fn error_message_for_output(error: &anyhow::Error) -> String {
+    message_for_output(format_args!("{error:#}"))
+}
+
+/// Renders a message for structured output, see `error_message_for_output`.
+pub fn message_for_output(message: impl std::fmt::Display) -> String {
+    strip_ansi_escapes::strip_str(message.to_string())
+}
+
 pub fn log_anyhow_error(error: &anyhow::Error) {
     if error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>() {
         // NOP
@@ -583,8 +596,10 @@ impl LogColorize for Utf8PathBuf {
 mod tests {
     use super::{
         LogContext, LogIndent, LogOutput, Output, active_log_context, current_indent_width,
-        log_action, log_preformatted, log_table, logln,
+        error_message_for_output, log_action, log_preformatted, log_table, logln,
+        message_for_output,
     };
+    use anyhow::anyhow;
     use std::sync::{LazyLock, Mutex};
     use test_r::test;
 
@@ -792,5 +807,22 @@ mod tests {
             assert_eq!(lines.len(), 1);
             assert!(lines[0].ends_with("still logged"));
         });
+    }
+
+    #[test]
+    fn messages_for_output_have_no_terminal_styling() {
+        // Styling as `colored` emits it when colors are enabled
+        let styled = "\u{1b}[1;33mNot found\u{1b}[0m: agent \u{1b}[4mCounter(\"a\")\u{1b}[0m";
+
+        assert_eq!(
+            message_for_output(styled),
+            "Not found: agent Counter(\"a\")"
+        );
+        assert_eq!(
+            error_message_for_output(
+                &anyhow!("{styled}").context("\u{1b}[31mfailed to delete the agent\u{1b}[0m")
+            ),
+            "failed to delete the agent: Not found: agent Counter(\"a\")"
+        );
     }
 }

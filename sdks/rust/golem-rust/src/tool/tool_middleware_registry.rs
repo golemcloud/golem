@@ -134,6 +134,7 @@ mod tests {
     fn universal(name: &str) -> ToolMiddleware {
         ToolMiddleware {
             name: name.to_string(),
+            version: "0.0.0".to_string(),
             aliases: vec![],
             doc: Doc {
                 summary: String::new(),
@@ -265,7 +266,7 @@ mod tests {
 
         async fn invoke(
             value: TypedSchemaValue,
-        ) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+        ) -> Result<InvocationResult, ToolInvokeError<crate::tool::RawCustomToolError>> {
             let invoker = get_tool_middleware_invoker_by_name("phase-five-authored-dispatch")
                 .expect("authored middleware ctor registered its invoker");
             invoker(
@@ -368,18 +369,19 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-invalid-presented".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented,
                         expected: None,
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -391,18 +393,19 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-missing-expected".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-missing-expected"),
                         expected: None,
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -413,18 +416,19 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-shared-name".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-shared-name"),
                         expected: Some(tool("registry-shared-name")),
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -438,29 +442,37 @@ mod tests {
     ))]
     #[test]
     fn guest_discovery_and_lookup_encode_complete_scope_metadata() {
+        assert_eq!(
+            get_tool_middleware_by_name("phase-six-transparent-policy")
+                .unwrap()
+                .version,
+            "1.2.3"
+        );
         let presented = tool("registry-presented");
         let expected = tool("registry-expected");
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-boundary-monomorphic".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec!["registry-boundary-alias".to_string()],
                 doc: Doc {
                     summary: "Boundary summary".to_string(),
                     description: "Boundary description".to_string(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: presented.clone(),
                         expected: Some(expected.clone()),
                     },
-                ),
+                )),
             },
             invoker,
         );
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-boundary-universal".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: "Universal summary".to_string(),
@@ -490,6 +502,7 @@ mod tests {
             "registry-boundary-monomorphic".to_string(),
         )
         .unwrap();
+        assert_eq!(encoded.version, "0.0.0");
         assert_eq!(encoded.aliases, vec!["registry-boundary-alias"]);
         assert_eq!(encoded.doc.summary, "Boundary summary");
         match encoded.scope {

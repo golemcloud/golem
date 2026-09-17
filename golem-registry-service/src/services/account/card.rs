@@ -23,20 +23,20 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
     AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
-    AccountToolReleaseResourcePattern, AccountUsageResourcePattern, AgentResourcePattern,
-    ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy,
-    CardManagedByAccountRoot, CardResourcePattern, ClassPermissionPattern,
-    ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    AccountToolMiddlewareReleaseResourcePattern, AccountToolReleaseResourcePattern,
+    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
+    BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern,
+    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
     EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
     EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
     EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
-    EnvironmentToolGrantResourcePattern, FilesystemResourcePattern, KvResourcePattern,
-    NetworkResourcePattern, OplogResourcePattern, PermissionPattern, PlanResourcePattern,
-    RdbmsResourcePattern, SecretResourcePattern, SystemResourcePattern, SystemVerb,
-    ToolResourcePattern,
+    EnvironmentToolGrantResourcePattern, EnvironmentToolMiddlewareGrantResourcePattern,
+    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
 pub(super) fn account_root_card_record(
@@ -179,6 +179,12 @@ fn add_account_grants(
             recipient: RecipientPattern::Any,
             resource: AccountToolReleaseResourcePattern::Any,
         }),
+        PermissionPattern::AccountToolMiddlewareRelease(ClassPermissionPattern {
+            verb: None,
+            owner: account_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: AccountToolMiddlewareReleaseResourcePattern::Any,
+        }),
         PermissionPattern::AccountPermissionShare(ClassPermissionPattern {
             verb: None,
             owner: account_owner.clone(),
@@ -268,6 +274,12 @@ fn add_account_grants(
             owner: environment_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: EnvironmentToolGrantResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentToolMiddlewareGrant(ClassPermissionPattern {
+            verb: None,
+            owner: environment_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: EnvironmentToolMiddlewareGrantResourcePattern::Any,
         }),
         PermissionPattern::EnvironmentResourceDefinition(ClassPermissionPattern {
             verb: None,

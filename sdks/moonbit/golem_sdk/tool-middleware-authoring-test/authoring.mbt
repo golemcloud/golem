@@ -11,13 +11,6 @@ pub(all) enum RunError {
 }
 
 ///|
-extend RunError with @tool.ToolErrorSchema::{
-  error_cases,
-  from_error_payload_value,
-  to_error_payload_value,
-}
-
-///|
 pub fn Presented::unit() -> Unit {
   ()
 }
@@ -80,7 +73,7 @@ pub fn Nested::run(name : String) -> String {
 }
 
 ///|
-#derive.tool_middleware("policy", presented="Presented")
+#derive.tool_middleware("policy", version="1.2.3", presented="Presented")
 #warnings("-struct_never_constructed")
 struct Policy {}
 
@@ -178,7 +171,7 @@ pub fn Storage::fetch(key : String) -> String {
 }
 
 ///|
-#derive.tool_middleware("adapter", presented="Presented", expected="Storage")
+#derive.tool_middleware("adapter", version="2.0.0", presented="Presented", expected="Storage")
 #warnings("-struct_never_constructed")
 struct Adapter {}
 
@@ -278,7 +271,7 @@ pub async fn Adapter::admin__run(
 }
 
 ///|
-#derive.universal_tool_middleware("audit")
+#derive.universal_tool_middleware("audit", version="3.1.4")
 pub async fn audit(
   invocation : @toolMiddleware.RawToolInvocation,
   underlying : @toolMiddleware.UnderlyingTool,
@@ -322,8 +315,8 @@ pub fn generated_input_for_tests(
 pub fn run_error_payload_for_tests(
   message : String,
 ) -> @types.TypedSchemaValue raise {
-  let payload = match RunError::to_error_payload_value(Broken(message)) {
-    Ok(payload) => payload
+  let (_, payload) = match RunError::to_error_payload_value(Broken(message)) {
+    Ok(named) => named
     Err(message) => raise Failure::Failure(message)
   }
   @model.typed_schema_value_to_wit(payload)
@@ -334,7 +327,7 @@ pub fn decode_run_error_payload_for_tests(
   payload : @types.TypedSchemaValue,
 ) -> RunError raise {
   let payload = @model_host.typed_schema_value_from_wit(payload)
-  match RunError::from_error_payload_value(payload) {
+  match RunError::from_error_payload_value("broken", payload) {
     Ok(error) => error
     Err(message) => raise Failure::Failure(message)
   }

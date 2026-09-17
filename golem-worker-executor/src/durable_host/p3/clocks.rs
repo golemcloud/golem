@@ -21,7 +21,6 @@ use crate::durable_host::suspendable_wait::{
 use crate::workerctx::WorkerCtx;
 use chrono::Utc;
 use futures::executor::block_on;
-use golem_common::model::Timestamp;
 use golem_common::model::oplog::host_functions::{
     P3MonotonicClockGetResolution, P3MonotonicClockNow, P3MonotonicClockWaitFor,
     P3MonotonicClockWaitUntil, P3SystemClockGetResolution, P3SystemClockNow,
@@ -234,8 +233,8 @@ async fn wait_until_live<U: Send + 'static, Ctx: WorkerCtx>(
 
     match outcome {
         ParkOutcome::Ready => Ok(()),
-        ParkOutcome::SuspendWorker => Err(wasmtime::Error::from_anyhow(
-            InterruptKind::Suspend(Timestamp::now_utc()).into(),
+        ParkOutcome::SuspendWorker(suspend_at) => Err(wasmtime::Error::from_anyhow(
+            InterruptKind::Suspend(suspend_at).into(),
         )),
         ParkOutcome::Interrupted(kind) => Err(wasmtime::Error::from_anyhow(kind.into())),
         ParkOutcome::EphemeralTooLong {

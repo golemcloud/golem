@@ -56,6 +56,76 @@ impl TryFrom<proto::Tool> for Tool {
     }
 }
 
+impl From<ToolMiddleware> for proto::ToolMiddleware {
+    fn from(value: ToolMiddleware) -> Self {
+        Self {
+            name: value.name,
+            version: value.version,
+            aliases: value.aliases,
+            doc: Some(value.doc.into()),
+            scope: Some(value.scope.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::ToolMiddleware> for ToolMiddleware {
+    type Error = String;
+
+    fn try_from(value: proto::ToolMiddleware) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            version: value.version,
+            aliases: value.aliases,
+            doc: required(value.doc, "ToolMiddleware.doc")?.into(),
+            scope: required(value.scope, "ToolMiddleware.scope")?.try_into()?,
+        })
+    }
+}
+
+impl From<ToolMiddlewareScope> for proto::ToolMiddlewareScope {
+    fn from(value: ToolMiddlewareScope) -> Self {
+        use proto::tool_middleware_scope::Value;
+        let value = match value {
+            ToolMiddlewareScope::Monomorphic(scope) => Value::Monomorphic((*scope).into()),
+            ToolMiddlewareScope::Universal => Value::Universal(Empty {}),
+        };
+        Self { value: Some(value) }
+    }
+}
+
+impl TryFrom<proto::ToolMiddlewareScope> for ToolMiddlewareScope {
+    type Error = String;
+
+    fn try_from(value: proto::ToolMiddlewareScope) -> Result<Self, Self::Error> {
+        use proto::tool_middleware_scope::Value;
+        match required(value.value, "ToolMiddlewareScope.value")? {
+            Value::Monomorphic(scope) => Ok(Self::Monomorphic(Box::new(scope.try_into()?))),
+            Value::Universal(_) => Ok(Self::Universal),
+        }
+    }
+}
+
+impl From<MonomorphicToolMiddlewareScope> for proto::MonomorphicToolMiddlewareScope {
+    fn from(value: MonomorphicToolMiddlewareScope) -> Self {
+        Self {
+            presented: Some(value.presented.into()),
+            expected: value.expected.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<proto::MonomorphicToolMiddlewareScope> for MonomorphicToolMiddlewareScope {
+    type Error = String;
+
+    fn try_from(value: proto::MonomorphicToolMiddlewareScope) -> Result<Self, Self::Error> {
+        Ok(Self {
+            presented: required(value.presented, "MonomorphicToolMiddlewareScope.presented")?
+                .try_into()?,
+            expected: value.expected.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
 impl From<CommandTree> for proto::CommandTree {
     fn from(value: CommandTree) -> Self {
         Self {

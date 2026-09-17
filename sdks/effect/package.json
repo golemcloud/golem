@@ -1,0 +1,168 @@
+{
+  "name": "@golemcloud/effect-golem",
+  "version": "0.0.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "Apache-2.0",
+  "description": "Write Golem agents on top of Effect v4: Effect Schema-typed methods, durable execution, snapshots, sagas, RPC, HTTP, webhooks, KV/blob, and RDBMS adapters compiled to a Golem WASM component.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/golemcloud/golem.git",
+    "directory": "sdks/effect"
+  },
+  "homepage": "https://github.com/golemcloud/golem/tree/main/sdks/effect#readme",
+  "bugs": {
+    "url": "https://github.com/golemcloud/golem/issues"
+  },
+  "keywords": [
+    "golem",
+    "effect",
+    "wasm",
+    "agent",
+    "durable-execution"
+  ],
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/effect-golem.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/effect-golem.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./middleware": {
+      "types": "./dist/effect-golem-middleware.d.ts",
+      "import": "./dist/middleware.mjs"
+    },
+    "./sqlite": {
+      "types": "./dist/effect-golem-sqlite.d.ts",
+      "import": "./dist/sqlite.mjs"
+    },
+    "./postgres": {
+      "types": "./dist/effect-golem-postgres.d.ts",
+      "import": "./dist/postgres.mjs"
+    },
+    "./mysql": {
+      "types": "./dist/effect-golem-mysql.d.ts",
+      "import": "./dist/mysql.mjs"
+    },
+    "./ignite2": {
+      "types": "./dist/effect-golem-ignite2.d.ts",
+      "import": "./dist/ignite.mjs"
+    },
+    "./agent-guest": {
+      "types": "./golem-types/exports.d.ts"
+    },
+    "./tool-middleware-guest": {
+      "types": "./golem-types/tool_middleware_exports.d.ts"
+    },
+    "./agent-tool-middleware-guest": {
+      "types": "./golem-types/agent_tool_middleware_exports.d.ts"
+    },
+    "./internal/*": null,
+    "./host/*": null,
+    "./Sqlite/internal/*": null,
+    "./Postgres/internal/*": null,
+    "./Mysql/internal/*": null,
+    "./Ignite/internal/*": null,
+    "./*": {
+      "types": "./dist/src/*.d.ts",
+      "import": "./dist/src/*.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "agent-guest": [
+        "golem-types/exports.d.ts"
+      ],
+      "tool-middleware-guest": [
+        "golem-types/tool_middleware_exports.d.ts"
+      ],
+      "agent-tool-middleware-guest": [
+        "golem-types/agent_tool_middleware_exports.d.ts"
+      ],
+      "golem:agent/common@2.0.0": [
+        "golem-types/golem_agent_2_0_0_common.d.ts"
+      ],
+      "golem:agent/host@2.0.0": [
+        "golem-types/golem_agent_2_0_0_host.d.ts"
+      ],
+      "golem:core/types@2.0.0": [
+        "golem-types/golem_core_2_0_0_types.d.ts"
+      ],
+      "golem:durability/durability@1.6.0": [
+        "golem-types/golem_durability_1_6_0_durability.d.ts"
+      ],
+      "golem:secrets/reveal@0.1.0": [
+        "golem-types/golem_secrets_0_1_0_reveal.d.ts"
+      ],
+      "golem:secrets/types@0.1.0": [
+        "golem-types/golem_secrets_0_1_0_types.d.ts"
+      ],
+      "golem:tool/common@0.1.0": [
+        "golem-types/golem_tool_0_1_0_common.d.ts"
+      ],
+      "golem:tool/host@0.1.0": [
+        "golem-types/golem_tool_0_1_0_host.d.ts"
+      ],
+      "wasi:cli/environment@0.3.0": [
+        "golem-types/wasi_cli_0_3_0_environment.d.ts"
+      ],
+      "wasi:clocks/system-clock@0.3.0": [
+        "golem-types/wasi_clocks_0_3_0_system_clock.d.ts"
+      ],
+      "wasi:clocks/types@0.3.0": [
+        "golem-types/wasi_clocks_0_3_0_types.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "wasm",
+    "!wasm/artifact-provenance.json",
+    "golem-types"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
+    "build:bundle": "rollup -c",
+    "generate-dts": "node ./scripts/generate-dts.mjs",
+    "check:dts": "node ./scripts/check-dts.mjs",
+    "check:contracts": "node ./scripts/check-stale-contracts.mjs",
+    "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "check:package": "node ./scripts/check-package.mjs",
+    "clean": "node ./scripts/clean.mjs",
+    "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
+    "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",
+    "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
+    "build-agent-template": "npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:e2e:rdbms": "cd integration-test && npm run infra:up && golem -L build && golem -L -Y deploy && npm run test:rdbms"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "effect": "4.0.0-beta.98"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.98",
+    "@eslint/js": "^9.17.0",
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "rollup": "^4.60.2",
+    "rollup-plugin-typescript2": "^0.37.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -91,6 +91,7 @@ Worker executors expose the following Prometheus metrics:
 | `promises_count_total`              | counter   |                     | Number of promises created                                                      |
 | `promises_scheduled_complete_total` | counter   |                     | Number of scheduled promise completions                                         |
 | `assigned_shard_count`              | gauge     |                     | Number of assigned shards                                                       |
+| `stale_shard_delivery_total`        | counter   | `delivery`          | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
 | `create_worker_seconds`             | histogram |                     | Time to create a new worker                                                     |
 | `create_worker_failure_total`       | counter   | `error`             | Number of failed worker creations                                               |
 | `invocation_total`                  | counter   | `mode`, `outcome`   | Number of invocations                                                           |

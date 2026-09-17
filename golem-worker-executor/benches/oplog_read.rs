@@ -31,7 +31,7 @@ use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::AgentMode;
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::oplog::{AgentError, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, RetryConfig,
 };
@@ -62,9 +62,10 @@ struct Fixture {
 
 impl Fixture {
     async fn reopen(&self) -> Arc<dyn Oplog> {
-        build_service(self.indexed_storage.clone(), self.blob_storage.clone())
-            .await
+        let service = build_service(self.indexed_storage.clone(), self.blob_storage.clone()).await;
+        service
             .open(
+                &mut service.lock_lifecycle(&self.owned_agent_id.agent_id).await,
                 &self.owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -114,6 +115,7 @@ fn entry(value: u64) -> OplogEntry {
     OplogEntry::Error {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
+        kind: OplogErrorKind::Invocation,
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         inside_atomic_region: false,
@@ -166,6 +168,7 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
     let initial_metadata = metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             entry(0),

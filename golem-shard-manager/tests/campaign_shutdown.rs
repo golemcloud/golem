@@ -57,6 +57,7 @@ fn unreachable_config() -> EtcdConfig {
         connect_timeout: TEST_CONNECT_TIMEOUT,
         request_timeout: TEST_REQUEST_TIMEOUT,
         leader_lease_ttl: TEST_LEASE_TTL,
+        compaction_retention_revisions: 0,
     }
 }
 

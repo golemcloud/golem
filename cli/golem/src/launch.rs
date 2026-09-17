@@ -83,17 +83,19 @@ impl LaunchArgs {
     }
 }
 
+/// The ports the local server actually bound, which differ from the requested ones when those
+/// were `0` (OS-assigned).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StartupPorts {
-    router_port: u16,
-    custom_request_port: u16,
-    mcp_port: u16,
+pub struct StartupPorts {
+    pub router_port: u16,
+    pub custom_request_port: u16,
+    pub mcp_port: u16,
 }
 
 pub async fn launch_golem_services(
     args: &LaunchArgs,
-) -> anyhow::Result<JoinSet<anyhow::Result<()>>> {
+) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts)> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -137,12 +139,12 @@ pub async fn launch_golem_services(
     )
     .await?;
 
+    let startup_ports = StartupPorts {
+        router_port,
+        custom_request_port,
+        mcp_port,
+    };
     if let Some(ports_file) = args.ports_file.as_ref() {
-        let startup_ports = StartupPorts {
-            router_port,
-            custom_request_port,
-            mcp_port,
-        };
         write_startup_ports_file(ports_file, &startup_ports).await?;
     }
 
@@ -151,7 +153,7 @@ pub async fn launch_golem_services(
         custom_request_port, mcp_port, "Started Golem services"
     );
 
-    Ok(join_set)
+    Ok((join_set, startup_ports))
 }
 
 async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
@@ -234,6 +236,7 @@ fn registry_service_config(
                 ..Default::default()
             }),
         ),
+        component_file_upload: Default::default(),
         blob_storage: blob_storage_config(args),
         initial_plans: {
             let mut plans = HashMap::new();

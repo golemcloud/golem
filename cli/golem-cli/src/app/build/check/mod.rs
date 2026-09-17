@@ -53,6 +53,7 @@ enum DependencyMatcherSemantics {
 #[derive(Clone, Debug)]
 enum ExpectedDependencyKind {
     ExactPath(String),
+    ExactValue(String),
     SemanticCompatibleVersion {
         base_version: String,
         use_version_hint: bool,
@@ -159,14 +160,18 @@ pub(crate) fn plan_dependency_fixes(
 
     let overrides = sdk_overrides()?;
 
-    if selected_languages.contains(&GuestLanguage::TypeScript) {
-        let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
+    if selected_languages.contains(&GuestLanguage::TypeScript)
+        || selected_languages.contains(&GuestLanguage::Effect)
+    {
+        let package_step = ts::plan_package_json_fix_step(
+            ctx,
+            overrides,
+            &selected_languages,
+            &mut plan.warnings,
+        )?;
         if let Some(step) = package_step {
             plan.steps.push(step);
         }
-    }
-
-    if selected_languages.contains(&GuestLanguage::TypeScript) {
         let tsconfig_steps = ts::plan_tsconfig_fix_steps(ctx)?;
         plan.steps.extend(tsconfig_steps);
     }
@@ -469,6 +474,21 @@ fn evaluate_dependency_spec_compliance(
                 Ok(DependencySpecCompliance::NeedsUpdate)
             }
         }
+        ExpectedDependencyKind::ExactValue(expected_value) => {
+            if found_text == expected_value {
+                Ok(DependencySpecCompliance::Compatible)
+            } else if ["file:", "link:", "portal:"]
+                .iter()
+                .any(|prefix| found_text.starts_with(prefix))
+            {
+                Ok(DependencySpecCompliance::SkipWarn(format!(
+                    "Skipped dependency check for local package spec '{}'",
+                    found_text
+                )))
+            } else {
+                Ok(DependencySpecCompliance::NeedsUpdate)
+            }
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint,
@@ -620,7 +640,9 @@ fn resolve_local_ts_dependency_path(path: &str) -> anyhow::Result<String> {
 
 fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
     match expected {
-        ExpectedDependencyKind::ExactPath(path) => path.clone(),
+        ExpectedDependencyKind::ExactPath(path) | ExpectedDependencyKind::ExactValue(path) => {
+            path.clone()
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,
@@ -729,5 +751,29 @@ mod test {
         .unwrap();
 
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
+    }
+
+    #[test]
+    fn ts_exact_value_requires_the_pinned_version() {
+        let expected = ExpectedDependencyKind::ExactValue("4.0.0-beta.98".to_string());
+
+        assert_eq!(
+            evaluate_dependency_spec_compliance(
+                "4.0.0-beta.98",
+                &expected,
+                DependencyMatcherSemantics::TypeScript,
+            )
+            .unwrap(),
+            DependencySpecCompliance::Compatible
+        );
+        assert_eq!(
+            evaluate_dependency_spec_compliance(
+                "^4.0.0-beta.98",
+                &expected,
+                DependencyMatcherSemantics::TypeScript,
+            )
+            .unwrap(),
+            DependencySpecCompliance::NeedsUpdate
+        );
     }
 }

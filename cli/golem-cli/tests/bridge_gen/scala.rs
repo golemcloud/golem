@@ -1956,8 +1956,77 @@ fn guest_tool_generation_handles_keywords_and_collisions() {
     assert!(source.contains("val elems0 = elems0_2.map"));
     assert!(source.contains("final case class Type"));
     assert!(source.contains("case object Type_2"));
+    assert!(source.contains("def decodeError(__error: _root_.golem.tool.NamedToolError)"));
+    assert!(source.contains("if (__error.name == \"type\")"));
+    assert!(source.contains("__error.payload.value"));
+    assert!(source.contains("_root_.golem.tool.ToolErrorSupport.unmatchedPayload"));
 
     compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_tool_error_decoder_distinguishes_cases_by_wire_name() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        errors: vec![
+            ErrorCase {
+                name: "first-payload".to_string(),
+                doc: doc("first payload"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "second-payload".to_string(),
+                doc: doc("second payload"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 2,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "first-unit".to_string(),
+                doc: doc("first unit"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 3,
+                payload: None,
+            },
+            ErrorCase {
+                name: "second-unit".to_string(),
+                doc: doc("second unit"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 4,
+                payload: None,
+            },
+        ],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+
+    let pkg = GeneratedToolPackage::new(tool);
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+    )
+    .unwrap();
+
+    for name in [
+        "first-payload",
+        "second-payload",
+        "first-unit",
+        "second-unit",
+    ] {
+        assert!(
+            source.contains(&format!("if (__error.name == \"{name}\")")),
+            "error case {name} must be selected by its wire name:\n{source}"
+        );
+    }
+    assert_eq!(source.matches("__error.payload.value").count(), 4);
+    assert!(source.contains("_root_.golem.tool.ToolErrorSupport.unmatchedPayload"));
+
+    compile(dir.as_path());
 }
 
 #[test]

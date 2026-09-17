@@ -117,22 +117,30 @@ describe('tool middleware runtime foundation', () => {
   it('decodes, maps, and re-encodes only the custom error arm', () => {
     const payload = wireValue(z.string(), 'backend failed');
     const decoded = decodeUnderlyingToolError(
-      { tag: 'custom-error', val: payload } satisfies ToolError,
+      { tag: 'custom-error', val: { name: 'backend-failed', payload } } satisfies ToolError,
       (wire) => {
-        expect(wire).toBe(payload);
+        expect(wire).toEqual({ name: 'backend-failed', payload });
         return { reason: 'backend failed' };
       },
     ) as ToolInvokeError<{ reason: string }>;
-    const mapped = decoded.mapTool(({ reason }) => `presented: ${reason}`);
+    const mapped = decoded.mapTool(({ reason }) => ({
+      tag: 'err' as const,
+      name: 'presented-failed',
+      hasPayload: true,
+      payload: `presented: ${reason}`,
+    }));
 
-    expect(mapped.cause).toEqual({ tag: 'tool', error: 'presented: backend failed' });
+    expect(mapped.cause).toMatchObject({
+      tag: 'tool',
+      error: { payload: 'presented: backend failed' },
+    });
     expect(encodeToolInvokeError(mapped, () => payload)).toEqual({
       tag: 'custom-error',
-      val: payload,
+      val: { name: 'presented-failed', payload },
     });
 
     const failedDecode = decodeUnderlyingToolError(
-      { tag: 'custom-error', val: payload } satisfies ToolError,
+      { tag: 'custom-error', val: { name: 'backend-failed', payload } } satisfies ToolError,
       () => {
         throw new Error('wrong custom payload');
       },
@@ -159,7 +167,10 @@ describe('tool middleware runtime foundation', () => {
     } as TypedSchemaValue;
     const raw = {
       invoke: vi.fn(async () => {
-        throw { tag: 'custom-error', val: malformedPayload } satisfies ToolError;
+        throw {
+          tag: 'custom-error',
+          val: { name: 'broken', payload: malformedPayload },
+        } satisfies ToolError;
       }),
     } as RawUnderlyingTool;
 
@@ -190,7 +201,7 @@ describe('tool middleware runtime foundation', () => {
     async (payload) => {
       const raw = {
         invoke: vi.fn(async () => {
-          throw { tag: 'custom-error', val: payload } as ToolError;
+          throw { tag: 'custom-error', val: { name: 'broken', payload } } as ToolError;
         }),
       } as RawUnderlyingTool;
 
@@ -212,7 +223,10 @@ describe('tool middleware runtime foundation', () => {
     } as TypedSchemaValue;
     const raw = {
       invoke: vi.fn(async () => {
-        throw { tag: 'custom-error', val: malformedPayload } satisfies ToolError;
+        throw {
+          tag: 'custom-error',
+          val: { name: 'broken', payload: malformedPayload },
+        } satisfies ToolError;
       }),
     } as RawUnderlyingTool;
 
@@ -236,7 +250,7 @@ describe('tool middleware runtime foundation', () => {
       invoke: vi.fn(async () => {
         throw {
           tag: 'custom-error',
-          val: wireValue(z.string(), 'unavailable'),
+          val: { name: 'backend-failed', payload: wireValue(z.string(), 'unavailable') },
         } satisfies ToolError;
       }),
     } as RawUnderlyingTool;

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::sharding::leader_election::LeaseLost;
+use crate::sharding::model::ExecutorId;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::repo::RepoError;
@@ -36,6 +37,8 @@ pub enum ShardManagerError {
     SerializationError(String),
     #[error("Concurrent modification: the persisted shard state was changed by another writer")]
     ConcurrentModification,
+    #[error("No shard lease for executor {executor_id}")]
+    ShardLeaseNotFound { executor_id: ExecutorId },
     #[error(
         "Leadership lost: the election key {leader_key} is no longer held at creation revision \
          {create_revision}"
@@ -60,6 +63,40 @@ pub enum ShardManagerError {
     Internal(String),
 }
 
+impl ShardManagerError {
+    /// A second copy of this error, for the fail-stop slot: a refused write has to reach both the
+    /// caller whose request it was and the loop that must end the process because of it.
+    ///
+    /// Every variant a caller *matches* on - a lost fence, a revision conflict, a shutdown - is
+    /// reproduced exactly. The ones whose payload cannot be duplicated (`anyhow`, `io`, `RepoError`,
+    /// `etcd_client`) degrade to [`ShardManagerError::Internal`] carrying the same message, which
+    /// is what a log line or a gRPC error body would have shown of them anyway.
+    pub(crate) fn duplicate(&self) -> Self {
+        match self {
+            Self::NoSourceIpForPod => Self::NoSourceIpForPod,
+            Self::FailedAddressResolveForPod => Self::FailedAddressResolveForPod,
+            Self::Timeout => Self::Timeout,
+            Self::GrpcError(status) => Self::GrpcError(status.clone()),
+            Self::NoResult => Self::NoResult,
+            Self::SerializationError(message) => Self::SerializationError(message.clone()),
+            Self::ConcurrentModification => Self::ConcurrentModification,
+            Self::ShardLeaseNotFound { executor_id } => Self::ShardLeaseNotFound {
+                executor_id: *executor_id,
+            },
+            Self::LeadershipLost {
+                leader_key,
+                create_revision,
+            } => Self::LeadershipLost {
+                leader_key: leader_key.clone(),
+                create_revision: *create_revision,
+            },
+            Self::ShutdownRequested => Self::ShutdownRequested,
+            Self::Internal(message) => Self::Internal(message.clone()),
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
 impl IsRetriableError for ShardManagerError {
     fn is_retriable(&self) -> bool {
         match self {
@@ -74,6 +111,9 @@ impl IsRetriableError for ShardManagerError {
             // succeed: recovery is a re-read followed by re-deriving the change, which is a
             // different operation. Reporting this as retriable would turn a conflict into a spin.
             ShardManagerError::ConcurrentModification => false,
+            // The executor holds no lease at all, so the same request can only be refused again;
+            // recovery is a fresh registration, which is a different call.
+            ShardManagerError::ShardLeaseNotFound { .. } => false,
             // Another replica holds the leadership now; no retry here can take it back.
             ShardManagerError::LeadershipLost { .. } => false,
             // A campaigner holds nothing yet: a fresh lease and a new campaign is full recovery.
@@ -161,6 +201,7 @@ mod tests {
     use test_r::test;
 
     use super::ShardManagerError;
+    use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
     #[test]
@@ -176,5 +217,11 @@ mod tests {
             .is_retriable()
         );
         assert!(!ShardManagerError::ShutdownRequested.is_retriable());
+        assert!(
+            !ShardManagerError::ShardLeaseNotFound {
+                executor_id: ExecutorId(uuid::Uuid::from_u128(1)),
+            }
+            .is_retriable()
+        );
     }
 }

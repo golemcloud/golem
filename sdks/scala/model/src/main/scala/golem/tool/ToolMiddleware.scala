@@ -29,7 +29,8 @@ final case class ToolMiddlewareDescriptor(
   name: String,
   aliases: List[String],
   doc: Doc,
-  scope: ToolMiddlewareScope
+  scope: ToolMiddlewareScope,
+  version: String = "0.0.0"
 )
 
 final case class ToolMiddlewareMethodBinding(
@@ -215,6 +216,8 @@ object ToolMiddlewareInvokerRuntime {
         validateSuccess(tool, commandIndex, result).map(_ => result)
       case Left(error @ ToolInvokeError.Tool(payload)) =>
         validateCustomError(tool, commandIndex, payload).fold(Left(_), _ => Left(error))
+      case Left(error @ ToolInvokeError.UnknownToolError(name, payload)) =>
+        validateCustomError(tool, commandIndex, name, payload).fold(Left(_), _ => Left(error))
       case Left(protocol: ToolInvokeError.InvalidToolName)     => Left(protocol)
       case Left(protocol: ToolInvokeError.InvalidCommandPath)  => Left(protocol)
       case Left(protocol: ToolInvokeError.InvalidInput)        => Left(protocol)
@@ -240,6 +243,9 @@ object ToolMiddlewareInvokerRuntime {
               .fold(message => Left(ToolInvokeError.InvalidResult(message)), _ => Right(result))
         }
       case Left(error @ ToolInvokeError.Tool(payload)) =>
+        validateSelfContainedValue(payload, "tool custom error")
+          .fold(message => Left(ToolInvokeError.InvalidResult(message)), _ => Left(error))
+      case Left(error @ ToolInvokeError.UnknownToolError(_, payload)) =>
         validateSelfContainedValue(payload, "tool custom error")
           .fold(message => Left(ToolInvokeError.InvalidResult(message)), _ => Left(error))
       case Left(protocol: ToolInvokeError.InvalidToolName)     => Left(protocol)
@@ -280,10 +286,28 @@ object ToolMiddlewareInvokerRuntime {
     commandIndex: Int,
     value: TypedSchemaValue
   ): Either[ToolInvokeError.InvalidResult, Unit] =
+    validateCustomErrorByPayload(tool, commandIndex, None, value)
+
+  private def validateCustomError(
+    tool: ExtendedToolType,
+    commandIndex: Int,
+    name: String,
+    value: TypedSchemaValue
+  ): Either[ToolInvokeError.InvalidResult, Unit] =
+    validateCustomErrorByPayload(tool, commandIndex, Some(name), value)
+
+  private def validateCustomErrorByPayload(
+    tool: ExtendedToolType,
+    commandIndex: Int,
+    name: Option[String],
+    value: TypedSchemaValue
+  ): Either[ToolInvokeError.InvalidResult, Unit] =
     tool.commands.lift(commandIndex).flatMap(_.body) match {
       case None       => Left(ToolInvokeError.InvalidResult(s"invalid tool command index: $commandIndex"))
       case Some(body) =>
-        val candidates = body.errors.map(_.payload.getOrElse(ToolErrorSupport.unitPayloadGraph))
+        val candidates = body.errors
+          .filter(error => name.forall(_ == error.name))
+          .map(_.payload.getOrElse(ToolErrorSupport.unitPayloadGraph))
         if (candidates.exists(expected => validateTypedValue(value, expected, "tool custom error").isRight)) Right(())
         else Left(ToolInvokeError.InvalidResult("tool custom error payload does not match a declared error case"))
     }
@@ -323,6 +347,7 @@ object ToolMiddlewareInvokerRuntime {
   ): ToolInvokeError[TypedSchemaValue] =
     error match {
       case ToolInvokeError.Tool(value)                   => ToolInvokerRuntime.customError(value, schema)
+      case unknown: ToolInvokeError.UnknownToolError     => unknown
       case protocol: ToolInvokeError.InvalidToolName     => protocol
       case protocol: ToolInvokeError.InvalidCommandPath  => protocol
       case protocol: ToolInvokeError.InvalidInput        => protocol
@@ -332,6 +357,7 @@ object ToolMiddlewareInvokerRuntime {
 
   def encodeInfallibleError(error: ToolInvokeError[Nothing]): ToolInvokeError[TypedSchemaValue] =
     error match {
+      case unknown: ToolInvokeError.UnknownToolError     => unknown
       case protocol: ToolInvokeError.InvalidToolName     => protocol
       case protocol: ToolInvokeError.InvalidCommandPath  => protocol
       case protocol: ToolInvokeError.InvalidInput        => protocol
@@ -401,7 +427,7 @@ object ToolUnderlyingRuntime {
     commandPath: List[String],
     input: Either[ToolInvokeError[Nothing], TypedSchemaValue],
     stdin: Option[ToolMiddlewareInputHandle],
-    decodeError: TypedSchemaValue => Either[String, E]
+    decodeError: NamedToolError => Either[String, E]
   ): Future[Either[ToolInvokeError[E], ToolMiddlewareResult]] =
     (descriptor, input) match {
       case (Left(error), _) =>
@@ -417,12 +443,14 @@ object ToolUnderlyingRuntime {
             ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, outcome)
           }
           .map {
-            case Right(result)                     => Right(result)
-            case Left(ToolInvokeError.Tool(value)) =>
-              decodeError(value) match {
-                case Right(error)  => Left(ToolInvokeError.Tool(error))
-                case Left(message) => Left(ToolInvokeError.InvalidResult(message))
+            case Right(result)                                         => Right(result)
+            case Left(ToolInvokeError.UnknownToolError(name, payload)) =>
+              decodeError(NamedToolError(name, payload)) match {
+                case Right(error) => Left(ToolInvokeError.Tool(error))
+                case Left(_)      => Left(ToolInvokeError.UnknownToolError(name, payload))
               }
+            case Left(ToolInvokeError.Tool(_)) =>
+              Left(ToolInvokeError.InvalidResult("underlying custom error was missing its declared case name"))
             case Left(error: ToolInvokeError.InvalidToolName)     => Left(error)
             case Left(error: ToolInvokeError.InvalidCommandPath)  => Left(error)
             case Left(error: ToolInvokeError.InvalidInput)        => Left(error)
@@ -461,6 +489,13 @@ object ToolUnderlyingRuntime {
   ): Either[ToolError[Nothing], T] =
     requireValue(result, from)
 
+  def decodeValueResult[T](
+    result: ToolMiddlewareResult,
+    from: FromSchema[T],
+    expected: golem.schema.SchemaGraph
+  ): Either[ToolError[Nothing], T] =
+    requireValue(result, from, Some(expected))
+
   def decodeStdoutResult(
     result: ToolMiddlewareResult
   ): Either[ToolError[Nothing], ToolMiddlewareOutputHandle] =
@@ -478,6 +513,16 @@ object ToolUnderlyingRuntime {
       value  <- requireValue(result, from)
     } yield (value, stdout)
 
+  def decodeValueStdoutResult[T](
+    result: ToolMiddlewareResult,
+    from: FromSchema[T],
+    expected: golem.schema.SchemaGraph
+  ): Either[ToolError[Nothing], (T, ToolMiddlewareOutputHandle)] =
+    for {
+      stdout <- requireStdout(result)
+      value  <- requireValue(result, from, Some(expected))
+    } yield (value, stdout)
+
   private def requireStdout(
     result: ToolMiddlewareResult
   ): Either[ToolError[Nothing], ToolMiddlewareOutputHandle] =
@@ -485,10 +530,13 @@ object ToolUnderlyingRuntime {
 
   private def requireValue[T](
     result: ToolMiddlewareResult,
-    from: FromSchema[T]
+    from: FromSchema[T],
+    expected: Option[golem.schema.SchemaGraph] = None
   ): Either[ToolError[Nothing], T] =
     result.result match {
-      case None        => Left(resultError("tool result did not contain a value"))
+      case None                                                                                       => Left(resultError("tool result did not contain a value"))
+      case Some(value) if expected.exists(graph => !ToolGraphs.schemaShapesMatch(value.graph, graph)) =>
+        Left(resultError("tool result schema does not match the generated underlying client's expected result schema"))
       case Some(value) => from.fromValue(value.value).left.map(error => resultError(error.message))
     }
 
@@ -508,8 +556,9 @@ object ToolUnderlyingRuntime {
 
   private def toolErrorMessage(error: ToolError[Nothing]): String =
     error match {
-      case ToolError.Rpc(rpc) => rpc.message
-      case ToolError.Tool(_)  => "unexpected typed tool error"
+      case ToolError.Rpc(rpc)                  => rpc.message
+      case ToolError.Tool(_)                   => "unexpected typed tool error"
+      case ToolError.UnknownToolError(name, _) => s"unexpected tool error `$name`"
     }
 }
 

@@ -11,7 +11,12 @@ steps:
   # 2. Create agent and set state to 2
   - id: "invoke-increment-1"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:
@@ -20,7 +25,12 @@ steps:
 
   - id: "invoke-increment-2"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:
@@ -38,6 +48,11 @@ steps:
         In the test-app project, add a new read-only method called `getDouble` to the
         CounterAgent that returns the current counter value multiplied by 2. Do not change
         any existing methods. Build and deploy, but do not update existing running agents.
+      effect: >
+        In the Effect-based test-app project, add an Effect-based read-only `getDouble` method
+        to the existing `Counter` agent that returns twice the current counter state. Preserve
+        all existing methods and the `Counter` runtime name. Build and deploy, but do not update
+        existing running agents.
       scala: >
         In the test-app project, add a new read-only method called `getDouble` to the
         CounterAgent that returns the current counter value multiplied by 2. Do not change
@@ -51,19 +66,32 @@ steps:
 
   # 4. Update the running agent using automatic mode
   - id: "auto-update-agent"
-    prompt: >
-      Update the running CounterAgent "c1" to the latest component revision using automatic
-      update mode. Wait for the update to complete.
+    prompt:
+      effect: >
+        Update the running Counter agent "c1" to the latest component revision using automatic
+        update mode. Wait for the update to complete.
+      rust: &update-counter-agent >
+        Update the running CounterAgent "c1" to the latest component revision using automatic
+        update mode. Wait for the update to complete.
+      ts: *update-counter-agent
+      scala: *update-counter-agent
+      moonbit: *update-counter-agent
     expectedSkills:
       - "golem-update-running-agents"
 
   # 5. Verify the new method works and state was preserved
   - id: "verify-updated"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method:
         rust: "get_double"
         ts: "getDouble"
+        effect: "getDouble"
         scala: "getDouble"
         moonbit: "get_double"
     expect:

@@ -58,6 +58,10 @@ are still being produced and consumed. Three crash windows follow:
 3. Invocation finished, session cleanup pending — `invocation_loop.rs::agent_invocation_finished`
    runs `complete_durable_streaming_session` after `on_agent_invocation_success`, appending
    protocol terminals and `StreamSession { Finished }` as hints after `AgentInvocationFinished`.
+   Output materialization settles positional tail work before that boundary. Session completion
+   runs inside the Store event loop, including after replay reaches live: unfinished host stream
+   operations can hold producer/session locks across pending polls, so awaiting cleanup outside
+   the event loop can deadlock and prevent the next queued invocation from starting.
 
 Provider reconstruction drains terminal outputs against their committed records without waiting
 for a consumer attachment; the consumer may already have finished and detached permanently.

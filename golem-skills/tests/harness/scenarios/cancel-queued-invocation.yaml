@@ -19,6 +19,11 @@ steps:
         function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
         and await sleep(100) inside a while(true) loop). Make sure the project builds
         and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add an Effect-based `runForever` method to the
+        existing `Counter` agent. It takes no arguments, returns void, and repeatedly increments
+        the counter state and sleeps for 100 milliseconds using Effect primitives. Preserve the
+        `Counter` runtime name, then build and deploy successfully.
       scala: >
         In the test-app project, add a new method called `runForever` to the CounterAgent
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
@@ -36,10 +41,16 @@ steps:
 
   - id: "trigger-long-running"
     trigger:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method:
         rust: "run_forever"
         ts: "runForever"
+        effect: "runForever"
         scala: "runForever"
         moonbit: "run_forever"
 
@@ -52,6 +63,7 @@ steps:
       args:
         rust: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         ts: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
+        effect: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "Counter(\"c1\")", "increment"]
         scala: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         moonbit: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
       cwd: "test-app"
@@ -64,23 +76,40 @@ steps:
   - id: "verify-pending"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "get", "Counter(\"c1\")"]
+        rust: &get-counter-agent ["agent", "get", "CounterAgent(\"c1\")"]
+        ts: *get-counter-agent
+        scala: *get-counter-agent
+        moonbit: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
       stdout_matches: "Pending.*[1-9]"
 
   - id: "cancel-via-prompt"
-    prompt: >
-      Use the CLI to cancel the pending invocation on CounterAgent "c1" that has
-      the idempotency key "cancel-me".
+    prompt:
+      effect: >
+        Use the CLI to cancel the pending invocation on Counter "c1" that has the
+        idempotency key "cancel-me".
+      rust: &cancel-counter-agent >
+        Use the CLI to cancel the pending invocation on CounterAgent "c1" that has
+        the idempotency key "cancel-me".
+      ts: *cancel-counter-agent
+      scala: *cancel-counter-agent
+      moonbit: *cancel-counter-agent
     expectedSkills:
       - "golem-cancel-queued-invocation"
 
   - id: "verify-canceled"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "get", "Counter(\"c1\")"]
+        rust: *get-counter-agent
+        ts: *get-counter-agent
+        scala: *get-counter-agent
+        moonbit: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -89,7 +118,12 @@ steps:
   - id: "cleanup"
     shell:
       command: "golem"
-      args: ["agent", "delete", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "delete", "Counter(\"c1\")"]
+        rust: &delete-counter-agent ["agent", "delete", "CounterAgent(\"c1\")"]
+        ts: *delete-counter-agent
+        scala: *delete-counter-agent
+        moonbit: *delete-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0

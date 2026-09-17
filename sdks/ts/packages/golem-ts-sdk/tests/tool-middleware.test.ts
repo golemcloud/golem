@@ -388,14 +388,21 @@ describe('monomorphic tool middleware dispatch', () => {
     expect(monomorphicSource('adapter-policy').presented.toolName).toBe('convert');
     expect(monomorphicSource('adapter-policy').expected.toolName).toBe('backend');
 
-    failure = { tag: 'custom-error', val: wireValue(z.string(), 'denied') };
+    failure = {
+      tag: 'custom-error',
+      val: { name: 'failed', payload: wireValue(z.string(), 'denied') },
+    };
     const custom = (await rejectionOf(run())) as ToolInvokeError<TypedSchemaValue>;
-    expect(custom.cause.tag).toBe('tool');
-    if (custom.cause.tag !== 'tool') throw new Error('custom error was not encoded');
+    expect(custom.cause.tag).toBe('unknown-error');
+    if (custom.cause.tag !== 'unknown-error') throw new Error('custom error was not encoded');
     const presentedBody = getExtendedToolDefinition(presented).root.body!;
-    expect(decodeDeclaredToolError(presentedBody, custom.cause.error, 'convert')).toEqual(
-      err('rejected', 'denied'),
-    );
+    expect(
+      decodeDeclaredToolError(
+        presentedBody,
+        { name: custom.cause.name, payload: custom.cause.payload },
+        'convert',
+      ),
+    ).toEqual(err('rejected', 'denied'));
 
     failure = { tag: 'invalid-tool-name', val: 'missing-backend' };
     await expect(run()).rejects.toMatchObject({

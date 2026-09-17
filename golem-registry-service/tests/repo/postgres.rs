@@ -14,7 +14,18 @@
 
 use crate::Tracing;
 use crate::repo::{Deps, TestDb};
+use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::config::DbPostgresConfig;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::TOOL_METADATA_WIT_VERSION;
+use golem_common::model::tool::ToolProvisionConfig;
+use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareSource};
+use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+use golem_common::schema::tool::{Doc, ToolMiddleware, ToolMiddlewareScope};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -24,23 +35,37 @@ use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
+use golem_registry_service::repo::environment_tool_middleware_grant::{
+    DbEnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepo,
+};
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
+use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
+use golem_registry_service::repo::model::component::ComponentRevisionRecord;
+use golem_registry_service::repo::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRecord;
+use golem_registry_service::repo::model::hash::SqlBlake3Hash;
+use golem_registry_service::repo::model::new_repo_uuid;
+use golem_registry_service::repo::model::tool_middleware_release::ToolMiddlewareReleaseRecord;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
+use golem_registry_service::repo::tool_middleware_release::{
+    DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepo,
+};
 use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::db;
-use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::migration::{Migrations, MigrationsDir};
+use golem_service_base::repo::Blob;
 use sqlx::ConnectOptions;
+use sqlx::Row;
 use sqlx::postgres::PgConnectOptions;
 use std::time::{Duration, Instant};
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
@@ -223,6 +248,9 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
+        environment_tool_middleware_grant_repo: Box::new(
+            DbEnvironmentToolMiddlewareGrantRepo::logged(pool.clone()),
+        ),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
@@ -232,6 +260,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
         tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
+        tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
@@ -355,6 +384,16 @@ async fn test_application_delete(#[dimension(postgres_variant)] deps: &Deps) {
 #[test]
 async fn test_environment_create(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_environment_create(deps).await;
+}
+
+#[test]
+async fn test_environment_service_persists_and_updates_tool_compatibility_mode(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_service_persists_and_updates_tool_compatibility_mode(
+        deps,
+    )
+    .await;
 }
 
 #[test]
@@ -635,6 +674,175 @@ async fn test_tool_release_and_grant_repository_contracts(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
+}
+
+#[test]
+async fn test_tool_middleware_release_and_grant_repository_contracts(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_tool_middleware_release_and_grant_repository_contracts(deps).await;
+}
+
+#[test]
+async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresDb) {
+    let deps = make_deps(db.pool.clone()).await;
+    let owner = deps.create_account().await;
+    let actor = AccountId(owner.revision.account_id);
+    let app = deps.create_application(actor.0).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("lock-test-middleware-{}", new_repo_uuid());
+    let component_id = new_repo_uuid();
+    let component = deps
+        .component_repo
+        .create(
+            environment.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id,
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    Default::default(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let definition = ToolMiddleware {
+        name: format!("lock-test-{}", new_repo_uuid()),
+        version: "1.0.0".to_string(),
+        aliases: Vec::new(),
+        doc: Doc::default(),
+        scope: ToolMiddlewareScope::Universal,
+    };
+    let release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &RegisteredToolMiddleware {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId(component.revision.component_id),
+                component_revision: ComponentRevision::try_from(component.revision.revision_id)
+                    .unwrap(),
+                component_name: golem_common::model::component::ComponentName(component_name),
+            },
+            owner_account_id: actor,
+            owner_account_email: AccountEmail::new(owner.revision.email),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            metadata_digest: Default::default(),
+        },
+        true,
+        actor,
+    )
+    .unwrap();
+    let release_id = release.tool_middleware_release_id;
+    deps.tool_middleware_release_repo
+        .create(release)
+        .await
+        .unwrap();
+    let grant = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolMiddlewareReleaseId(release_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+
+    let mut environment_blocker = db
+        .pool
+        .with("test", "environment_grant_insert_blocker")
+        .begin()
+        .await
+        .unwrap();
+    let blocker_pid: i32 = environment_blocker
+        .fetch_one(
+            sqlx::query("SELECT pg_backend_pid() AS pid FROM environments WHERE environment_id = $1 FOR UPDATE")
+                .bind(environment.revision.environment_id),
+        )
+        .await
+        .unwrap()
+        .get("pid");
+
+    let grant_repo = DbEnvironmentToolMiddlewareGrantRepo::new(db.pool.clone());
+    let grant_creation = tokio::spawn(async move { grant_repo.create(grant).await });
+
+    let grant_pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(row) = db
+                .pool
+                .with("test", "inspect_blocked_grant_insert")
+                .fetch_optional(
+                    sqlx::query(
+                        "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+                     AND query LIKE '%INSERT INTO environment_tool_middleware_grants%' \
+                     AND $1 = ANY(pg_blocking_pids(pid))",
+                    )
+                    .bind(blocker_pid),
+                )
+                .await
+                .unwrap()
+            {
+                break row.get::<i32, _>("pid");
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("real middleware grant create did not block on the environment foreign key");
+
+    let release_repo = DbToolMiddlewareReleaseRepo::new(db.pool.clone());
+    let depublication =
+        tokio::spawn(async move { release_repo.de_publish(release_id, actor.0).await });
+    let depublication_blocked = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let blocked = db.pool.with("test", "inspect_blocked_depublication")
+                .fetch_optional(sqlx::query(
+                    "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+                     AND query LIKE '%UPDATE tool_middleware_releases%' \
+                     AND $1 = ANY(pg_blocking_pids(pid))",
+                ).bind(grant_pid))
+                .await
+                .unwrap()
+                .is_some();
+            if blocked {
+                break;
+            }
+            if depublication.is_finished() {
+                panic!("depublication completed instead of waiting for the real grant's eligibility lock");
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        depublication_blocked.is_ok(),
+        "Postgres did not report depublication blocked by the grant backend"
+    );
+
+    environment_blocker.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), grant_creation)
+        .await
+        .expect("grant creation did not resume after releasing the environment lock")
+        .unwrap()
+        .unwrap();
+    let de_published = tokio::time::timeout(Duration::from_secs(5), depublication)
+        .await
+        .expect("depublication did not resume after grant creation committed")
+        .unwrap()
+        .unwrap();
+    assert!(de_published.is_some());
 }
 
 /// Tests that Postgres LISTEN/NOTIFY propagates events through the

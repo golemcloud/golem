@@ -276,11 +276,11 @@ export type SchemaValue =
   | { kind: 's8'; value: number }
   | { kind: 's16'; value: number }
   | { kind: 's32'; value: number }
-  | { kind: 's64'; value: number | bigint }
+  | { kind: 's64'; value: bigint }
   | { kind: 'u8'; value: number }
   | { kind: 'u16'; value: number }
   | { kind: 'u32'; value: number }
-  | { kind: 'u64'; value: number | bigint }
+  | { kind: 'u64'; value: bigint }
   | { kind: 'f32'; value: number }
   | { kind: 'f64'; value: number }
   | { kind: 'char'; value: string }
@@ -598,6 +598,62 @@ function restJson(value: unknown): string {
   return encode(value, false) ?? 'null';
 }
 
+function parseInvocationResultJson(json: string): AgentInvocationResult {
+  return restoreJsonIntegers(parseJson(json, true)) as AgentInvocationResult;
+}
+
+class JsonNumberToken {
+  constructor(readonly lexeme: string) {}
+}
+
+function jsonIntegerToken(token: JsonNumberToken, kind: 's64' | 'u64'): bigint {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?)(\d+))?$/u.exec(token.lexeme);
+  if (!match) throw new Error(`${kind} value is not an integer`);
+
+  const negative = match[1] === '-';
+  const fraction = match[3] ?? '';
+  let digits = `${match[2]}${fraction}`.replace(/^0+/u, '');
+  if (digits === '') return 0n;
+
+  const exponentDigits = (match[5] ?? '0').replace(/^0+/u, '') || '0';
+  if (exponentDigits.length > 15)
+    throw new Error(`${kind} value is ${match[4] === '-' ? 'not an integer' : 'out of range'}`);
+  const exponent = Number(exponentDigits) * (match[4] === '-' ? -1 : 1);
+  const scale = exponent - fraction.length;
+  if (scale >= 0) {
+    if (digits.length + scale > 20) throw new Error(`${kind} value is out of range`);
+    digits += '0'.repeat(scale);
+  } else {
+    const integerLength = digits.length + scale;
+    if (integerLength <= 0 || /[1-9]/u.test(digits.slice(integerLength)))
+      throw new Error(`${kind} value is not an integer`);
+    digits = digits.slice(0, integerLength);
+  }
+
+  if (digits.length > 20) throw new Error(`${kind} value is out of range`);
+  const result = BigInt(`${negative ? '-' : ''}${digits}`);
+  if (kind === 'u64' && (result < 0n || result > U64_MAX))
+    throw new Error('u64 value is out of range');
+  if (kind === 's64' && (result < -(1n << 63n) || result >= 1n << 63n))
+    throw new Error('s64 value is out of range');
+  return result;
+}
+
+function restoreJsonIntegers(value: unknown, integerKind?: 's64' | 'u64'): unknown {
+  if (value instanceof JsonNumberToken)
+    return integerKind ? jsonIntegerToken(value, integerKind) : Number(value.lexeme);
+  if (Array.isArray(value)) return value.map((item) => restoreJsonIntegers(item));
+  if (!isRecord(value)) return value;
+
+  const valueKind = value.kind === 's64' || value.kind === 'u64' ? value.kind : undefined;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      restoreJsonIntegers(item, key === 'value' ? valueKind : undefined),
+    ]),
+  );
+}
+
 export async function createAgent(
   server: GolemServer,
   request: CreateAgentRequest,
@@ -709,7 +765,7 @@ export async function invokeAgent(
       await throwGolemServiceError('invokeAgent', rawResponse);
     }
 
-    let response = await (rawResponse.json() as Promise<AgentInvocationResult>);
+    let response = parseInvocationResultJson(await rawResponse.text());
 
     if (aroundInvokeHook) {
       await aroundInvokeHook.afterInvoke(request, { ok: response });
@@ -2093,7 +2149,11 @@ function compareCodePoints(left: string, right: string): number {
   return leftPoints.length - rightPoints.length;
 }
 
-function parseStrictJson(text: string): unknown {
+function parseJson(
+  text: string,
+  integersAsBigInt = false,
+  enforceStreamingBudgets = false,
+): unknown {
   let offset = 0;
   let collectionItems = 0;
   const whitespace = () => {
@@ -2114,7 +2174,7 @@ function parseStrictJson(text: string): unknown {
     throw new Error();
   };
   const value = (depth = 0): unknown => {
-    if (depth >= 64) throw new Error();
+    if (enforceStreamingBudgets && depth >= 64) throw new Error();
     whitespace();
     const char = text[offset];
     if (char === '"') return string();
@@ -2124,7 +2184,7 @@ function parseStrictJson(text: string): unknown {
       whitespace();
       if (text[offset] === ']') return ((offset += 1), result);
       for (;;) {
-        if ((collectionItems += 1) > 100_000) throw new Error();
+        if (enforceStreamingBudgets && (collectionItems += 1) > 100_000) throw new Error();
         result.push(value(depth + 1));
         whitespace();
         if (text[offset++] === ']') return result;
@@ -2143,7 +2203,7 @@ function parseStrictJson(text: string): unknown {
         const key = string();
         if (keys.has(key)) throw new Error();
         keys.add(key);
-        if ((collectionItems += 1) > 100_000) throw new Error();
+        if (enforceStreamingBudgets && (collectionItems += 1) > 100_000) throw new Error();
         whitespace();
         if (text[offset++] !== ':') throw new Error();
         result[key] = value(depth + 1);
@@ -2157,13 +2217,19 @@ function parseStrictJson(text: string): unknown {
     );
     if (!match) throw new Error();
     offset += match[0].length;
-    return JSON.parse(match[0]);
+    return integersAsBigInt && /^-?\d/u.test(match[0])
+      ? new JsonNumberToken(match[0])
+      : JSON.parse(match[0]);
   };
+  const result = value();
+  whitespace();
+  if (offset !== text.length) throw new Error('invalid JSON');
+  return result;
+}
+
+function parseStrictJson(text: string): unknown {
   try {
-    const result = value();
-    whitespace();
-    if (offset !== text.length) throw new Error();
-    return result;
+    return parseJson(text, false, true);
   } catch {
     throw new StreamingProtocolError('malformed-message', 'invalid JSON');
   }

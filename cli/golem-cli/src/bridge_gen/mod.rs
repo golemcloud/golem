@@ -26,6 +26,7 @@
 //! encode/decode code; there is no longer any dependency on the legacy
 //! `AnalysedType` / `IntoValue` / `FromValue` surface.
 
+pub mod effect;
 pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;

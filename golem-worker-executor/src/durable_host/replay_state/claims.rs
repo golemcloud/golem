@@ -539,6 +539,7 @@ impl ReplayState {
     /// time. The request payload is not decoded: `function_name` already pins the request type
     /// (and the `Req` associated type has no `TryFrom<HostRequest>` to decode it generically); the
     /// response is fully type-checked on the `End` side during replay.
+    #[cfg(test)]
     pub async fn claim_concurrent_start(
         &self,
         expected_function_name: &HostFunctionName,
@@ -557,7 +558,7 @@ impl ReplayState {
     /// function name or durable function type, registering a resolver receiver keyed by the
     /// `Start`'s index and returning the claimed entry's identity for the caller to inspect.
     ///
-    /// This is the dynamic counterpart of [`Self::claim_concurrent_start`]: it is used by callers
+    /// This is the dynamic counterpart of an identity-based claim: it is used by callers
     /// that learn the call identity from the claimed entry itself rather than knowing it up front —
     /// notably the guest-facing `golem::durability` read, which returns the persisted invocation's
     /// function name to the guest and therefore has no expected name to validate against.
@@ -590,6 +591,7 @@ impl ReplayState {
     /// `Start` ahead of the cursor when concurrent host tasks interleaved the live append order.
     /// Matching `Start`s that share the same full identity (several chunks under one parent) are
     /// claimed in oplog order, preserving the deterministic per-parent chain order.
+    #[cfg(test)]
     pub async fn claim_owned_concurrent_start(
         &self,
         expected_function_name: &HostFunctionName,

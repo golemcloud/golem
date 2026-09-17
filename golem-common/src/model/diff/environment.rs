@@ -15,6 +15,7 @@
 use crate::model::diff::{
     DiffError, Diffable, Hash, Hashable, PluginInstallation, hash_from_serialized_value,
 };
+use crate::schema::tool::compatibility::ToolCompatibilityMode;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -22,6 +23,7 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
     pub compatibility_check: bool,
+    pub tool_compatibility_mode: ToolCompatibilityMode,
     pub version_check: bool,
     pub security_overrides: bool,
 }
@@ -30,6 +32,7 @@ pub struct Environment {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentDiff {
     pub compatibility_check_changed: bool,
+    pub tool_compatibility_mode_changed: bool,
     pub version_check_changed: bool,
     pub security_overrides_changed: bool,
 }
@@ -40,11 +43,14 @@ impl Diffable for Environment {
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let diff = EnvironmentDiff {
             compatibility_check_changed: new.compatibility_check != current.compatibility_check,
+            tool_compatibility_mode_changed: new.tool_compatibility_mode
+                != current.tool_compatibility_mode,
             version_check_changed: new.version_check != current.version_check,
             security_overrides_changed: new.security_overrides != current.security_overrides,
         };
 
         let any_changed = diff.compatibility_check_changed
+            || diff.tool_compatibility_mode_changed
             || diff.version_check_changed
             || diff.security_overrides_changed;
 

@@ -16,13 +16,14 @@ The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` 
   are defined by the root-workspace `golem-schema-derive` crate, not by `golem-rust-macro`.
 - `golem-rust-macro` — Procedural macros: `#[agent_definition]`, `#[agent_implementation]`,
   `#[tool_definition]`, `#[golem_operation]`, and the `MultimodalSchema`, `ConfigSchema`,
-  `AllowedLanguages`, `AllowedMimeTypes`, and `ToolError` derives.
+  `AllowedLanguages`, `AllowedMimeTypes`, and `ToolError` derives. This crate lives in the root
+  workspace, alongside `golem-tool-metadata` and `golem-native-tool`.
 
 ### Building
 
 ```shell
-cd sdks/rust
-cargo build -p golem-rust
+# From the repository root
+cargo build --manifest-path sdks/rust/Cargo.toml -p golem-rust
 cargo build -p golem-rust-macro
 ```
 

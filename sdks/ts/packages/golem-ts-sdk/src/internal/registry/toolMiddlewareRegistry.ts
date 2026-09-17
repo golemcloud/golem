@@ -33,6 +33,7 @@ import {
 
 interface ToolMiddlewareSourceBase {
   readonly name: string;
+  readonly version: string;
   readonly aliases: readonly string[];
   readonly doc: Doc;
 }
@@ -146,6 +147,7 @@ export const ToolMiddlewareRegistry = new ToolMiddlewareRegistryImpl();
 function encodeMiddleware(source: ToolMiddlewareSource): ToolMiddleware {
   return {
     name: source.name,
+    version: source.version,
     aliases: [...source.aliases],
     doc: {
       ...source.doc,

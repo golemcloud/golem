@@ -69,6 +69,24 @@ impl TestWorkerProxy {
 
 #[async_trait]
 impl WorkerProxy for TestWorkerProxy {
+    async fn prepare(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _method_name: &str,
+        _caller_agent_id: &AgentId,
+        _caller_env: HashMap<String, String>,
+        _caller_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _principal: Principal,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown(
+                "Not implemented in tests as debug service is not expected to call prepare through proxy",
+            ),
+        ))
+    }
+
     async fn start(
         &self,
         _owned_agent_id: &OwnedAgentId,

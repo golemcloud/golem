@@ -1,4 +1,7 @@
 name: "add-ignite-rdbms"
+semanticRequirements:
+  effect:
+    - The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with IgniteClient.layer; IgniteClient.make and adapter-specific service access are not substitutes.
 prerequisites:
   services:
     - ignite
@@ -40,6 +43,21 @@ steps:
         `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
         existing increment method unchanged. The method must return a plain string, not a result
         type. Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, modify the existing counter agent so it adds a new
+        method called `checkIgnite`. The generated Effect template initially registers this agent
+        as `Counter`; change its `defineAgent` name to exactly `CounterAgent` and update the matching
+        agent key in `golem.yaml` so the agent can be invoked as `CounterAgent("db-test")` below.
+        Declare `checkIgnite` in the methods map with `success: Schema.String` and implement its
+        handler as an Effect using `IgniteClient` from `@golemcloud/effect-golem/ignite2`, not a
+        native Node driver. Import `SqlClient` from `effect/unstable/sql`, hardcode
+        `{{ignite_url}}` in an
+        `IgniteClient.layer`, resolve `SqlClient.SqlClient` in the outer agent implementation
+        Effect, and provide the adapter layer around that outer Effect so every handler closes over
+        and reuses the canonical client. Do not call `IgniteClient.make` or resolve the
+        adapter-specific service. Run `SELECT 'ignite-ok'`, use the statement's `.values` Effect to
+        read row 0, column 0, verify that cell is a string, and return that string. Keep the existing
+        `increment` method unchanged and make sure the project builds and deploys.
     expectedSkills:
       rust:
         - "golem-add-ignite-rust"
@@ -49,6 +67,8 @@ steps:
         - "golem-add-ignite-moonbit"
       scala:
         - "golem-add-ignite-scala"
+      effect:
+        - "golem-add-ignite-effect"
     verify:
       build: true
       deploy: true
@@ -61,6 +81,7 @@ steps:
         ts: "checkIgnite"
         moonbit: "check_ignite"
         scala: "checkIgnite"
+        effect: "checkIgnite"
     expect:
       result_json:
         - path: "$"

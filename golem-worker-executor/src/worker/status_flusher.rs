@@ -492,7 +492,11 @@ mod tests {
         ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
         async fn remove_cached_status(

@@ -43,7 +43,7 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -75,6 +75,18 @@ use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
+
+/// Executable identity used to construct a worker context.
+///
+/// Native contexts deliberately carry no component metadata or Wasm executable.
+#[derive(Clone)]
+pub enum WorkerCtxExecutable {
+    Component(Box<Component>),
+    Native {
+        host_tool_id: golem_common::model::tool::HostToolId,
+        implementation_version: String,
+    },
+}
 
 pub struct WorkerFilesystemContext {
     pub(crate) generation_handle: FilesystemGenerationHandle,
@@ -185,6 +197,12 @@ pub trait WorkerCtx:
         None
     }
 
+    /// Supplies optional test-harness coordination for worker deletion stages.
+    #[doc(hidden)]
+    fn worker_deletion_hook(_extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
+        None
+    }
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -230,6 +248,7 @@ pub trait WorkerCtx:
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -252,7 +271,7 @@ pub trait WorkerCtx:
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
@@ -285,6 +304,10 @@ pub trait WorkerCtx:
     /// Gets the email of the account that created this worker
     fn created_by_email(&self) -> &AccountEmail;
 
+    /// Metadata for the executable component. Native entity contexts have none.
+    fn executable_component_metadata(&self) -> Option<&Component>;
+
+    /// Metadata for the owning component.
     fn component_metadata(&self) -> &Component;
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;

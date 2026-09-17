@@ -165,6 +165,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                 account_id: AccountId::new(),
                 account_email: AccountEmail::new("owner@example.com"),
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,
@@ -240,6 +241,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -303,6 +305,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -387,6 +390,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            output_contract: golem_common::model::entity::ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
         })),
         tool_input.clone(),
     );
@@ -404,6 +411,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let entity_retry_error = oplog
         .add(OplogEntry::error(
             Some(tool_start),
+            golem_common::model::oplog::OplogErrorKind::Invocation,
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             false,
@@ -826,6 +834,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -969,6 +978,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,

@@ -40,6 +40,13 @@ steps:
         - `GREETING_PREFIX` set to `Hello`
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a durable `ConfigAgent` with a single `id`
+        string field using Effect Schema and `defineAgent`. Expose an Effect-based `getConfig`
+        method that reads `APP_MODE` and `GREETING_PREFIX` with Effect Config and returns
+        `{ appMode, greetingPrefix }`. In the top-level `agents.ConfigAgent.env` manifest entry,
+        set `APP_MODE` to `production` and `GREETING_PREFIX` to `Hello`. Import the implementation
+        from `src/main.ts`, then build and deploy successfully.
       scala: >
         In the test-app project, add a new durable agent type called `ConfigAgent` identified by
         a single constructor parameter for the instance name.
@@ -91,6 +98,7 @@ steps:
       method:
         rust: "get_config"
         ts: "getConfig"
+        effect: "getConfig"
         scala: "getConfig"
         moonbit: "get_config"
     expect:
@@ -101,6 +109,12 @@ steps:
           - path: "$.greeting_prefix"
             equals: "Hello"
       ts:
+        result_json:
+          - path: "$.appMode"
+            equals: "production"
+          - path: "$.greetingPrefix"
+            equals: "Hello"
+      effect:
         result_json:
           - path: "$.appMode"
             equals: "production"

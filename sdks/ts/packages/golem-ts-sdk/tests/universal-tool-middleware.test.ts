@@ -277,7 +277,7 @@ describe('universal tool middleware dispatch', () => {
       { tag: 'invalid-input', val: 'bad-input' },
       { tag: 'constraint-violation', val: 'constraint' },
       { tag: 'invalid-result', val: 'bad-result' },
-      { tag: 'custom-error', val: customPayload },
+      { tag: 'custom-error', val: { name: 'custom', payload: customPayload } },
     ];
 
     for (const wireError of cases) {
@@ -289,10 +289,12 @@ describe('universal tool middleware dispatch', () => {
       const error = (await rejectionOf(invoke('raw-errors', invocation(), raw))) as ToolInvokeError;
       expect(error).toBeInstanceOf(ToolInvokeError);
       expect(error.cause).toEqual(
-        wireError.tag === 'custom-error' ? { tag: 'tool', error: customPayload } : wireError,
+        wireError.tag === 'custom-error'
+          ? { tag: 'unknown-error', name: 'custom', payload: customPayload }
+          : wireError,
       );
-      if (wireError.tag === 'custom-error' && error.cause.tag === 'tool') {
-        expect(error.cause.error).toBe(customPayload);
+      if (wireError.tag === 'custom-error' && error.cause.tag === 'unknown-error') {
+        expect(error.cause.payload).toBe(customPayload);
       }
     }
   });

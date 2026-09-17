@@ -65,34 +65,6 @@ CREATE UNIQUE INDEX tool_releases_owner_name_version_uk
 CREATE INDEX tool_releases_component_revision_idx
     ON tool_releases (component_id, component_revision);
 
-CREATE TRIGGER tool_releases_component_owner_check_insert
-BEFORE INSERT ON tool_releases
-WHEN NEW.source_kind = 0 AND NOT EXISTS (
-    SELECT 1
-    FROM components c
-    JOIN environments e ON e.environment_id = c.environment_id
-    JOIN applications app ON app.application_id = e.application_id
-    WHERE c.component_id = NEW.component_id
-      AND app.account_id = NEW.owner_account_id
-)
-BEGIN
-    SELECT RAISE(ABORT, 'component tool release source must belong to the release owner account');
-END;
-
-CREATE TRIGGER tool_releases_component_owner_check_update
-BEFORE UPDATE OF owner_account_id, source_kind, component_id ON tool_releases
-WHEN NEW.source_kind = 0 AND NOT EXISTS (
-    SELECT 1
-    FROM components c
-    JOIN environments e ON e.environment_id = c.environment_id
-    JOIN applications app ON app.application_id = e.application_id
-    WHERE c.component_id = NEW.component_id
-      AND app.account_id = NEW.owner_account_id
-)
-BEGIN
-    SELECT RAISE(ABORT, 'component tool release source must belong to the release owner account');
-END;
-
 CREATE TABLE environment_tool_grants
 (
     environment_tool_grant_id UUID      NOT NULL,

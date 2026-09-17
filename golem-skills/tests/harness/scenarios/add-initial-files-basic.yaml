@@ -50,6 +50,14 @@ steps:
            - permissions: read-only
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, create `data/greeting.txt` containing exactly
+        `Hello from Golem!`. Add a durable `FileReaderAgent` with a single `id` string field,
+        modeled with Effect Schema and `defineAgent`. Its Effect-based `readGreeting` method must
+        read `/data/greeting.txt` and return its contents without trailing whitespace. Configure
+        `agents.FileReaderAgent.files` in `golem.yaml` with sourcePath `data/greeting.txt`,
+        targetPath `/data/greeting.txt`, and read-only permissions. Import the implementation from
+        `src/main.ts`, then build and deploy successfully.
       scala: >
         In the test-app project, do the following:
 
@@ -118,6 +126,7 @@ steps:
       method:
         rust: "read_greeting"
         ts: "readGreeting"
+        effect: "readGreeting"
         scala: "readGreeting"
         moonbit: "read_greeting"
     expect:

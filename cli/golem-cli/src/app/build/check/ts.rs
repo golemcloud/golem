@@ -24,10 +24,12 @@ use crate::app::edit;
 use crate::app::edit::json::collect_object_entries;
 use crate::app::edit::tsconfig_json::RequiredSetting;
 use crate::fs;
+use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::SdkOverrides;
 use crate::versions;
+use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageJsonSection {
     Dependencies,
     DevDependencies,
@@ -72,11 +74,12 @@ impl PackageJsonDependencyRequirement {
 pub(super) fn plan_package_json_fix_step(
     ctx: &BuildContext<'_>,
     overrides: &SdkOverrides,
+    selected_languages: &BTreeSet<GuestLanguage>,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Option<DependencyFixStep>> {
     let package_json_path = ctx.application().app_root_dir().join("package.json");
     let package_json_str_contents = fs::read_to_string(&package_json_path)?;
-    let requirements = typescript_sdk_requirements(overrides)?;
+    let requirements = selected_sdk_requirements(overrides, selected_languages)?;
     let names = requirements.iter().map(|r| r.name).collect::<Vec<_>>();
 
     let dependencies = collect_object_entries(&package_json_str_contents, "dependencies", &names)?;
@@ -197,6 +200,26 @@ fn parse_json_string_literal(raw: &str) -> Option<String> {
     serde_json::from_str::<String>(raw).ok()
 }
 
+fn selected_sdk_requirements(
+    overrides: &SdkOverrides,
+    selected_languages: &BTreeSet<GuestLanguage>,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+    let mut requirements = BTreeMap::<&'static str, PackageJsonDependencyRequirement>::new();
+
+    if selected_languages.contains(&GuestLanguage::TypeScript) {
+        for requirement in typescript_sdk_requirements(overrides)? {
+            requirements.insert(requirement.name, requirement);
+        }
+    }
+    if selected_languages.contains(&GuestLanguage::Effect) {
+        for requirement in effect_sdk_requirements(overrides)? {
+            requirements.insert(requirement.name, requirement);
+        }
+    }
+
+    Ok(requirements.into_values().collect())
+}
+
 fn typescript_sdk_requirements(
     overrides: &SdkOverrides,
 ) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
@@ -255,9 +278,54 @@ fn typescript_sdk_requirements(
     ])
 }
 
+fn effect_sdk_requirements(
+    overrides: &SdkOverrides,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+    use DependencyPresence::Required;
+    use PackageJsonDependencyRequirement as Req;
+    use versions::ts_dep;
+
+    let effect_golem = if overrides.effect_golem_path.is_some() {
+        ExpectedDependencyKind::ExactPath(overrides.effect_golem_dep()?)
+    } else {
+        ExpectedDependencyKind::ExactValue(overrides.effect_golem_dep()?)
+    };
+    let exact_effect = ExpectedDependencyKind::ExactValue(versions::effect_dep::EFFECT.to_string());
+    let pinned = ExpectedDependencyKind::version_hint;
+
+    Ok(vec![
+        Req::dependency("@golemcloud/effect-golem", effect_golem, Required),
+        Req::dependency("effect", exact_effect, Required),
+        Req::dev_dependency(
+            "@rollup/plugin-node-resolve",
+            pinned(ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE),
+            Required,
+        ),
+        Req::dev_dependency(
+            "@rollup/plugin-typescript",
+            pinned(ts_dep::ROLLUP_PLUGIN_TYPESCRIPT),
+            Required,
+        ),
+        Req::dev_dependency(
+            "@rollup/plugin-commonjs",
+            pinned(ts_dep::ROLLUP_PLUGIN_COMMONJS),
+            Required,
+        ),
+        Req::dev_dependency(
+            "@rollup/plugin-json",
+            pinned(ts_dep::ROLLUP_PLUGIN_JSON),
+            Required,
+        ),
+        Req::dev_dependency("@types/node", pinned(ts_dep::TYPES_NODE), Required),
+        Req::dev_dependency("rollup", pinned(ts_dep::ROLLUP), Required),
+        Req::dev_dependency("tslib", pinned(ts_dep::TSLIB), Required),
+        Req::dev_dependency("typescript", pinned(ts_dep::TYPESCRIPT), Required),
+    ])
+}
+
 #[cfg(test)]
 mod test {
-    use super::{PackageJsonSection, typescript_sdk_requirements};
+    use super::{PackageJsonSection, effect_sdk_requirements, typescript_sdk_requirements};
     use crate::app::template::TEMPLATES_DIR;
     use crate::sdk_overrides::sdk_overrides;
     use std::collections::BTreeSet;
@@ -336,6 +404,44 @@ mod test {
     }
 
     #[test]
+    fn effect_template_and_check_requirements_match() {
+        let template_source = TEMPLATES_DIR
+            .get_file("effect/common/package.json")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let template_json: serde_json::Value = serde_json::from_str(template_source).unwrap();
+        let template_deps = template_json["dependencies"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let template_dev_deps = template_json["devDependencies"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+
+        let overrides = sdk_overrides().unwrap();
+        let requirements = effect_sdk_requirements(overrides).unwrap();
+        let required_deps = requirements
+            .iter()
+            .filter(|requirement| requirement.section == PackageJsonSection::Dependencies)
+            .map(|requirement| requirement.name)
+            .collect::<BTreeSet<_>>();
+        let required_dev_deps = requirements
+            .iter()
+            .filter(|requirement| requirement.section == PackageJsonSection::DevDependencies)
+            .map(|requirement| requirement.name)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(template_deps, required_deps);
+        assert_eq!(template_dev_deps, required_dev_deps);
+    }
+
+    #[test]
     fn ts_tsconfig_requires_only_bundler_resolution() {
         use crate::app::build::check::requirements::typescript_tsconfig_requirements;
         use crate::model::language::GuestLanguage;
@@ -352,5 +458,8 @@ mod test {
         assert!(ts.contains(&"moduleResolution"));
         assert!(!ts.contains(&"experimentalDecorators"));
         assert!(!ts.contains(&"emitDecoratorMetadata"));
+
+        let effect = setting_keys(GuestLanguage::Effect);
+        assert_eq!(effect, vec!["moduleResolution"]);
     }
 }

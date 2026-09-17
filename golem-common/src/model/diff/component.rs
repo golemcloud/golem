@@ -20,7 +20,7 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::ToolBindingInput;
-use crate::schema::tool::Tool;
+use crate::schema::tool::{Tool, ToolMiddleware};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -36,6 +36,10 @@ pub struct Component {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub tool_deployment_configs: BTreeMap<String, HashOf<ToolDeploymentConfig>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub tool_middleware_deployment_configs:
+        BTreeMap<String, HashOf<ToolMiddlewareDeploymentConfig>>,
 }
 
 /// Top-level component diff result.
@@ -47,6 +51,9 @@ pub struct ComponentDiff {
     pub agent_type_provision_config_changes: BTreeMapDiff<String, HashOf<AgentTypeProvisionConfig>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_deployment_config_changes: BTreeMapDiff<String, HashOf<ToolDeploymentConfig>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_middleware_deployment_config_changes:
+        BTreeMapDiff<String, HashOf<ToolMiddlewareDeploymentConfig>>,
 }
 
 impl Diffable for Component {
@@ -62,21 +69,52 @@ impl Diffable for Component {
             .tool_deployment_configs
             .diff_with_current(&current.tool_deployment_configs)?
             .unwrap_or_default();
+        let tool_middleware_deployment_config_changes = new
+            .tool_middleware_deployment_configs
+            .diff_with_current(&current.tool_middleware_deployment_configs)?
+            .unwrap_or_default();
 
         Ok(
             if wasm_changed
                 || !agent_type_provision_config_changes.is_empty()
                 || !tool_deployment_config_changes.is_empty()
+                || !tool_middleware_deployment_config_changes.is_empty()
             {
                 Some(ComponentDiff {
                     wasm_changed,
                     agent_type_provision_config_changes,
                     tool_deployment_config_changes,
+                    tool_middleware_deployment_config_changes,
                 })
             } else {
                 None
             },
         )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolMiddlewareDeploymentConfig {
+    pub definition: ToolMiddleware,
+    pub config: NormalizedJsonValue,
+    pub env: BTreeMap<String, String>,
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub files_by_path: BTreeMap<String, HashOf<crate::model::diff::AgentFile>>,
+    pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
+}
+
+impl Hashable for ToolMiddlewareDeploymentConfig {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for ToolMiddlewareDeploymentConfig {
+    type DiffResult = ToolMiddlewareDeploymentConfig;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new.hash()? != current.hash()?).then(|| new.clone()))
     }
 }
 
@@ -213,6 +251,7 @@ mod tests {
             wasm_hash: Hash::empty(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([("grep".to_string(), tool_config.into())]),
+            tool_middleware_deployment_configs: BTreeMap::new(),
         }
     }
 

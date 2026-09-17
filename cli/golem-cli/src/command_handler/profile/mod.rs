@@ -17,17 +17,20 @@ pub mod config;
 use crate::command::profile::{ProfileAuthMode, ProfileSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::{
-    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileName,
+    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileDeletion,
+    ProfileName,
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{LogColorize, log_action};
+use crate::log::{LogColorize, log_action, logln};
 use crate::model::config::ProfileView;
 use crate::model::config::profile::{
     ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
 use crate::model::format::Format;
+use crate::model::help::AvailableProfileNamesHelp;
+use crate::model::text_format::log_text_view;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -93,9 +96,10 @@ impl ProfileCommandHandler {
         let (name, profile, set_active) = match name {
             Some(name) => {
                 if name.is_builtin() {
-                    log_error(
+                    log_error(format!(
                         "The requested profile name {} is a builtin profile. Please choose another profile name!",
-                    );
+                        name.0.log_color_error_highlight()
+                    ));
                     bail!(NonSuccessfulExit);
                 }
 
@@ -118,8 +122,6 @@ impl ProfileCommandHandler {
             "Creating",
             format!("new profile: {}", name.0.log_color_highlight()),
         );
-        Config::set_profile(name.clone(), profile, self.ctx.config_dir())?;
-
         if set_active {
             log_action(
                 "Setting ",
@@ -128,8 +130,15 @@ impl ProfileCommandHandler {
                     name.0.log_color_highlight()
                 ),
             );
-            Config::set_active_profile_name(name.clone(), self.ctx.config_dir())?;
-        };
+        }
+        let added = Config::add_profile(name.clone(), profile, set_active, self.ctx.config_dir())?;
+        if !added {
+            log_error(format!(
+                "Profile {} already exists. Delete it first, or choose another profile name!",
+                name.0.log_color_error_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        }
 
         self.ctx.log_handler().log_output(ProfileCreateResult {
             created: true,
@@ -184,7 +193,11 @@ impl ProfileCommandHandler {
         let profiles = sorted_profiles
             .into_iter()
             .map(|(name, profile)| {
-                ProfileView::from_profile(&default_profile_name, NamedProfile { name, profile })
+                ProfileView::from_profile(
+                    &default_profile_name,
+                    NamedProfile { name, profile },
+                    self.ctx.builtin_local_url(),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -233,7 +246,11 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(ProfileView::from_profile(&default_profile_name, profile))?;
+            .log_output(ProfileView::from_profile(
+                &default_profile_name,
+                profile,
+                self.ctx.builtin_local_url(),
+            ))?;
 
         Ok(())
     }
@@ -247,19 +264,29 @@ impl ProfileCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        // Check if we're trying to delete the currently active profile
-        let config = Config::from_dir(self.ctx.config_dir())?;
-        let current_active_profile = config.default_profile_name();
-
-        if profile_name == current_active_profile {
-            log_error(format!(
-                "Cannot delete currently active profile: {}. Switch to another profile first.",
-                profile_name.0.log_color_error_highlight()
-            ));
-            bail!(NonSuccessfulExit);
+        // The active profile cannot be deleted; the check is part of the locked update, so a
+        // concurrent switch cannot slip in between the check and the delete.
+        match Config::delete_inactive_profile(&profile_name, self.ctx.config_dir())? {
+            ProfileDeletion::Deleted => {}
+            ProfileDeletion::Active => {
+                log_error(format!(
+                    "Cannot delete currently active profile: {}. Switch to another profile first.",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                bail!(NonSuccessfulExit);
+            }
+            ProfileDeletion::NotFound => {
+                log_error(format!(
+                    "Profile {} not found",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
+                bail!(NonSuccessfulExit);
+            }
         }
-
-        Config::delete_profile(&profile_name, self.ctx.config_dir())?;
 
         self.ctx.log_handler().log_output(ProfileDeleteView {
             deleted: true,
