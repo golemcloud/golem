@@ -22,9 +22,7 @@ use crate::schema::tool::canonical::CanonicalSurfaceRef;
 use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::decode_tool;
 use crate::schema::tool::{CommandBody, Constraint, Doc, Ref, Tool};
-use crate::schema::{
-    MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
-};
+use crate::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -140,14 +138,13 @@ impl ToolType {
             .body
             .as_ref()
             .expect("resolved body");
-        let mut local_graph = input.record_schema.clone();
         let mut arguments = Vec::with_capacity(input.fields.len());
         let surfaces = self.definition.canonical_input_surfaces(index);
-        let local_types = input
+        input
             .fields
             .iter()
             .zip(surfaces)
-            .map(|(field, surface)| {
+            .for_each(|(field, surface)| {
                 let (required, default) = match surface {
                     CanonicalSurfaceRef::GlobalOption { node, index } => {
                         let spec = &self.definition.commands.nodes[node].globals.options[index];
@@ -167,14 +164,6 @@ impl ToolType {
                     ),
                     _ => (false, None),
                 };
-                let optional_carrier = !required
-                    && default.is_none()
-                    && matches!(
-                        surface,
-                        CanonicalSurfaceRef::GlobalOption { .. }
-                            | CanonicalSurfaceRef::BodyOption { .. }
-                            | CanonicalSurfaceRef::BodyPositional { .. }
-                    );
                 let kind = match surface {
                     CanonicalSurfaceRef::GlobalOption { .. }
                     | CanonicalSurfaceRef::BodyOption { .. } => ToolArgumentKind::Option,
@@ -183,31 +172,19 @@ impl ToolType {
                     CanonicalSurfaceRef::BodyPositional { .. } => ToolArgumentKind::Positional,
                     CanonicalSurfaceRef::BodyTail => ToolArgumentKind::Tail,
                 };
-                let schema_type = if optional_carrier {
-                    SchemaType::option(field.type_.clone())
-                } else {
-                    field.type_.clone()
-                };
                 arguments.push(ToolArgument {
                     kind,
                     name: field.name.clone(),
                     aliases: field.aliases.clone(),
                     short: field.short,
                     schema: SchemaRef::new(SchemaGraph {
-                        defs: local_graph.defs.clone(),
-                        root: schema_type.clone(),
+                        defs: input.record_schema.defs.clone(),
+                        root: field.type_.clone(),
                     }),
                     required,
                     default,
                 });
-                NamedFieldType {
-                    name: field.name.clone(),
-                    body: schema_type,
-                    metadata: MetadataEnvelope::default(),
-                }
-            })
-            .collect::<Vec<_>>();
-        local_graph.root = SchemaType::record(local_types);
+            });
         let mut node_index = 0;
         let canonical_path = path
             .iter()
@@ -228,7 +205,7 @@ impl ToolType {
             tool: self.clone(),
             index,
             path: canonical_path,
-            input: SchemaRef::new(local_graph),
+            input: SchemaRef::new(input.record_schema.clone()),
             wire_input: input.record_schema,
             arguments,
         })
@@ -655,9 +632,10 @@ impl DynamicToolClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::SchemaType;
     use crate::schema::tool::{
-        CommandBody, CommandIndex, CommandNode, CommandTree, Globals, Positional, Positionals,
-        ResultSpec,
+        CommandBody, CommandIndex, CommandNode, CommandTree, Globals, OptionShape, OptionSpec,
+        Positional, Positionals, ResultSpec,
     };
     use test_r::test;
 
@@ -736,6 +714,44 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn optional_inputs_use_the_canonical_wire_schema() {
+        let mut tool = sample();
+        let definition = Arc::make_mut(&mut tool.definition);
+        let body = definition.commands.nodes[1].body.as_mut().unwrap();
+        body.positionals.fixed[0].required = false;
+        body.options.push(OptionSpec {
+            long: "mode".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+        let command = tool.command(&["run"]).unwrap();
+        assert_eq!(command.input_schema().graph(), &command.wire_input);
+        for fields in [
+            vec![
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+            ],
+            vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("hello".to_string()))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("fast".to_string()))),
+                },
+            ],
+        ] {
+            let value = SchemaValue::Record { fields };
+            assert!(command.checked_input(value).is_ok());
+        }
     }
 
     #[test]
