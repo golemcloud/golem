@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 EXPECTED_INVOKE_LIFT_SHA256 = (
-    "563d4220b02be6c79fce3bd9242fc992a2049b7a66da6b836ea86b16749461b2"
+    "6402e624d9b47778706a098debcb3114261f909d3b03352a159f7091c812fdfd"
 )
 
 
@@ -121,7 +121,7 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
                         graph: __wit_bindgen_lift_invoke_input_graph(p0),
                         value: __wit_bindgen_lift_invoke_input_value(p0),
                   }
-                  let return_result: Ref[Result[@common.InvocationResult, @common.ToolError]?] = Ref(None)
+                  let return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?] = Ref(None)
                   return_result.val = Some(invoke_tool_middleware(
                         middleware_name,
                         tool_name,

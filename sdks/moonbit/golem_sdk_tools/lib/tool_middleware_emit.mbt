@@ -132,12 +132,12 @@ fn emit_middleware_protocol_helpers(buf : StringBuilder) -> Unit {
       #|  context : String,
       #|) -> Result[T, @toolMiddleware.ToolInvokeError[E]] {
       #|  try @tool.decode_canonical_field(fields, name, context) catch {
-      #|    @toolCommon.ToolError::InvalidToolName(name) => Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
-      #|    @toolCommon.ToolError::InvalidCommandPath(path) => Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
-      #|    @toolCommon.ToolError::InvalidInput(message) => Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
-      #|    @toolCommon.ToolError::ConstraintViolation(message) => Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
-      #|    @toolCommon.ToolError::InvalidResult(message) => Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
-      #|    @toolCommon.ToolError::CustomError(value) => {
+      #|    @types.ToolError::InvalidToolName(name) => Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
+      #|    @types.ToolError::InvalidCommandPath(path) => Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
+      #|    @types.ToolError::InvalidInput(message) => Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
+      #|    @types.ToolError::ConstraintViolation(message) => Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
+      #|    @types.ToolError::InvalidResult(message) => Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
+      #|    @types.ToolError::CustomError(value) => {
       #|      @model.drop_wit_capabilities(value.payload.value)
       #|      Err(@toolMiddleware.ToolInvokeError::InvalidResult("canonical field decoding returned a custom tool error"))
       #|    }

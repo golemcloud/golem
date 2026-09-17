@@ -33,6 +33,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardId = golemCore200Types.CardId;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolRpcError = golemCore200Types.ToolRpcError;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
@@ -413,63 +414,6 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type ToolInvocationResult = {
     result?: TypedSchemaValue;
-  };
-  export type CustomToolError = {
-    name: string;
-    payload: TypedSchemaValue;
-  };
-  export type ToolError =
-  {
-    tag: 'invalid-tool-name'
-    val: string
-  } |
-  {
-    tag: 'invalid-command-path'
-    val: string[]
-  } |
-  {
-    tag: 'invalid-input'
-    val: string
-  } |
-  {
-    tag: 'constraint-violation'
-    val: string
-  } |
-  {
-    tag: 'invalid-result'
-    val: string
-  } |
-  {
-    tag: 'custom-error'
-    val: CustomToolError
-  };
-  export type ToolRpcError =
-  {
-    tag: 'protocol-error'
-    val: string
-  } |
-  {
-    tag: 'denied'
-    val: string
-  } |
-  {
-    tag: 'not-found'
-    val: string
-  } |
-  {
-    tag: 'remote-internal-error'
-    val: string
-  } |
-  {
-    tag: 'remote-tool-error'
-    val: ToolError
-  } |
-  {
-    tag: 'cancelled'
-  } |
-  {
-    tag: 'resource-exhausted'
-    val: string
   };
   export type ExternalToolResultParameters = {
     result: Result<ToolInvocationResult, ToolRpcError>;

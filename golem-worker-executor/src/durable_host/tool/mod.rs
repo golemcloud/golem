@@ -56,7 +56,7 @@ use crate::preview2::golem::tool::host::{
     HostToolStdinClosed, HostToolStdinClosedWithStore, HostToolStdinWriter,
     HostToolStdinWriterWithStore, HostToolStdout, HostToolStdoutWriter,
     HostToolStdoutWriterWithStore, HostWithStore, InvocationResult,
-    RegisteredTool as WitRegisteredTool, RpcError, StreamWriteError, TypedSchemaValue,
+    RegisteredTool as WitRegisteredTool, StreamWriteError, ToolRpcError, TypedSchemaValue,
 };
 use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_exports;
 use crate::services::environment_state::{
@@ -988,59 +988,51 @@ fn encode_typed_tool_value<Ctx: WorkerCtx>(
 fn project_tool_error<Ctx: WorkerCtx>(
     error: SerializableToolError,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> RpcError {
+) -> ToolRpcError {
     let error = match error {
-        SerializableToolError::InvalidToolName(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidToolName(value)
-        }
-        SerializableToolError::InvalidCommandPath(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidCommandPath(value)
-        }
-        SerializableToolError::InvalidInput(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidInput(value)
-        }
-        SerializableToolError::ConstraintViolation(value) => {
-            crate::preview2::golem::tool::host::ToolError::ConstraintViolation(value)
-        }
-        SerializableToolError::InvalidResult(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidResult(value)
-        }
+        SerializableToolError::InvalidToolName(value) => ToolError::InvalidToolName(value),
+        SerializableToolError::InvalidCommandPath(value) => ToolError::InvalidCommandPath(value),
+        SerializableToolError::InvalidInput(value) => ToolError::InvalidInput(value),
+        SerializableToolError::ConstraintViolation(value) => ToolError::ConstraintViolation(value),
+        SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
         SerializableToolError::CustomError(value) => {
             match encode_typed_tool_value(&value.payload, ctx) {
-                Ok(payload) => crate::preview2::golem::tool::host::ToolError::CustomError(
-                    crate::preview2::golem::tool::common::CustomToolError {
+                Ok(payload) => {
+                    ToolError::CustomError(golem_common::schema::wit::wire::CustomToolError {
                         name: value.name,
                         payload,
-                    },
-                ),
-                Err(error) => return RpcError::ProtocolError(error),
+                    })
+                }
+                Err(error) => return ToolRpcError::ProtocolError(error),
             }
         }
     };
-    RpcError::RemoteToolError(error)
+    ToolRpcError::RemoteToolError(error)
 }
 
 fn project_tool_rpc_error<Ctx: WorkerCtx>(
     error: SerializableToolRpcError,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> RpcError {
+) -> ToolRpcError {
     match error {
-        SerializableToolRpcError::ProtocolError(value) => RpcError::ProtocolError(value),
-        SerializableToolRpcError::Denied(value) => RpcError::Denied(value),
-        SerializableToolRpcError::NotFound(value) => RpcError::NotFound(value),
+        SerializableToolRpcError::ProtocolError(value) => ToolRpcError::ProtocolError(value),
+        SerializableToolRpcError::Denied(value) => ToolRpcError::Denied(value),
+        SerializableToolRpcError::NotFound(value) => ToolRpcError::NotFound(value),
         SerializableToolRpcError::RemoteInternalError(value) => {
-            RpcError::RemoteInternalError(value)
+            ToolRpcError::RemoteInternalError(value)
         }
         SerializableToolRpcError::RemoteToolError(error) => project_tool_error(*error, ctx),
-        SerializableToolRpcError::Cancelled => RpcError::Cancelled,
-        SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
+        SerializableToolRpcError::Cancelled => ToolRpcError::Cancelled,
+        SerializableToolRpcError::ResourceExhausted(value) => {
+            ToolRpcError::ResourceExhausted(value)
+        }
     }
 }
 
 fn project_tool_response_value<Ctx: WorkerCtx>(
     response: ToolInvokeResponse,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<Option<TypedSchemaValue>, RpcError> {
+) -> Result<Option<TypedSchemaValue>, ToolRpcError> {
     response
         .map_err(|error| project_tool_rpc_error(error, ctx))
         .and_then(|response| {
@@ -1049,14 +1041,14 @@ fn project_tool_response_value<Ctx: WorkerCtx>(
                 .as_ref()
                 .map(|value| encode_typed_tool_value(value, ctx))
                 .transpose()
-                .map_err(RpcError::ProtocolError)
+                .map_err(ToolRpcError::ProtocolError)
         })
 }
 
 fn project_tool_response<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
-) -> Result<InvocationResult, RpcError>
+) -> Result<InvocationResult, ToolRpcError>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -1073,7 +1065,7 @@ where
 fn project_tool_unit<Ctx: WorkerCtx>(
     response: Result<(), SerializableToolRpcError>,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<(), RpcError> {
+) -> Result<(), ToolRpcError> {
     response.map_err(|error| project_tool_rpc_error(error, ctx))
 }
 
@@ -1628,40 +1620,28 @@ fn decode_tool_terminal(
 }
 
 fn decode_guest_tool_error<Ctx: WorkerCtx>(
-    error: crate::preview2::golem::tool::host::ToolError,
+    error: ToolError,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> SerializableToolRpcError {
     let error = match error {
-        crate::preview2::golem::tool::host::ToolError::InvalidToolName(value) => {
-            SerializableToolError::InvalidToolName(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidCommandPath(value) => {
-            SerializableToolError::InvalidCommandPath(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidInput(value) => {
-            SerializableToolError::InvalidInput(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::ConstraintViolation(value) => {
-            SerializableToolError::ConstraintViolation(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidResult(value) => {
-            SerializableToolError::InvalidResult(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::CustomError(value) => {
-            match decode_typed_tool_value(value.payload, ctx) {
-                Ok(payload) => {
-                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
-                        name: value.name,
-                        payload,
-                    }))
-                }
-                Err(_) => {
-                    return SerializableToolRpcError::ProtocolError(
-                        "tool guest returned an invalid custom-error payload".to_string(),
-                    );
-                }
+        ToolError::InvalidToolName(value) => SerializableToolError::InvalidToolName(value),
+        ToolError::InvalidCommandPath(value) => SerializableToolError::InvalidCommandPath(value),
+        ToolError::InvalidInput(value) => SerializableToolError::InvalidInput(value),
+        ToolError::ConstraintViolation(value) => SerializableToolError::ConstraintViolation(value),
+        ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
+        ToolError::CustomError(value) => match decode_typed_tool_value(value.payload, ctx) {
+            Ok(payload) => {
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: value.name,
+                    payload,
+                }))
             }
-        }
+            Err(_) => {
+                return SerializableToolRpcError::ProtocolError(
+                    "tool guest returned an invalid custom-error payload".to_string(),
+                );
+            }
+        },
     };
     SerializableToolRpcError::RemoteToolError(Box::new(error))
 }
@@ -3764,7 +3744,7 @@ pub(crate) async fn settle_tool_children_owned(
 async fn get_tool_invoke_results<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     futures: &[Resource<FutureInvokeResultEntry>],
-) -> anyhow::Result<Vec<Result<InvocationResult, RpcError>>>
+) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -4354,7 +4334,7 @@ where
             }
             Ok(Ok(response))
         }
-        Err(RpcError::RemoteToolError(error)) => Ok(Err(error)),
+        Err(ToolRpcError::RemoteToolError(error)) => Ok(Err(error)),
         Err(error) => Err(anyhow!("underlying tool invocation failed: {error:?}")),
     }
 }
@@ -4777,7 +4757,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     async fn get_invoke_results(
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
-    ) -> anyhow::Result<Vec<Result<InvocationResult, RpcError>>> {
+    ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -4862,7 +4842,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+    ) -> anyhow::Result<Result<(), ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -4906,7 +4886,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
         stdout: Option<Resource<ToolStdoutEntry>>,
-    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+    ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -4979,7 +4959,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
     async fn get(
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
-    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+    ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()

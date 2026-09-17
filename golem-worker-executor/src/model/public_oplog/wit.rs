@@ -78,19 +78,19 @@ fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<SchemaVal
     decode_value(&value).map_err(|e| e.to_string())
 }
 
-fn encode_tool_error(error: SerializableToolError) -> Result<oplog::ToolError, String> {
+fn encode_tool_error(error: SerializableToolError) -> Result<wire::ToolError, String> {
     Ok(match error {
-        SerializableToolError::InvalidToolName(error) => oplog::ToolError::InvalidToolName(error),
+        SerializableToolError::InvalidToolName(error) => wire::ToolError::InvalidToolName(error),
         SerializableToolError::InvalidCommandPath(path) => {
-            oplog::ToolError::InvalidCommandPath(path)
+            wire::ToolError::InvalidCommandPath(path)
         }
-        SerializableToolError::InvalidInput(error) => oplog::ToolError::InvalidInput(error),
+        SerializableToolError::InvalidInput(error) => wire::ToolError::InvalidInput(error),
         SerializableToolError::ConstraintViolation(error) => {
-            oplog::ToolError::ConstraintViolation(error)
+            wire::ToolError::ConstraintViolation(error)
         }
-        SerializableToolError::InvalidResult(error) => oplog::ToolError::InvalidResult(error),
+        SerializableToolError::InvalidResult(error) => wire::ToolError::InvalidResult(error),
         SerializableToolError::CustomError(error) => {
-            oplog::ToolError::CustomError(oplog::CustomToolError {
+            wire::ToolError::CustomError(wire::CustomToolError {
                 name: error.name,
                 payload: encode_public_typed_schema_value(error.payload)?,
             })

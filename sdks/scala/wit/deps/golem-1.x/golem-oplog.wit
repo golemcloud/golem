@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
-    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
+    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value, tool-rpc-error};
 
     use host.{component-revision, oplog-index, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/types@0.3.0.{duration};
@@ -403,30 +403,6 @@ interface oplog {
 
     record tool-invocation-result {
         %result: option<typed-schema-value>,
-    }
-
-    record custom-tool-error {
-        name: string,
-        payload: typed-schema-value,
-    }
-
-    variant tool-error {
-        invalid-tool-name(string),
-        invalid-command-path(list<string>),
-        invalid-input(string),
-        constraint-violation(string),
-        invalid-result(string),
-        custom-error(custom-tool-error),
-    }
-
-    variant tool-rpc-error {
-        protocol-error(string),
-        denied(string),
-        not-found(string),
-        remote-internal-error(string),
-        remote-tool-error(tool-error),
-        cancelled,
-        resource-exhausted(string),
     }
 
     record agent-invocation-output-parameters {

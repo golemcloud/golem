@@ -642,4 +642,36 @@ interface types {
         value: schema-value-tree,
     }
 
+    /// A declared tool failure shared by invocation and oplog interfaces.
+    record custom-tool-error {
+        /// The selected declared error-case name, independent of payload shape.
+        name: string,
+        /// Unit for a payloadless error; otherwise the declared payload type.
+        payload: typed-schema-value,
+    }
+
+    variant tool-error {
+        invalid-tool-name(string),
+        invalid-command-path(list<string>),
+        invalid-input(string),
+        constraint-violation(string),
+        /// The returned value does not match the body's declared result schema.
+        invalid-result(string),
+        /// Consumers preserve unfamiliar names and typed payloads when forwarding.
+        custom-error(custom-tool-error),
+    }
+
+    variant tool-rpc-error {
+        protocol-error(string),
+        denied(string),
+        not-found(string),
+        remote-internal-error(string),
+        remote-tool-error(tool-error),
+        /// The operation's explicit cancellation won terminal arbitration.
+        cancelled,
+        /// A filesystem-capable input or output attachment exceeded the
+        /// configured per-direction retained-byte limit.
+        resource-exhausted(string),
+    }
+
 }

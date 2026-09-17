@@ -26,25 +26,6 @@ pub(all) suberror OplogReadError {
   InternalError(String)
 } derive(Eq, @debug.Debug)
 
-pub(all) suberror ToolError {
-  InvalidToolName(String)
-  InvalidCommandPath(Array[String])
-  InvalidInput(String)
-  ConstraintViolation(String)
-  InvalidResult(String)
-  CustomError(CustomToolError)
-} derive(Eq, @debug.Debug)
-
-pub(all) suberror ToolRpcError {
-  ProtocolError(String)
-  Denied(String)
-  NotFound(String)
-  RemoteInternalError(String)
-  RemoteToolError(ToolError)
-  Cancelled
-  ResourceExhausted(String)
-} derive(Eq, @debug.Debug)
-
 pub(all) suberror WorkerError {
   Unknown(String)
   InvalidRequest(String)
@@ -237,11 +218,6 @@ pub(all) struct CreateResourceParameters {
   owner : String
 } derive(Eq, @debug.Debug)
 
-pub(all) struct CustomToolError {
-  name : String
-  payload : @types.TypedSchemaValue
-} derive(Eq, @debug.Debug)
-
 pub(all) struct DeactivatePluginParameters {
   timestamp : @system-clock.Instant
   plugin : PluginInstallationDescription
@@ -312,7 +288,7 @@ pub(all) struct ExternalToolInvocationParameters {
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ExternalToolResultParameters {
-  result : Result[ToolInvocationResult, ToolRpcError]
+  result : Result[ToolInvocationResult, @types.ToolRpcError]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FailedUpdateParameters {

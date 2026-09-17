@@ -8,8 +8,8 @@ package golem:tool@0.1.0;
 /// (rather than agent-id), and without the agent-instance constructor
 /// step (tools are stateless invocables).
 interface host {
-  use common.{tool, tool-error, invocation-result};
-  use golem:core/types@2.0.0.{typed-schema-value, component-id};
+  use common.{tool, invocation-result};
+  use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};
 
   /// A tool registered in the environment, addressable by name from
   /// any agent or other tool. `definition` carries the full metadata;
@@ -45,19 +45,6 @@ interface host {
   /// either if the tool is not registered or if the calling agent
   /// has no binding for it; the two cases are not distinguished.
   get-tool: func(name: string) -> option<registered-tool>;
-
-  variant rpc-error {
-    protocol-error(string),
-    denied(string),
-    not-found(string),
-    remote-internal-error(string),
-    remote-tool-error(tool-error),
-    /// The operation's explicit cancellation won terminal arbitration.
-    cancelled,
-    /// A filesystem-capable input or output attachment exceeded the
-    /// configured per-direction retained-byte limit.
-    resource-exhausted(string),
-  }
 
   /// Recoverable attachment failures are stream values rather than Component
   /// Model stream errors. A producer emits one final failure item and then
@@ -150,7 +137,7 @@ interface host {
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
       stdout:       option<own<tool-stdout>>,
-    ) -> result<invocation-result, rpc-error>;
+    ) -> result<invocation-result, tool-rpc-error>;
 
     /// Durably admits fire-and-forget work. Declared output is discarded by
     /// the host so an absent caller reader cannot apply backpressure.
@@ -158,7 +145,7 @@ interface host {
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
-    ) -> result<_, rpc-error>;
+    ) -> result<_, tool-rpc-error>;
 
     /// Durably admits work and returns an independently owned structured
     /// result observer. Stdout, when declared, was created by the caller and
@@ -174,7 +161,7 @@ interface host {
   resource future-invoke-result {
     /// Sequential calls return the same immutable terminal. Only one call may
     /// be outstanding at a time.
-    get: async func() -> result<invocation-result, rpc-error>;
+    get: async func() -> result<invocation-result, tool-rpc-error>;
     /// Explicitly cancels the operation. Dropping this resource only detaches
     /// result observation and does not cancel accepted work.
     cancel: func();
@@ -185,7 +172,7 @@ interface host {
   /// eligible together and execute in durable Start order.
   get-invoke-results: async func(
     futures: list<borrow<future-invoke-result>>,
-  ) -> list<result<invocation-result, rpc-error>>;
+  ) -> list<result<invocation-result, tool-rpc-error>>;
 }
 
 world tool-host {

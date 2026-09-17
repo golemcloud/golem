@@ -9,7 +9,7 @@ pub fn wasmExportAsyncInvokeGolemToolGuest(event_raw : Int, waitable : Int, code
 #doc(hidden)
 pub fn wasmExportDiscoverTools() -> Int {
 
-      let (result) : (Result[Array[@common.Tool], @common.ToolError]) = discover_tools();
+      let (result) : (Result[Array[@common.Tool], @types.ToolError]) = discover_tools();
       let return_area = mbt_ffi_malloc(48)
 
       match result {
@@ -20,7 +20,7 @@ pub fn wasmExportDiscoverTools() -> Int {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.Tool = (payload)[(index)]
                         let iter_base = address + (index * 36);
-                        __wit_bindgen_lower_t536((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t538((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((return_area) + 8, (payload).length())
@@ -30,7 +30,7 @@ pub fn wasmExportDiscoverTools() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t542((return_area) + 4, payload0)
+                  __wit_bindgen_lower_t81((return_area) + 4, payload0)
 
                   ()
             }
@@ -3274,19 +3274,19 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
 
       let result = mbt_ffi_ptr2str(p0, p1)
 
-      let (result0) : (Result[@common.Tool, @common.ToolError]) = get_tool(result);
+      let (result0) : (Result[@common.Tool, @types.ToolError]) = get_tool(result);
       let return_area = mbt_ffi_malloc(48)
 
       match result0 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  __wit_bindgen_lower_t536((return_area) + 4, payload)
+                  __wit_bindgen_lower_t538((return_area) + 4, payload)
 
                   ()
             }
             Err(payload1) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t542((return_area) + 4, payload1)
+                  __wit_bindgen_lower_t81((return_area) + 4, payload1)
 
                   ()
             }
@@ -7050,7 +7050,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
 fn wasmExportAsyncInvokeGolemToolGuestTaskReturn(p0: Int, p1: Int, p2: Int, p3: Int, p4: Int, p5: Int, p6: Int, p7: Int, p8: Int, p9: Int, p10: Int, p11: Int) = "[export]golem:tool/guest@0.1.0" "[task-return]invoke"
 
 ///|
-fn invoke_task_return(return_result: Ref[Result[@common.InvocationResult, @common.ToolError]?]) -> Unit {
+fn invoke_task_return(return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?]) -> Unit {
 
       match return_result.val {
             Some(return_value) => {
@@ -9179,7 +9179,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                         _ => panic()
                   }
 
-                  let return_result: Ref[Result[@common.InvocationResult, @common.ToolError]?] = Ref(None)
+                  let return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?] = Ref(None)
                   return_result.val = Some(invoke(result, array, @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array196, defs : array201, root : mbt_ffi_load32((p0) + 32)}, value : @types.SchemaValueTree::{value_nodes : array232, root : mbt_ffi_load32((p0) + 44)}}, lifted235, lifted236, lifted254, background_group))
                   invoke_task_return(return_result)
 
@@ -10935,929 +10935,7 @@ fn __wit_bindgen_lower_t79(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t483(ptr : Int, value : @common.CommandAnnotations) -> Unit {
-      mbt_ffi_store8((ptr) + 0, (if (value).read_only { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 1, (if (value).destructive { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 2, (if (value).idempotent { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 3, (if (value).open_world { 1 } else { 0 }))
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Repetition) -> Unit {
-
-      match value {
-            Repeated => {
-                  mbt_ffi_store8((ptr) + 0, (0))
-
-                  ()
-            }
-            Delimited(payload0) => {
-                  mbt_ffi_store8((ptr) + 0, (1))
-                  mbt_ffi_store32((ptr) + 4, (payload0).to_int())
-
-                  ()
-            }
-            Either(payload1) => {
-                  mbt_ffi_store8((ptr) + 0, (2))
-                  mbt_ffi_store32((ptr) + 4, (payload1).to_int())
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t486(ptr : Int, value : @common.RepeatableListShape) -> Unit {
-      __wit_bindgen_lower_t485((ptr) + 0, (value).repetition)
-      mbt_ffi_store32((ptr) + 8, (value).item_type)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t487(ptr : Int, value : @common.RepeatableMapShape) -> Unit {
-      __wit_bindgen_lower_t485((ptr) + 0, (value).repetition)
-      mbt_ffi_store32((ptr) + 8, (value).map_type)
-      mbt_ffi_store8((ptr) + 12, (value).duplicate_key_policy.ordinal())
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t488(ptr : Int, value : @common.OptionShape) -> Unit {
-
-      match value {
-            Scalar(payload) => {
-                  mbt_ffi_store8((ptr) + 0, (0))
-                  mbt_ffi_store32((ptr) + 4, payload)
-
-                  ()
-            }
-            OptionalScalar(payload0) => {
-                  mbt_ffi_store8((ptr) + 0, (1))
-                  mbt_ffi_store32((ptr) + 4, payload0)
-
-                  ()
-            }
-            RepeatableList(payload1) => {
-                  mbt_ffi_store8((ptr) + 0, (2))
-                  __wit_bindgen_lower_t486((ptr) + 4, payload1)
-
-                  ()
-            }
-            RepeatableMap(payload2) => {
-                  mbt_ffi_store8((ptr) + 0, (3))
-                  __wit_bindgen_lower_t487((ptr) + 4, payload2)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t489(ptr : Int, value : @common.BoolFlagShape) -> Unit {
-      mbt_ffi_store8((ptr) + 0, (if (value).default { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 1, (if (value).negatable { 1 } else { 0 }))
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t491(ptr : Int, value : @common.FlagShape) -> Unit {
-
-      match value {
-            BoolFlag(payload) => {
-                  mbt_ffi_store8((ptr) + 0, (0))
-                  __wit_bindgen_lower_t489((ptr) + 4, payload)
-
-                  ()
-            }
-            CountFlag(payload0) => {
-                  mbt_ffi_store8((ptr) + 0, (1))
-
-                  match (payload0) {
-                        None => {
-                              mbt_ffi_store8((ptr) + 4, (0))
-
-                              ()
-                        }
-                        Some(payload2) => {
-                              mbt_ffi_store8((ptr) + 4, (1))
-                              mbt_ffi_store32((ptr) + 8, (payload2).reinterpret_as_int())
-
-                              ()
-                        }
-                  }
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t492(ptr : Int, value : @common.ValueIsRef) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t78((ptr) + 8, (value).value)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t493(ptr : Int, value : @common.Ref) -> Unit {
-
-      match value {
-            Present(payload) => {
-                  mbt_ffi_store8((ptr) + 0, (0))
-
-                  let ptr0 = mbt_ffi_str2ptr(payload)
-                  mbt_ffi_store32((ptr) + 8, payload.length())
-                  mbt_ffi_store32((ptr) + 4, ptr0)
-
-                  ()
-            }
-            ValueIs(payload1) => {
-                  mbt_ffi_store8((ptr) + 0, (1))
-                  __wit_bindgen_lower_t492((ptr) + 4, payload1)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t495(ptr : Int, value : @common.RefGroup) -> Unit {
-
-      let address = mbt_ffi_malloc(((value).refs).length() * 24);
-      for index = 0; index < ((value).refs).length(); index = index + 1 {
-            let iter_elem : @common.Ref = ((value).refs)[(index)]
-            let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 4, ((value).refs).length())
-      mbt_ffi_store32((ptr) + 0, address)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t497(ptr : Int, value : @common.ImpliesC) -> Unit {
-      mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
-
-      let address = mbt_ffi_malloc(((value).lhs).length() * 24);
-      for index = 0; index < ((value).lhs).length(); index = index + 1 {
-            let iter_elem : @common.Ref = ((value).lhs)[(index)]
-            let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
-      mbt_ffi_store32((ptr) + 4, address)
-      mbt_ffi_store8((ptr) + 12, (value).rhs_quant.ordinal())
-
-      let address0 = mbt_ffi_malloc(((value).rhs).length() * 24);
-      for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
-            let iter_elem : @common.Ref = ((value).rhs)[(index1)]
-            let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 20, ((value).rhs).length())
-      mbt_ffi_store32((ptr) + 16, address0)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t498(ptr : Int, value : @common.ForbidsC) -> Unit {
-      mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
-
-      let address = mbt_ffi_malloc(((value).lhs).length() * 24);
-      for index = 0; index < ((value).lhs).length(); index = index + 1 {
-            let iter_elem : @common.Ref = ((value).lhs)[(index)]
-            let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
-      mbt_ffi_store32((ptr) + 4, address)
-
-      let address0 = mbt_ffi_malloc(((value).rhs).length() * 24);
-      for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
-            let iter_elem : @common.Ref = ((value).rhs)[(index1)]
-            let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 16, ((value).rhs).length())
-      mbt_ffi_store32((ptr) + 12, address0)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t500(ptr : Int, value : @common.Constraint) -> Unit {
-
-      match value {
-            RequiresAll(payload) => {
-                  mbt_ffi_store8((ptr) + 0, (0))
-
-                  let address = mbt_ffi_malloc((payload).length() * 24);
-                  for index = 0; index < (payload).length(); index = index + 1 {
-                        let iter_elem : @common.Ref = (payload)[(index)]
-                        let iter_base = address + (index * 24);
-                        __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-                  }
-                  mbt_ffi_store32((ptr) + 8, (payload).length())
-                  mbt_ffi_store32((ptr) + 4, address)
-
-                  ()
-            }
-            AllOrNone(payload0) => {
-                  mbt_ffi_store8((ptr) + 0, (1))
-
-                  let address1 = mbt_ffi_malloc((payload0).length() * 24);
-                  for index2 = 0; index2 < (payload0).length(); index2 = index2 + 1 {
-                        let iter_elem : @common.Ref = (payload0)[(index2)]
-                        let iter_base = address1 + (index2 * 24);
-                        __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-                  }
-                  mbt_ffi_store32((ptr) + 8, (payload0).length())
-                  mbt_ffi_store32((ptr) + 4, address1)
-
-                  ()
-            }
-            RequiresAny(payload3) => {
-                  mbt_ffi_store8((ptr) + 0, (2))
-
-                  let address4 = mbt_ffi_malloc((payload3).length() * 24);
-                  for index5 = 0; index5 < (payload3).length(); index5 = index5 + 1 {
-                        let iter_elem : @common.Ref = (payload3)[(index5)]
-                        let iter_base = address4 + (index5 * 24);
-                        __wit_bindgen_lower_t493((iter_base) + 0, iter_elem)
-
-                  }
-                  mbt_ffi_store32((ptr) + 8, (payload3).length())
-                  mbt_ffi_store32((ptr) + 4, address4)
-
-                  ()
-            }
-            MutexGroups(payload6) => {
-                  mbt_ffi_store8((ptr) + 0, (3))
-
-                  let address7 = mbt_ffi_malloc((payload6).length() * 8);
-                  for index8 = 0; index8 < (payload6).length(); index8 = index8 + 1 {
-                        let iter_elem : @common.RefGroup = (payload6)[(index8)]
-                        let iter_base = address7 + (index8 * 8);
-                        __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
-
-                  }
-                  mbt_ffi_store32((ptr) + 8, (payload6).length())
-                  mbt_ffi_store32((ptr) + 4, address7)
-
-                  ()
-            }
-            Implies(payload9) => {
-                  mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t497((ptr) + 4, payload9)
-
-                  ()
-            }
-            Forbids(payload10) => {
-                  mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t498((ptr) + 4, payload10)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t502(ptr : Int, value : @common.Example) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).title)
-      mbt_ffi_store32((ptr) + 4, (value).title.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-      let ptr1 = mbt_ffi_str2ptr((value).body)
-      mbt_ffi_store32((ptr) + 12, (value).body.length())
-      mbt_ffi_store32((ptr) + 8, ptr1)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t504(ptr : Int, value : @common.Doc) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).summary)
-      mbt_ffi_store32((ptr) + 4, (value).summary.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-      let ptr1 = mbt_ffi_str2ptr((value).description)
-      mbt_ffi_store32((ptr) + 12, (value).description.length())
-      mbt_ffi_store32((ptr) + 8, ptr1)
-
-      let address = mbt_ffi_malloc(((value).examples).length() * 16);
-      for index = 0; index < ((value).examples).length(); index = index + 1 {
-            let iter_elem : @common.Example = ((value).examples)[(index)]
-            let iter_base = address + (index * 16);
-            __wit_bindgen_lower_t502((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 20, ((value).examples).length())
-      mbt_ffi_store32((ptr) + 16, address)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t507(ptr : Int, value : @common.Positional) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t504((ptr) + 8, (value).doc)
-
-      match ((value).value_name) {
-            None => {
-                  mbt_ffi_store8((ptr) + 32, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((ptr) + 32, (1))
-
-                  let ptr2 = mbt_ffi_str2ptr(payload1)
-                  mbt_ffi_store32((ptr) + 40, payload1.length())
-                  mbt_ffi_store32((ptr) + 36, ptr2)
-
-                  ()
-            }
-      }
-      mbt_ffi_store32((ptr) + 44, (value).type_)
-
-      match ((value).default) {
-            None => {
-                  mbt_ffi_store8((ptr) + 48, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t78((ptr) + 52, payload4)
-
-                  ()
-            }
-      }
-      mbt_ffi_store8((ptr) + 64, (if (value).required { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 65, (if (value).accepts_stdio { 1 } else { 0 }))
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t508(ptr : Int, value : @common.TailPositional) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t504((ptr) + 8, (value).doc)
-
-      match ((value).value_name) {
-            None => {
-                  mbt_ffi_store8((ptr) + 32, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((ptr) + 32, (1))
-
-                  let ptr2 = mbt_ffi_str2ptr(payload1)
-                  mbt_ffi_store32((ptr) + 40, payload1.length())
-                  mbt_ffi_store32((ptr) + 36, ptr2)
-
-                  ()
-            }
-      }
-      mbt_ffi_store32((ptr) + 44, (value).item_type)
-      mbt_ffi_store32((ptr) + 48, ((value).min).reinterpret_as_int())
-
-      match ((value).max) {
-            None => {
-                  mbt_ffi_store8((ptr) + 52, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 52, (1))
-                  mbt_ffi_store32((ptr) + 56, (payload4).reinterpret_as_int())
-
-                  ()
-            }
-      }
-
-      match ((value).separator) {
-            None => {
-                  mbt_ffi_store8((ptr) + 60, (0))
-
-                  ()
-            }
-            Some(payload6) => {
-                  mbt_ffi_store8((ptr) + 60, (1))
-
-                  let ptr7 = mbt_ffi_str2ptr(payload6)
-                  mbt_ffi_store32((ptr) + 68, payload6.length())
-                  mbt_ffi_store32((ptr) + 64, ptr7)
-
-                  ()
-            }
-      }
-      mbt_ffi_store8((ptr) + 72, (if (value).verbatim { 1 } else { 0 }))
-      mbt_ffi_store8((ptr) + 73, (if (value).accepts_stdio { 1 } else { 0 }))
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t511(ptr : Int, value : @common.Positionals) -> Unit {
-
-      let address = mbt_ffi_malloc(((value).fixed).length() * 68);
-      for index = 0; index < ((value).fixed).length(); index = index + 1 {
-            let iter_elem : @common.Positional = ((value).fixed)[(index)]
-            let iter_base = address + (index * 68);
-            __wit_bindgen_lower_t507((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 4, ((value).fixed).length())
-      mbt_ffi_store32((ptr) + 0, address)
-
-      match ((value).tail) {
-            None => {
-                  mbt_ffi_store8((ptr) + 8, (0))
-
-                  ()
-            }
-            Some(payload0) => {
-                  mbt_ffi_store8((ptr) + 8, (1))
-                  __wit_bindgen_lower_t508((ptr) + 12, payload0)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t514(ptr : Int, value : @common.OptionSpec) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).long)
-      mbt_ffi_store32((ptr) + 4, (value).long.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-      match ((value).short) {
-            None => {
-                  mbt_ffi_store8((ptr) + 8, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((ptr) + 8, (1))
-                  mbt_ffi_store32((ptr) + 12, (payload1).to_int())
-
-                  ()
-            }
-      }
-
-      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
-      for index = 0; index < ((value).aliases).length(); index = index + 1 {
-            let iter_elem : String = ((value).aliases)[(index)]
-            let iter_base = address + (index * 8);
-
-            let ptr2 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr2)
-
-      }
-      mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
-      mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t504((ptr) + 24, (value).doc)
-
-      match ((value).value_name) {
-            None => {
-                  mbt_ffi_store8((ptr) + 48, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 48, (1))
-
-                  let ptr5 = mbt_ffi_str2ptr(payload4)
-                  mbt_ffi_store32((ptr) + 56, payload4.length())
-                  mbt_ffi_store32((ptr) + 52, ptr5)
-
-                  ()
-            }
-      }
-      __wit_bindgen_lower_t488((ptr) + 60, (value).shape)
-
-      match ((value).default) {
-            None => {
-                  mbt_ffi_store8((ptr) + 80, (0))
-
-                  ()
-            }
-            Some(payload7) => {
-                  mbt_ffi_store8((ptr) + 80, (1))
-                  __wit_bindgen_lower_t78((ptr) + 84, payload7)
-
-                  ()
-            }
-      }
-      mbt_ffi_store8((ptr) + 96, (if (value).required { 1 } else { 0 }))
-
-      match ((value).env_var) {
-            None => {
-                  mbt_ffi_store8((ptr) + 100, (0))
-
-                  ()
-            }
-            Some(payload9) => {
-                  mbt_ffi_store8((ptr) + 100, (1))
-
-                  let ptr10 = mbt_ffi_str2ptr(payload9)
-                  mbt_ffi_store32((ptr) + 108, payload9.length())
-                  mbt_ffi_store32((ptr) + 104, ptr10)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t515(ptr : Int, value : @common.FlagSpec) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).long)
-      mbt_ffi_store32((ptr) + 4, (value).long.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-      match ((value).short) {
-            None => {
-                  mbt_ffi_store8((ptr) + 8, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((ptr) + 8, (1))
-                  mbt_ffi_store32((ptr) + 12, (payload1).to_int())
-
-                  ()
-            }
-      }
-
-      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
-      for index = 0; index < ((value).aliases).length(); index = index + 1 {
-            let iter_elem : String = ((value).aliases)[(index)]
-            let iter_base = address + (index * 8);
-
-            let ptr2 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr2)
-
-      }
-      mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
-      mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t504((ptr) + 24, (value).doc)
-      __wit_bindgen_lower_t491((ptr) + 48, (value).shape)
-
-      match ((value).env_var) {
-            None => {
-                  mbt_ffi_store8((ptr) + 60, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 60, (1))
-
-                  let ptr5 = mbt_ffi_str2ptr(payload4)
-                  mbt_ffi_store32((ptr) + 68, payload4.length())
-                  mbt_ffi_store32((ptr) + 64, ptr5)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t518(ptr : Int, value : @common.Globals) -> Unit {
-
-      let address = mbt_ffi_malloc(((value).options).length() * 112);
-      for index = 0; index < ((value).options).length(); index = index + 1 {
-            let iter_elem : @common.OptionSpec = ((value).options)[(index)]
-            let iter_base = address + (index * 112);
-            __wit_bindgen_lower_t514((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 4, ((value).options).length())
-      mbt_ffi_store32((ptr) + 0, address)
-
-      let address0 = mbt_ffi_malloc(((value).flags).length() * 72);
-      for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
-            let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
-            let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t515((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 12, ((value).flags).length())
-      mbt_ffi_store32((ptr) + 8, address0)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t519(ptr : Int, value : @common.StreamSpec) -> Unit {
-      __wit_bindgen_lower_t504((ptr) + 0, (value).doc)
-
-      let address = mbt_ffi_malloc(((value).mime).length() * 8);
-      for index = 0; index < ((value).mime).length(); index = index + 1 {
-            let iter_elem : String = ((value).mime)[(index)]
-            let iter_base = address + (index * 8);
-
-            let ptr0 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr0)
-
-      }
-      mbt_ffi_store32((ptr) + 28, ((value).mime).length())
-      mbt_ffi_store32((ptr) + 24, address)
-      mbt_ffi_store8((ptr) + 32, (if (value).required { 1 } else { 0 }))
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t520(ptr : Int, value : @common.Formatter) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t504((ptr) + 8, (value).doc)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t522(ptr : Int, value : @common.ResultSpec) -> Unit {
-      mbt_ffi_store32((ptr) + 0, (value).type_)
-      __wit_bindgen_lower_t504((ptr) + 4, (value).doc)
-
-      let address = mbt_ffi_malloc(((value).formatters).length() * 32);
-      for index = 0; index < ((value).formatters).length(); index = index + 1 {
-            let iter_elem : @common.Formatter = ((value).formatters)[(index)]
-            let iter_base = address + (index * 32);
-            __wit_bindgen_lower_t520((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 32, ((value).formatters).length())
-      mbt_ffi_store32((ptr) + 28, address)
-
-      let ptr0 = mbt_ffi_str2ptr((value).default_formatter)
-      mbt_ffi_store32((ptr) + 40, (value).default_formatter.length())
-      mbt_ffi_store32((ptr) + 36, ptr0)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t524(ptr : Int, value : @common.ErrorCase) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t504((ptr) + 8, (value).doc)
-      mbt_ffi_store8((ptr) + 32, (value).kind.ordinal())
-      mbt_ffi_store8((ptr) + 33, ((value).exit_code).to_int())
-
-      match ((value).payload) {
-            None => {
-                  mbt_ffi_store8((ptr) + 36, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((ptr) + 36, (1))
-                  mbt_ffi_store32((ptr) + 40, payload1)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t530(ptr : Int, value : @common.CommandBody) -> Unit {
-      __wit_bindgen_lower_t511((ptr) + 0, (value).positionals)
-
-      let address = mbt_ffi_malloc(((value).options).length() * 112);
-      for index = 0; index < ((value).options).length(); index = index + 1 {
-            let iter_elem : @common.OptionSpec = ((value).options)[(index)]
-            let iter_base = address + (index * 112);
-            __wit_bindgen_lower_t514((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 92, ((value).options).length())
-      mbt_ffi_store32((ptr) + 88, address)
-
-      let address0 = mbt_ffi_malloc(((value).flags).length() * 72);
-      for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
-            let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
-            let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t515((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 100, ((value).flags).length())
-      mbt_ffi_store32((ptr) + 96, address0)
-
-      let address2 = mbt_ffi_malloc(((value).constraints).length() * 28);
-      for index3 = 0; index3 < ((value).constraints).length(); index3 = index3 + 1 {
-            let iter_elem : @common.Constraint = ((value).constraints)[(index3)]
-            let iter_base = address2 + (index3 * 28);
-            __wit_bindgen_lower_t500((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 108, ((value).constraints).length())
-      mbt_ffi_store32((ptr) + 104, address2)
-
-      match ((value).stdin) {
-            None => {
-                  mbt_ffi_store8((ptr) + 112, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 112, (1))
-                  __wit_bindgen_lower_t519((ptr) + 116, payload4)
-
-                  ()
-            }
-      }
-
-      match ((value).stdout) {
-            None => {
-                  mbt_ffi_store8((ptr) + 152, (0))
-
-                  ()
-            }
-            Some(payload6) => {
-                  mbt_ffi_store8((ptr) + 152, (1))
-                  __wit_bindgen_lower_t519((ptr) + 156, payload6)
-
-                  ()
-            }
-      }
-
-      match ((value).result) {
-            None => {
-                  mbt_ffi_store8((ptr) + 192, (0))
-
-                  ()
-            }
-            Some(payload8) => {
-                  mbt_ffi_store8((ptr) + 192, (1))
-                  __wit_bindgen_lower_t522((ptr) + 196, payload8)
-
-                  ()
-            }
-      }
-
-      let address9 = mbt_ffi_malloc(((value).errors).length() * 44);
-      for index10 = 0; index10 < ((value).errors).length(); index10 = index10 + 1 {
-            let iter_elem : @common.ErrorCase = ((value).errors)[(index10)]
-            let iter_base = address9 + (index10 * 44);
-            __wit_bindgen_lower_t524((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 244, ((value).errors).length())
-      mbt_ffi_store32((ptr) + 240, address9)
-
-      match ((value).annotations) {
-            None => {
-                  mbt_ffi_store8((ptr) + 248, (0))
-
-                  ()
-            }
-            Some(payload12) => {
-                  mbt_ffi_store8((ptr) + 248, (1))
-                  __wit_bindgen_lower_t483((ptr) + 249, payload12)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t533(ptr : Int, value : @common.CommandNode) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).name)
-      mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
-      for index = 0; index < ((value).aliases).length(); index = index + 1 {
-            let iter_elem : String = ((value).aliases)[(index)]
-            let iter_base = address + (index * 8);
-
-            let ptr1 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr1)
-
-      }
-      mbt_ffi_store32((ptr) + 12, ((value).aliases).length())
-      mbt_ffi_store32((ptr) + 8, address)
-      __wit_bindgen_lower_t504((ptr) + 16, (value).doc)
-      __wit_bindgen_lower_t518((ptr) + 40, (value).globals)
-
-      let address2 = mbt_ffi_malloc(((value).subcommands).length() * 4);
-      for index3 = 0; index3 < ((value).subcommands).length(); index3 = index3 + 1 {
-            let iter_elem : Int = ((value).subcommands)[(index3)]
-            let iter_base = address2 + (index3 * 4);
-            mbt_ffi_store32((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 60, ((value).subcommands).length())
-      mbt_ffi_store32((ptr) + 56, address2)
-
-      match ((value).body) {
-            None => {
-                  mbt_ffi_store8((ptr) + 64, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((ptr) + 64, (1))
-                  __wit_bindgen_lower_t530((ptr) + 68, payload4)
-
-                  ()
-            }
-      }
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t535(ptr : Int, value : @common.CommandTree) -> Unit {
-
-      let address = mbt_ffi_malloc(((value).nodes).length() * 324);
-      for index = 0; index < ((value).nodes).length(); index = index + 1 {
-            let iter_elem : @common.CommandNode = ((value).nodes)[(index)]
-            let iter_base = address + (index * 324);
-            __wit_bindgen_lower_t533((iter_base) + 0, iter_elem)
-
-      }
-      mbt_ffi_store32((ptr) + 4, ((value).nodes).length())
-      mbt_ffi_store32((ptr) + 0, address)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t536(ptr : Int, value : @common.Tool) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).version)
-      mbt_ffi_store32((ptr) + 4, (value).version.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t535((ptr) + 8, (value).commands)
-      __wit_bindgen_lower_t59((ptr) + 16, (value).schema)
-
-}
-
-///|
-#doc(hidden)
-fn __wit_bindgen_lower_t541(ptr : Int, value : @common.CustomToolError) -> Unit {
+fn __wit_bindgen_lower_t80(ptr : Int, value : @types.CustomToolError) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
@@ -11868,7 +10946,7 @@ fn __wit_bindgen_lower_t541(ptr : Int, value : @common.CustomToolError) -> Unit 
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t542(ptr : Int, value : @common.ToolError) -> Unit {
+fn __wit_bindgen_lower_t81(ptr : Int, value : @types.ToolError) -> Unit {
 
       match value {
             InvalidToolName(payload) => {
@@ -11927,11 +11005,933 @@ fn __wit_bindgen_lower_t542(ptr : Int, value : @common.ToolError) -> Unit {
             }
             CustomError(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t541((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t80((ptr) + 4, payload9)
 
                   ()
             }
       }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t485(ptr : Int, value : @common.CommandAnnotations) -> Unit {
+      mbt_ffi_store8((ptr) + 0, (if (value).read_only { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 1, (if (value).destructive { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 2, (if (value).idempotent { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 3, (if (value).open_world { 1 } else { 0 }))
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t487(ptr : Int, value : @common.Repetition) -> Unit {
+
+      match value {
+            Repeated => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+
+                  ()
+            }
+            Delimited(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+                  mbt_ffi_store32((ptr) + 4, (payload0).to_int())
+
+                  ()
+            }
+            Either(payload1) => {
+                  mbt_ffi_store8((ptr) + 0, (2))
+                  mbt_ffi_store32((ptr) + 4, (payload1).to_int())
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t488(ptr : Int, value : @common.RepeatableListShape) -> Unit {
+      __wit_bindgen_lower_t487((ptr) + 0, (value).repetition)
+      mbt_ffi_store32((ptr) + 8, (value).item_type)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t489(ptr : Int, value : @common.RepeatableMapShape) -> Unit {
+      __wit_bindgen_lower_t487((ptr) + 0, (value).repetition)
+      mbt_ffi_store32((ptr) + 8, (value).map_type)
+      mbt_ffi_store8((ptr) + 12, (value).duplicate_key_policy.ordinal())
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t490(ptr : Int, value : @common.OptionShape) -> Unit {
+
+      match value {
+            Scalar(payload) => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+                  mbt_ffi_store32((ptr) + 4, payload)
+
+                  ()
+            }
+            OptionalScalar(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+                  mbt_ffi_store32((ptr) + 4, payload0)
+
+                  ()
+            }
+            RepeatableList(payload1) => {
+                  mbt_ffi_store8((ptr) + 0, (2))
+                  __wit_bindgen_lower_t488((ptr) + 4, payload1)
+
+                  ()
+            }
+            RepeatableMap(payload2) => {
+                  mbt_ffi_store8((ptr) + 0, (3))
+                  __wit_bindgen_lower_t489((ptr) + 4, payload2)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t491(ptr : Int, value : @common.BoolFlagShape) -> Unit {
+      mbt_ffi_store8((ptr) + 0, (if (value).default { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 1, (if (value).negatable { 1 } else { 0 }))
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t493(ptr : Int, value : @common.FlagShape) -> Unit {
+
+      match value {
+            BoolFlag(payload) => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+                  __wit_bindgen_lower_t491((ptr) + 4, payload)
+
+                  ()
+            }
+            CountFlag(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+
+                  match (payload0) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 4, (0))
+
+                              ()
+                        }
+                        Some(payload2) => {
+                              mbt_ffi_store8((ptr) + 4, (1))
+                              mbt_ffi_store32((ptr) + 8, (payload2).reinterpret_as_int())
+
+                              ()
+                        }
+                  }
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t494(ptr : Int, value : @common.ValueIsRef) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t78((ptr) + 8, (value).value)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t495(ptr : Int, value : @common.Ref) -> Unit {
+
+      match value {
+            Present(payload) => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+
+                  let ptr0 = mbt_ffi_str2ptr(payload)
+                  mbt_ffi_store32((ptr) + 8, payload.length())
+                  mbt_ffi_store32((ptr) + 4, ptr0)
+
+                  ()
+            }
+            ValueIs(payload1) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+                  __wit_bindgen_lower_t494((ptr) + 4, payload1)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t497(ptr : Int, value : @common.RefGroup) -> Unit {
+
+      let address = mbt_ffi_malloc(((value).refs).length() * 24);
+      for index = 0; index < ((value).refs).length(); index = index + 1 {
+            let iter_elem : @common.Ref = ((value).refs)[(index)]
+            let iter_base = address + (index * 24);
+            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 4, ((value).refs).length())
+      mbt_ffi_store32((ptr) + 0, address)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t499(ptr : Int, value : @common.ImpliesC) -> Unit {
+      mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
+
+      let address = mbt_ffi_malloc(((value).lhs).length() * 24);
+      for index = 0; index < ((value).lhs).length(); index = index + 1 {
+            let iter_elem : @common.Ref = ((value).lhs)[(index)]
+            let iter_base = address + (index * 24);
+            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
+      mbt_ffi_store32((ptr) + 4, address)
+      mbt_ffi_store8((ptr) + 12, (value).rhs_quant.ordinal())
+
+      let address0 = mbt_ffi_malloc(((value).rhs).length() * 24);
+      for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
+            let iter_elem : @common.Ref = ((value).rhs)[(index1)]
+            let iter_base = address0 + (index1 * 24);
+            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 20, ((value).rhs).length())
+      mbt_ffi_store32((ptr) + 16, address0)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t500(ptr : Int, value : @common.ForbidsC) -> Unit {
+      mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
+
+      let address = mbt_ffi_malloc(((value).lhs).length() * 24);
+      for index = 0; index < ((value).lhs).length(); index = index + 1 {
+            let iter_elem : @common.Ref = ((value).lhs)[(index)]
+            let iter_base = address + (index * 24);
+            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
+      mbt_ffi_store32((ptr) + 4, address)
+
+      let address0 = mbt_ffi_malloc(((value).rhs).length() * 24);
+      for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
+            let iter_elem : @common.Ref = ((value).rhs)[(index1)]
+            let iter_base = address0 + (index1 * 24);
+            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 16, ((value).rhs).length())
+      mbt_ffi_store32((ptr) + 12, address0)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t502(ptr : Int, value : @common.Constraint) -> Unit {
+
+      match value {
+            RequiresAll(payload) => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+
+                  let address = mbt_ffi_malloc((payload).length() * 24);
+                  for index = 0; index < (payload).length(); index = index + 1 {
+                        let iter_elem : @common.Ref = (payload)[(index)]
+                        let iter_base = address + (index * 24);
+                        __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+                  }
+                  mbt_ffi_store32((ptr) + 8, (payload).length())
+                  mbt_ffi_store32((ptr) + 4, address)
+
+                  ()
+            }
+            AllOrNone(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+
+                  let address1 = mbt_ffi_malloc((payload0).length() * 24);
+                  for index2 = 0; index2 < (payload0).length(); index2 = index2 + 1 {
+                        let iter_elem : @common.Ref = (payload0)[(index2)]
+                        let iter_base = address1 + (index2 * 24);
+                        __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+                  }
+                  mbt_ffi_store32((ptr) + 8, (payload0).length())
+                  mbt_ffi_store32((ptr) + 4, address1)
+
+                  ()
+            }
+            RequiresAny(payload3) => {
+                  mbt_ffi_store8((ptr) + 0, (2))
+
+                  let address4 = mbt_ffi_malloc((payload3).length() * 24);
+                  for index5 = 0; index5 < (payload3).length(); index5 = index5 + 1 {
+                        let iter_elem : @common.Ref = (payload3)[(index5)]
+                        let iter_base = address4 + (index5 * 24);
+                        __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+
+                  }
+                  mbt_ffi_store32((ptr) + 8, (payload3).length())
+                  mbt_ffi_store32((ptr) + 4, address4)
+
+                  ()
+            }
+            MutexGroups(payload6) => {
+                  mbt_ffi_store8((ptr) + 0, (3))
+
+                  let address7 = mbt_ffi_malloc((payload6).length() * 8);
+                  for index8 = 0; index8 < (payload6).length(); index8 = index8 + 1 {
+                        let iter_elem : @common.RefGroup = (payload6)[(index8)]
+                        let iter_base = address7 + (index8 * 8);
+                        __wit_bindgen_lower_t497((iter_base) + 0, iter_elem)
+
+                  }
+                  mbt_ffi_store32((ptr) + 8, (payload6).length())
+                  mbt_ffi_store32((ptr) + 4, address7)
+
+                  ()
+            }
+            Implies(payload9) => {
+                  mbt_ffi_store8((ptr) + 0, (4))
+                  __wit_bindgen_lower_t499((ptr) + 4, payload9)
+
+                  ()
+            }
+            Forbids(payload10) => {
+                  mbt_ffi_store8((ptr) + 0, (5))
+                  __wit_bindgen_lower_t500((ptr) + 4, payload10)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t504(ptr : Int, value : @common.Example) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).title)
+      mbt_ffi_store32((ptr) + 4, (value).title.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+
+      let ptr1 = mbt_ffi_str2ptr((value).body)
+      mbt_ffi_store32((ptr) + 12, (value).body.length())
+      mbt_ffi_store32((ptr) + 8, ptr1)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t506(ptr : Int, value : @common.Doc) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).summary)
+      mbt_ffi_store32((ptr) + 4, (value).summary.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+
+      let ptr1 = mbt_ffi_str2ptr((value).description)
+      mbt_ffi_store32((ptr) + 12, (value).description.length())
+      mbt_ffi_store32((ptr) + 8, ptr1)
+
+      let address = mbt_ffi_malloc(((value).examples).length() * 16);
+      for index = 0; index < ((value).examples).length(); index = index + 1 {
+            let iter_elem : @common.Example = ((value).examples)[(index)]
+            let iter_base = address + (index * 16);
+            __wit_bindgen_lower_t504((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 20, ((value).examples).length())
+      mbt_ffi_store32((ptr) + 16, address)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t509(ptr : Int, value : @common.Positional) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t506((ptr) + 8, (value).doc)
+
+      match ((value).value_name) {
+            None => {
+                  mbt_ffi_store8((ptr) + 32, (0))
+
+                  ()
+            }
+            Some(payload1) => {
+                  mbt_ffi_store8((ptr) + 32, (1))
+
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 40, payload1.length())
+                  mbt_ffi_store32((ptr) + 36, ptr2)
+
+                  ()
+            }
+      }
+      mbt_ffi_store32((ptr) + 44, (value).type_)
+
+      match ((value).default) {
+            None => {
+                  mbt_ffi_store8((ptr) + 48, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 48, (1))
+                  __wit_bindgen_lower_t78((ptr) + 52, payload4)
+
+                  ()
+            }
+      }
+      mbt_ffi_store8((ptr) + 64, (if (value).required { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 65, (if (value).accepts_stdio { 1 } else { 0 }))
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t510(ptr : Int, value : @common.TailPositional) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t506((ptr) + 8, (value).doc)
+
+      match ((value).value_name) {
+            None => {
+                  mbt_ffi_store8((ptr) + 32, (0))
+
+                  ()
+            }
+            Some(payload1) => {
+                  mbt_ffi_store8((ptr) + 32, (1))
+
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 40, payload1.length())
+                  mbt_ffi_store32((ptr) + 36, ptr2)
+
+                  ()
+            }
+      }
+      mbt_ffi_store32((ptr) + 44, (value).item_type)
+      mbt_ffi_store32((ptr) + 48, ((value).min).reinterpret_as_int())
+
+      match ((value).max) {
+            None => {
+                  mbt_ffi_store8((ptr) + 52, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 52, (1))
+                  mbt_ffi_store32((ptr) + 56, (payload4).reinterpret_as_int())
+
+                  ()
+            }
+      }
+
+      match ((value).separator) {
+            None => {
+                  mbt_ffi_store8((ptr) + 60, (0))
+
+                  ()
+            }
+            Some(payload6) => {
+                  mbt_ffi_store8((ptr) + 60, (1))
+
+                  let ptr7 = mbt_ffi_str2ptr(payload6)
+                  mbt_ffi_store32((ptr) + 68, payload6.length())
+                  mbt_ffi_store32((ptr) + 64, ptr7)
+
+                  ()
+            }
+      }
+      mbt_ffi_store8((ptr) + 72, (if (value).verbatim { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 73, (if (value).accepts_stdio { 1 } else { 0 }))
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t513(ptr : Int, value : @common.Positionals) -> Unit {
+
+      let address = mbt_ffi_malloc(((value).fixed).length() * 68);
+      for index = 0; index < ((value).fixed).length(); index = index + 1 {
+            let iter_elem : @common.Positional = ((value).fixed)[(index)]
+            let iter_base = address + (index * 68);
+            __wit_bindgen_lower_t509((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 4, ((value).fixed).length())
+      mbt_ffi_store32((ptr) + 0, address)
+
+      match ((value).tail) {
+            None => {
+                  mbt_ffi_store8((ptr) + 8, (0))
+
+                  ()
+            }
+            Some(payload0) => {
+                  mbt_ffi_store8((ptr) + 8, (1))
+                  __wit_bindgen_lower_t510((ptr) + 12, payload0)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t516(ptr : Int, value : @common.OptionSpec) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).long)
+      mbt_ffi_store32((ptr) + 4, (value).long.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+
+      match ((value).short) {
+            None => {
+                  mbt_ffi_store8((ptr) + 8, (0))
+
+                  ()
+            }
+            Some(payload1) => {
+                  mbt_ffi_store8((ptr) + 8, (1))
+                  mbt_ffi_store32((ptr) + 12, (payload1).to_int())
+
+                  ()
+            }
+      }
+
+      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
+      for index = 0; index < ((value).aliases).length(); index = index + 1 {
+            let iter_elem : String = ((value).aliases)[(index)]
+            let iter_base = address + (index * 8);
+
+            let ptr2 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
+            mbt_ffi_store32((iter_base) + 0, ptr2)
+
+      }
+      mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
+      mbt_ffi_store32((ptr) + 16, address)
+      __wit_bindgen_lower_t506((ptr) + 24, (value).doc)
+
+      match ((value).value_name) {
+            None => {
+                  mbt_ffi_store8((ptr) + 48, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 48, (1))
+
+                  let ptr5 = mbt_ffi_str2ptr(payload4)
+                  mbt_ffi_store32((ptr) + 56, payload4.length())
+                  mbt_ffi_store32((ptr) + 52, ptr5)
+
+                  ()
+            }
+      }
+      __wit_bindgen_lower_t490((ptr) + 60, (value).shape)
+
+      match ((value).default) {
+            None => {
+                  mbt_ffi_store8((ptr) + 80, (0))
+
+                  ()
+            }
+            Some(payload7) => {
+                  mbt_ffi_store8((ptr) + 80, (1))
+                  __wit_bindgen_lower_t78((ptr) + 84, payload7)
+
+                  ()
+            }
+      }
+      mbt_ffi_store8((ptr) + 96, (if (value).required { 1 } else { 0 }))
+
+      match ((value).env_var) {
+            None => {
+                  mbt_ffi_store8((ptr) + 100, (0))
+
+                  ()
+            }
+            Some(payload9) => {
+                  mbt_ffi_store8((ptr) + 100, (1))
+
+                  let ptr10 = mbt_ffi_str2ptr(payload9)
+                  mbt_ffi_store32((ptr) + 108, payload9.length())
+                  mbt_ffi_store32((ptr) + 104, ptr10)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t517(ptr : Int, value : @common.FlagSpec) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).long)
+      mbt_ffi_store32((ptr) + 4, (value).long.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+
+      match ((value).short) {
+            None => {
+                  mbt_ffi_store8((ptr) + 8, (0))
+
+                  ()
+            }
+            Some(payload1) => {
+                  mbt_ffi_store8((ptr) + 8, (1))
+                  mbt_ffi_store32((ptr) + 12, (payload1).to_int())
+
+                  ()
+            }
+      }
+
+      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
+      for index = 0; index < ((value).aliases).length(); index = index + 1 {
+            let iter_elem : String = ((value).aliases)[(index)]
+            let iter_base = address + (index * 8);
+
+            let ptr2 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
+            mbt_ffi_store32((iter_base) + 0, ptr2)
+
+      }
+      mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
+      mbt_ffi_store32((ptr) + 16, address)
+      __wit_bindgen_lower_t506((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t493((ptr) + 48, (value).shape)
+
+      match ((value).env_var) {
+            None => {
+                  mbt_ffi_store8((ptr) + 60, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 60, (1))
+
+                  let ptr5 = mbt_ffi_str2ptr(payload4)
+                  mbt_ffi_store32((ptr) + 68, payload4.length())
+                  mbt_ffi_store32((ptr) + 64, ptr5)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t520(ptr : Int, value : @common.Globals) -> Unit {
+
+      let address = mbt_ffi_malloc(((value).options).length() * 112);
+      for index = 0; index < ((value).options).length(); index = index + 1 {
+            let iter_elem : @common.OptionSpec = ((value).options)[(index)]
+            let iter_base = address + (index * 112);
+            __wit_bindgen_lower_t516((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 4, ((value).options).length())
+      mbt_ffi_store32((ptr) + 0, address)
+
+      let address0 = mbt_ffi_malloc(((value).flags).length() * 72);
+      for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
+            let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
+            let iter_base = address0 + (index1 * 72);
+            __wit_bindgen_lower_t517((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 12, ((value).flags).length())
+      mbt_ffi_store32((ptr) + 8, address0)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t521(ptr : Int, value : @common.StreamSpec) -> Unit {
+      __wit_bindgen_lower_t506((ptr) + 0, (value).doc)
+
+      let address = mbt_ffi_malloc(((value).mime).length() * 8);
+      for index = 0; index < ((value).mime).length(); index = index + 1 {
+            let iter_elem : String = ((value).mime)[(index)]
+            let iter_base = address + (index * 8);
+
+            let ptr0 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
+            mbt_ffi_store32((iter_base) + 0, ptr0)
+
+      }
+      mbt_ffi_store32((ptr) + 28, ((value).mime).length())
+      mbt_ffi_store32((ptr) + 24, address)
+      mbt_ffi_store8((ptr) + 32, (if (value).required { 1 } else { 0 }))
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t522(ptr : Int, value : @common.Formatter) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t506((ptr) + 8, (value).doc)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t524(ptr : Int, value : @common.ResultSpec) -> Unit {
+      mbt_ffi_store32((ptr) + 0, (value).type_)
+      __wit_bindgen_lower_t506((ptr) + 4, (value).doc)
+
+      let address = mbt_ffi_malloc(((value).formatters).length() * 32);
+      for index = 0; index < ((value).formatters).length(); index = index + 1 {
+            let iter_elem : @common.Formatter = ((value).formatters)[(index)]
+            let iter_base = address + (index * 32);
+            __wit_bindgen_lower_t522((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 32, ((value).formatters).length())
+      mbt_ffi_store32((ptr) + 28, address)
+
+      let ptr0 = mbt_ffi_str2ptr((value).default_formatter)
+      mbt_ffi_store32((ptr) + 40, (value).default_formatter.length())
+      mbt_ffi_store32((ptr) + 36, ptr0)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t526(ptr : Int, value : @common.ErrorCase) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t506((ptr) + 8, (value).doc)
+      mbt_ffi_store8((ptr) + 32, (value).kind.ordinal())
+      mbt_ffi_store8((ptr) + 33, ((value).exit_code).to_int())
+
+      match ((value).payload) {
+            None => {
+                  mbt_ffi_store8((ptr) + 36, (0))
+
+                  ()
+            }
+            Some(payload1) => {
+                  mbt_ffi_store8((ptr) + 36, (1))
+                  mbt_ffi_store32((ptr) + 40, payload1)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t532(ptr : Int, value : @common.CommandBody) -> Unit {
+      __wit_bindgen_lower_t513((ptr) + 0, (value).positionals)
+
+      let address = mbt_ffi_malloc(((value).options).length() * 112);
+      for index = 0; index < ((value).options).length(); index = index + 1 {
+            let iter_elem : @common.OptionSpec = ((value).options)[(index)]
+            let iter_base = address + (index * 112);
+            __wit_bindgen_lower_t516((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 92, ((value).options).length())
+      mbt_ffi_store32((ptr) + 88, address)
+
+      let address0 = mbt_ffi_malloc(((value).flags).length() * 72);
+      for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
+            let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
+            let iter_base = address0 + (index1 * 72);
+            __wit_bindgen_lower_t517((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 100, ((value).flags).length())
+      mbt_ffi_store32((ptr) + 96, address0)
+
+      let address2 = mbt_ffi_malloc(((value).constraints).length() * 28);
+      for index3 = 0; index3 < ((value).constraints).length(); index3 = index3 + 1 {
+            let iter_elem : @common.Constraint = ((value).constraints)[(index3)]
+            let iter_base = address2 + (index3 * 28);
+            __wit_bindgen_lower_t502((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 108, ((value).constraints).length())
+      mbt_ffi_store32((ptr) + 104, address2)
+
+      match ((value).stdin) {
+            None => {
+                  mbt_ffi_store8((ptr) + 112, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 112, (1))
+                  __wit_bindgen_lower_t521((ptr) + 116, payload4)
+
+                  ()
+            }
+      }
+
+      match ((value).stdout) {
+            None => {
+                  mbt_ffi_store8((ptr) + 152, (0))
+
+                  ()
+            }
+            Some(payload6) => {
+                  mbt_ffi_store8((ptr) + 152, (1))
+                  __wit_bindgen_lower_t521((ptr) + 156, payload6)
+
+                  ()
+            }
+      }
+
+      match ((value).result) {
+            None => {
+                  mbt_ffi_store8((ptr) + 192, (0))
+
+                  ()
+            }
+            Some(payload8) => {
+                  mbt_ffi_store8((ptr) + 192, (1))
+                  __wit_bindgen_lower_t524((ptr) + 196, payload8)
+
+                  ()
+            }
+      }
+
+      let address9 = mbt_ffi_malloc(((value).errors).length() * 44);
+      for index10 = 0; index10 < ((value).errors).length(); index10 = index10 + 1 {
+            let iter_elem : @common.ErrorCase = ((value).errors)[(index10)]
+            let iter_base = address9 + (index10 * 44);
+            __wit_bindgen_lower_t526((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 244, ((value).errors).length())
+      mbt_ffi_store32((ptr) + 240, address9)
+
+      match ((value).annotations) {
+            None => {
+                  mbt_ffi_store8((ptr) + 248, (0))
+
+                  ()
+            }
+            Some(payload12) => {
+                  mbt_ffi_store8((ptr) + 248, (1))
+                  __wit_bindgen_lower_t485((ptr) + 249, payload12)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t535(ptr : Int, value : @common.CommandNode) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+
+      let address = mbt_ffi_malloc(((value).aliases).length() * 8);
+      for index = 0; index < ((value).aliases).length(); index = index + 1 {
+            let iter_elem : String = ((value).aliases)[(index)]
+            let iter_base = address + (index * 8);
+
+            let ptr1 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
+            mbt_ffi_store32((iter_base) + 0, ptr1)
+
+      }
+      mbt_ffi_store32((ptr) + 12, ((value).aliases).length())
+      mbt_ffi_store32((ptr) + 8, address)
+      __wit_bindgen_lower_t506((ptr) + 16, (value).doc)
+      __wit_bindgen_lower_t520((ptr) + 40, (value).globals)
+
+      let address2 = mbt_ffi_malloc(((value).subcommands).length() * 4);
+      for index3 = 0; index3 < ((value).subcommands).length(); index3 = index3 + 1 {
+            let iter_elem : Int = ((value).subcommands)[(index3)]
+            let iter_base = address2 + (index3 * 4);
+            mbt_ffi_store32((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 60, ((value).subcommands).length())
+      mbt_ffi_store32((ptr) + 56, address2)
+
+      match ((value).body) {
+            None => {
+                  mbt_ffi_store8((ptr) + 64, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 64, (1))
+                  __wit_bindgen_lower_t532((ptr) + 68, payload4)
+
+                  ()
+            }
+      }
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t537(ptr : Int, value : @common.CommandTree) -> Unit {
+
+      let address = mbt_ffi_malloc(((value).nodes).length() * 324);
+      for index = 0; index < ((value).nodes).length(); index = index + 1 {
+            let iter_elem : @common.CommandNode = ((value).nodes)[(index)]
+            let iter_base = address + (index * 324);
+            __wit_bindgen_lower_t535((iter_base) + 0, iter_elem)
+
+      }
+      mbt_ffi_store32((ptr) + 4, ((value).nodes).length())
+      mbt_ffi_store32((ptr) + 0, address)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t538(ptr : Int, value : @common.Tool) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).version)
+      mbt_ffi_store32((ptr) + 4, (value).version.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t537((ptr) + 8, (value).commands)
+      __wit_bindgen_lower_t59((ptr) + 16, (value).schema)
 
 }
 

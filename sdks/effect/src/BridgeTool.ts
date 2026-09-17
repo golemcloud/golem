@@ -25,7 +25,7 @@ export interface ToolInvocationResult {
 }
 /** Runtime error preserved by generated clients. @since 1.6.0 @category errors */
 export type ToolRuntimeError<E> =
-  | { readonly tag: "rpc"; readonly error: Host.RpcError }
+  | { readonly tag: "rpc"; readonly error: Host.ToolRpcError }
   | { readonly tag: "tool"; readonly error: E }
 /** Host and lifetime requirements of a generated invocation. @since 1.6.0 @category models */
 export type ToolRequirements = ToolClient | Scope.Scope
@@ -162,12 +162,12 @@ export const decodeTypedSchemaValue = <A>(
 }
 
 /** Identify a WIT RPC error. @since 1.6.0 @category errors */
-export const isRpcError = (value: unknown): value is Host.RpcError =>
+export const isRpcError = (value: unknown): value is Host.ToolRpcError =>
   typeof value === "object" && value !== null && "tag" in value
 
 /** Split declared custom failures from transport failures. @since 1.6.0 @category errors */
 export const splitToolRpcError = <E>(
-  error: Host.RpcError,
+  error: Host.ToolRpcError,
   decode: (name: string, payload: TypedSchemaValue) => E,
 ): ToolRuntimeError<E> => {
   if (error.tag !== "remote-tool-error" || error.val.tag !== "custom-error")

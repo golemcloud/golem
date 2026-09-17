@@ -124,10 +124,10 @@ pub fn discover_tool_middlewares() -> Array[@toolCommon.ToolMiddleware] {
 #doc(hidden)
 pub fn get_registered_tool_middleware(
   name : String,
-) -> Result[@toolCommon.ToolMiddleware, @toolCommon.ToolError] {
+) -> Result[@toolCommon.ToolMiddleware, @types.ToolError] {
   match tool_middleware_state.descriptors.get(name) {
     Some(middleware) => Ok(middleware.to_wit())
-    None => Err(@toolCommon.ToolError::InvalidToolName(name))
+    None => Err(@types.ToolError::InvalidToolName(name))
   }
 }
 
@@ -142,20 +142,20 @@ pub async fn invoke_registered_tool_middleware(
   stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
   underlying : UnderlyingTool,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let context = underlying.ownership_context()
   let invocation = RawToolInvocation::from_wit(
     context, tool_name, tool_metadata, command_path, input, stdin, principal,
   )
   let invoker = match tool_middleware_state.invokers.get(middleware_name) {
     Some(invoker) => invoker
-    None => return Err(@toolCommon.ToolError::InvalidToolName(middleware_name))
+    None => return Err(@types.ToolError::InvalidToolName(middleware_name))
   }
   match invoker(invocation, underlying) {
     Ok(result) =>
       match result.take_for_final(context) {
         Ok(result) => Ok(result)
-        Err(message) => Err(@toolCommon.ToolError::InvalidResult(message))
+        Err(message) => Err(@types.ToolError::InvalidResult(message))
       }
     Err(error) => Err(encode_raw_tool_error(error, context))
   }
