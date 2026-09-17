@@ -22,7 +22,7 @@ const run = (...args) =>
     env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
-    timeout: 600_000,
+    timeout: Number(process.env.CROSS_SDK_CLI_TIMEOUT_MS ?? 600_000),
   })
 
 const listening = () =>
@@ -72,7 +72,17 @@ try {
     const stamp = Date.now().toString(36)
     const invoke = (agent, method, ...args) =>
       run("--local", "agent", "invoke", "--no-stream", agent, method, ...args)
-    if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
+    if (process.env.RUN_TS_AGENT_REFLECTION_ONLY === "1") {
+      const tsCaller = `TsPeer("ts-${stamp}")`
+      const tsFirst = invoke(tsCaller, "reflectedEffectAgent")
+      assert.ok(tsFirst.includes("EffectSnapshotFixture|EffectSnapshotFixture|0|0|1|1|1"), tsFirst)
+      const tsSecond = invoke(tsCaller, "reflectedEffectAgent")
+      assert.ok(
+        tsSecond.includes("EffectSnapshotFixture|EffectSnapshotFixture|1|1|2|2|2"),
+        tsSecond,
+      )
+      console.log("Deployed TS reflected agent JSON, native, and dynamic calls passed")
+    } else if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
       const caller = `EffectConsumer("effect-${stamp}")`
       const first = invoke(caller, "reflectedRoundTrip", '"reflected"')
       assert.ok(first.includes(`TsPeer:echo:ts:effect-${stamp}:reflected`), first)
@@ -211,7 +221,10 @@ try {
         "Cross-SDK RPC passed: TS/Rust ↔ Effect streams, Effect snapshot restoration, direct rich schema values, tools, capabilities, reflection, and typed failures",
       )
     }
-    if (process.env.RUN_AGENT_REFLECTION_ONLY !== "1") {
+    if (
+      process.env.RUN_AGENT_REFLECTION_ONLY !== "1" &&
+      process.env.RUN_TS_AGENT_REFLECTION_ONLY !== "1"
+    ) {
       const reflectedEffectTool = invoke(
         `TsPeer("ts-${stamp}")`,
         "reflectedEffectTool",

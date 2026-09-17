@@ -11,9 +11,9 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 | 1. Generated | Complete | Typed | F | F | C | C | C |
 | 2. Caller-authored | Complete | Typed | F | F | C | F | F |
 | 2. Caller-authored | Binding-only | Typed | F | F | C | F | F |
-| 3. Reflected | Complete deployed schema | JSON | F | H+ | C | F | F |
+| 3. Reflected | Complete deployed schema | JSON | H+ | H+ | C | F | F |
 | 3. Reflected | Complete deployed schema | Native | H+ | H+ | C | F | F |
-| 4. Dynamic | Binding-only | Native | F | F | C | F | F |
+| 4. Dynamic | Binding-only | Native | H+ | F | C | F | F |
 
 Every other agent level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the complete schema published by the deployed type rather than a caller-authored partial contract; dynamic clients deliberately have no schema to validate canonical JSON.
 
@@ -63,6 +63,13 @@ It also invoked a reflected ephemeral phantom and checked its final ID. Reflecte
 native nonfinite output passed for TS and Rust peers, while the declared JSON nonfinite output was
 rejected. This path isolates agent reflection from the earlier large-stream case that stalls the
 full cross-SDK harness.
+
+The fixture's `RUN_TS_AGENT_REFLECTION_ONLY=1` path invoked `TsPeer.reflectedEffectAgent`
+twice from one durable caller against a fresh deployment. It discovered and bound
+`EffectSnapshotFixture`, called its declared methods through canonical JSON and native schema
+values, parsed the host-produced remote ID, rebound the discovered type, and read the same
+persisted state through a schema-free dynamic client. The count advanced from `0` to `1` and
+then from `1` to `2`. Principal-injected identities and negative host cases remain pending.
 
 ## Behavior checklist
 
