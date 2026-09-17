@@ -67,6 +67,7 @@ defineAgent({
     scheduledMetadata: method({ input: {}, success: Schema.String }),
     callTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
     toolRoundTrip: method({ input: { payload: Schema.String }, success: Schema.String }),
+    reflectedTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
     quotaThroughTs: method({ input: {}, success: Schema.String }),
   },
 }).implement({
@@ -226,6 +227,25 @@ defineAgent({
             { concurrency: "unbounded" },
           )
           return `${result}|${stdout}`
+        }),
+      ).pipe(Effect.orDie),
+    reflectedTsTool: ({ payload }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tool = yield* Reflection.getToolType("ts-cross-streaming")
+          if (!tool) return "missing:ts-cross-streaming"
+          const command = tool.client.command([])
+          const started = yield* command.startJson(
+            { label: name },
+            Stream.succeed(new TextEncoder().encode(payload)),
+          )
+          const json = yield* started.collect
+          const nativeCall = yield* command.startValue(
+            command.inputSchema!.packJson({ label: name }),
+            Stream.succeed(new TextEncoder().encode(payload)),
+          )
+          const native = yield* nativeCall.collect
+          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}`
         }),
       ).pipe(Effect.orDie),
     quotaThroughTs: () =>

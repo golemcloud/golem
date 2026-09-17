@@ -4,7 +4,7 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 
 ## Surface matrix
 
-`F` means focused SDK tests passed, with host verification pending. `C` means type/build checks passed, with runtime verification pending. `P` means pending. `U` means intentionally unavailable by the API contract. JSON means canonical JSON accepted by reflection; native means a schema value or WIT tree. Typed means a language-level method contract.
+`F` means focused SDK tests passed, with host verification pending. `C` means type/build checks passed, with runtime verification pending. `P` means pending. `U` means intentionally unavailable by the API contract. `H+` means a positive deployed call passed, with negative host cases pending. JSON means canonical JSON accepted by reflection; native means a schema value or WIT tree. Typed means a language-level method contract.
 
 | Level | Caller contract | Style | TypeScript | Effect | Rust | Scala | MoonBit |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -25,8 +25,8 @@ The tool matrix covers all five SDKs, including Effect. A tool has a command pat
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1. Exact definition or generated | Complete | Typed | P | P | P | P | P |
 | 2. Caller-authored | Complete or partial command subset | Typed | P | P | P | P | P |
-| 3. Reflected | Complete deployed tool schema | JSON | P | P | P | P | P |
-| 3. Reflected | Complete deployed tool schema | Native | P | P | P | P | P |
+| 3. Reflected | Complete deployed tool schema | JSON | H+ | H+ | P | P | P |
+| 3. Reflected | Complete deployed tool schema | Native | H+ | H+ | P | P | P |
 | 4. Dynamic | Name and command path only | Native | P | P | P | P | P |
 
 Other tool level × contract × style combinations are `U`: typed clients require caller-owned codecs, reflected JSON requires discovered schemas, and dynamic calls deliberately have no schema for JSON packing. No SDK is intentionally unavailable for native tool reflection.
@@ -41,6 +41,15 @@ Other tool level × contract × style combinations are `U`: typed clients requir
 | Required/optional stdin and stdout, concurrent collection, trigger restrictions | Scoped stream, cancellation, early-close, and cleanup tests in all five SDKs | Deployed streaming invocation and cancellation, including Effect interruption |
 
 No tool matrix cell is complete solely from a mock-host test.
+
+The TS and Effect `H+` cells were exercised by the deployed cross-SDK fixture's
+`RUN_TOOL_REFLECTION_ONLY=1` path. Each caller discovered the other SDK's tool and invoked its
+required-stdin/required-stdout command twice, once with canonical JSON and once with a native
+schema value; both structured results and byte streams matched. The full cross-SDK harness was
+also attempted, but its earlier `callEffectStream` case stopped progressing before it reached
+the tool checks. The targeted path ran against a fresh local deployment and passed. Its local
+build required a current checkout-built `golem` CLI and a temporary Node preload to unref
+Rollup's lingering file watchers; neither changes the SDK contract.
 
 ## Behavior checklist
 

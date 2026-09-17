@@ -86,6 +86,7 @@ export const TsPeer = defineAgent({
     }),
     callEffectStream: method({ input: { tenant: z.string() }, returns: z.string() }),
     callEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
+    reflectedEffectTool: method({ input: { payload: z.string() }, returns: z.string() }),
     quotaThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     richCorpusThroughEffect: method({ input: { tenant: z.string() }, returns: z.string() }),
     snapshotAdd: method({
@@ -192,6 +193,23 @@ TsPeer.implement({
         .effect_cross_streaming(this.name, stdin)
         .collect()
       return `${result}|${new TextDecoder().decode(stdout)}`
+    },
+    async reflectedEffectTool({ payload }) {
+      const tool = reflection.getToolType("effect-cross-streaming")
+      if (!tool) return "missing:effect-cross-streaming"
+      const stdin = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(payload))
+            controller.close()
+          },
+        })
+      const command = tool.client.command([])
+      const json = await command.startJson({ label: this.name }, stdin()).collect()
+      const native = await command
+        .startValue(command.inputSchema!.packJson({ label: this.name }), stdin())
+        .collect()
+      return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}`
     },
     async quotaThroughEffect({ tenant }) {
       const token = acquireQuotaToken("cross-sdk-quota", 2n)
