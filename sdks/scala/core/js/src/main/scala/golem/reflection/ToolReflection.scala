@@ -77,7 +77,11 @@ final class ToolType private[reflection] (
     case WitOptionShape.RepeatableMap(item) => schemaAt(item.mapType)
   }
 
-  private def argument(option: WitOptionSpec): ToolArgument =
+  private def argument(option: WitOptionSpec): ToolArgument = {
+    val repeatable = option.shape match {
+      case WitOptionShape.RepeatableList(_) | WitOptionShape.RepeatableMap(_) => true
+      case _                                                                  => false
+    }
     ToolArgument(
       "option",
       option.long,
@@ -86,8 +90,9 @@ final class ToolType private[reflection] (
       option.required,
       option.default.map(SchemaWire.schemaValueFromWit),
       optionSchema(option.shape),
-      !option.required && option.default.isEmpty
+      !option.required && option.default.isEmpty && !repeatable
     )
+  }
 
   private def argument(flag: FlagSpec): ToolArgument = {
     val root = flag.shape match {
@@ -151,8 +156,7 @@ final class ToolType private[reflection] (
           )
         }
         val arguments = globals ++ positionals ++ tail ++ body.options.map(argument) ++ body.flags.map(argument)
-        val wireRoot  = record(arguments.map(arg => arg.name -> arg.schema.root))
-        val localRoot = record(arguments.map { arg =>
+        val inputRoot = record(arguments.map { arg =>
           arg.name -> (if (arg.optionalCarrier) SchemaType(OptionType(arg.schema.root)) else arg.schema.root)
         })
         val canonicalPath = indices.map(nodes(_).name)
@@ -162,8 +166,8 @@ final class ToolType private[reflection] (
             canonicalPath,
             body,
             arguments,
-            SchemaRef(SchemaGraph(graph.defs, localRoot)),
-            SchemaGraph(graph.defs, wireRoot)
+            SchemaRef(SchemaGraph(graph.defs, inputRoot)),
+            SchemaGraph(graph.defs, inputRoot)
           )
         )
       case _ => Left(GolemReflectError.Discovery(s"Tool '$lookupName' has no command '${path.mkString(" ")}'"))
