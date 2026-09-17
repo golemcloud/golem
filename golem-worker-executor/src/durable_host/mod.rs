@@ -4551,11 +4551,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                                     self.on_worker_update_failed(
                                         target_revision,
-                                        Some(stringified_error),
+                                        Some(stringified_error.clone()),
                                     )
                                     .await;
 
-                                    Err(error)?
+                                    warn!("Worker update to revision {} failed, logged FailedUpdate in oplog: {}", target_revision, stringified_error);
+                                    return Ok(());
                                 };
 
                                 let component_metadata = self.component_metadata().clone();
