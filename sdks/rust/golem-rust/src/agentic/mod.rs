@@ -74,6 +74,7 @@ mod tool_client;
 mod tool_impl;
 mod tool_literal;
 mod tool_refinement;
+mod tool_reflection;
 mod tool_registry;
 mod unstructured_binary;
 mod unstructured_text;

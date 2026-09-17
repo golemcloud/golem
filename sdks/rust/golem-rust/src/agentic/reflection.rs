@@ -14,6 +14,12 @@
 
 //! Runtime agent reflection and schema-free invocation.
 
+pub use super::tool_reflection::{
+    DynamicToolClient, ReflectedToolClient, ReflectedToolCustomError, ToolArgument,
+    ToolArgumentKind, ToolCommand, ToolReflectionError, ToolType, get_all_tool_types,
+    get_tool_type,
+};
+
 use crate::bindings::golem::agent::{common as wire_common, host};
 use crate::schema::render::{
     RenderError, from_json_value, to_json_schema_with_config, to_json_value,

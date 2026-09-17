@@ -69,6 +69,7 @@ pub enum ToolError<E> {
     RemoteTool(RemoteToolError),
     Tool(E),
     UnknownCustomError(RawCustomToolError),
+    MalformedRemoteOutput(String),
 }
 
 /// A structural failure returned by the remote tool implementation.
@@ -111,6 +112,9 @@ impl<E: Display> Display for ToolError<E> {
             ToolError::UnknownCustomError(error) => {
                 write!(f, "unknown custom tool error `{}`", error.name)
             }
+            ToolError::MalformedRemoteOutput(message) => {
+                write!(f, "malformed remote tool output: {message}")
+            }
         }
     }
 }
@@ -122,6 +126,7 @@ impl<E: Error + 'static> Error for ToolError<E> {
             ToolError::RemoteTool(error) => Some(error),
             ToolError::Tool(error) => Some(error),
             ToolError::UnknownCustomError(_) => None,
+            ToolError::MalformedRemoteOutput(_) => None,
         }
     }
 }
@@ -404,7 +409,7 @@ impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
     }
 }
 
-fn map_rpc_error<E>(
+pub(crate) fn map_rpc_error<E>(
     error: WitRpcError,
     decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
@@ -680,6 +685,9 @@ impl<T, E> ToolInvocation<T, E> {
                         Err(message) => Err(protocol_error(message)),
                     }
                 }
+                Err(ToolError::MalformedRemoteOutput(message)) => {
+                    Err(ToolError::MalformedRemoteOutput(message))
+                }
             }
         }
     }
@@ -736,11 +744,28 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
     decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
 ) -> Result<ToolInvocation<T, E>, ToolError<E>> {
+    start_tool_invocation_with_stdout(rpc, command_path, input, stdin, true, decode, decode_error)
+}
+
+pub fn start_tool_invocation_with_stdout<T: 'static, E: 'static>(
+    rpc: &impl StartedToolRpcClient,
+    command_path: &[String],
+    input: &TypedSchemaValue,
+    stdin: Option<InputStream>,
+    attach_stdout: bool,
+    decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
+    decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
+) -> Result<ToolInvocation<T, E>, ToolError<E>> {
     let input = crate::encode_typed_schema_value(input)
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let stdin = stdin.map(pump_tool_stdin);
-    let (stdout_target, stdout) = agentic_host_api::create_stdout();
-    let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, Some(stdout_target));
+    let (stdout_target, stdout) = if attach_stdout {
+        let (target, stream) = agentic_host_api::create_stdout();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target);
     let future = Rc::new(future);
     let result = Rc::new(InvocationResultDriver::new({
         let future = Rc::clone(&future);
@@ -757,7 +782,7 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
     }));
     Ok(ToolInvocation {
         stdout: ToolInvocationStdout {
-            stream: Some(stdout),
+            stream: stdout,
             result: Rc::clone(&result),
         },
         future,
@@ -1102,6 +1127,9 @@ mod tests {
             }
             Err(ToolError::UnknownCustomError(error)) => {
                 panic!("expected declared tool error, got unknown error: {error:?}")
+            }
+            Err(ToolError::MalformedRemoteOutput(message)) => {
+                panic!("expected declared tool error, got malformed output: {message}")
             }
             Ok(_) => panic!("expected declared tool error, got success"),
         }
