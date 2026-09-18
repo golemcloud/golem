@@ -1,0 +1,225 @@
+///|
+fn sample_tool() -> ToolType raise {
+  let doc : @toolCommon.Doc = { summary: "", description: "", examples: [], }
+  let graph = @model.schema_graph_to_wit({
+    defs: [],
+    root: @model.schema_type(String),
+  })
+  let body : @toolCommon.CommandBody = {
+    positionals: {
+      fixed: [
+        {
+          name: "message",
+          doc,
+          value_name: None,
+          type_: graph.root,
+          default: None,
+          required: true,
+          accepts_stdio: false,
+        },
+        {
+          name: "note",
+          doc,
+          value_name: None,
+          type_: graph.root,
+          default: None,
+          required: false,
+          accepts_stdio: false,
+        },
+      ],
+      tail: None,
+    },
+    options: [
+      {
+        long: "label",
+        short: None,
+        aliases: [],
+        doc,
+        value_name: None,
+        shape: @toolCommon.OptionShape::Scalar(graph.root),
+        default: None,
+        required: false,
+        env_var: None,
+      },
+    ],
+    flags: [],
+    constraints: [],
+    stdin: None,
+    stdout: None,
+    result: Some({
+      type_: graph.root,
+      doc,
+      formatters: [],
+      default_formatter: "",
+    }),
+    errors: [],
+    annotations: None,
+  }
+  {
+    lookup_name: "sample",
+    definition: {
+      version: "1",
+      commands: {
+        nodes: [
+          {
+            name: "sample",
+            aliases: [],
+            doc,
+            globals: { options: [], flags: [], },
+            subcommands: [1],
+            body: None,
+          },
+          {
+            name: "run",
+            aliases: ["r"],
+            doc,
+            globals: { options: [], flags: [], },
+            subcommands: [],
+            body: Some(body),
+          },
+        ],
+      },
+      schema: graph,
+    },
+    implemented_by: { uuid: { high_bits: 0UL, low_bits: 0UL, }, },
+  }
+}
+
+///|
+test "reflected tool resolves aliases and rejects input before RPC" {
+  let command = sample_tool().command(["r"])
+  assert_eq(command.path, ["run"])
+  assert_eq(command.arguments[0].name, "message")
+  let invalid = @model.SchemaValue::Record([@model.SchemaValue::S32(1)])
+  match command.start_value(invalid) {
+    Err(@tool.ToolError::InvalidInput(_)) => ()
+    _ => fail("expected local tool input rejection")
+  }
+}
+
+///|
+test "reflected optional tool inputs share the canonical wire schema" {
+  let command = sample_tool().command(["run"])
+  assert_eq(command.input_schema.graph, command.wire_input)
+  let omitted = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  let supplied = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("note"))),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("label"))),
+  ])
+  match command.checked_input(omitted) {
+    Ok(_) => ()
+    Err(_) => fail("expected omitted optional inputs to validate")
+  }
+  match command.checked_input(supplied) {
+    Ok(_) => ()
+    Err(_) => fail("expected supplied optional inputs to validate")
+  }
+}
+
+///|
+extern "wasm" fn set_reflection_tool_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+
+///|
+extern "wasm" fn reset_reflection_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
+
+///|
+extern "wasm" fn reflection_resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+
+///|
+fn run_reflection_tool_async(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async-core.with_waitableset(async fn() {
+    body()
+    @async-core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps += 1
+    if steps > 1000 {
+      fail("reflected tool async test did not complete")
+    }
+    if (callback & 0xf) != 1 {
+      fail("reflected tool test unexpectedly waited on a host event")
+    }
+    callback = @async-core.cb(0, 0, 0)
+  }
+}
+
+///|
+test "repeated reflected convenience calls release result futures on every exit" {
+  let command = sample_tool().command(["run"])
+  let input = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  reset_reflection_resource_drop_counts()
+  set_reflection_tool_host_mode(1)
+  defer set_reflection_tool_host_mode(0)
+  run_reflection_tool_async(async fn() {
+    for _ in 0..<50 {
+      match command.invoke_value(input) {
+        Err(@tool.ToolError::Rpc(@tool.RpcError::Cancelled)) => ()
+        _ => fail("expected cancelled tool result")
+      }
+    }
+  })
+  assert_eq(reflection_resource_drop_count(4), 50)
+  set_reflection_tool_host_mode(2)
+  run_reflection_tool_async(async fn() {
+    for _ in 0..<50 {
+      match command.invoke_value(input) {
+        Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+        _ => fail("expected missing remote result")
+      }
+    }
+  })
+  assert_eq(reflection_resource_drop_count(4), 100)
+}
+
+///|
+test "reflected tool reports malformed remote result" {
+  let command = sample_tool().command(["run"])
+  match command.decode_result({ result: None, stdout: None, }) {
+    Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+    _ => fail("expected missing tool result to be malformed")
+  }
+}
+
+///|
+test "tool constraint references use flag defaults and nested values" {
+  let tool = sample_tool()
+  let command = tool.command(["run"])
+  let flag : @toolCommon.FlagSpec = {
+    long: "enabled",
+    short: None,
+    aliases: [],
+    doc: { summary: "", description: "", examples: [], },
+    shape: BoolFlag({ default: true, negatable: true, }),
+    env_var: None,
+  }
+  command.arguments.push(tool_flag_argument(tool, flag))
+  assert_eq(command.arguments[3].default, Some(@model.SchemaValue::Bool(true)))
+  let values = [
+    @model.SchemaValue::String("message"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("fast"))),
+    @model.SchemaValue::Bool(false),
+  ]
+  assert_true(command.constraint_ref_matches(Present("enabled"), values))
+  assert_true(
+    command.constraint_ref_matches(
+      ValueIs({
+        name: "label",
+        value: @model.schema_value_to_wit(@model.SchemaValue::String("fast")),
+      }),
+      values,
+    ),
+  )
+  values[3] = @model.SchemaValue::Bool(true)
+  assert_false(command.constraint_ref_matches(Present("enabled"), values))
+}

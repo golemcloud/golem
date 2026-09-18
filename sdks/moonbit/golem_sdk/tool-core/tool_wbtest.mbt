@@ -1488,7 +1488,7 @@ test "canonical command lookup, ordering, shadowing, and collected shapes" {
       #|["global", "count", "arg", "rest", "items", "values", "force"]
     ),
   )
-  assert_true(fields[0].type_.root.body is @model.SchemaTypeBody::String)
+  assert_true(fields[0].type_.root.body is @model.SchemaTypeBody::Option(_))
   assert_true(fields[1].type_.root.body is @model.SchemaTypeBody::U32(_))
   assert_true(fields[3].type_.root.body is @model.SchemaTypeBody::List(_))
   assert_true(fields[4].type_.root.body is @model.SchemaTypeBody::List(_))
@@ -1517,8 +1517,14 @@ test "canonical model builds and decodes the expected named record" {
     ("rest", @model.SchemaValue::List([])),
     ("arg", @model.SchemaValue::String("arg")),
     ("count", @model.SchemaValue::U32(1)),
-    ("global", @model.SchemaValue::String("old")),
-    ("global", @model.SchemaValue::String("new")),
+    (
+      "global",
+      @model.SchemaValue::Option(Some(@model.SchemaValue::String("old"))),
+    ),
+    (
+      "global",
+      @model.SchemaValue::Option(Some(@model.SchemaValue::String("new"))),
+    ),
   ])
   guard input.value is @model.SchemaValue::Record(values) else {
     fail("expected record value")
@@ -1526,7 +1532,7 @@ test "canonical model builds and decodes the expected named record" {
   debug_inspect(
     values[0],
     content=(
-      #|String("new")
+      #|Option(Some(String("new")))
     ),
   )
   let wire = @model.typed_schema_value_to_wit(input)
@@ -1768,6 +1774,76 @@ test "text-refined string canonical input round-trips through typed values" {
       #|"aaa"
     ),
   )
+}
+
+///|
+test "optional canonical fields use option wire schemas" {
+  let def : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "optional",
+        aliases: [],
+        doc: doc("optional"),
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: {
+            fixed: [
+              {
+                name: "position",
+                doc: doc("position"),
+                value_name: None,
+                type_: string_graph(),
+                default: None,
+                required: false,
+                accepts_stdio: false,
+              },
+            ],
+            tail: None,
+          },
+          options: [
+            {
+              long: "maybe",
+              short: None,
+              aliases: [],
+              doc: doc("maybe"),
+              value_name: None,
+              shape: OptionShapeDef::Scalar(string_graph()),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let model = def.canonical_input_model(0)
+  assert_true(model.record_graph.root.body is @model.SchemaTypeBody::Record(_))
+  for value in [None, Some("supplied")] {
+    let input = build_canonical_input(model, [
+      ("position", @schema.to_value_as(value)),
+      ("maybe", @schema.to_value_as(value)),
+    ])
+    let wire = @model.typed_schema_value_to_wit(input)
+    let decoded = decode_canonical_input_for_test(def, 0, wire, "optional")
+    let position : String? = decode_canonical_field_for_test(
+      decoded, "position", "optional",
+    )
+    let maybe : String? = decode_canonical_field_for_test(
+      decoded, "maybe", "optional",
+    )
+    assert_eq(position, value)
+    assert_eq(maybe, value)
+  }
 }
 
 ///|

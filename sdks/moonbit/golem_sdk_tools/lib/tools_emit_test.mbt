@@ -1440,7 +1440,15 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
     rel_path: "golem_moonbit_examples",
     dir: "../golem_sdk_example1/golem_moonbit_examples",
   }
-  let tools = @lib.parse_tools(@lib.scan_package(package_info).files)
+  let fixture_names = [
+    "canonical-grep", "canonical-git", "remote", "stash", "canonical-big-bound",
+    "moonbit-streaming",
+  ]
+  let tools = @lib.parse_tools(@lib.scan_package(package_info).files).filter(fn(
+    tool,
+  ) {
+    fixture_names.contains(tool.name)
+  })
   assert_eq(tools.length(), 6)
   let grep = canonical_tool(tools, "canonical-grep")
   assert_eq(grep.version, Some("2.0.0"))

@@ -221,18 +221,16 @@ fn emit_client(
     "  let client = @rpc.AgentClient::\{migration_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
   )
   buf.write_string("  { client, }\n}\n\n")
-  // Explicit phantom identities are meaningful only for durable agents.
-  if durable {
-    buf.write_string("///|\n")
-    buf.write_string(
-      "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
-    )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
-    buf.write_string(
-      "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
-    )
-    buf.write_string("  { client, }\n}\n\n")
-  }
+  // Known phantom identities are valid for both durable and ephemeral agents.
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
   // get_agent_id
   if durable {
     buf.write_string("///|\n")
@@ -255,11 +253,9 @@ fn emit_client(
     emit_client_scoped(buf, client, "scoped", "get", vis, [])
   }
   emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
-  if durable {
-    emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
-      ("phantom_id", "@types.Uuid"),
-    ])
-  }
+  emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
+    ("phantom_id", "@types.Uuid"),
+  ])
   // methods
   for meth in agent.methods {
     let contains_stream = method_contains_agent_stream(meth, value_types)
@@ -468,18 +464,16 @@ fn emit_client_config_variants(
   )
   buf.write_string("  { client, }\n}\n\n")
   // get_phantom_with_config
-  if durable {
-    buf.write_string("///|\n")
-    buf.write_string(
-      "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-    )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
-    buf.write_string("  let agent_config = \{walker}(config, [])\n")
-    buf.write_string(
-      "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
-    )
-    buf.write_string("  { client, }\n}\n\n")
-  }
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string("  let agent_config = \{walker}(config, [])\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
   // scoped variants
   if durable {
     emit_client_scoped_with_config(
@@ -501,17 +495,15 @@ fn emit_client_config_variants(
     [],
     override_name,
   )
-  if durable {
-    emit_client_scoped_with_config(
-      buf,
-      client,
-      "scoped_get_phantom_with_config",
-      "get_phantom_with_config",
-      vis,
-      [("phantom_id", "@types.Uuid")],
-      override_name,
-    )
-  }
+  emit_client_scoped_with_config(
+    buf,
+    client,
+    "scoped_get_phantom_with_config",
+    "get_phantom_with_config",
+    vis,
+    [("phantom_id", "@types.Uuid")],
+    override_name,
+  )
 }
 
 ///|
