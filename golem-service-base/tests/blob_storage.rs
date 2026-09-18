@@ -1679,3 +1679,190 @@ async fn delete_dir_keeps_blobs_of_other_namespaces(
     assert!(deleted);
     assert_eq!(kept, Some(Bytes::from("payload").to_vec()));
 }
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_keeps_siblings_that_differ_only_in_case(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let create_dir = |op: &'static str, path: &'static str| {
+        storage.create_dir(
+            "delete_dir_keeps_siblings_that_differ_only_in_case",
+            op,
+            namespace.clone(),
+            Path::new(path),
+        )
+    };
+    let put = |op: &'static str, path: &'static str| {
+        storage.put_raw(
+            "delete_dir_keeps_siblings_that_differ_only_in_case",
+            op,
+            namespace.clone(),
+            Path::new(path),
+            path.as_bytes(),
+        )
+    };
+    let get = |op: &'static str, path: &'static str| {
+        storage.get_raw(
+            "delete_dir_keeps_siblings_that_differ_only_in_case",
+            op,
+            namespace.clone(),
+            Path::new(path),
+        )
+    };
+
+    create_dir("create-dir", "foo").await.unwrap();
+    put("put-a", "foo/a").await.unwrap();
+
+    // A case-insensitive store maps `FOO` onto `foo`, so only a case-sensitive store gets the
+    // sibling that differs only in case.
+    let case_sensitive = storage
+        .exists(
+            "delete_dir_keeps_siblings_that_differ_only_in_case",
+            "exists",
+            namespace.clone(),
+            Path::new("FOO/a"),
+        )
+        .await
+        .unwrap()
+        == ExistsResult::DoesNotExist;
+    if case_sensitive {
+        create_dir("create-sibling-dir", "FOO").await.unwrap();
+        put("put-c", "FOO/x/c").await.unwrap();
+    }
+
+    storage
+        .delete_dir(
+            "delete_dir_keeps_siblings_that_differ_only_in_case",
+            "delete-dir",
+            namespace.clone(),
+            Path::new("foo"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        get("get-c", "FOO/x/c").await.unwrap(),
+        case_sensitive.then(|| b"FOO/x/c".to_vec())
+    );
+    assert_eq!(get("get-a", "foo/a").await.unwrap(), None);
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_deletes_nested_descendants(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let put = |op: &'static str, path: &'static str| {
+        storage.put_raw(
+            "delete_dir_deletes_nested_descendants",
+            op,
+            namespace.clone(),
+            Path::new(path),
+            path.as_bytes(),
+        )
+    };
+    let get = |op: &'static str, path: &'static str| {
+        storage.get_raw(
+            "delete_dir_deletes_nested_descendants",
+            op,
+            namespace.clone(),
+            Path::new(path),
+        )
+    };
+
+    storage
+        .create_dir(
+            "delete_dir_deletes_nested_descendants",
+            "create-dir",
+            namespace.clone(),
+            Path::new("nested"),
+        )
+        .await
+        .unwrap();
+    put("put-direct", "nested/direct").await.unwrap();
+    put("put-below", "nested/below/deep").await.unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_deletes_nested_descendants",
+            "delete-dir",
+            namespace.clone(),
+            Path::new("nested"),
+        )
+        .await
+        .unwrap();
+
+    assert!(deleted);
+    assert_eq!(get("get-direct", "nested/direct").await.unwrap(), None);
+    assert_eq!(get("get-below", "nested/below/deep").await.unwrap(), None);
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_keeps_blobs_of_other_namespaces(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cc")] deleted_namespace: &BlobStorageNamespace,
+    #[tagged_as("cs")] kept_namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("shared");
+    let blob = Path::new("shared/blob");
+
+    storage
+        .create_dir(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "create-dir",
+            deleted_namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "put-deleted",
+            deleted_namespace.clone(),
+            blob,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "put-kept",
+            kept_namespace.clone(),
+            blob,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "delete-dir",
+            deleted_namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+
+    let kept = storage
+        .get_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "get-kept",
+            kept_namespace.clone(),
+            blob,
+        )
+        .await
+        .unwrap();
+
+    assert!(deleted);
+    assert_eq!(kept, Some(Bytes::from("payload").to_vec()));
+}
