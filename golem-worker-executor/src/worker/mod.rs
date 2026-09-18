@@ -1163,9 +1163,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await;
     }
 
-    /// What anyone waiting on this agent is told. Every variant is one the worker service answers
-    /// by refreshing its routing table and retrying, so the invocation lands on the new owner
-    /// rather than failing.
+    /// [`RelinquishReason::to_error`] for the reason recorded for this agent, or
+    /// `ShardingNotReady` when none is recorded yet.
     pub(crate) fn relinquish_error(&self) -> WorkerExecutorError {
         self.relinquishment
             .get()

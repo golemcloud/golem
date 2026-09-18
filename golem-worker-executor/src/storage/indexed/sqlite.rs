@@ -137,7 +137,7 @@ impl SqliteIndexedStorage {
     /// A stored epoch that will not fit a `u64` is corruption, not a fence: `to_i64` refuses to
     /// write one, so a negative column value came from outside this code, and reading it back as
     /// `u64` would wrap it into a spuriously huge epoch.
-    fn epoch_from_i64(value: i64, key: &str) -> String {
+    fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("SQLite indexed storage read a negative shard epoch {value} for key '{key}'")
     }
 
@@ -383,7 +383,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                         let mut owner_matches = false;
                         if let Some((epoch, owner)) = stored {
                             let epoch = u64::try_from(epoch).map_err(|_| {
-                                FencedTxError::Corrupt(Self::epoch_from_i64(epoch, &key))
+                                FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
                             })?;
                             actual = Some(ShardEpoch(epoch));
                             owner_matches = owner == writer_id;
@@ -427,12 +427,9 @@ impl IndexedStorage for SqliteIndexedStorage {
             })
     }
 
-    /// Monotonic compare-and-set on the epoch and its writer: the `WHERE` on the conflict path
-    /// means a lower epoch updates no row, so while a record exists a stale writer cannot walk it
-    /// back and un-fence itself, and an equal epoch updates the row only for the process that
-    /// recorded it, so two processes cannot share one generation. With no record there is no
-    /// conflict and any epoch is inserted. The unqualified `epoch`/`owner` there are the existing
-    /// row's.
+    /// SQLite's half of [`IndexedStorage::upsert_oplog_metadata`], which states the rule this
+    /// enforces. The unqualified `epoch`/`owner` in the `WHERE` are the existing row's, and
+    /// `excluded` is the row being written.
     async fn upsert_oplog_metadata(
         &self,
         svc_name: &'static str,
@@ -481,8 +478,9 @@ impl IndexedStorage for SqliteIndexedStorage {
             let mut actual = None;
             let mut owner_matches = false;
             if let Some((epoch, owner)) = stored {
-                let epoch = u64::try_from(epoch)
-                    .map_err(|_| IndexedStorageError::Other(Self::epoch_from_i64(epoch, key)))?;
+                let epoch = u64::try_from(epoch).map_err(|_| {
+                    IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                })?;
                 actual = Some(ShardEpoch(epoch));
                 owner_matches = owner == writer_id;
             }

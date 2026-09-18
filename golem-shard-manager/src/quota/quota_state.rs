@@ -30,7 +30,7 @@ use tracing::debug;
 /// `epoch` here is the caller's claimed epoch, taken straight off the wire (a `renew_lease` /
 /// `release_lease` argument, itself `golem_common::model::quota::LeaseEpoch(request.epoch)` in
 /// `grpc.rs` with nothing upstream bounding it) - unlike `pod_lease.epoch`, which only ever
-/// advances by exactly one through this state's own `next()` calls. A `u64::MAX` claim can never
+/// advances by exactly one through this state's own `checked_next()` calls. A `u64::MAX` claim can never
 /// legitimately precede a real stored epoch, so it simply fails this check like any other stale
 /// one, rather than aborting the process.
 fn precedes(epoch: LeaseEpoch, next: LeaseEpoch) -> bool {

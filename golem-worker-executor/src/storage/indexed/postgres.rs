@@ -153,7 +153,7 @@ impl PostgresIndexedStorage {
     /// write one, so a negative column value came from outside this code - and reading it back as
     /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the oplog and,
     /// reported as evidence, walks the shard manager's own mint towards its ceiling.
-    fn epoch_from_i64(value: i64, key: &str) -> String {
+    fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("Postgres indexed storage read a negative shard epoch {value} for key '{key}'")
     }
 
@@ -439,7 +439,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                         let mut owner_matches = false;
                         if let Some((epoch, owner)) = stored {
                             let epoch = u64::try_from(epoch).map_err(|_| {
-                                FencedTxError::Corrupt(Self::epoch_from_i64(epoch, &key))
+                                FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
                             })?;
                             actual = Some(ShardEpoch(epoch));
                             owner_matches = owner == writer_id;
@@ -492,18 +492,14 @@ impl IndexedStorage for PostgresIndexedStorage {
             })
     }
 
-    /// Monotonic compare-and-set on the epoch authorised to write this key, and on the writer
-    /// holding it.
+    /// Postgres's half of [`IndexedStorage::upsert_oplog_metadata`], which states the rule this
+    /// enforces.
     ///
-    /// The `WHERE` on the conflict path is what makes it monotonic: a lower epoch updates no row,
-    /// so while a record exists a writer holding a stale epoch cannot walk it back and un-fence
-    /// itself against the current owner. An equal epoch updates the row only for the process that
-    /// already recorded it: a re-open by the holder is ordinary, while another process arriving at
-    /// the same epoch is a shard manager that lost its state and minted the generation twice, and
-    /// letting it through would put two writers behind one `(shard, epoch)` pair - the thing the
-    /// epoch exists to tell apart. With no record there is no conflict and any epoch is inserted.
-    /// Postgres reports one row affected for an insert and for an accepted update, and zero when
-    /// the `WHERE` excludes it.
+    /// The `WHERE` on the conflict path is where it lives: `epoch < EXCLUDED.epoch` for a higher
+    /// generation, or `= EXCLUDED.epoch AND owner = EXCLUDED.owner` for the same process re-opening
+    /// at the one it holds. With no record there is no conflict and any epoch is inserted. Postgres
+    /// reports one row affected for an insert and for an accepted update, and zero when the `WHERE`
+    /// excludes it - which is what the read-back below turns into a fence.
     async fn upsert_oplog_metadata(
         &self,
         svc_name: &'static str,
@@ -550,8 +546,9 @@ impl IndexedStorage for PostgresIndexedStorage {
             let mut actual = None;
             let mut owner_matches = false;
             if let Some((epoch, owner)) = stored {
-                let epoch = u64::try_from(epoch)
-                    .map_err(|_| IndexedStorageError::Other(Self::epoch_from_i64(epoch, key)))?;
+                let epoch = u64::try_from(epoch).map_err(|_| {
+                    IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                })?;
                 actual = Some(ShardEpoch(epoch));
                 owner_matches = owner == writer_id;
             }

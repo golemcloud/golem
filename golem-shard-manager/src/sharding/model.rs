@@ -611,10 +611,9 @@ impl ShardLeaseState {
             // but a claim of `u64::MAX - 1` does not, and minting past it succeeds, landing
             // exactly on `u64::MAX`. Either way the wire carries a raw `u64` with nothing
             // upstream bounding it, and a `u64::MAX` epoch must never reach `shard_epochs`: the
-            // next ordinary reassignment mints past whatever is stored there
-            // (`next_epoch_for`), and `ShardEpoch::next` panics on it - aborting this process,
-            // and again on every retry of the same report. So a candidate that would land on it
-            // is dropped here, the same stance as the out-of-range shard id above.
+            // next ordinary reassignment has nothing left to mint past it (`next_epoch_for`), so
+            // the shard could never change owner again. A candidate that would land on it is
+            // dropped here, the same stance as the out-of-range shard id above.
             let candidate = if mints_past_claim {
                 claimed_epoch.checked_next()
             } else {
