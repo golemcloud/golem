@@ -93,20 +93,6 @@ impl SqliteBlobStorage {
             }
         }
     }
-
-    fn escape_like(value: &str) -> String {
-        let mut result = String::with_capacity(value.len());
-        for ch in value.chars() {
-            match ch {
-                '%' | '_' | '!' => {
-                    result.push('!');
-                    result.push(ch);
-                }
-                _ => result.push(ch),
-            }
-        }
-        result
-    }
 }
 
 #[async_trait]
@@ -341,19 +327,24 @@ impl BlobStorage for SqliteBlobStorage {
         } else {
             format!("{parent}/{name}")
         };
-        let descendants_prefix = format!("{}/", dir_path);
-        let descendants_like = format!("{}%", Self::escape_like(&descendants_prefix));
+        // Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE,
+        // which ignores ASCII case. A parent below `dir_path` is at least `dir_path/` and less
+        // than `dir_path0`, because `0` is the character after `/`. This range can use the
+        // primary key.
+        let descendants_start = format!("{dir_path}/");
+        let descendants_end = format!("{dir_path}0");
 
         let query = sqlx::query(
             r#"DELETE FROM blob_storage WHERE namespace = ? AND
-                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent LIKE ? ESCAPE '!'));
+                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent >= ? AND parent < ?));
             "#,
         )
         .bind(Self::namespace(namespace))
         .bind(parent)
         .bind(name)
         .bind(dir_path)
-        .bind(descendants_like);
+        .bind(descendants_start)
+        .bind(descendants_end);
 
         let result = self
             .pool
