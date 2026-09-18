@@ -4408,7 +4408,7 @@ mod tests {
     async fn seed_reports_the_error_of_a_directory_that_it_cannot_make() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let parent = tempfile::tempdir().unwrap();

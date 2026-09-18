@@ -323,7 +323,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     async fn create_at_root_accepts_the_name_again_after_a_failed_creation() {
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let root = tempfile::tempdir().unwrap();
@@ -472,7 +472,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     async fn discard_reports_a_removal_failure() {
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let root = tempfile::tempdir().unwrap();
