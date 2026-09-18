@@ -325,6 +325,14 @@ try {
         reflectedRustTool,
       )
       assert.ok(reflectedRustTool.includes("|true|Some(String("), reflectedRustTool)
+      const reflectedRustOptional = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "reflected_optional_tool",
+      )
+      assert.ok(
+        reflectedRustOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedRustOptional,
+      )
       console.log("Deployed TS, Effect, and Rust typed, reflected, and dynamic tool calls passed")
     }
   }

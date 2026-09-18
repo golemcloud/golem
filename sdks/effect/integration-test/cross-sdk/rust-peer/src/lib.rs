@@ -22,6 +22,7 @@ pub trait RustPeer {
     async fn nonfinite(&self, kind: String) -> f64;
     async fn permission_card_through_effect(&self, tenant: String) -> String;
     async fn reflected_ts_tool(&self, label: String) -> String;
+    async fn reflected_optional_tool(&self) -> String;
     async fn reflected_ts_agent(&self) -> String;
 }
 
@@ -119,6 +120,49 @@ impl RustPeer for RustPeerImpl {
             Ok(_) => "unexpected tool output".to_string(),
             Err(error) => format!("error:{error}"),
         }
+    }
+    async fn reflected_optional_tool(&self) -> String {
+        let result = async {
+            let tool = get_tool_type("ts-optional-reflection")?;
+            let command = tool.command(&[])?;
+            let omitted_json = command
+                .invoke_json(&serde_json::json!({ "maybe": null }))
+                .await?;
+            let supplied_json = command
+                .invoke_json(&serde_json::json!({ "maybe": "supplied" }))
+                .await?;
+            let omitted_native = command
+                .invoke_value(SchemaValue::Record {
+                    fields: vec![SchemaValue::Option { inner: None }],
+                })
+                .await?;
+            let supplied_native = command
+                .invoke_value(SchemaValue::Record {
+                    fields: vec![SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("supplied".to_string()))),
+                    }],
+                })
+                .await?;
+            Ok::<_, golem_rust::agentic::ToolReflectionError>(format!(
+                "{}|{}|{}|{}",
+                omitted_json
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unexpected".to_string()),
+                supplied_json
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unexpected".to_string()),
+                match omitted_native {
+                    Some(SchemaValue::String(value)) => value,
+                    _ => "unexpected".to_string(),
+                },
+                match supplied_native {
+                    Some(SchemaValue::String(value)) => value,
+                    _ => "unexpected".to_string(),
+                },
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
     }
     async fn call_effect(&self, tenant: String, request_id: String) -> String {
         let client = EffectFixture::get_with_config(tenant, Some("rust-override".into()))
