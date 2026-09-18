@@ -6,11 +6,19 @@ use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
 use golem_rust::bindings::golem::permissions::{derive, types};
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::{
-    GolemReflectError, SchemaValue, TypedSchemaValue, agent_definition, agent_implementation,
-    get_agent_type, get_agent_type_for,
+    GolemReflectError, IntoSchema, MethodOnlyAgentClientDefinition, SchemaValue, TypedSchemaValue,
+    agent_definition, agent_implementation, get_agent_type, get_agent_type_for,
 };
 use std::cell::Cell;
 use std::rc::Rc;
+
+#[derive(IntoSchema)]
+struct PrincipalPeerId {
+    tenant: String,
+}
+
+#[derive(IntoSchema)]
+struct EmptyAgentInput {}
 
 #[agent_definition]
 pub trait RustPeer {
@@ -24,6 +32,7 @@ pub trait RustPeer {
     async fn reflected_ts_tool(&self, label: String) -> String;
     async fn reflected_optional_tool(&self) -> String;
     async fn reflected_ts_agent(&self) -> String;
+    async fn principal_identity_round_trip(&self) -> String;
 }
 
 struct RustPeerImpl {
@@ -73,6 +82,67 @@ impl RustPeer for RustPeerImpl {
                     .map_or("unit".to_string(), |value| value.to_string()),
                 rebound_count.value,
                 dynamic_count.value,
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
+    }
+    async fn principal_identity_round_trip(&self) -> String {
+        let result = async {
+            let tenant = format!("principal-rust-{}", self.name);
+            let agent_type = get_agent_type("TsPrincipalPeer")?;
+            let reflected = agent_type
+                .client()
+                .get_json(&serde_json::json!({ "tenant": tenant }))?;
+            let first = reflected
+                .method("value")?
+                .invoke_json(&serde_json::json!({}))
+                .await?;
+            let host_id = first.metadata.agent_id;
+            let parts = host_id.parts()?;
+            if parts.type_name != "TsPrincipalPeer"
+                || parts.constructor_value
+                    != (SchemaValue::Record {
+                        fields: vec![SchemaValue::String(tenant.clone())],
+                    })
+            {
+                return Ok::<_, GolemReflectError>("principal-in-id".to_string());
+            }
+            let full = MethodOnlyAgentClientDefinition::builder()
+                .durable::<PrincipalPeerId>("TsPrincipalPeer")
+                .method::<EmptyAgentInput, String>("value")?
+                .build();
+            let method_only = MethodOnlyAgentClientDefinition::builder()
+                .method_only()
+                .method::<EmptyAgentInput, String>("value")?
+                .build();
+            let local_id = full.agent_id(
+                &PrincipalPeerId {
+                    tenant: tenant.clone(),
+                },
+                None,
+            )?;
+            if local_id != host_id {
+                return Ok("identity-mismatch".to_string());
+            }
+            let full_call = full
+                .bind(&host_id)?
+                .method::<EmptyAgentInput, String>("value")?
+                .invoke(&EmptyAgentInput {})
+                .await?;
+            let method_call = method_only
+                .bind(&host_id)?
+                .method::<EmptyAgentInput, String>("value")?
+                .invoke(&EmptyAgentInput {})
+                .await?;
+            Ok(format!(
+                "{}|{}|{}",
+                first
+                    .value
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                full_call.value.unwrap_or_default(),
+                method_call.value.unwrap_or_default(),
             ))
         }
         .await;

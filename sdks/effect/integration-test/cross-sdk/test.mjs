@@ -125,6 +125,12 @@ try {
       const rustSecond = invoke(rustCaller, "reflected_ts_agent")
       assert.ok(rustSecond.includes("TsPeer|TsPeer|1.0|Some(F64(1"), rustSecond)
       assert.ok(rustSecond.includes("|2.0|Some(F64(2"), rustSecond)
+      const rustPrincipal = invoke(rustCaller, "principal_identity_round_trip")
+      const rustTenant = `principal-rust-rust-${stamp}`
+      assert.ok(
+        rustPrincipal.includes(`${rustTenant}:1|${rustTenant}:2|${rustTenant}:3`),
+        rustPrincipal,
+      )
       console.log("Deployed Effect and Rust reflected agent calls and ephemeral lifecycle passed")
     } else if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
       const ts = invoke(`TsPeer("ts-${stamp}")`, "callEffect", `"ts-${stamp}"`, '"request-ts"')

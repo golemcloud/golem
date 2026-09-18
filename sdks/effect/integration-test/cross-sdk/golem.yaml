@@ -33,6 +33,7 @@ components:
     dependencies:
       agents:
         - effect-cross-sdk:effect-provider/EffectFixture
+        - effect-cross-sdk:ts-peer/TsPrincipalPeer
       tools:
         - effect-cross-sdk:ts-peer/ts-cross-plain
         - effect-cross-sdk:ts-peer/ts-optional-reflection
