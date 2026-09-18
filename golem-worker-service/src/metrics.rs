@@ -146,6 +146,34 @@ pub fn record_http_session_cleanup_outcome(outcome: &'static str, duration: Dura
         .observe(duration.as_secs_f64());
 }
 
+static OPENAPI_CACHE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "openapi_cache_total",
+        "OpenAPI cache lookups and stale fencing by bounded outcome",
+        &["outcome"]
+    )
+    .unwrap()
+});
+
+static OPENAPI_GENERATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "openapi_generation_seconds",
+        "OpenAPI generation duration by success or bounded failure category",
+        &["outcome"]
+    )
+    .unwrap()
+});
+
+pub fn record_openapi_cache(outcome: &'static str) {
+    OPENAPI_CACHE_TOTAL.with_label_values(&[outcome]).inc();
+}
+
+pub fn record_openapi_generation(outcome: &'static str, duration: Duration) {
+    OPENAPI_GENERATION_SECONDS
+        .with_label_values(&[outcome])
+        .observe(duration.as_secs_f64());
+}
+
 pub fn register_all() -> Registry {
     VERSION_INFO.with_label_values(&[golem_version()]).inc();
 

@@ -12,6 +12,7 @@
 
 use super::budget::{Budget, GENERATION_TIMEOUT};
 use super::{Freshness, OpenApiDocument, OpenApiError, OpenApiInputs, OpenApiKey, OpenApiService};
+use crate::metrics::{record_openapi_cache, record_openapi_generation};
 use futures::FutureExt;
 use golem_common::model::environment::EnvironmentId;
 use std::collections::{HashMap, VecDeque};
@@ -21,6 +22,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::{Instant, timeout_at};
+use tracing::Instrument;
 
 const SUCCESS_TTL: Duration = Duration::from_secs(300);
 const FAILURE_TTL: Duration = Duration::from_secs(5);
@@ -60,6 +62,7 @@ impl OpenApiService {
         let (generation, mut receiver) = {
             let mut state = self.cache.lock().unwrap();
             if !inputs.freshness.is_current() {
+                record_openapi_cache("stale-snapshot");
                 return Err(OpenApiError::new("stale"));
             }
             state
@@ -72,8 +75,14 @@ impl OpenApiService {
             {
                 let entry = state.completed.remove(index).unwrap();
                 let result = if entry.generation.is_current() && inputs.freshness.is_current() {
+                    record_openapi_cache(if entry.result.is_ok() {
+                        "hit"
+                    } else {
+                        "failure-hit"
+                    });
                     entry.result.clone()
                 } else {
+                    record_openapi_cache("stale-hit");
                     Err(OpenApiError::new("stale"))
                 };
                 state.completed.push_back(entry);
@@ -86,14 +95,14 @@ impl OpenApiService {
                 state.pending.remove(&inputs.key);
             }
             if let Some(pending) = state.pending.get(&inputs.key) {
+                record_openapi_cache("join");
                 (pending.clone(), pending.result.subscribe())
             } else {
-                let lease = Arc::new(
-                    self.admission
-                        .clone()
-                        .try_acquire_owned()
-                        .map_err(|_| OpenApiError::new("admission"))?,
-                );
+                let lease = Arc::new(self.admission.clone().try_acquire_owned().map_err(|_| {
+                    record_openapi_cache("admission");
+                    OpenApiError::new("admission")
+                })?);
+                record_openapi_cache("miss");
                 state
                     .environments
                     .retain(|_, counter| counter.strong_count() > 0);
@@ -118,6 +127,7 @@ impl OpenApiService {
                 state.pending.insert(inputs.key.clone(), generation.clone());
                 let service = self.clone();
                 let task = generation.clone();
+                let started = Instant::now();
                 tokio::spawn(async move {
                     let work = async {
                         tokio::select! {
@@ -156,10 +166,14 @@ impl OpenApiService {
                         });
                         result
                     } else {
+                        record_openapi_cache("stale-fill");
                         Err(OpenApiError::new("stale"))
                     };
+                    let outcome = result.as_ref().map_or_else(|error| error.category(), |_| "success");
+                    record_openapi_generation(outcome, started.elapsed());
+                    tracing::debug!(outcome, "OpenAPI generation completed");
                     task.result.send_replace(Some(result));
-                });
+                }.instrument(tracing::info_span!("generate_openapi")));
                 (generation, rx)
             }
         };
@@ -171,6 +185,7 @@ impl OpenApiService {
         // Check on delivery as well as publication; an event can race a ready
         // watch notification before this waiter is polled again.
         if !generation.is_current() || !inputs.freshness.is_current() {
+            record_openapi_cache("stale-delivery");
             Err(OpenApiError::new("stale"))
         } else {
             result

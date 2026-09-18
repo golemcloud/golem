@@ -429,3 +429,52 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
         SchemaValue::Record { fields: vec![] }
     );
 }
+
+#[test]
+#[test_r::timeout("30s")]
+async fn diagnostics_and_observability_do_not_expose_provider_values() {
+    let (service, mut calls, _cleanups) = controlled();
+    let inputs = inputs(1).await;
+    let canary = "provider-private-value-canary";
+    let valid = document().replace("ok", canary);
+    let task = tokio::spawn({
+        let service = service.clone();
+        let inputs = inputs.clone();
+        async move { service.generate(inputs).await }
+    });
+    calls.recv().await.unwrap().1.send(Ok(valid)).unwrap();
+    let doc = task.await.unwrap().unwrap();
+    assert!(std::str::from_utf8(&doc.json).unwrap().contains(canary));
+    assert!(!format!("{doc:?}").contains(canary));
+    service.clear();
+    let task = tokio::spawn({
+        let service = service.clone();
+        let inputs = inputs.clone();
+        async move { service.generate(inputs).await }
+    });
+    let mut invalid: Value = serde_json::from_str(&document()).unwrap();
+    invalid["components"] =
+        json!({"schemas":{"S":{"$ref":format!("https://example.com/{canary}")}}});
+    calls
+        .recv()
+        .await
+        .unwrap()
+        .1
+        .send(Ok(invalid.to_string()))
+        .unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(error.category(), "unsupported-reference");
+    assert!(!format!("{error:?} {error}").contains(canary));
+    let cached = service.generate(inputs).await.unwrap_err();
+    assert_eq!(cached.category(), error.category());
+    assert!(calls.try_recv().is_err());
+    let metrics = prometheus::gather();
+    for name in ["openapi_cache_total", "openapi_generation_seconds"] {
+        let family = metrics.iter().find(|metric| metric.name() == name).unwrap();
+        for metric in family.get_metric() {
+            assert_eq!(metric.get_label().len(), 1);
+            assert_eq!(metric.get_label()[0].name(), "outcome");
+            assert!(!metric.get_label()[0].value().contains(canary));
+        }
+    }
+}

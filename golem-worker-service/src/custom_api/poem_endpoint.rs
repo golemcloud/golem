@@ -284,4 +284,23 @@ mod tests {
             http::StatusCode::BAD_REQUEST
         );
     }
+
+    #[test]
+    async fn openapi_failures_keep_safe_categories_and_http_statuses() {
+        for (category, status) in [
+            ("provider-json", http::StatusCode::BAD_GATEWAY),
+            ("provider-timeout", http::StatusCode::GATEWAY_TIMEOUT),
+            ("generation-timeout", http::StatusCode::GATEWAY_TIMEOUT),
+            ("admission", http::StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            assert_raw_error(
+                crate::custom_api::openapi::OpenApiError::new(category).into(),
+                status,
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                category,
+                false,
+            )
+            .await;
+        }
+    }
 }
