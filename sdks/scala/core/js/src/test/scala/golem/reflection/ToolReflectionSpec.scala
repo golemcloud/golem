@@ -107,6 +107,60 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         )
       )
     },
+    test("constraints use the declared flag default and nested value-is") {
+      val original = sample()
+      val nodes    = original.definition.commands.nodes
+      val current  = nodes(1)
+      val body     = current.body.get
+      val option   = WitOptionSpec(
+        "mode",
+        None,
+        Nil,
+        Doc("", "", Nil),
+        None,
+        WitOptionShape.Scalar(original.definition.schema.root),
+        None,
+        required = false,
+        None
+      )
+      val flag = FlagSpec(
+        "enabled",
+        None,
+        Nil,
+        Doc("", "", Nil),
+        FlagShape.BoolFlag(BoolFlagShape(default = true, negatable = true)),
+        None
+      )
+      val constraint = WitConstraint.RequiresAll(
+        List(
+          WitRef.Present("enabled"),
+          WitRef.ValueIs(WitValueIsRef("mode", SchemaWire.schemaValueToWit(StringValue("fast"))))
+        )
+      )
+      val updatedBody = body.copy(options = List(option), flags = List(flag), constraints = List(constraint))
+      val updated     = new ToolType(
+        original.lookupName,
+        original.definition.copy(commands =
+          original.definition.commands.copy(
+            nodes = nodes.updated(1, current.copy(body = Some(updatedBody)))
+          )
+        ),
+        original.implementedBy
+      )
+      val command = updated.command(List("run")).toOption.get
+      val valid   =
+        Json.Object("message" -> Json.String("hello"), "mode" -> Json.String("fast"), "enabled" -> Json.Boolean(false))
+      val defaultFlag =
+        Json.Object("message" -> Json.String("hello"), "mode" -> Json.String("fast"), "enabled" -> Json.Boolean(true))
+      val wrongValue =
+        Json.Object("message" -> Json.String("hello"), "mode" -> Json.String("slow"), "enabled" -> Json.Boolean(false))
+      assertTrue(
+        command.arguments.last.default.contains(BoolValue(true)),
+        command.packJson(valid).isRight,
+        command.packJson(defaultFlag).isLeft,
+        command.packJson(wrongValue).isLeft
+      )
+    },
     test("schema-native input fails locally before opening RPC") {
       val command = sample().command(List("run")).toOption.get
       val invalid = command.startValue(RecordValue(List(S32Value(1))))

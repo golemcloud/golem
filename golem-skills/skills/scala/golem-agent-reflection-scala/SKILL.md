@@ -5,7 +5,7 @@ description: "Discovering and calling Golem agents through runtime reflection in
 
 # Calling Agents with Runtime Reflection (Scala)
 
-Use generated clients when the complete target definition is available at
+Use generated clients when the fully defined target is available at
 compile time. Otherwise choose one authority and invocation path explicitly:
 caller-authored codecs, runtime-reflected schemas, or direct schema-free
 `SchemaValue` calls.
@@ -75,15 +75,15 @@ stream.
 not discover remote schemas. `InputRecordCodec` and `OutputCodec` are the
 caller's schema authority.
 
-A binding-only definition contains methods only. It binds an existing durable
+A method-only client definition contains methods only. It binds an existing durable
 `ParsedAgentId`, taking the name and constructor value from that identity:
 
 ```scala
 import golem.reflection._
 import golem.runtime.{InputRecordCodec, OutputCodec}
 
-val contract: AgentClientDefinition[BindingOnly, Unit, NoConfig] =
-  AgentClientDefinition.bindingOnly
+val contract: AgentClientDefinition[MethodOnly, Unit, NoConfig] =
+  AgentClientDefinition.methodOnly
 val add = contract.method(
   "add",
   InputRecordCodec.single[Int]("by"),
@@ -94,13 +94,13 @@ val counter = contract.bind(existingId)
 val result = counter.map(_.method(add).invoke(5))
 ```
 
-A complete definition adds the exact name, lifecycle mode, constructor codec,
-and an optional typed config codec. Construction infers `DurableComplete` or
-`EphemeralComplete`; both extend `Complete`, which gates identity helpers and
+A fully defined client adds the exact name, lifecycle mode, constructor codec,
+and an optional typed config codec. Construction infers `DurableFull` or
+`EphemeralFull`; both extend `Full`, which gates identity helpers and
 lifecycle factories:
 
 ```scala
-val counter = AgentClientDefinition.complete(
+val counter = AgentClientDefinition.full(
   name = "CounterAgent",
   mode = AgentMode.Durable,
   constructor = InputRecordCodec.single[String]("name")
@@ -113,12 +113,12 @@ val id = counter.agentId("main", Some(phantomId))
 val exact = counter.bind(existingId)
 ```
 
-Complete factories also accept a typed config value as a second argument when the definition declares an `AgentConfigCodec`. Complete contracts use `bindWithConfig(existingId, config)` for typed overrides; binding-only contracts use `bindWithOverrides(existingId, entries)` with raw `ConfigOverride` entries because they have no local declarations to validate against.
+Fully defined factories also accept a typed config value as a second argument when the definition declares an `AgentConfigCodec`. Fully defined clients use `bindWithConfig(existingId, config)` for typed overrides; method-only clients use `bindWithOverrides(existingId, entries)` with raw `ConfigOverride` entries because they have no local declarations to validate against.
 
 Overrides are optional: component defaults can satisfy required local declarations. The host checks the effective config when it creates the worker and supplies secrets. An existing durable worker retains its persisted initial config, so passing overrides while binding its ID does not reconfigure it.
 
-Complete durable binding checks both the exact name and the constructor value
-against the declared constructor codec before creating transport. Complete
+Fully defined durable binding checks both the exact name and the constructor value
+against the declared constructor codec before creating transport. Fully defined
 ephemeral definitions support logical-new and known-phantom factories and
 have no `CanBindAgentClient` capability, so generic binding is rejected at
 compile time. `AgentConfigCodec[C]` maps a typed config carrier to
@@ -130,7 +130,7 @@ by that codec.
 - Use a supplied `ParsedAgentId` directly or inspect it with `parts`.
 - Use `ParsedAgentId.create` for schema-free durable, known-phantom, or newly
   generated phantom identities.
-- Reflected, generated, and complete caller-codec factories provide `get`
+- Reflected, generated, and fully defined caller-codec factories provide `get`
   (durable only), known `getPhantom`, and `newPhantom`.
 - Use `DynamicAgentClient.ephemeral(typeName, constructorValue)`
   for a raw ephemeral invocation address.

@@ -73,7 +73,7 @@ final case class ParsedAgentId(value: String) {
     definition: AgentClientDefinition[Capability, Constructor, Config],
     config: Config
   )(implicit
-    complete: Capability <:< Complete,
+    full: Capability <:< Full,
     canBind: CanBindAgentClient[Capability]
   ): Either[GolemReflectError, CallerCodecAgentClient] =
     definition.bindWithConfig(this, config)

@@ -99,6 +99,40 @@ object SchemaRefSpec extends ZIOSpecDefault {
         rendered.get("type").one == Right(Json.String("object"))
       )
     },
+    test("union export keeps discriminator and branch body while packing enforces the rule") {
+      val union = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(
+            UnionType(
+              List(
+                UnionBranch("ssh", SchemaType(StringType), DiscriminatorRule.Prefix("ssh://")),
+                UnionBranch("https", SchemaType(StringType), DiscriminatorRule.Regex("^https://"))
+              )
+            )
+          )
+        )
+      )
+      val branches = Json.Array(
+        Json.Object(
+          "allOf" -> Json.Array(
+            Json.Object("type"    -> Json.String("string")),
+            Json.Object("pattern" -> Json.String("^ssh://"))
+          )
+        ),
+        Json.Object(
+          "allOf" -> Json.Array(
+            Json.Object("type"    -> Json.String("string")),
+            Json.Object("pattern" -> Json.String("^https://"))
+          )
+        )
+      )
+      assertTrue(
+        union.toJsonSchema().get("oneOf").one == Right(branches),
+        union.packJson(Json.String("ssh://host")).isRight,
+        union.packJson(Json.String("http://host")).isLeft
+      )
+    },
     test("requires explicit null for an absent option and renders it as required") {
       val optional = SchemaRef(
         SchemaGraph(
@@ -147,17 +181,17 @@ object SchemaRefSpec extends ZIOSpecDefault {
           .isRight
       )
     },
-    test("caller-owned contracts expose two tiers and validate complete identity shapes") {
-      val binding: AgentClientDefinition[BindingOnly, Unit, NoConfig]        = AgentClientDefinition.bindingOnly
-      val complete: AgentClientDefinition[DurableComplete, String, NoConfig] = AgentClientDefinition.complete(
+    test("caller-owned contracts expose two tiers and validate full identity shapes") {
+      val binding: AgentClientDefinition[MethodOnly, Unit, NoConfig] = AgentClientDefinition.methodOnly
+      val full: AgentClientDefinition[DurableFull, String, NoConfig] = AgentClientDefinition.full(
         name = "CounterAgent",
         constructor = InputRecordCodec.single[String]("name")
       )
       val wrongShape = ReflectionInternals.validate(
-        SchemaRef(complete.constructorCodec.get.graph),
+        SchemaRef(full.constructorCodec.get.graph),
         RecordValue(List(U32Value(1)))
       )
-      val configured = AgentClientDefinition.complete[String, String](
+      val configured = AgentClientDefinition.full[String, String](
         name = "ConfiguredCounterAgent",
         mode = AgentMode.Durable,
         constructor = InputRecordCodec.single[String]("name"),
@@ -167,7 +201,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
 
       assertTrue(
         binding.contractName.isEmpty,
-        complete.contractName.contains("CounterAgent"),
+        full.contractName.contains("CounterAgent"),
         wrongShape.isLeft,
         optionalConfig != null
       )
@@ -192,6 +226,22 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val secret  = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
       val invalid = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
       assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft)
+    },
+    test("throwing config codecs return schema encode failures") {
+      val definition = AgentClientDefinition.full[String, String](
+        name = "ConfiguredCounterAgent",
+        mode = AgentMode.Durable,
+        constructor = InputRecordCodec.single[String]("name"),
+        config = AgentConfigCodec[String](_ => throw new IllegalArgumentException("bad config"))
+      )
+      val client   = definition.client
+      val expected = Left(GolemReflectError.SchemaEncode("bad config"))
+      val phantom  = golem.Uuid(BigInt(0), BigInt(1))
+      assertTrue(
+        client.get("worker", "bad") == expected,
+        client.getPhantom("worker", phantom, "bad") == expected,
+        client.newPhantom("worker", "bad") == expected
+      )
     }
   )
 }

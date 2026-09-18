@@ -105,7 +105,10 @@ final class ToolType private[reflection] (
       flag.aliases,
       flag.short,
       required = false,
-      None,
+      Some(flag.shape match {
+        case FlagShape.BoolFlag(shape) => BoolValue(shape.default)
+        case FlagShape.CountFlag(_)    => U32Value(0)
+      }),
       SchemaRef(SchemaGraph(graph.defs, root)),
       optionalCarrier = false
     )
@@ -241,11 +244,31 @@ final class ToolCommand private[reflection] (
       val actual   = values(argument.name)
       reference match {
         case WitRef.Present(_) =>
-          actual match {
-            case OptionValue(None) => false
-            case other             => !argument.default.contains(other)
-          }
-        case WitRef.ValueIs(item) => actual == SchemaWire.schemaValueFromWit(item.value)
+          if (argument.kind == "flag") argument.default.exists(_ != actual)
+          else if (argument.default.contains(actual)) false
+          else
+            actual match {
+              case OptionValue(value)     => value.nonEmpty
+              case ListValue(values)      => values.nonEmpty
+              case FixedListValue(values) => values.nonEmpty
+              case MapValue(entries)      => entries.nonEmpty
+              case BoolValue(value)       => value
+              case U32Value(value)        => value != 0
+              case _                      => true
+            }
+        case WitRef.ValueIs(item) =>
+          val expected                                  = SchemaWire.schemaValueFromWit(item.value)
+          def matchesValue(value: SchemaValue): Boolean =
+            if (value == expected) true
+            else
+              value match {
+                case OptionValue(inner)       => inner.exists(matchesValue)
+                case ListValue(elements)      => elements.exists(matchesValue)
+                case FixedListValue(elements) => elements.exists(matchesValue)
+                case MapValue(entries)        => entries.exists(entry => matchesValue(entry.value))
+                case _                        => false
+              }
+          matchesValue(actual)
       }
     }
     def quant(refs: List[WitRef], all: Boolean): Boolean = if (all) refs.forall(matches) else refs.exists(matches)

@@ -21,17 +21,17 @@ import scala.annotation.targetName
 import scala.util.control.NonFatal
 
 sealed trait AgentClientCapability
-sealed trait BindingOnly       extends AgentClientCapability
-sealed trait Complete          extends AgentClientCapability
-sealed trait DurableComplete   extends Complete
-sealed trait EphemeralComplete extends Complete
+sealed trait MethodOnly    extends AgentClientCapability
+sealed trait Full          extends AgentClientCapability
+sealed trait DurableFull   extends Full
+sealed trait EphemeralFull extends Full
 sealed trait NoConfig
 
 sealed trait CanBindAgentClient[Capability <: AgentClientCapability]
 
 object CanBindAgentClient {
-  implicit object BindingOnlyCanBind     extends CanBindAgentClient[BindingOnly]
-  implicit object DurableCompleteCanBind extends CanBindAgentClient[DurableComplete]
+  implicit object MethodOnlyCanBind  extends CanBindAgentClient[MethodOnly]
+  implicit object DurableFullCanBind extends CanBindAgentClient[DurableFull]
 }
 
 trait AgentConfigCodec[Config] {
@@ -59,13 +59,13 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
   ): CallerCodecMethod[Input, Output] =
     CallerCodecMethod(name, input, output)
 
-  def client(implicit complete: Capability <:< Complete): CallerCodecClientFactory[Constructor, Config] =
-    new CallerCodecClientFactory(this.asInstanceOf[AgentClientDefinition[Complete, Constructor, Config]])
+  def client(implicit full: Capability <:< Full): CallerCodecClientFactory[Constructor, Config] =
+    new CallerCodecClientFactory(this.asInstanceOf[AgentClientDefinition[Full, Constructor, Config]])
 
   def agentId(
     input: Constructor,
     phantomId: Option[Uuid] = None
-  )(implicit complete: Capability <:< Complete): Either[GolemReflectError, ParsedAgentId] =
+  )(implicit full: Capability <:< Full): Either[GolemReflectError, ParsedAgentId] =
     try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
@@ -109,7 +109,7 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
     } yield new CallerCodecAgentClient(transport)
 
   def bindWithConfig(agentId: ParsedAgentId, config: Config)(implicit
-    complete: Capability <:< Complete,
+    full: Capability <:< Full,
     canBind: CanBindAgentClient[Capability]
   ): Either[GolemReflectError, CallerCodecAgentClient] =
     try bindWithOverrides(agentId, configCodec.fold(List.empty[ConfigOverride])(_.overrides(config)))
@@ -117,47 +117,47 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
 }
 
 object AgentClientDefinition {
-  def bindingOnly: AgentClientDefinition[BindingOnly, Unit, NoConfig] =
+  def methodOnly: AgentClientDefinition[MethodOnly, Unit, NoConfig] =
     new AgentClientDefinition(None, None, None, None)
 
-  def complete[Constructor](
+  def full[Constructor](
     name: String,
     constructor: InputRecordCodec[Constructor]
-  ): AgentClientDefinition[DurableComplete, Constructor, NoConfig] =
+  ): AgentClientDefinition[DurableFull, Constructor, NoConfig] =
     new AgentClientDefinition(Some(name), Some(AgentMode.Durable), Some(constructor), None)
 
   @targetName("completeDurable")
-  def complete[Constructor](
+  def full[Constructor](
     name: String,
     mode: AgentMode.Durable.type,
     constructor: InputRecordCodec[Constructor]
-  ): AgentClientDefinition[DurableComplete, Constructor, NoConfig] =
+  ): AgentClientDefinition[DurableFull, Constructor, NoConfig] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), None)
 
   @targetName("completeEphemeral")
-  def complete[Constructor](
+  def full[Constructor](
     name: String,
     mode: AgentMode.Ephemeral.type,
     constructor: InputRecordCodec[Constructor]
-  ): AgentClientDefinition[EphemeralComplete, Constructor, NoConfig] =
+  ): AgentClientDefinition[EphemeralFull, Constructor, NoConfig] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), None)
 
   @targetName("completeDurableWithConfig")
-  def complete[Constructor, Config](
+  def full[Constructor, Config](
     name: String,
     mode: AgentMode.Durable.type,
     constructor: InputRecordCodec[Constructor],
     config: AgentConfigCodec[Config]
-  ): AgentClientDefinition[DurableComplete, Constructor, Config] =
+  ): AgentClientDefinition[DurableFull, Constructor, Config] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), Some(config))
 
   @targetName("completeEphemeralWithConfig")
-  def complete[Constructor, Config](
+  def full[Constructor, Config](
     name: String,
     mode: AgentMode.Ephemeral.type,
     constructor: InputRecordCodec[Constructor],
     config: AgentConfigCodec[Config]
-  ): AgentClientDefinition[EphemeralComplete, Constructor, Config] =
+  ): AgentClientDefinition[EphemeralFull, Constructor, Config] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), Some(config))
 }
 
@@ -174,13 +174,13 @@ final case class CallerCodecPhantomClient(
 )
 
 final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
-  definition: AgentClientDefinition[Complete, Constructor, Config]
+  definition: AgentClientDefinition[Full, Constructor, Config]
 ) {
   def get(input: Constructor): Either[GolemReflectError, CallerCodecAgentClient] =
     getWithOverrides(input, Nil)
 
   def get(input: Constructor, config: Config): Either[GolemReflectError, CallerCodecAgentClient] =
-    getWithOverrides(input, encodeConfig(config))
+    encodeConfig(config).flatMap(getWithOverrides(input, _))
 
   def getPhantom(input: Constructor, phantomId: Uuid): Either[GolemReflectError, CallerCodecAgentClient] =
     create(input, Some(phantomId), Nil)
@@ -190,7 +190,7 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
     phantomId: Uuid,
     config: Config
   ): Either[GolemReflectError, CallerCodecAgentClient] =
-    create(input, Some(phantomId), encodeConfig(config))
+    encodeConfig(config).flatMap(create(input, Some(phantomId), _))
 
   def newPhantom(
     input: Constructor
@@ -201,7 +201,7 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
     input: Constructor,
     config: Config
   ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
-    newPhantomWithOverrides(input, encodeConfig(config))
+    encodeConfig(config).flatMap(newPhantomWithOverrides(input, _))
 
   private def newPhantomWithOverrides(
     input: Constructor,
@@ -248,8 +248,9 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
       GolemReflectError.Identity(s"$operation is not available for ephemeral agent types")
     )
 
-  private def encodeConfig(config: Config): List[ConfigOverride] =
-    definition.configCodec.fold(List.empty[ConfigOverride])(_.overrides(config))
+  private def encodeConfig(config: Config): Either[GolemReflectError, List[ConfigOverride]] =
+    try Right(definition.configCodec.fold(List.empty[ConfigOverride])(_.overrides(config)))
+    catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 }
 
 final class CallerCodecAgentClient private[reflection] (transport: Transport) {

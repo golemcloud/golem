@@ -189,12 +189,33 @@ private object CanonicalJson {
           "additionalProperties" -> Json.Boolean(false)
         )
       case UnionType(branches) =>
-        Json.Object("oneOf" -> Json.Array(branches.map(branch => schemaJson(graph, branch.body)): _*))
+        Json.Object("oneOf" -> Json.Array(branches.map { branch =>
+          Json.Object("allOf" -> Json.Array(schemaJson(graph, branch.body), discriminatorJson(branch.discriminator)))
+        }: _*))
       case SecretType(_)         => Json.Object("x-golem-capability" -> Json.String("secret"))
       case QuotaTokenType(_)     => Json.Object("x-golem-capability" -> Json.String("quota-token"))
       case PermissionCardType(_) => Json.Object("x-golem-capability" -> Json.String("permission-card"))
       case FutureType(_)         => Json.Object("x-golem-unsupported" -> Json.String("future"))
       case StreamType(_)         => Json.Object("x-golem-unsupported" -> Json.String("stream"))
+    }
+  }
+
+  private def discriminatorJson(rule: DiscriminatorRule): Json = {
+    def regexLiteral(value: String): String =
+      value.flatMap(char => if ("\\^$.*+?()[]{}|".contains(char)) s"\\$char" else char.toString)
+
+    rule match {
+      case DiscriminatorRule.Prefix(value)      => Json.Object("pattern" -> Json.String(s"^${regexLiteral(value)}"))
+      case DiscriminatorRule.Suffix(value)      => Json.Object("pattern" -> Json.String(s"${regexLiteral(value)}$$"))
+      case DiscriminatorRule.Contains(value)    => Json.Object("pattern" -> Json.String(regexLiteral(value)))
+      case DiscriminatorRule.Regex(value)       => Json.Object("pattern" -> Json.String(value))
+      case DiscriminatorRule.FieldEquals(field) =>
+        val properties = field.literal.toList.map(literal =>
+          "properties" -> Json.Object(field.fieldName -> Json.Object("const" -> Json.String(literal)))
+        )
+        Json.Object((List("required" -> Json.Array(Json.String(field.fieldName))) ++ properties): _*)
+      case DiscriminatorRule.FieldAbsent(name) =>
+        Json.Object("not" -> Json.Object("required" -> Json.Array(Json.String(name))))
     }
   }
 
