@@ -131,7 +131,8 @@ pub trait BlobStorage: Debug + Send + Sync {
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
-    /// A root path changes nothing and returns false. A directory that only holds blobs
+    /// A root path changes nothing and returns false. A path is at the root when it has no
+    /// name in it, for example an empty path or `.`. A directory that only holds blobs
     /// exists. Returns true if the path had a directory. Returns false if the path had
     /// nothing.
     async fn delete_dir(
@@ -431,6 +432,16 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Tells if the path is at the root of a namespace.
+///
+/// A path is at the root when it has no name in it. An empty path is at the root, and so is a
+/// path that only has `.` in it.
+pub(crate) fn blob_path_is_root(path: &Path) -> bool {
+    !path
+        .components()
+        .any(|component| matches!(component, Component::Normal(_)))
 }
 
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {

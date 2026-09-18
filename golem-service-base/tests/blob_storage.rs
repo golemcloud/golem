@@ -1397,42 +1397,54 @@ async fn delete_dir_root_path_is_safe_noop(
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
-    let file_path = Path::new("keep-me");
+    let paths = [Path::new("keep-me"), Path::new("keep/me/too")];
 
-    storage
-        .put_raw(
-            "delete_dir_root_path_is_safe_noop",
-            "put-file",
-            namespace.clone(),
-            file_path,
-            &Bytes::from("payload"),
-        )
-        .await
-        .unwrap();
+    // Every one of these paths is at the root of the namespace, because none of them has a name
+    // in it.
+    for root_path in ["", ".", "./", "././"] {
+        for path in paths {
+            storage
+                .put_raw(
+                    "delete_dir_root_path_is_safe_noop",
+                    "put-file",
+                    namespace.clone(),
+                    path,
+                    &Bytes::from("payload"),
+                )
+                .await
+                .unwrap();
+        }
 
-    let deleted = storage
-        .delete_dir(
-            "delete_dir_root_path_is_safe_noop",
-            "delete-root-dir",
-            namespace.clone(),
-            Path::new(""),
-        )
-        .await
-        .unwrap();
+        let deleted = storage
+            .delete_dir(
+                "delete_dir_root_path_is_safe_noop",
+                "delete-root-dir",
+                namespace.clone(),
+                Path::new(root_path),
+            )
+            .await
+            .unwrap();
 
-    assert!(!deleted);
+        assert!(!deleted, "delete_dir({root_path:?}) deleted a directory");
 
-    let remaining = storage
-        .get_raw(
-            "delete_dir_root_path_is_safe_noop",
-            "get-file",
-            namespace.clone(),
-            file_path,
-        )
-        .await
-        .unwrap();
+        for path in paths {
+            let remaining = storage
+                .get_raw(
+                    "delete_dir_root_path_is_safe_noop",
+                    "get-file",
+                    namespace.clone(),
+                    path,
+                )
+                .await
+                .unwrap();
 
-    assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+            assert_eq!(
+                remaining,
+                Some(Bytes::from("payload").to_vec()),
+                "delete_dir({root_path:?}) removed {path:?}"
+            );
+        }
+    }
 }
 
 #[test]

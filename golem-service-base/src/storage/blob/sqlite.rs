@@ -18,7 +18,7 @@ use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -297,7 +297,7 @@ impl BlobStorage for SqliteBlobStorage {
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
 
-        if path.as_os_str().is_empty() {
+        if blob_path_is_root(path) {
             return Ok(false);
         }
 
@@ -314,8 +314,9 @@ impl BlobStorage for SqliteBlobStorage {
         };
         // Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE,
         // which ignores ASCII case. A parent below `dir_path` is at least `dir_path/` and less
-        // than `dir_path0`, because `0` is the character after `/`. This range can use the
-        // primary key.
+        // than `dir_path0`, because `0` is the character after `/`. The OR keeps SQLite from a
+        // search on `parent`, so it searches the primary key for `namespace` and then reads the
+        // rows of that namespace.
         let descendants_start = format!("{dir_path}/");
         let descendants_end = format!("{dir_path}0");
 
