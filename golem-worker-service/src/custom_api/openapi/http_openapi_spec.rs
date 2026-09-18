@@ -33,13 +33,16 @@ use golem_service_base::custom_api::{AgentRouteMode, PathSegment, RouteMatch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
 
-pub struct HttpApiOpenApiSpec(pub Value);
+pub struct HttpApiOpenApiSpec;
 
 impl HttpApiOpenApiSpec {
-    pub fn from_routes(routes: &[&RichCompiledRoute], public_origin: &str) -> Result<Self, String> {
+    #[cfg(test)]
+    pub fn from_routes(
+        routes: &[&RichCompiledRoute],
+        public_origin: &str,
+    ) -> Result<Value, String> {
         let spec = Self::contribution_from_routes(routes, public_origin)?;
         super::merge::merge(spec, vec![], public_origin)
-            .map(HttpApiOpenApiSpec)
             .map_err(|error| format!("{:?} at {}", error.category, error.location))
     }
 

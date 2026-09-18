@@ -309,7 +309,6 @@ fn call_agent_route(
 fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
     HttpApiOpenApiSpec::from_routes(&routes.iter().collect::<Vec<_>>(), "https://example.com")
         .expect("spec generation succeeds")
-        .0
 }
 
 #[test]

@@ -428,6 +428,11 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
         harness.recorded_method_params(),
         SchemaValue::Record { fields: vec![] }
     );
+    let contexts = harness.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 1);
+    assert!(matches!(contexts[0].auth, AuthCtx::System));
+    assert_eq!(contexts[0].principal, Principal::anonymous().into());
+    assert!(contexts[0].context.is_none());
 }
 
 #[test]
@@ -477,4 +482,83 @@ async fn diagnostics_and_observability_do_not_expose_provider_values() {
             assert!(!metric.get_label()[0].value().contains(canary));
         }
     }
+}
+
+#[test]
+fn provider_limit_and_raw_json_corpus() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct TimedOutput {
+        elapsed: Duration,
+        text: String,
+        cancellations: AtomicUsize,
+    }
+    #[async_trait]
+    impl ProviderInvoker for TimedOutput {
+        async fn invoke(&self, _: &ProviderCall) -> Result<String, OpenApiError> {
+            tokio::time::advance(self.elapsed).await;
+            if self.elapsed > PROVIDER_TIMEOUT {
+                std::future::pending::<()>().await;
+            }
+            Ok(self.text.clone())
+        }
+        async fn cleanup(&self, _: &ProviderCall) {
+            self.cancellations.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    paused(async {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        let inputs = inputs(1).await;
+        let mut count = 0;
+        for case in
+            corpus["cases"].as_array().unwrap().iter().filter(|case| {
+                case["suite"] == "openapi" && case["input"].get("providers").is_none()
+            })
+        {
+            count += 1;
+            let id = case["id"].as_str().unwrap();
+            let limits = &case["input"]["limit_check"];
+            let text = if let Some(raw) = case["input"]["raw_document"].as_str() {
+                raw.to_owned()
+            } else {
+                let mut extension = Value::Null;
+                for _ in 1..limits["depth"].as_u64().unwrap() {
+                    extension = json!([extension]);
+                }
+                let mut text = json!({"openapi":"3.1.0","info":{"title":"A","version":"1"},
+                    "paths":{}, "x-depth":extension})
+                .to_string();
+                let size = limits["output_bytes"].as_u64().unwrap() as usize;
+                text.truncate(size);
+                text.extend(std::iter::repeat_n(' ', size - text.len()));
+                assert_eq!(text.len(), size, "{id}");
+                text
+            };
+            let invoker = Arc::new(TimedOutput {
+                elapsed: Duration::from_millis(limits["elapsed_ms"].as_u64().unwrap_or(0)),
+                text,
+                cancellations: AtomicUsize::new(0),
+            });
+            let lease = Arc::new(Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap());
+            let result = invoke_provider(invoker.clone(), &inputs.routes[1], lease)
+                .await
+                .and_then(|text| provider_document::parse(id, &text).map_err(OpenApiError::from));
+            if let Some(category) = case["expect"]["error"].as_str() {
+                assert_eq!(result.err().expect(id).category(), category, "{id}");
+            } else {
+                assert!(result.is_ok(), "{id}: {:?}", result.err());
+            }
+            tokio::task::yield_now().await;
+            assert_eq!(
+                invoker.cancellations.load(Ordering::SeqCst),
+                case["expect"]["invocation_cancellations"]
+                    .as_u64()
+                    .unwrap_or(0) as usize,
+                "{id}"
+            );
+        }
+        assert_eq!(count, 5);
+    });
 }

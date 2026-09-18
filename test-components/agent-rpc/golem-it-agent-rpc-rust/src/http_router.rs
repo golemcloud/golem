@@ -90,6 +90,7 @@ pub trait StaticHttpRouter {
     fn new() -> Self;
     #[endpoint(any = "/")]
     async fn route(&self, request: HttpRequest) -> HttpResponse;
+    fn describe(&self) -> String;
 }
 
 struct StaticHttpRouterImpl;
@@ -109,34 +110,49 @@ impl StaticHttpRouter for StaticHttpRouterImpl {
                 prompt_hint: None,
                 input_schema: vec![],
             },
-            methods: vec![EnrichedAgentMethod {
-                name: "route".to_string(),
-                description: String::new(),
-                http_endpoint: vec![HttpEndpointDetails {
-                    http_method: HttpMethod::Any,
-                    path_suffix: vec![],
-                    header_vars: vec![],
-                    query_vars: vec![],
-                    auth_details: None,
-                    cors_options: CorsOptions {
-                        allowed_patterns: vec![],
-                    },
-                }],
-                prompt_hint: None,
-                input_schema: vec![(
-                    "request".to_string(),
-                    EnrichedParameterSchema::Value(
-                        golem_rust::schema::try_into_schema_graph::<HttpRequest>()
-                            .expect("request schema"),
-                    ),
-                )],
-                output_schema: vec![(
-                    "result".to_string(),
-                    golem_rust::schema::try_into_schema_graph::<HttpResponse>()
-                        .expect("response schema"),
-                )],
-                read_only: None,
-            }],
+            methods: vec![
+                EnrichedAgentMethod {
+                    name: "route".to_string(),
+                    description: String::new(),
+                    http_endpoint: vec![HttpEndpointDetails {
+                        http_method: HttpMethod::Any,
+                        path_suffix: vec![],
+                        header_vars: vec![],
+                        query_vars: vec![],
+                        auth_details: None,
+                        cors_options: CorsOptions {
+                            allowed_patterns: vec![],
+                        },
+                    }],
+                    prompt_hint: None,
+                    input_schema: vec![(
+                        "request".to_string(),
+                        EnrichedParameterSchema::Value(
+                            golem_rust::schema::try_into_schema_graph::<HttpRequest>()
+                                .expect("request schema"),
+                        ),
+                    )],
+                    output_schema: vec![(
+                        "result".to_string(),
+                        golem_rust::schema::try_into_schema_graph::<HttpResponse>()
+                            .expect("response schema"),
+                    )],
+                    read_only: None,
+                },
+                EnrichedAgentMethod {
+                    name: "describe".to_string(),
+                    description: String::new(),
+                    http_endpoint: vec![],
+                    prompt_hint: None,
+                    input_schema: vec![],
+                    output_schema: vec![(
+                        "result".to_string(),
+                        golem_rust::schema::try_into_schema_graph::<String>()
+                            .expect("document schema"),
+                    )],
+                    read_only: None,
+                },
+            ],
             dependencies: vec![],
             mode: AgentMode::Ephemeral,
             http_mount: Some(HttpMountDetails {
@@ -158,7 +174,7 @@ impl StaticHttpRouter for StaticHttpRouterImpl {
                     }),
                 ],
                 filesystem_bindings: vec![],
-                openapi_provider_method: None,
+                openapi_provider_method: Some("describe".to_string()),
             }),
             snapshotting: Snapshotting::Disabled,
             config: vec![],
@@ -173,6 +189,25 @@ impl StaticHttpRouter for StaticHttpRouterImpl {
 
     async fn route(&self, request: HttpRequest) -> HttpResponse {
         RawHttpRouterImpl.route(request).await
+    }
+
+    fn describe(&self) -> String {
+        use golem_rust::agentic::{get_agent_id, get_principal};
+        use golem_rust::golem_agentic::golem::agent::common::Principal;
+        assert!(matches!(get_principal(), Some(Principal::Anonymous)));
+        if std::env::var("TEST_OPENAPI_INVALID").as_deref() == Ok("true") {
+            return "invalid-provider-document".to_string();
+        }
+        serde_json::json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Provider", "version": "1"},
+            "paths": {
+                "/": {"get": {"responses": {"200": {"description": "root"}}}},
+                "/echo/": {"post": {"operationId": "rawEcho", "responses": {"200": {"description": "echo"}}}}
+            },
+            "x-provider-agent": get_agent_id().agent_id,
+            "x-provider-revision": golem_rust::get_self_metadata().unwrap().component_revision
+        }).to_string()
     }
 }
 

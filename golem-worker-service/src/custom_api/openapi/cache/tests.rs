@@ -355,3 +355,191 @@ fn timed_out_processing_retains_admission_and_cannot_overwrite_cached_failure() 
         assert!(calls.try_recv().is_err());
     });
 }
+
+#[test]
+fn shared_cache_corpus() {
+    use serde_json::{Value, json};
+    paused(async {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        let mut count = 0;
+        for case in corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["suite"] == "cache")
+        {
+            let id = case["id"].as_str().unwrap();
+            if matches!(
+                id,
+                "cache-ordinary-traffic-lazy"
+                    | "cache-provider-failure-isolated"
+                    | "cache-fixed-provider-context"
+            ) {
+                // These cases exercise HTTP dispatch or the real executor, not
+                // the cache alone; their runners live with those consumers.
+                continue;
+            }
+            count += 1;
+            let input = &case["input"];
+            let expected = &case["expect"];
+            let events: Vec<_> = input["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            let (service, mut calls, mut cleanups) = controlled();
+            let mut snapshot = inputs(1).await;
+            let snapshot_mut = Arc::get_mut(&mut snapshot).unwrap();
+            snapshot_mut.key.deployment_revision =
+                golem_common::model::deployment::DeploymentRevision::new(
+                    input["key"][1].as_u64().unwrap(),
+                )
+                .unwrap();
+            snapshot_mut.key.domain.0 = input["key"][2].as_str().unwrap().into();
+            snapshot_mut.public_origin = input["public_origin"]
+                .as_str()
+                .unwrap_or("https://public.test")
+                .into();
+            let mut provider_calls = 0;
+            match id {
+                "cache-single-flight-json-yaml"
+                | "cache-origin-not-first-waiter"
+                | "cache-configured-http-origin" => {
+                    let first = start(&service, snapshot.clone());
+                    let (_, reply) = calls.recv().await.unwrap();
+                    provider_calls += 1;
+                    let second = events
+                        .iter()
+                        .any(|e| e.starts_with("request-yaml"))
+                        .then(|| start(&service, snapshot.clone()));
+                    reply.send(Ok(document())).unwrap();
+                    let doc = ready(first).await.unwrap();
+                    if let Some(second) = second {
+                        assert!(Arc::ptr_eq(&doc, &ready(second).await.unwrap()), "{id}");
+                    }
+                    assert!(
+                        Arc::ptr_eq(&doc, &service.generate(snapshot).await.unwrap()),
+                        "{id}"
+                    );
+                    let json: Value = serde_json::from_slice(&doc.json).unwrap();
+                    let yaml: Value = serde_yaml::from_slice(&doc.yaml).unwrap();
+                    assert_eq!(json, yaml, "{id}");
+                    if let Some(servers) = expected.get("servers") {
+                        assert_eq!(&json["servers"], servers, "{id}");
+                    }
+                    assert_eq!(service.cache.lock().unwrap().completed.len(), 1, "{id}");
+                }
+                "cache-failure-ttl" => {
+                    let first = start(&service, snapshot.clone());
+                    calls
+                        .recv()
+                        .await
+                        .unwrap()
+                        .1
+                        .send(Err(OpenApiError::new("provider-invocation")))
+                        .unwrap();
+                    provider_calls += 1;
+                    let mut statuses = vec![ready(first).await.unwrap_err().status().as_u16()];
+                    let times: Vec<u64> = events
+                        .iter()
+                        .filter_map(|event| event.strip_prefix("time:").map(|s| s.parse().unwrap()))
+                        .collect();
+                    tokio::time::advance(Duration::from_millis(times[1] - times[0])).await;
+                    statuses.push(
+                        service
+                            .generate(snapshot.clone())
+                            .await
+                            .unwrap_err()
+                            .status()
+                            .as_u16(),
+                    );
+                    assert!(calls.try_recv().is_err(), "{id}");
+                    tokio::time::advance(Duration::from_millis(times[2] - times[1])).await;
+                    let last = start(&service, snapshot);
+                    calls.recv().await.unwrap().1.send(Ok(document())).unwrap();
+                    provider_calls += 1;
+                    ready(last).await.unwrap();
+                    statuses.push(200);
+                    assert_eq!(json!(statuses), expected["statuses"], "{id}");
+                }
+                "cache-waiter-disconnect" => {
+                    let owner = start(&service, snapshot.clone());
+                    let (_, reply) = calls.recv().await.unwrap();
+                    provider_calls += 1;
+                    let other = start(&service, snapshot);
+                    owner.abort();
+                    assert!(owner.await.unwrap_err().is_cancelled());
+                    reply.send(Ok(document())).unwrap();
+                    ready(other).await.unwrap();
+                    assert!(cleanups.try_recv().is_err(), "{id}");
+                    assert_eq!(expected["provider_cancellations"], 0);
+                    assert_eq!(expected["successful_waiters"], json!(["b"]));
+                }
+                "cache-secret-change-fences-fill" | "cache-deployment-key-change" => {
+                    let old = start(&service, snapshot.clone());
+                    let (_, old_reply) = calls.recv().await.unwrap();
+                    provider_calls += 1;
+                    service.invalidate_environment(snapshot.key.environment_id);
+                    assert!(ready(old).await.unwrap_err().is_stale(), "{id}");
+                    assert!(old_reply.is_closed(), "{id}");
+                    cleanups.recv().await.unwrap();
+                    if let Some(revision) = events.iter().find_map(|e| e.strip_prefix("deploy:")) {
+                        let original = snapshot;
+                        snapshot = Arc::new(OpenApiInputs {
+                            key: OpenApiKey {
+                                deployment_revision:
+                                    golem_common::model::deployment::DeploymentRevision::new(
+                                        revision.parse().unwrap(),
+                                    )
+                                    .unwrap(),
+                                ..original.key.clone()
+                            },
+                            freshness: original.freshness.clone(),
+                            public_origin: original.public_origin.clone(),
+                            routes: original.routes.clone(),
+                        });
+                    }
+                    let current = start(&service, snapshot.clone());
+                    calls
+                        .recv()
+                        .await
+                        .unwrap()
+                        .1
+                        .send(Ok(document().replace("ok", "f2")))
+                        .unwrap();
+                    provider_calls += 1;
+                    let doc = ready(current).await.unwrap();
+                    let value: Value = serde_json::from_slice(&doc.json).unwrap();
+                    let fill = &value["paths"]["/r1"]["get"]["responses"]["200"]["description"];
+                    assert_eq!(json!([fill]), expected["published_fills"], "{id}");
+                    assert!(
+                        Arc::ptr_eq(&doc, &service.generate(snapshot.clone()).await.unwrap()),
+                        "{id}"
+                    );
+                    if let Some(served) = expected.get("served_fills") {
+                        assert_eq!(&json!([fill]), served, "{id}");
+                    }
+                    if let Some(revisions) = expected.get("served_deployment_revisions") {
+                        let cache = service.cache.lock().unwrap();
+                        assert_eq!(cache.completed.len(), 1, "{id}");
+                        assert_eq!(
+                            &json!([cache.completed[0].generation.inputs.key.deployment_revision]),
+                            revisions,
+                            "{id}"
+                        );
+                    }
+                }
+                other => panic!("unhandled cache corpus case {other}"),
+            }
+            assert!(calls.try_recv().is_err(), "{id}");
+            if let Some(expected_calls) = expected.get("provider_calls") {
+                assert_eq!(json!(provider_calls), *expected_calls, "{id}");
+            }
+        }
+        assert_eq!(count, 7);
+    });
+}

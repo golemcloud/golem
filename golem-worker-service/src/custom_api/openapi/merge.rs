@@ -10,7 +10,9 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::budget::{Budget, DOCUMENT_BYTE_LIMIT, GENERATION_TIMEOUT};
+#[cfg(test)]
+use super::budget::GENERATION_TIMEOUT;
+use super::budget::{Budget, DOCUMENT_BYTE_LIMIT};
 use super::provider_document::{Category, DocumentError, METHODS, ProviderDocument, pointer};
 use golem_common::model::component::ComponentId;
 use serde_json::{Map, Value, json};
@@ -29,6 +31,7 @@ pub(super) struct ProviderContribution {
 
 /// Generated values are host-owned; provider values have already passed strict
 /// validation against their own document, before any names can be merged.
+#[cfg(test)]
 pub(super) fn merge(
     generated: Value,
     providers: Vec<ProviderContribution>,

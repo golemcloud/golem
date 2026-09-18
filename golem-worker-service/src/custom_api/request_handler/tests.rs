@@ -739,3 +739,79 @@ fn stale_openapi_retries_share_original_request_deadline() {
         handler.openapi_service.clear();
     });
 }
+
+#[test]
+async fn ordinary_traffic_lazy_openapi_corpus() {
+    use crate::custom_api::openapi::test_support::{controlled, provider_routes};
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::FileMapping;
+    use golem_service_base::custom_api::RouterFileIndexEntry;
+    use golem_service_base::replayable_stream::ReplayableStream;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    let case = corpus["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "cache-ordinary-traffic-lazy")
+        .unwrap();
+    let files = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let bytes = b"static-body".to_vec();
+    let key = files
+        .put_if_not_exists(
+            EnvironmentId(uuid::Uuid::nil()),
+            bytes
+                .map_item(|item| item.map_err(anyhow::Error::from))
+                .map_error(anyhow::Error::from),
+        )
+        .await
+        .unwrap();
+    let mut routes = provider_routes(1);
+    let RouteBehaviour::HttpRouter(router) = &mut routes[1].behavior else {
+        unreachable!()
+    };
+    router.static_bindings = FileMapping::compile_list([("/static", "/asset")]).unwrap();
+    router.file_index.push(RouterFileIndexEntry {
+        path: "/asset".into(),
+        blob_key: key,
+        size: 11,
+    });
+    let mut live = test_route(2, "/live", None, "filesystem");
+    let RouteBehaviour::AgentFilesystem(filesystem) = &mut live.behavior else {
+        unreachable!()
+    };
+    filesystem.filesystem_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+    routes.push(live);
+    let mut handler = request_handler_with(test_resolver(routes), files);
+    let (service, mut calls, _cleanups) = controlled();
+    handler.openapi_service = Arc::new(service);
+    for event in case["input"]["events"].as_array().unwrap() {
+        let (path, status) = match event.as_str().unwrap() {
+            "request-handler" => ("/r1/missing", StatusCode::NOT_FOUND),
+            "request-static" => ("/r1/static", StatusCode::OK),
+            "request-live-files" => ("/live/file", StatusCode::NOT_IMPLEMENTED),
+            other => panic!("unhandled ordinary event {other}"),
+        };
+        let response = handler.handle_request(openapi_request(path)).await.unwrap();
+        assert_eq!(response.status(), status);
+        if status == StatusCode::OK {
+            assert_eq!(
+                response.into_body().into_vec().await.unwrap(),
+                b"static-body"
+            );
+        }
+    }
+    let mut observed = 0;
+    while calls.try_recv().is_ok() {
+        observed += 1;
+    }
+    assert_eq!(
+        serde_json::json!(observed),
+        case["expect"]["provider_calls"]
+    );
+}

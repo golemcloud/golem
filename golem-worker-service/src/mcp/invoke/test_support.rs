@@ -310,10 +310,17 @@ pub(crate) struct FileReadMock {
     pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<FileReadResponse>>>>,
 }
 
+pub(crate) struct RecordedInvocationContext {
+    pub auth: AuthCtx,
+    pub principal: golem_api_grpc::proto::golem::component::Principal,
+    pub context: Option<InvocationContext>,
+}
+
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
     file_reads: Arc<FileReadMock>,
 }
@@ -581,17 +588,25 @@ impl WorkerClient for RecordingWorkerClient {
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: IdempotencyKey,
-        _: Option<InvocationContext>,
+        context: Option<InvocationContext>,
         _: golem_common::model::agent::InvocationFreshnessDisposition,
         _: Vec<golem_common::model::worker::AgentConfigEntryDto>,
         _: EnvironmentId,
         _: AccountId,
-        _: AuthCtx,
-        _: golem_api_grpc::proto::golem::component::Principal,
+        auth: AuthCtx,
+        principal: golem_api_grpc::proto::golem::component::Principal,
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(agent_id.clone());
         self.method_params.lock().unwrap().push(method_params);
+        self.contexts
+            .lock()
+            .unwrap()
+            .push(RecordedInvocationContext {
+                auth,
+                principal,
+                context,
+            });
         Ok(self.invocation_output.clone())
     }
 
@@ -633,6 +648,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) file_reads: Arc<FileReadMock>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
 }
 
 impl InvocationHarness {
@@ -695,10 +711,12 @@ impl InvocationHarness {
         let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
         let method_params = Arc::new(Mutex::new(Vec::new()));
         let file_reads = Arc::new(FileReadMock::default());
+        let contexts = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
             prepared_agent_ids,
             method_params: method_params.clone(),
+            contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
         });
@@ -723,6 +741,7 @@ impl InvocationHarness {
             file_reads,
             agent_ids,
             method_params,
+            contexts,
         }
     }
 
