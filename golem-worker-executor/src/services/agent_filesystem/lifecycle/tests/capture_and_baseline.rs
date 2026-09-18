@@ -787,10 +787,12 @@ async fn an_update_reads_only_what_the_initial_file_rule_needs() {
     .unwrap()
     .await;
 
-    assert!(
-        updated.as_ref().is_err_and(|error| error
-            .to_string()
-            .contains(&format!("{CONFLICT_ERROR_START}blocked/sub/file.txt"))),
+    assert_eq!(
+        updated.as_ref().err().map(ToString::to_string).as_deref(),
+        Some(
+            "the agent filesystem holds a file above blocked/sub/file.txt, so the initial \
+             files of the agent cannot be installed"
+        ),
         "the file above blocked/sub/file.txt must be the first conflict: {updated:?}"
     );
     assert_eq!(
@@ -1251,7 +1253,11 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
     .await
     .unwrap_err();
 
-    assert!(conflict.to_string().contains("added"), "{conflict}");
+    assert_eq!(
+        conflict.to_string(),
+        "the agent filesystem holds another object at added, so the initial files of \
+         the agent cannot be installed"
+    );
     assert_eq!(call_count(&control, "seed("), 1);
     assert!(!filesystem_activity(&resident).has_terminal_failure());
 
@@ -1272,6 +1278,53 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
 
     assert!(matches!(failure, Error::Sandbox(_)), "{failure}");
     assert!(filesystem_activity(&resident).has_terminal_failure());
+    delete_scripted_resident(&control, resident).await;
+}
+
+#[test]
+async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone() {
+    let store = InitialFileStore::new().await;
+    let installed = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"installed")
+        .await;
+    let changed = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"changed")
+        .await;
+
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(file_attributes(7, installed.size, 1, true)));
+    let resident = scripted_resident(
+        &control,
+        filesystem,
+        store.prepare(std::slice::from_ref(&installed)).await,
+    )
+    .await;
+    // The agent removed Golem's file, so nothing is at the path that the update changes.
+    control.push_get_attributes(Err(sandbox_error(
+        "get sandbox filesystem path attributes",
+        std::io::ErrorKind::NotFound,
+    )));
+
+    let updated = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![changed],
+    )
+    .unwrap()
+    .await;
+
+    match &updated {
+        Err(error) => assert_eq!(
+            error.to_string(),
+            "the agent filesystem no longer holds the file that Golem installed at config, \
+             so the initial files of the agent cannot be installed"
+        ),
+        Ok(()) => panic!("the update must fail with a conflict"),
+    }
+    assert!(!filesystem_activity(&resident).has_terminal_failure());
     delete_scripted_resident(&control, resident).await;
 }
 
@@ -1327,11 +1380,11 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 .await;
 
                 match &updated {
-                    Err(error) => assert!(
-                        error
-                            .to_string()
-                            .contains(&format!("{CONFLICT_ERROR_START}config")),
-                        "{name}: {error}"
+                    Err(error) => assert_eq!(
+                        error.to_string(),
+                        "the agent filesystem holds another object at config, so the \
+                         initial files of the agent cannot be installed",
+                        "{name}"
                     ),
                     Ok(()) => panic!("{name}: the update must fail with a conflict"),
                 }
@@ -2302,10 +2355,10 @@ fn declarations_at(
 fn error_outcome(error: Error) -> StepOutcome {
     match error {
         Error::Access(error) => StepOutcome::Access(error),
-        Error::Sandbox(error) => match error.to_string().strip_prefix(CONFLICT_ERROR_START) {
-            Some(path) => StepOutcome::Conflict(path.to_string()),
-            None => StepOutcome::Sandbox(error.io_kind()),
-        },
+        Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
+        Error::InitialFileConflict(conflict) => {
+            StepOutcome::Conflict(conflict.path().display().to_string())
+        }
         Error::AgentQuota(_) => StepOutcome::AgentQuota,
         Error::PhysicalCapacity(_) => StepOutcome::PhysicalCapacity,
         Error::Baseline(_) => StepOutcome::Baseline,
@@ -2687,10 +2740,6 @@ enum ResultClass {
     /// A result that the reference model never gives.
     Unexpected(String),
 }
-
-/// The start of the error text that a conflicting install gives. The conflicting path follows it.
-const CONFLICT_ERROR_START: &str =
-    "failed to install initial files because of a conflict at filesystem ";
 
 /// Gives the class of a lifecycle step result. This is the only function that maps step outcomes
 /// to the classes of the reference model.

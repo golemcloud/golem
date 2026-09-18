@@ -56,6 +56,7 @@ mod initial_files;
 pub(crate) use baseline::{
     CaptureError, FilesystemCapture, RestoreError, RestoreTree, capture, materialize_baseline,
 };
+pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};
 
 mod lifecycle_stage {
@@ -295,6 +296,9 @@ pub(crate) struct DeleteFailure {
 pub(crate) enum Error {
     Access(AccessError),
     Sandbox(FilesystemStorageError),
+    /// An install of initial files found something other than what the old declarations left at a
+    /// path. The install changed nothing, and the generation stays valid.
+    InitialFileConflict(Box<InitialFileConflict>),
     AgentQuota(FilesystemStorageError),
     PhysicalCapacity(FilesystemStorageError),
     Baseline(Box<RestoreError>),
@@ -308,6 +312,7 @@ impl Display for Error {
             Self::Sandbox(error) | Self::AgentQuota(error) | Self::PhysicalCapacity(error) => {
                 Display::fmt(error, formatter)
             }
+            Self::InitialFileConflict(error) => Display::fmt(error, formatter),
             Self::Baseline(error) => Display::fmt(error, formatter),
             Self::RuntimeInvalidated => formatter.write_str("agent filesystem runtime is invalid"),
         }
@@ -634,9 +639,9 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
 /// declarations. At a path whose declaration changes, the call expects Golem's file where the
 /// current declarations have the path, and nothing where they do not. It puts the new file there,
 /// or removes Golem's file. An empty path that the new declarations do not have stays empty.
-/// Anything else at such a path is a conflict. A conflict fails the call with an error that names
-/// the path, and changes nothing. A failure after the plan passes and the sources load invalidates
-/// the generation.
+/// Anything else at such a path is a conflict. A conflict fails the call with an
+/// [`Error::InitialFileConflict`] that names the path and what is at it, and changes nothing. A
+/// failure after the plan passes and the sources load invalidates the generation.
 /// Admission errors are immediate, and loading or sandbox failures are produced by the returned
 /// call.
 pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(

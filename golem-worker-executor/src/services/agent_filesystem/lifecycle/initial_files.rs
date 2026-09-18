@@ -147,12 +147,13 @@ impl<'a> Step<'a> {
 /// files that the install removes also holds nothing: the install removes that directory, and the
 /// directories in it, after the files and before the seeds.
 ///
-/// The result gives the steps in path order, or the first path in path order that has a conflict.
+/// The result gives the steps in path order, or the conflict of the first path in path order
+/// that has one.
 pub(super) fn plan<'a>(
     old: &DeclarationView<'a>,
     new: &DeclarationView<'a>,
     state: impl Fn(&Path) -> PathState,
-) -> Result<Box<[Step<'a>]>, &'a Path> {
+) -> Result<Box<[Step<'a>]>, InitialFileConflict> {
     let paths = old
         .keys()
         .chain(new.keys())
@@ -200,12 +201,84 @@ pub(super) fn plan<'a>(
                     });
                 }
                 Decision::Unlink => steps.push(Step::Unlink { path }),
-                Decision::Conflict => return Err(path),
+                Decision::Conflict => {
+                    return Err(InitialFileConflict {
+                        path: Box::from(path),
+                        cause: conflict_cause(observed, resolved),
+                    });
+                }
             }
             Ok(steps)
         })
         .map(Vec::into_boxed_slice)
 }
+
+/// Why one path of an install has a conflict. `observed` is what is at the path, and `resolved` is
+/// what the rule of [`plan`] reads there once the removals of the install are taken into account.
+fn conflict_cause(observed: PathState, resolved: PathState) -> ConflictCause {
+    match (observed, resolved) {
+        // The removals of the install clear whatever is at the path, so nothing is left there.
+        (_, PathState::Absent) => ConflictCause::Missing,
+        (PathState::Blocked, _) => ConflictCause::Blocked,
+        _ => ConflictCause::Occupied,
+    }
+}
+
+/// Why an install of initial files stopped at one path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictCause {
+    /// Another object is at the path.
+    Occupied,
+    /// An object above the path is not a directory.
+    Blocked,
+    /// Nothing is at the path, and the old declarations put a file there.
+    Missing,
+}
+
+/// The first path, in path order, that stopped an install of initial files.
+///
+/// The message names the path and what is at it, because the agent, and not Golem, put it there.
+/// The install reads the whole tree before its first change, so an install that gives this error
+/// changed nothing, and it succeeds after the path holds what the old declarations left.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InitialFileConflict {
+    /// The path of the conflict, below the root of the agent filesystem.
+    path: Box<Path>,
+    /// What is at the path.
+    cause: ConflictCause,
+}
+
+impl InitialFileConflict {
+    /// The path of the conflict, below the root of the agent filesystem.
+    #[allow(dead_code)]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Display for InitialFileConflict {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let path = self.path.display();
+        match self.cause {
+            ConflictCause::Occupied => {
+                write!(
+                    formatter,
+                    "the agent filesystem holds another object at {path}"
+                )
+            }
+            ConflictCause::Blocked => {
+                write!(formatter, "the agent filesystem holds a file above {path}")
+            }
+            ConflictCause::Missing => write!(
+                formatter,
+                "the agent filesystem no longer holds the file that Golem installed at {path}"
+            ),
+        }?;
+        formatter.write_str(", so the initial files of the agent cannot be installed")
+    }
+}
+
+impl std::error::Error for InitialFileConflict {}
 
 /// Gives the directories that an install removes before it seeds a file at `path`: the directory at
 /// `path`, and each directory between it and a path in `unlinked` under it.
@@ -251,8 +324,9 @@ fn rule<'a>(
 ///
 /// `installed` holds the files that the lifecycle installed for `old`. `states` gives what is at
 /// the paths, as [`plan`] needs it. A path without a state holds nothing. A conflict fails the
-/// install with an error that names the conflicting path. The install loads every source before
-/// its first change, so a conflict or a failed load changes nothing. A failure after the plan
+/// install with an [`InitialFileConflict`] that names the conflicting path and what is at it.
+/// The install loads every source before its first change, so a conflict or a failed load changes
+/// nothing. A failure after the plan
 /// passes and the sources load invalidates the generation. The result gives the files that the
 /// lifecycle installed for `new`.
 pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
@@ -267,12 +341,7 @@ pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
     let steps = plan(old, new, |path| {
         states.get(path).copied().unwrap_or(PathState::Absent)
     })
-    .map_err(|path| {
-        Error::Sandbox(FilesystemStorageError::verification(
-            "install initial files because of a conflict at",
-            path,
-        ))
-    })?;
+    .map_err(|conflict| Error::InitialFileConflict(Box::new(conflict)))?;
     let sources = sources.load(&steps).await?;
     match apply(generation, sandbox, &sources, &steps).await {
         Ok(recorded) => Ok(installed_after(installed, new, &steps, recorded)),
