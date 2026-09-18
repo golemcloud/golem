@@ -897,6 +897,8 @@ fn tool_wit_uses_directional_started_stream_contract() {
         .expect("failed to read canonical tool host WIT");
     let guest = std::fs::read_to_string(tool_wit.join("guest.wit"))
         .expect("failed to read canonical tool guest WIT");
+    let streams = std::fs::read_to_string(tool_wit.join("streams.wit"))
+        .expect("failed to read canonical tool streams WIT");
     let rpc_error = host
         .split_once("variant rpc-error {")
         .and_then(|(_, rest)| rest.split_once("\n  }").map(|(body, _)| body))
@@ -908,6 +910,19 @@ fn tool_wit_uses_directional_started_stream_contract() {
 
     for required in [
         "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
+        "resource tool-stdout-writer {",
+        "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
+        "finish: async func() -> result<_, stream-write-error>;",
+        "fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;",
+    ] {
+        assert!(
+            streams.contains(required),
+            "missing streams WIT contract: {required}"
+        );
+    }
+
+    for required in [
+        "use streams.{byte-stream-failure, byte-stream-item, byte-stream-close-cause, stream-write-error};",
         "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
         "create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;",
         "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
@@ -929,7 +944,7 @@ fn tool_wit_uses_directional_started_stream_contract() {
     assert!(!host.contains("option<stream<u8>>"));
 
     for required in [
-        "use host.{byte-stream-item, tool-stdout-writer};",
+        "use streams.{byte-stream-item, tool-stdout-writer};",
         "stdin:        option<stream<byte-stream-item>>",
         "stdout:       option<own<tool-stdout-writer>>",
     ] {

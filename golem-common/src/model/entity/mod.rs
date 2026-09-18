@@ -717,6 +717,10 @@ impl EntityInvocationPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "A plan contains middleware layers followed by exactly one tool; boxing would add indirection to every middleware to save space for only the terminal tool"
+)]
 pub enum EntityInvocationPlanLayer {
     Middleware {
         activation: EntityActivation,

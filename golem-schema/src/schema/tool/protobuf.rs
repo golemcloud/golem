@@ -915,6 +915,15 @@ impl From<Example> for proto::Example {
     }
 }
 
+impl From<proto::Example> for Example {
+    fn from(value: proto::Example) -> Self {
+        Self {
+            title: value.title,
+            body: value.body,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -936,14 +945,5 @@ mod tests {
         };
         let proto: proto::ToolMiddleware = middleware.clone().into();
         assert_eq!(ToolMiddleware::try_from(proto).unwrap(), middleware);
-    }
-}
-
-impl From<proto::Example> for Example {
-    fn from(value: proto::Example) -> Self {
-        Self {
-            title: value.title,
-            body: value.body,
-        }
     }
 }
