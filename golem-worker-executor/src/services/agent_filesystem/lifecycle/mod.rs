@@ -2365,9 +2365,11 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
 /// empties the file before the caller sees which object it opened, and an executor that overrides
 /// permissions opens a read-only file for writing, so the contents of a file that the check
 /// refuses would already be gone. The truncation runs on the pinned descriptor after the check
-/// instead. It is therefore not atomic with the open, and another call of the agent can read the
-/// old contents between the two steps. An open that finds the file empty, which every open that
-/// creates the file does, truncates nothing and makes no call of its own.
+/// instead. It is therefore not atomic with the open. Another call of the agent can read the old
+/// contents between the two steps, and a write that another call starts in that window either
+/// survives the truncation or leaves the bytes before its offset as zeros, exactly as a `set-size`
+/// call of the agent does. An open that finds the file empty, which every open that creates the
+/// file does, truncates nothing and makes no call of its own.
 async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
@@ -2382,7 +2384,7 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
         OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => follow,
     };
     let change = open_requires_mutable_target(options).then(|| sandbox_follow(follow));
-    let (open_options, truncates) = open_without_truncation(options);
+    let (open_options, truncate_after_check) = open_without_truncation(options);
     loop {
         let Some(CoordinatedTarget {
             mut coordination,
@@ -2396,7 +2398,7 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
             execute_close(Arc::clone(&generation), opened.into_node()).await?;
             return Err(Error::Access(AccessError::NotPermitted));
         }
-        if truncates && opened.size() > 0 {
+        if truncate_after_check && opened.size() > 0 {
             let file = opened
                 .opened_file()
                 .expect("sandbox file open must return a file")
@@ -2622,6 +2624,20 @@ fn existing_open_after_postcondition(options: OpenOptions) -> OpenOptions {
 /// the caller sees which object it opened. The open keeps the contents instead, and the caller
 /// truncates the descriptor that the open pinned. An open that must find the file becomes an open
 /// of an existing file. An open that may create the file still creates it and no longer truncates.
+/// Gives the access that an open needs to truncate what it opened.
+///
+/// A truncating disposition opens the file for writing whatever access the caller asked for,
+/// because the native open truncates the file itself. An open that keeps the contents must ask for
+/// the same access, or the truncation of the descriptor would run on a descriptor that cannot
+/// write. A guest that asks to truncate without asking to write opens such a descriptor: WASI takes
+/// the truncation from the open flags and the access from the descriptor flags.
+fn access_that_can_truncate(access: AccessMode) -> AccessMode {
+    match access {
+        AccessMode::Read | AccessMode::ReadWrite => AccessMode::ReadWrite,
+        AccessMode::Write => AccessMode::Write,
+    }
+}
+
 fn open_without_truncation(options: OpenOptions) -> (OpenOptions, bool) {
     match options {
         OpenOptions::File {
@@ -2631,7 +2647,7 @@ fn open_without_truncation(options: OpenOptions) -> (OpenOptions, bool) {
         } => (
             OpenOptions::Existing {
                 expected: ObjectKind::File,
-                access,
+                access: access_that_can_truncate(access),
                 follow,
             },
             true,

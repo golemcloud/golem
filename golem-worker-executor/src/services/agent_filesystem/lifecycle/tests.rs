@@ -5783,6 +5783,141 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     assert!(!root.exists());
 }
 
+#[test]
+#[timeout("30s")]
+async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read_only_one() {
+    let parent = tempfile::tempdir().unwrap();
+    let profile = FilesystemStorageConfig {
+        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        ..FilesystemStorageConfig::default()
+    };
+    let id = agent_id();
+    let root = parent
+        .path()
+        .join(id.environment_id.to_string())
+        .join(id.agent_id.component_id.to_string())
+        .join(id.agent_id.agent_name_encoded());
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let read_only = b"immutable initial file".to_vec();
+    let read_write = b"mutable initial file".to_vec();
+    let read_only_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            read_only
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let read_write_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            read_write
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = vec![
+        InitialAgentFile {
+            content_hash: read_only_hash,
+            path: AgentFilePath::from_abs_str("/read-only").unwrap(),
+            permissions: AgentFilePermissions::ReadOnly,
+            size: read_only.len() as u64,
+        },
+        InitialAgentFile {
+            content_hash: read_write_hash,
+            path: AgentFilePath::from_abs_str("/read-write").unwrap(),
+            permissions: AgentFilePermissions::ReadWrite,
+            size: read_write.len() as u64,
+        },
+    ];
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
+        .await
+        .unwrap();
+    let provisioning = sandbox_provisioning(&profile).unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        id.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let (account, entry) = account();
+    let reconstructing = bind_configured_resource_usage_metering(
+        created,
+        account,
+        ResourceUsageMeteringConfig {
+            compute: false,
+            memory: true,
+            filesystem: false,
+        },
+    )
+    .unwrap();
+    let window = open_resource_usage_window(&reconstructing, permit(&entry).await)
+        .await
+        .unwrap();
+    let reconstructing =
+        materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
+            .await
+            .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    let resident = finish_reconstruction(reconstructing).await.unwrap();
+    let generation_handle = resident_generation_handle(&resident);
+
+    // A guest can ask to truncate without asking to write, because WASI takes the truncation from
+    // the open flags and the access from the descriptor flags. Such an open still empties the file,
+    // so the open must ask for the access that the truncation of the descriptor needs.
+    let emptied = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "read-write").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::Read,
+            disposition: FileDisposition::TruncateExisting,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close(emptied.node).await.unwrap();
+    assert!(std::fs::read(root.join("read-write")).unwrap().is_empty());
+
+    // The same open of a read-only initial file is refused, and the file keeps its bytes. An
+    // executor that runs as root opens such a file, so only the check of the lifecycle stops the
+    // truncation; a test runner that is not root is refused by the kernel instead.
+    let refused = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::Write,
+            disposition: FileDisposition::CreateOrTruncate,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+    assert!(
+        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    assert_eq!(std::fs::read(root.join("read-only")).unwrap(), read_only);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    drop(loader);
+    delete(seal(resident)).await.unwrap();
+    assert!(!root.exists());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
