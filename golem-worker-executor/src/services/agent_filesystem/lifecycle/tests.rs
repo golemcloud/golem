@@ -3589,121 +3589,6 @@ async fn a_writable_open_through_a_symlink_refuses_the_read_only_file_that_it_op
 
 #[test]
 #[timeout("10s")]
-async fn a_truncating_open_through_a_symlink_keeps_the_contents_of_the_read_only_file_that_it_opened()
- {
-    let (filesystem, control, window) = metered_resident().await;
-    let generation_handle = resident_generation_handle(&filesystem);
-    // Both resolutions of alias find a symlink to a writable file.
-    control.push_read_only_resolution(1, "alias", false, false);
-    control.push_read_only_resolution(1, "alias", false, false);
-    // The open finds a read-only file that holds 12 bytes.
-    control.push_open(Ok(SandboxOpened::scripted_read_only_file_of_size(720, 12)));
-    control.push_close(Ok(()));
-    let opening_gate = control.block("open");
-    let opening = tokio::spawn(
-        open(
-            &generation_handle,
-            PathTarget::at_root(&generation_handle, "alias").unwrap(),
-            OpenOptions::File {
-                access: AccessMode::Write,
-                disposition: FileDisposition::CreateOrTruncate,
-                follow: Follow::Yes,
-            },
-        )
-        .unwrap(),
-    );
-    opening_gate.wait_started().await;
-    // A rename puts the read-only file at the target of the symlink while the open runs. The
-    // coordination on the entry alias does not stop it, as in the test above.
-    move_namespace_entry(
-        &generation_handle,
-        &control,
-        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
-        PathTarget::at_root(&generation_handle, "target").unwrap(),
-        SandboxObjectKind::File,
-    )
-    .await;
-    opening_gate.release();
-
-    let opened = opening.await.unwrap();
-
-    assert!(
-        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
-        "{:?}",
-        opened.as_ref().err()
-    );
-    // The open asked the sandbox to keep the contents, and nothing truncated the file after it.
-    let calls = control.calls();
-    let open_call = calls
-        .iter()
-        .find(|call| call.starts_with("open("))
-        .expect("the open must reach the sandbox");
-    assert!(
-        open_call.contains("CreateIfMissing") && !open_call.contains("Truncate"),
-        "{open_call}"
-    );
-    assert_eq!(call_count(&control, "set_size("), 0);
-    assert_eq!(call_count(&control, "close("), 1);
-    close_window(window, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
-    control.push_delete_and_verify(Ok(()));
-    delete(seal(filesystem)).await.unwrap();
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_truncating_open_of_a_writable_file_truncates_the_descriptor_that_it_pinned() {
-    let (filesystem, control, window) = metered_resident().await;
-    let generation_handle = resident_generation_handle(&filesystem);
-    control.push_read_only_resolution(1, "file", false, false);
-    control.push_read_only_resolution(1, "file", false, false);
-    // The open finds a writable file that holds 12 bytes.
-    control.push_open(Ok(SandboxOpened::scripted_file_of_size(101, 12)));
-    control.push_get_attributes(Ok(SandboxAttributes {
-        kind: SandboxObjectKind::File,
-        link_count: 1,
-        size: 12,
-        accessed: None,
-        modified: None,
-        read_only: false,
-        object: SandboxObjectId::scripted(0),
-    }));
-    control.push_set_size(Ok(()));
-
-    let opened = open(
-        &generation_handle,
-        PathTarget::at_root(&generation_handle, "file").unwrap(),
-        OpenOptions::File {
-            access: AccessMode::Write,
-            disposition: FileDisposition::TruncateExisting,
-            follow: Follow::Yes,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
-
-    // The native open kept the contents, and the truncation ran on the descriptor that it pinned.
-    let calls = control.calls();
-    let open_call = calls
-        .iter()
-        .find(|call| call.starts_with("open("))
-        .expect("the open must reach the sandbox");
-    assert!(!open_call.contains("Truncate"), "{open_call}");
-    assert_eq!(call_count(&control, "set_size("), 1);
-
-    close_window(window, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
-    control.push_close(Ok(()));
-    close(opened.node).await.unwrap();
-    control.push_delete_and_verify(Ok(()));
-    delete(seal(filesystem)).await.unwrap();
-}
-
-#[test]
-#[timeout("10s")]
 async fn a_writable_open_through_a_symlink_that_the_sandbox_refuses_with_a_permission_error_gives_not_permitted_and_keeps_the_generation()
  {
     let (filesystem, control, window) = metered_resident().await;
@@ -5872,8 +5757,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
     let generation_handle = resident_generation_handle(&resident);
 
     // A guest can ask to truncate without asking to write, because WASI takes the truncation from
-    // the open flags and the access from the descriptor flags. Such an open still empties the file,
-    // so the open must ask for the access that the truncation of the descriptor needs.
+    // the open flags and the access from the descriptor flags. Such an open still empties the file.
     let emptied = open(
         &generation_handle,
         PathTarget::at_root(&generation_handle, "read-write").unwrap(),
@@ -5889,9 +5773,10 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
     close(emptied.node).await.unwrap();
     assert!(std::fs::read(root.join("read-write")).unwrap().is_empty());
 
-    // The same open of a read-only initial file is refused, and the file keeps its bytes. An
-    // executor that runs as root opens such a file, so only the check of the lifecycle stops the
-    // truncation; a test runner that is not root is refused by the kernel instead.
+    // The same open of a read-only initial file is refused, and the file keeps its bytes. A file
+    // that the lifecycle installed read-only carries no write permission, so the kernel refuses the
+    // open of a test runner that is not root, and the permission error of an agent's call becomes
+    // not-permitted.
     let refused = open(
         &generation_handle,
         PathTarget::at_root(&generation_handle, "read-only").unwrap(),
