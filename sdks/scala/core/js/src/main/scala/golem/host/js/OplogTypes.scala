@@ -169,6 +169,7 @@ sealed trait JsExternalSpanData extends js.Object {
 @js.native
 sealed trait JsErrorParameters extends js.Object {
   def timestamp: JsDatetime = js.native
+  def kind: String          = js.native
   def error: String         = js.native
   def retryFrom: js.BigInt  = js.native
 }

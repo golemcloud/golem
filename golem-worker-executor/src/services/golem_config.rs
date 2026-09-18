@@ -47,9 +47,10 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
-    /// Retry policy applied to SQL-backed key-value storage operations when the connection pool
-    /// is briefly exhausted (a pool acquisition timeout). Retrying these transient failures keeps
-    /// hot paths such as promise and worker status updates from crashing the executor under load.
+    /// Retry policy applied to every key-value storage operation whose failure is classified as
+    /// transient, whichever backend serves it. Without it a brief backend outage - a connection
+    /// pool acquisition timeout, a dropped connection - surfaces to hot paths such as promise and
+    /// agent status updates as a hard failure.
     #[serde(default = "default_key_value_storage_retry")]
     pub key_value_storage_retry: RetryConfig,
     /// Retry policy applied when scheduling or cancelling hits a briefly exhausted connection
@@ -113,16 +114,31 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
-fn default_key_value_storage_retry() -> RetryConfig {
-    RetryConfig::max_attempts_3()
-}
-
 fn default_scheduler_storage_retry() -> RetryConfig {
     RetryConfig::max_attempts_3()
 }
 
 fn default_indexed_storage_retry() -> RetryConfig {
     RetryConfig::max_attempts_3()
+}
+
+pub fn default_key_value_storage_retry() -> RetryConfig {
+    // Sized to outlast an AWS-side switchover rather than a momentary blip, because those are the
+    // outages this policy exists to hide. Aurora promotes a reader to writer in high single-digit
+    // to mid-tens of seconds, worst case around a minute; ElastiCache Multi-AZ promotes a replica
+    // in around thirty. Roughly 93 seconds of backoff across these attempts covers both with
+    // margin, and the delay is capped so the tail stays responsive once the new writer answers.
+    //
+    // The other half of this budget is `DbPostgresConfig::acquire_timeout`: an attempt against an
+    // endpoint that blackholes packets, rather than one that refuses fast, costs that timeout
+    // before the backoff below even starts.
+    RetryConfig {
+        max_attempts: 15,
+        min_delay: Duration::from_millis(200),
+        max_delay: Duration::from_secs(10),
+        multiplier: 2.0,
+        max_jitter_factor: Some(0.15),
+    }
 }
 
 impl SafeDisplay for GolemConfig {
@@ -718,16 +734,22 @@ pub struct SuspendConfig {
     pub wait_suspend_grace: Duration,
     #[serde(with = "humantime_serde")]
     pub wait_suspend_check_interval: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_suspend_after: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_resume_after: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}",
+            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}, RPC suspend after: {:?}, RPC resume after: {:?}",
             self.suspend_after,
             self.ephemeral_max_sleep,
             self.wait_suspend_grace,
-            self.wait_suspend_check_interval
+            self.wait_suspend_check_interval,
+            self.rpc_suspend_after,
+            self.rpc_resume_after
         )
     }
 }
@@ -948,6 +970,8 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
+    /// Controls the background sweep that archives the oplogs of agents which have gone quiet.
+    pub sweep: OplogSweepConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -1003,6 +1027,8 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
+        let _ = writeln!(&mut result, "sweep:");
+        let _ = writeln!(&mut result, "{}", self.sweep.to_safe_string());
         result
     }
 }
@@ -1939,6 +1965,103 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
+            sweep: OplogSweepConfig::default(),
+        }
+    }
+}
+
+/// Controls the background sweep that archives the oplogs of ephemeral agents which have gone
+/// quiet. It finds them by paginating the oplog layers, so an ephemeral invocation registers no
+/// `ScheduledAction::ArchiveOplog`. Durable agents are not swept; see
+/// [`oplog_sweep`](crate::services::oplog_sweep).
+///
+/// A tick that hits a per-tick bound keeps its scan cursor and resumes there on the next tick, so
+/// work is deferred, never dropped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OplogSweepConfig {
+    /// Whether the sweep runs. Also read by `StatusState::schedule_oplog_archive_if_needed`: while
+    /// it is false, ephemeral agents register `ScheduledAction::ArchiveOplog` instead, so an oplog
+    /// stranded by a crashed pod always has something to move it.
+    pub enabled: bool,
+    /// Wait between ticks. An agent is archived once its last oplog index is unchanged across two
+    /// scan passes, and a pass takes one interval only while the namespace fits in one tick's
+    /// budget.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Keys read per scan call.
+    pub page_size: u64,
+    /// Agents archived concurrently. Shares the indexed-storage connection budget with
+    /// invocations, and bounds memory: an archive step reads an agent's whole layer into one `Vec`.
+    pub max_concurrency: usize,
+    /// Agents one tick may archive, split across routes. A page is decided as a unit, so a tick can
+    /// exceed this by up to `page_size`.
+    pub max_archives_per_tick: usize,
+    /// Keys one tick may scan, split across routes. A close bound rather than an exact one, since
+    /// Redis and the multi-file SQLite backend can return more keys than asked for.
+    pub max_scanned_per_tick: usize,
+    /// Wall-clock bound on one tick. The count budgets bound work; this bounds how long a tick
+    /// holds the indexed-storage concurrency it shares with invocations, which matters when the
+    /// store is slow. A tick stops at its next boundary, never inside an agent's archive, so it
+    /// can overrun by the agents already started, at most `max_concurrency` of them.
+    #[serde(with = "humantime_serde")]
+    pub max_tick_duration: Duration,
+    /// Most intervals to wait after a tick that hit `max_tick_duration`. The wait doubles after
+    /// each such tick and resets once a tick finishes in time, so the sweep backs off a slow store.
+    pub max_backoff_intervals: u32,
+    /// Most agents whose previous index is remembered. An agent past the bound goes untracked for
+    /// that pass and is archived a pass later, so set this above the largest backlog of stranded
+    /// oplogs one pod should work through.
+    pub max_tracked_agents: usize,
+}
+
+impl SafeDisplay for OplogSweepConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "interval: {:?}", self.interval);
+        let _ = writeln!(&mut result, "page size: {}", self.page_size);
+        let _ = writeln!(&mut result, "max concurrency: {}", self.max_concurrency);
+        let _ = writeln!(
+            &mut result,
+            "max archives per tick: {}",
+            self.max_archives_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max scanned per tick: {}",
+            self.max_scanned_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tick duration: {:?}",
+            self.max_tick_duration
+        );
+        let _ = writeln!(
+            &mut result,
+            "max backoff intervals: {}",
+            self.max_backoff_intervals
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tracked agents: {}",
+            self.max_tracked_agents
+        );
+        result
+    }
+}
+
+impl Default for OplogSweepConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(60),
+            page_size: 128,
+            max_concurrency: 4,
+            max_archives_per_tick: 256,
+            max_scanned_per_tick: 4096,
+            max_tick_duration: Duration::from_secs(30),
+            max_backoff_intervals: 8,
+            max_tracked_agents: 100_000,
         }
     }
 }
@@ -1950,6 +2073,8 @@ impl Default for SuspendConfig {
             ephemeral_max_sleep: Duration::from_secs(60),
             wait_suspend_grace: Duration::from_secs(1),
             wait_suspend_check_interval: Duration::from_secs(10),
+            rpc_suspend_after: Duration::from_secs(30),
+            rpc_resume_after: Duration::from_secs(5),
         }
     }
 }

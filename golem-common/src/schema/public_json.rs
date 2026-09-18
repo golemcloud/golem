@@ -15,7 +15,6 @@
 use crate::model::invocation_session_public::{
     MAX_COLLECTION_SIZE, MAX_JSON_DEPTH, MAX_LOGICAL_VALUE_SIZE, MAX_TOKEN_SIZE, PublicErrorCode,
 };
-use crate::schema::render::{from_json_value, to_json_value};
 use crate::schema::stream::SchemaValueStream;
 use crate::schema::validation::value::validate_value;
 use crate::schema::{
@@ -24,6 +23,7 @@ use crate::schema::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use golem_schema::schema::render::{from_json_value, to_json_value};
 use serde_json::{Map, Number, Value};
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};

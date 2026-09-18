@@ -131,6 +131,12 @@ pub trait HttpClient4 {
     /// as a single string, which is also returned.
     async fn get_and_store_full_response(&mut self) -> String;
 
+    /// Reads the full response but leaves its trailers future unconsumed.
+    async fn get_and_ignore_trailers(&mut self) -> String;
+
+    /// Cancels a pending body read after its first chunk and leaves trailers unconsumed.
+    async fn get_and_cancel_body_ignoring_trailers(&mut self) -> String;
+
     /// Returns the response stored by the last `get_and_store_full_response`
     /// call (rebuilt from the oplog on replay).
     fn stored_full_response(&self) -> String;
@@ -294,7 +300,19 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn get_and_store_full_response(&mut self) -> String {
-        let result = do_get_full_response().await;
+        let result = do_get_full_response(false, false).await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn get_and_ignore_trailers(&mut self) -> String {
+        let result = do_get_full_response(true, false).await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn get_and_cancel_body_ignoring_trailers(&mut self) -> String {
+        let result = do_get_full_response(true, true).await;
         self.last_full_response = Some(result.clone());
         result
     }
@@ -614,7 +632,7 @@ async fn do_send_with_permanent_error() -> String {
     }
 }
 
-async fn do_get_full_response() -> String {
+async fn do_get_full_response(ignore_trailers: bool, cancel_body: bool) -> String {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_bindgen::StreamResult;
     use golem_rust::wasip3::wit_future;
@@ -631,9 +649,7 @@ async fn do_get_full_response() -> String {
     request
         .set_authority(Some(&format!("localhost:{port}")))
         .unwrap();
-    request
-        .set_path_with_query(Some("/full-response"))
-        .unwrap();
+    request.set_path_with_query(Some("/full-response")).unwrap();
 
     let response = client::send(request).await.expect("Request failed");
     let status = response.get_status_code();
@@ -655,13 +671,32 @@ async fn do_get_full_response() -> String {
             StreamResult::Complete(n) => {
                 body_bytes.extend_from_slice(&buffer[..n]);
                 buffer.clear();
+                if cancel_body && n > 0 {
+                    use std::future::Future;
+                    use std::task::Poll;
+
+                    let mut pending = Box::pin(body.read(Vec::with_capacity(1024)));
+                    futures_util::future::poll_fn(|cx| {
+                        assert!(pending.as_mut().poll(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
+                    let (result, _) = pending.as_mut().cancel();
+                    assert_eq!(result, StreamResult::Cancelled);
+                    break;
+                }
             }
             StreamResult::Dropped => break,
             StreamResult::Cancelled => panic!("response body read was cancelled"),
         }
     }
     drop(body);
-    trailers.await.expect("response trailers failed");
+    if ignore_trailers {
+        // Model a guest that never reads or drops the returned future handle.
+        std::mem::forget(trailers);
+    } else {
+        trailers.await.expect("response trailers failed");
+    }
     response_done_tx
         .write(Ok(()))
         .await
@@ -845,9 +880,7 @@ async fn do_post_with_p3_streamed_body(chunk_count: usize, chunk_len: usize) -> 
         async { transmit.await },
         async {
             for i in 0..chunk_count {
-                let chunk: Vec<u8> = (0..chunk_len)
-                    .map(|j| ((i * 31 + j) % 251) as u8)
-                    .collect();
+                let chunk: Vec<u8> = (0..chunk_len).map(|j| ((i * 31 + j) % 251) as u8).collect();
                 let remaining = body_tx.write_all(chunk).await;
                 assert!(remaining.is_empty(), "request body receiver closed early");
             }

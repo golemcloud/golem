@@ -5,53 +5,38 @@ priv suberror SnapshotLoadError {
 
 ///|
 /// Tries to load a snapshot, parsing the versioned envelope and restoring agent state.
-/// Supports both JSON and binary envelopes, as well as snapshot-based updates
-/// on uninitialized agents (reads GOLEM_AGENT_ID from environment).
+/// Supports both JSON and binary envelopes on an uninitialized component.
 pub async fn load(
   snapshot : @host.Snapshot,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, String] {
+  if @agents.get_agent_instance() is Some(_) {
+    return Err("Agent instance is already initialized")
+  }
   if snapshot.payload.length() == 0 {
-    return Ok(())
+    return Err("Snapshot is empty")
   }
   let result = parse_snapshot_envelope(snapshot) catch {
     SnapshotLoadError(msg) => return Err(msg)
   }
   let principal = result.0
   let state_bytes = result.1
-  match @agents.get_agent_instance() {
-    Some(instance) =>
-      match instance.snapshottable {
-        Some(s) => s.load_snapshot(state_bytes)
-        None => Err("Agent does not support snapshots")
+  let agent_id = get_golem_agent_id() catch {
+    SnapshotLoadError(msg) => return Err(msg)
+  }
+  match @agentHost.parse_agent_id(agent_id) {
+    Err(e) => Err("Failed to parse agent ID: \{Repr(e)}")
+    Ok((agent_type, identity, phantom_id)) => {
+      let identity_fields = @agents.decode_snapshot_identity(identity.value) catch {
+        e => return Err("Failed to decode agent identity: \{Repr(e)}")
       }
-    None => {
-      // Snapshot-based update on a fresh component instance.
-      // Read GOLEM_AGENT_ID from environment and reconstruct the agent.
-      let agent_id_str = get_golem_agent_id() catch {
-        SnapshotLoadError(msg) => return Err(msg)
-      }
-      match @agentHost.parse_agent_id(agent_id_str) {
-        Ok((type_name, ctor_params, _phantom_id)) =>
-          match
-            @agents.construct_and_set_instance(
-              type_name,
-              ctor_params.value,
-              principal,
-            ) {
-            Ok(_) =>
-              match @agents.get_agent_instance() {
-                Some(instance) =>
-                  match instance.snapshottable {
-                    Some(s) => s.load_snapshot(state_bytes)
-                    None => Err("Agent does not support snapshots")
-                  }
-                None => Err("Failed to construct agent instance")
-              }
-            Err(e) => Err("Failed to construct agent: \{Repr(e)}")
-          }
-        Err(e) => Err("Failed to parse agent ID: \{Repr(e)}")
-      }
+      @agents.restore_and_set_instance(agent_type, state_bytes, {
+        agent_id,
+        agent_type,
+        identity_fields,
+        phantom_id,
+        principal,
+      })
     }
   }
 }
@@ -93,15 +78,27 @@ fn parse_snapshot_envelope(
       Object(m) => m
       _ => raise SnapshotLoadError("Expected JSON object in snapshot envelope")
     }
-    let principal = match obj.get("principal") {
-      Some(p) =>
-        @agents.principal_from_json(p) catch {
-          e =>
-            raise SnapshotLoadError(
-              "Failed to parse principal: \{@debug.to_string(e)}",
-            )
+    let version = match obj.get("version") {
+      Some(version) =>
+        match version {
+          Number(version, ..) => version
+          _ => raise SnapshotLoadError("Invalid JSON snapshot version")
         }
-      None => @common.Principal::Anonymous
+      None => raise SnapshotLoadError("Missing 'version' in snapshot envelope")
+    }
+    if version != 1.0 {
+      raise SnapshotLoadError("Unsupported JSON snapshot version: \{version}")
+    }
+    let principal_json = match obj.get("principal") {
+      Some(principal) => principal
+      None =>
+        raise SnapshotLoadError("Missing 'principal' in snapshot envelope")
+    }
+    let principal = @agents.principal_from_json(principal_json) catch {
+      e =>
+        raise SnapshotLoadError(
+          "Failed to parse principal: \{@debug.to_string(e)}",
+        )
     }
     let state_json = match obj.get("state") {
       Some(s) => s
@@ -129,11 +126,16 @@ fn parse_snapshot_envelope(
             "Binary snapshot too short for version 2 header",
           )
         }
+        if data[1].to_int() > 0x7F {
+          raise SnapshotLoadError(
+            "Binary snapshot principal data exceeds supported size",
+          )
+        }
         let principal_len = (data[1].to_int() << 24) |
           (data[2].to_int() << 16) |
           (data[3].to_int() << 8) |
           data[4].to_int()
-        if data.length() < 5 + principal_len {
+        if principal_len > data.length() - 5 {
           raise SnapshotLoadError(
             "Binary snapshot too short for principal data",
           )

@@ -795,7 +795,7 @@ impl SandboxFilesystemProvisioning {
     pub(crate) async fn create_fresh(
         &self,
         name: SandboxFilesystemName,
-    ) -> Result<Arc<SandboxFilesystem>, FilesystemStorageError> {
+    ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         match &self.mode {
             SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
                 unmanaged.create_fresh(self.volume.clone(), name).await
@@ -1092,17 +1092,24 @@ impl SandboxFilesystem {
         unreachable!("managed XFS is unavailable on this platform");
     }
 
-    pub(crate) async fn delete_and_verify(&self) -> Result<(), FilesystemStorageError> {
+    pub(crate) async fn delete_and_verify(self) -> Result<(), DeleteError<Self>> {
         self.root.close();
         let Some(mut state) = RestoringLeaseState::take(&self.lease.state) else {
             return Ok(());
         };
-        state.cleanup().delete().await?;
-        state.disarm();
-        Ok(())
+        match state.cleanup().delete().await {
+            Ok(()) => {
+                state.disarm();
+                Ok(())
+            }
+            Err(source) => {
+                drop(state);
+                Err(DeleteError::new(self, source))
+            }
+        }
     }
 
-    pub(crate) fn delete_and_verify_blocking(&self) -> Result<(), FilesystemStorageError> {
+    fn delete_and_verify_blocking(&self) -> Result<(), FilesystemStorageError> {
         self.root.close();
         let Some(mut state) = RestoringLeaseState::take(&self.lease.state) else {
             return Ok(());
@@ -1621,6 +1628,16 @@ async fn verify_empty_directory(path: &Path) -> Result<(), FilesystemStorageErro
     Ok(())
 }
 
+async fn rollback_created_filesystem(
+    filesystem: SandboxFilesystem,
+    creation_error: FilesystemStorageError,
+) -> FilesystemStorageError {
+    match SandboxFilesystem::delete_and_verify(filesystem).await {
+        Ok(()) => creation_error,
+        Err(cleanup_error) => cleanup_error.into_source(),
+    }
+}
+
 async fn rollback_creation(
     path: &Path,
     creation_error: FilesystemStorageError,
@@ -1882,7 +1899,7 @@ mod tests {
         );
 
         let root = filesystem.root().to_path_buf();
-        SandboxFilesystem::delete_and_verify(&filesystem)
+        SandboxFilesystem::delete_and_verify(filesystem)
             .await
             .unwrap();
         assert!(!root.exists());
@@ -1903,7 +1920,7 @@ mod tests {
         drop(cleanup);
         assert!(filesystem.lease.state.lock().unwrap().is_some());
 
-        SandboxFilesystem::delete_and_verify(&filesystem)
+        SandboxFilesystem::delete_and_verify(filesystem)
             .await
             .unwrap();
     }
@@ -1920,9 +1937,9 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(!second.is_finished());
 
-        SandboxFilesystem::delete_and_verify(&first).await.unwrap();
+        SandboxFilesystem::delete_and_verify(first).await.unwrap();
         let second = second.await.unwrap().unwrap();
-        SandboxFilesystem::delete_and_verify(&second).await.unwrap();
+        SandboxFilesystem::delete_and_verify(second).await.unwrap();
     }
 
     #[test]

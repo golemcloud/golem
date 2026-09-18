@@ -49,10 +49,9 @@ pub fn set_agent_instance(instance : AgentInstance) -> Unit {
 
 ///|
 /// Optional trait that agents can implement to support snapshot-based state persistence.
-/// When implemented, the SDK will use these methods to save/load agent state during updates.
+/// Snapshot restoration is a separate static factory registered for the agent type.
 pub(open) trait Snapshottable {
   fn save_snapshot(Self) -> Bytes
-  fn load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
 
 ///|
@@ -72,7 +71,26 @@ pub(all) struct ConstructedAgent {
 }
 
 ///|
-/// A registered agent type with its name, type definition, and constructor function.
+/// Information available while constructing a fresh agent from a snapshot.
+pub(all) struct SnapshotRestoreContext {
+  agent_id : String
+  agent_type : String
+  identity_fields : Array[@model.SchemaValue]
+  phantom_id : @types.Uuid?
+  principal : @common.Principal
+}
+
+///|
+/// Decodes an identity field from the ambient agent ID.
+pub fn[T : @schema.FromSchema] SnapshotRestoreContext::identity(
+  self : SnapshotRestoreContext,
+  index : Int,
+) -> T raise @common.AgentError {
+  decode_param(self.identity_fields, index, "snapshot restoration")
+}
+
+///|
+/// A registered agent type with distinct initialization and restoration factories.
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
@@ -80,6 +98,10 @@ pub(all) struct RegisteredAgent {
     ConstructedAgent,
     @common.AgentError,
   ]
+  load_snapshot : (async (Bytes, SnapshotRestoreContext) -> Result[
+    ConstructedAgent,
+    String,
+  ])?
 }
 
 ///|
@@ -95,8 +117,40 @@ pub(all) struct AgentInstance {
 }
 
 ///|
+/// Installs a complete agent returned by an initialization or restoration factory.
+fn install_constructed_agent(
+  registered_agent : RegisteredAgent,
+  principal : @common.Principal,
+  constructed : ConstructedAgent,
+) -> Unit {
+  set_agent_instance({
+    name: registered_agent.name,
+    agent_type: registered_agent.agent_type,
+    principal,
+    interface: constructed.raw,
+    snapshottable: constructed.snapshottable,
+    snapshot_format: constructed.snapshot_format,
+  })
+}
+
+///|
+/// Commits a restoration result atomically to the agent singleton.
+fn finish_restoration(
+  registered_agent : RegisteredAgent,
+  principal : @common.Principal,
+  restored : Result[ConstructedAgent, String],
+) -> Result[Unit, String] {
+  match restored {
+    Err(e) => Err(e)
+    Ok(constructed) => {
+      install_constructed_agent(registered_agent, principal, constructed)
+      Ok(())
+    }
+  }
+}
+
+///|
 /// Constructs an agent and sets it as the current instance.
-/// Shared logic used by both `initialize` and snapshot-based `load`.
 pub async fn construct_and_set_instance(
   agent_type : String,
   input : @types.SchemaValueTree,
@@ -112,19 +166,37 @@ pub async fn construct_and_set_instance(
       let constructed = (registered_agent.construct)(input, principal)
       match constructed {
         Ok(constructed) => {
-          set_agent_instance({
-            name: registered_agent.name,
-            agent_type: registered_agent.agent_type,
-            principal,
-            interface: constructed.raw,
-            snapshottable: constructed.snapshottable,
-            snapshot_format: constructed.snapshot_format,
-          })
+          install_constructed_agent(registered_agent, principal, constructed)
           Ok(())
         }
         Err(e) => Err(e)
       }
     }
+  }
+}
+
+///|
+/// Restores an agent and sets it as the current instance only after the
+/// restoration factory has returned a complete agent successfully.
+pub async fn restore_and_set_instance(
+  agent_type : String,
+  snapshot : Bytes,
+  context : SnapshotRestoreContext,
+) -> Result[Unit, String] {
+  match get_registered_agent(agent_type) {
+    None => Err("Agent type not found: \{agent_type}")
+    Some(registered_agent) =>
+      match registered_agent.load_snapshot {
+        None => Err("Agent does not support snapshots")
+        Some(load_snapshot) => {
+          let principal = context.principal
+          finish_restoration(
+            registered_agent,
+            principal,
+            load_snapshot(snapshot, context),
+          )
+        }
+      }
   }
 }
 

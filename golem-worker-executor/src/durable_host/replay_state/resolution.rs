@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable_host::tail_work::TailActivity;
 
 impl ReplayState {
     /// Drops a resolver awaiter from outside a cursor transaction. Acquires the cursor lock briefly
@@ -133,6 +134,7 @@ impl ReplayState {
     /// entry (or a reserved delivery marker owned by another token) sits at the head.
     pub(in crate::durable_host) async fn await_natural_tail_end(
         &self,
+        activity: Option<&TailActivity>,
     ) -> Result<(), WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
@@ -152,7 +154,13 @@ impl ReplayState {
                 return Ok(());
             }
 
-            progress.await;
+            // Only the passive tail wait can span invocation settlement. Keep the owned
+            // cursor operation above active, including while it is queued or awaiting its result.
+            if let Some(activity) = activity {
+                activity.park(progress.as_mut()).await;
+            } else {
+                progress.await;
+            }
         }
     }
 

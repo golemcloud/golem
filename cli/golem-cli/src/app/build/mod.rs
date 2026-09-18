@@ -21,8 +21,8 @@ use crate::app::build::gen_bridge::{
     plan_dependency_guest_bridge_generation_for_components_lenient,
     plan_explicit_manifest_guest_bridge_generation_for_components_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
-    plan_repl_bridge_generation_lenient, validate_no_output_dir_collisions,
-    validate_supported_bridge_targets, write_repl_metadata,
+    plan_repl_bridge_generation_lenient, validate_host_managed_bridge_targets,
+    validate_no_output_dir_collisions, validate_supported_bridge_targets, write_repl_metadata,
 };
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
@@ -395,6 +395,7 @@ fn validate_and_filter_new_bridge_targets(
         .map(|(_, target)| target.clone())
         .collect::<Vec<_>>();
     validate_supported_bridge_targets(&exact_targets)?;
+    validate_host_managed_bridge_targets(&exact_targets)?;
     validate_no_output_dir_collisions(&exact_targets)?;
     validate_exact_targets_against_claims(&tagged_targets, claims)?;
 

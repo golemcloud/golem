@@ -39,7 +39,7 @@ import { BaseAgent, agent, prompt, description, endpoint, readonly, Config, Secr
 
 // NEW — import what you use
 import { z } from 'zod';                              // or valibot / arktype
-import { defineAgent, method, s, http, clientFor, Result } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, s, http, Result } from '@golemcloud/golem-ts-sdk';
 ```
 
 `Result` still exists (host `Result.ok` / `Result.err`). `Config` and `Secret` as **constructor parameter types** are gone — config is now a `config` record on `defineAgent` and secrets are `s.secret(...)` markers surfaced as `Secret<T>` handles on `this.config`.
@@ -195,8 +195,9 @@ removed decorator surface.
 **Current forms:**
 - **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean } })`. Bare `readOnly: true` uses the `until-write` policy (the base default); principal-dependent caching → `usesPrincipal: true`.
 - **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` →
-  `clientFor(Def)(id, undefined, overrides)`. For a fresh phantom agent, use
-  `clientFor(Def).newPhantom(id, overrides)`. Non-secret override leaves are encoded and applied at
+  `Def.client.get(id, overrides)`. For an existing phantom agent, use
+  `Def.client.getPhantom(id, phantomId, overrides)`; for a fresh phantom agent, use
+  `Def.client.newPhantom(id, overrides)`. Non-secret override leaves are encoded and applied at
   call time; secret overrides are rejected because secrets remain host-provisioned.
 - **Cancelable / abortable RPC.** Pass `{ signal }` to an awaited client method, for example
   `await client.run(input, { signal })`. `client.run.schedule(at, input)` returns a

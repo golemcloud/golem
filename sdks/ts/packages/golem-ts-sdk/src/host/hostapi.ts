@@ -17,6 +17,8 @@ import {
   getPromise,
   generateIdempotencyKey as rawGenerateIdempotencyKey,
   resolveComponentId as rawResolveComponentId,
+  resolveAgentId as rawResolveAgentId,
+  resolveAgentIdStrict as rawResolveAgentIdStrict,
   fork as rawFork,
   ForkResult as RawForkResult,
   getSelfMetadata as rawGetSelfMetadata,
@@ -55,8 +57,6 @@ export {
   updateAgent,
   forkAgent,
   revertAgent,
-  resolveAgentId,
-  resolveAgentIdStrict,
 } from 'golem:api/host@1.5.0';
 
 // Re-export classes (GetAgents is wrapped below)
@@ -144,6 +144,27 @@ export function generateIdempotencyKey(): Uuid {
 export function resolveComponentId(componentReference: string): ComponentId | undefined {
   const raw = rawResolveComponentId(componentReference);
   return raw ? ComponentId.from(raw) : undefined;
+}
+
+/**
+ * Resolve an agent reference without checking that the concrete agent exists.
+ * Returns `undefined` only when the component reference cannot be resolved.
+ */
+export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined {
+  const raw = rawResolveAgentId(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
+}
+
+/**
+ * Resolve an agent reference and require the concrete agent to exist.
+ * Returns `undefined` when either the component or the agent cannot be found.
+ */
+export function resolveAgentIdStrict(
+  componentReference: string,
+  agentName: string,
+): AgentId | undefined {
+  const raw = rawResolveAgentIdStrict(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
 }
 
 /**

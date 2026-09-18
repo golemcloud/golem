@@ -18,6 +18,11 @@ steps:
         it writes the current counter value to a file at /data/counter.txt using the Node.js
         fs module (node:fs). Create the /data directory if it doesn't exist. The file should
         contain just the number as a string.
+      effect: >
+        In the Effect-based test-app project, modify the existing `Counter` agent so each
+        `increment` writes the updated value as a decimal string to `/data/counter.txt`. Use
+        Effect platform filesystem APIs and create `/data` when needed. Preserve the `Counter`
+        runtime name and import the implementation from `src/main.ts`.
       scala: >
         In the test-app project, modify the CounterAgent so that every time increment is called,
         it writes the current counter value to a file at /data/counter.txt using the Node.js
@@ -34,13 +39,25 @@ steps:
 
   - id: "invoke-increment"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method: "increment"
 
   - id: "list-files"
-    prompt: >
-      Use the CLI to list the files of CounterAgent "c1" at the /data path and save the
-      full output to a file called files-output.txt in the test-app directory.
+    prompt:
+      effect: >
+        Use the CLI to list the files of Counter "c1" at `/data` and save the full output to
+        `files-output.txt` in the test-app directory.
+      rust: &list-counter-agent-files >
+        Use the CLI to list the files of CounterAgent "c1" at the /data path and save the
+        full output to a file called files-output.txt in the test-app directory.
+      ts: *list-counter-agent-files
+      scala: *list-counter-agent-files
+      moonbit: *list-counter-agent-files
     expectedSkills:
       - "golem-view-agent-files"
 

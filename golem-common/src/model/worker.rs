@@ -25,7 +25,7 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        crate::schema::render::to_json_value(
+        golem_schema::schema::render::to_json_value(
             self.value.graph(),
             self.value.root_type(),
             self.value.value(),
@@ -46,6 +46,14 @@ impl TypedAgentConfigEntry {
             .iter()
             .filter_map(TypedAgentConfigEntry::to_flat_pair)
             .collect()
+    }
+}
+
+impl AgentMetadataDto {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        for entry in &mut self.config {
+            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        }
     }
 }
 
@@ -103,7 +111,7 @@ mod protobuf {
     use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::AgentFingerprint;
     use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-    use crate::model::oplog::AgentResourceId;
+    use crate::model::oplog::{AgentResourceId, OplogErrorKind};
     use crate::model::regions::OplogRegion;
     use crate::model::{AgentResourceDescription, OplogIndex};
     use std::collections::HashSet;
@@ -150,6 +158,21 @@ mod protobuf {
                     .collect::<Result<Vec<_>, _>>()?,
                 created_at: value.created_at.ok_or("Missing created_at")?.into(),
                 last_error: value.last_error,
+                last_error_kind: value
+                    .last_error_kind
+                    .map(|kind| {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind)
+                            .map_err(|_| format!("Invalid oplog error kind: {kind}"))
+                            .map(|kind| match kind {
+                                golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation => {
+                                    OplogErrorKind::Invocation
+                                }
+                                golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery => {
+                                    OplogErrorKind::Recovery
+                                }
+                            })
+                    })
+                    .transpose()?,
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 exported_resource_instances,
@@ -208,6 +231,14 @@ mod protobuf {
                 updates: value.updates.into_iter().map(Into::into).collect(),
                 created_at: Some(value.created_at.into()),
                 last_error: value.last_error,
+                last_error_kind: value.last_error_kind.map(|kind| match kind {
+                    OplogErrorKind::Invocation => {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation as i32
+                    }
+                    OplogErrorKind::Recovery => {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                    }
+                }),
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 owned_resources,

@@ -21,6 +21,9 @@ type = "Enabled"
 [component_compilation.config]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 33554432
 port = 9091
 
@@ -35,6 +38,11 @@ multiplier = 2.0
 type = "Disabled"
 
 [component_compilation.config.tls.config]
+
+[component_file_upload]
+max_concurrent_files = 16
+max_uncompressed_archive_size = 1073741824
+max_uncompressed_file_size = 536870912
 
 [db]
 type = "Sqlite"

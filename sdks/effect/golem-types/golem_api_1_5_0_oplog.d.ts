@@ -1,0 +1,1463 @@
+/**
+ * Host interface for enumerating and searching for agent oplogs
+ */
+declare module 'golem:api/oplog@1.5.0' {
+  import * as golemApi150Context from 'golem:api/context@1.5.0';
+  import * as golemApi150Host from 'golem:api/host@1.5.0';
+  import * as golemApi150Retry from 'golem:api/retry@1.5.0';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
+  import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
+  /**
+   * Enriches raw oplog entries into public oplog entries by resolving oplog payloads
+   * and augmenting entries with component metadata.
+   * @throws string
+   */
+  export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
+  export class GetOplog {
+    constructor(agentId: AgentId, start: OplogIndex);
+    /**
+     * @throws OplogReadError
+     */
+    getNext(): PublicOplogEntry[] | undefined;
+  }
+  export class SearchOplog {
+    constructor(agentId: AgentId, text: string);
+    /**
+     * @throws OplogReadError
+     */
+    getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
+  }
+  export type Datetime = wasiClocks030SystemClock.Instant;
+  export type AccountId = golemCore200Types.AccountId;
+  export type CardId = golemCore200Types.CardId;
+  export type SchemaValueTree = golemCore200Types.SchemaValueTree;
+  export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ComponentRevision = golemApi150Host.ComponentRevision;
+  export type OplogIndex = golemApi150Host.OplogIndex;
+  export type EnvironmentId = golemApi150Host.EnvironmentId;
+  export type Uuid = golemApi150Host.Uuid;
+  export type AgentId = golemApi150Host.AgentId;
+  export type Snapshot = golemApi150Host.Snapshot;
+  export type Duration = wasiClocks030Types.Duration;
+  export type Attribute = golemApi150Context.Attribute;
+  export type AttributeValue = golemApi150Context.AttributeValue;
+  export type SpanId = golemApi150Context.SpanId;
+  export type TraceId = golemApi150Context.TraceId;
+  export type RetryPredicate = golemApi150Retry.RetryPredicate;
+  export type RetryPolicy = golemApi150Retry.RetryPolicy;
+  export type NamedRetryPolicy = golemApi150Retry.NamedRetryPolicy;
+  /**
+   * Whether an agent is durable (persistent oplog) or ephemeral.
+   * This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid
+   * a circular WIT package dependency between golem:api and golem:agent.
+   */
+  export type AgentMode = "durable" | "ephemeral";
+  /**
+   * Index into a retry-policy-state's node list
+   */
+  export type StateNodeIndex = number;
+  export type CountBoxState = {
+    attempts: number;
+    inner: StateNodeIndex;
+  };
+  export type AndThenState = {
+    left: StateNodeIndex;
+    right: StateNodeIndex;
+    onRight: boolean;
+  };
+  export type PairState = {
+    left: StateNodeIndex;
+    right: StateNodeIndex;
+  };
+  export type StateNode =
+  /** Counter-based state (e.g. periodic, exponential, fibonacci). */
+  {
+    tag: 'counter'
+    val: number
+  } |
+  /** Terminal state — policy has given up. */
+  {
+    tag: 'terminal'
+  } |
+  /** Wrapper state delegating to an inner policy state. */
+  {
+    tag: 'wrapper'
+    val: StateNodeIndex
+  } |
+  /** Count-box state with attempt tracking. */
+  {
+    tag: 'count-box'
+    val: CountBoxState
+  } |
+  /** And-then sequential composition state. */
+  {
+    tag: 'and-then'
+    val: AndThenState
+  } |
+  /** Pair state for union/intersect composition. */
+  {
+    tag: 'pair'
+    val: PairState
+  };
+  /**
+   * Persistent state of a retry policy across retry attempts.
+   * Root is nodes[0]. Children referenced by state-node-index.
+   */
+  export type RetryPolicyState = {
+    nodes: StateNode[];
+  };
+  export type EnvironmentPluginGrantId = {
+    uuid: Uuid;
+  };
+  export type WrappedFunctionType =
+  /**
+   * The side-effect reads from the agent's local state (for example local file system,
+   * random generator, etc.)
+   */
+  {
+    tag: 'read-local'
+  } |
+  /** The side-effect writes to the agent's local state (for example local file system) */
+  {
+    tag: 'write-local'
+  } |
+  /** The side-effect reads from external state (for example a key-value store) */
+  {
+    tag: 'read-remote'
+  } |
+  /** The side-effect manipulates external state (for example an RPC call) */
+  {
+    tag: 'write-remote'
+  } |
+  /**
+   * The side-effect manipulates external state through multiple invoked functions (for example
+   * a HTTP request where reading the response involves multiple host function calls)
+   * On the first invocation of the batch, the parameter should be `None` - this triggers
+   * writing a scope `Start` entry in the oplog. Followup invocations should contain this
+   * entry's index as the parameter so their host-call `Start` entries can point back to the
+   * scope. In batched remote writes it is the caller's responsibility to manually write the
+   * matching scope `End` entry (using `end_function`) when the operation is completed.
+   */
+  {
+    tag: 'write-remote-batched'
+    val: OplogIndex | undefined
+  } |
+  {
+    tag: 'write-remote-transaction'
+    val: OplogIndex | undefined
+  };
+  export type PluginInstallationDescription = {
+    environmentPluginGrantId: EnvironmentPluginGrantId;
+    pluginPriority: number;
+    pluginName: string;
+    pluginVersion: string;
+    parameters: [string, string][];
+  };
+  export type RawLocalAgentConfigEntry = {
+    path: string[];
+    value: SchemaValueTree;
+  };
+  export type LocalAgentConfigEntry = {
+    path: string[];
+    value: TypedSchemaValue;
+  };
+  export type CreateParameters = {
+    timestamp: Datetime;
+    agentId: AgentId;
+    agentMode: AgentMode;
+    componentRevision: ComponentRevision;
+    env: [string, string][];
+    createdBy: AccountId;
+    environmentId: EnvironmentId;
+    parent?: AgentId;
+    componentSize: bigint;
+    initialTotalLinearMemorySize: bigint;
+    initialActivePlugins: PluginInstallationDescription[];
+    localAgentConfig: LocalAgentConfigEntry[];
+    originalPhantomId?: Uuid;
+    instanceId: Uuid;
+  };
+  /**
+   * Parameters of an enriched durable host-call `start` entry.
+   * The recorded `request` payload of every durable host call — including
+   * durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+   * and blobstore operations — surfaces as a generic `typed-schema-value`
+   * tree, identified by `function-name`; there are no per-interface named WIT
+   * variants for the payload shapes.
+   */
+  export type StartParameters = {
+    timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
+    functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
+    request?: TypedSchemaValue;
+    durableFunctionType: WrappedFunctionType;
+  };
+  /**
+   * Parameters of an enriched durable host-call `end` entry. Like the
+   * `start` `request`, the recorded `response` payload surfaces as a generic
+   * `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type EndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: TypedSchemaValue;
+    forcedCommit: boolean;
+  };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: TypedSchemaValue;
+  };
+  /**
+   * Parameters of a `completion-discarded` entry: the durable host call started at
+   * `start-index` completed successfully (its `end` entry was persisted) but the response
+   * was never delivered to the agent, because the agent dropped the call's completion
+   * future after the `end` was already recorded.
+   */
+  export type CompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  /**
+   * Parameters of a `completion-delivered` entry: the successful result of the durable host
+   * call started at `start-index` was handed to the agent at this point in the recorded
+   * execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+   * agent until this marker and prevents later oplog entries from advancing until that handoff.
+   */
+  export type CompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  export type LocalSpanData = {
+    spanId: SpanId;
+    start: Datetime;
+    parent?: SpanId;
+    /** Optionally an index of the invocation-context field within agent-invocation */
+    linkedContext?: bigint;
+    attributes: Attribute[];
+    inherited: boolean;
+  };
+  export type ExternalSpanData = {
+    spanId: SpanId;
+  };
+  export type SpanData =
+  {
+    tag: 'local-span'
+    val: LocalSpanData
+  } |
+  {
+    tag: 'external-span'
+    val: ExternalSpanData
+  };
+  export type OplogErrorKind = "invocation" | "recovery";
+  export type ErrorParameters = {
+    timestamp: Datetime;
+    kind: OplogErrorKind;
+    error: string;
+    retryFrom: OplogIndex;
+    insideAtomicRegion: boolean;
+    /** Persistent retry policy state, if a semantic retry policy is active. */
+    retryPolicyState?: RetryPolicyState;
+  };
+  export type OplogRegion = {
+    start: OplogIndex;
+    end: OplogIndex;
+  };
+  export type JumpParameters = {
+    timestamp: Datetime;
+    jump: OplogRegion;
+  };
+  /**
+   * Parameters for a set-retry-policy oplog entry.
+   */
+  export type SetRetryPolicyParameters = {
+    timestamp: Datetime;
+    policy: NamedRetryPolicy;
+  };
+  /**
+   * Parameters for a remove-retry-policy oplog entry.
+   */
+  export type RemoveRetryPolicyParameters = {
+    timestamp: Datetime;
+    name: string;
+  };
+  export type QueuedCardEventInstall = {
+    cardId: CardId;
+  };
+  export type QueuedCardEventRevoke = {
+    cardId: CardId;
+  };
+  export type QueuedCardEvent =
+  {
+    tag: 'install'
+    val: QueuedCardEventInstall
+  } |
+  {
+    tag: 'revoke'
+    val: QueuedCardEventRevoke
+  };
+  /**
+   * Parameters for a card-event-queued oplog entry.
+   */
+  export type CardEventQueuedParameters = {
+    timestamp: Datetime;
+    event: QueuedCardEvent;
+  };
+  /**
+   * Parameters for a card-installed oplog entry.
+   */
+  export type CardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Raw parameters for a card-installed oplog entry.
+   */
+  export type RawCardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    card: Uint8Array;
+  };
+  export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
+  /**
+   * Parameters for a card-install-failed oplog entry.
+   */
+  export type CardInstallFailedParameters = {
+    timestamp: Datetime;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+    reason: CardInstallFailure;
+  };
+  /**
+   * Parameters for a card-revoked oplog entry.
+   */
+  export type CardRevokedParameters = {
+    timestamp: Datetime;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Parameters for a card-expired oplog entry.
+   */
+  export type CardExpiredParameters = {
+    timestamp: Datetime;
+    cardId: CardId;
+  };
+  /**
+   * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
+   * The kind determines how the entry's payload is interpreted.
+   */
+  export type HostStreamKind = "p3-http-request-body";
+  /**
+   * Parameters for a host-stream-frame oplog entry: a durably recorded frame of a
+   * host-owned stream (e.g. the outgoing request body of a P3 HTTP client send),
+   * attached to the durable host call identified by its start entry's index.
+   */
+  export type HostStreamFrameParameters = {
+    timestamp: Datetime;
+    parentStartIndex: OplogIndex;
+    kind: HostStreamKind;
+    payload: TypedSchemaValue;
+  };
+  /**
+   * A public durable-stream producer record rendered as a typed schema value.
+   */
+  export type DurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: TypedSchemaValue;
+  };
+  export type EndAtomicRegionParameters = {
+    timestamp: Datetime;
+    beginIndex: OplogIndex;
+  };
+  export type AgentInitializationParameters = {
+    idempotencyKey: string;
+    constructorParameters: TypedSchemaValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type AgentMethodInvocationParameters = {
+    idempotencyKey: string;
+    methodName: string;
+    functionInput: TypedSchemaValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type ProcessOplogEntriesParameters = {
+    idempotencyKey: string;
+  };
+  export type ManualUpdateParameters = {
+    targetRevision: ComponentRevision;
+  };
+  export type AgentInvocationOutputParameters = {
+    output: TypedSchemaValue;
+  };
+  export type FallibleResultParameters = {
+    error?: string;
+  };
+  export type UpdateDescription =
+  /** Automatic update by replaying the oplog on the new version */
+  {
+    tag: 'auto-update'
+  } |
+  /** Custom update by loading a given snapshot on the new version */
+  {
+    tag: 'snapshot-based'
+    val: Snapshot
+  };
+  export type PendingUpdateParameters = {
+    timestamp: Datetime;
+    targetRevision: ComponentRevision;
+    description: UpdateDescription;
+  };
+  export type SuccessfulUpdateParameters = {
+    timestamp: Datetime;
+    targetRevision: ComponentRevision;
+    newComponentSize: bigint;
+    newActivePlugins: PluginInstallationDescription[];
+  };
+  export type FailedUpdateParameters = {
+    timestamp: Datetime;
+    targetRevision: ComponentRevision;
+    details?: string;
+  };
+  export type GrowMemoryParameters = {
+    timestamp: Datetime;
+    delta: bigint;
+  };
+  export type AgentResourceId = bigint;
+  export type CreateResourceParameters = {
+    timestamp: Datetime;
+    id: AgentResourceId;
+    name: string;
+    owner: string;
+  };
+  export type DropResourceParameters = {
+    timestamp: Datetime;
+    id: AgentResourceId;
+    name: string;
+    owner: string;
+  };
+  export type LogLevel = "stdout" | "stderr" | "trace" | "debug" | "info" | "warn" | "error" | "critical";
+  export type LogParameters = {
+    timestamp: Datetime;
+    level: LogLevel;
+    context: string;
+    message: string;
+  };
+  export type ActivatePluginParameters = {
+    timestamp: Datetime;
+    plugin: PluginInstallationDescription;
+  };
+  export type DeactivatePluginParameters = {
+    timestamp: Datetime;
+    plugin: PluginInstallationDescription;
+  };
+  export type RevertParameters = {
+    timestamp: Datetime;
+    droppedRegion: OplogRegion;
+  };
+  export type CancelPendingInvocationParameters = {
+    timestamp: Datetime;
+    idempotencyKey: string;
+  };
+  export type StartSpanParameters = {
+    timestamp: Datetime;
+    spanId: SpanId;
+    parent?: SpanId;
+    linkedContextId?: SpanId;
+    attributes: Attribute[];
+  };
+  export type FinishSpanParameters = {
+    timestamp: Datetime;
+    spanId: SpanId;
+  };
+  export type SetSpanAttributeParameters = {
+    timestamp: Datetime;
+    spanId: SpanId;
+    key: string;
+    value: AttributeValue;
+  };
+  export type BeginRemoteTransactionParameters = {
+    timestamp: Datetime;
+    transactionId: string;
+  };
+  export type RemoteTransactionParameters = {
+    timestamp: Datetime;
+    beginIndex: OplogIndex;
+  };
+  export type SnapshotData = {
+    data: Uint8Array;
+    mimeType: string;
+  };
+  export type LoadSnapshotParameters = {
+    snapshot: SnapshotData;
+  };
+  export type AgentInvocation =
+  {
+    tag: 'agent-initialization'
+    val: AgentInitializationParameters
+  } |
+  {
+    tag: 'agent-method-invocation'
+    val: AgentMethodInvocationParameters
+  } |
+  {
+    tag: 'save-snapshot'
+  } |
+  {
+    tag: 'load-snapshot'
+    val: LoadSnapshotParameters
+  } |
+  {
+    tag: 'process-oplog-entries'
+    val: ProcessOplogEntriesParameters
+  } |
+  {
+    tag: 'manual-update'
+    val: ManualUpdateParameters
+  };
+  export type AgentInvocationStartedParameters = {
+    timestamp: Datetime;
+    invocation: AgentInvocation;
+  };
+  export type SaveSnapshotResultParameters = {
+    snapshot: SnapshotData;
+  };
+  export type AgentInvocationResult =
+  {
+    tag: 'agent-initialization'
+    val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'agent-method'
+    val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'manual-update'
+  } |
+  {
+    tag: 'load-snapshot'
+    val: FallibleResultParameters
+  } |
+  {
+    tag: 'save-snapshot'
+    val: SaveSnapshotResultParameters
+  } |
+  {
+    tag: 'process-oplog-entries'
+    val: FallibleResultParameters
+  };
+  export type AgentInvocationFinishedParameters = {
+    timestamp: Datetime;
+    result: AgentInvocationResult;
+    methodName?: string;
+    consumedFuel: bigint;
+    componentRevision: bigint;
+  };
+  export type PendingAgentInvocationParameters = {
+    timestamp: Datetime;
+    invocation: AgentInvocation;
+  };
+  export type SnapshotParameters = {
+    timestamp: Datetime;
+    data: SnapshotData;
+  };
+  export type OplogProcessorCheckpointParameters = {
+    timestamp: Datetime;
+    plugin: PluginInstallationDescription;
+    targetAgentId: AgentId;
+    confirmedUpTo: OplogIndex;
+    sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
+  };
+  export type Timestamp = {
+    timestamp: Datetime;
+  };
+  export type OplogExternalPayload = {
+    payloadId: Uuid;
+    md5Hash: Uint8Array;
+  };
+  /**
+   * Opaque oplog payload, which can either be serialized inline or stored externally
+   */
+  export type OplogPayload =
+  {
+    tag: 'inline'
+    val: Uint8Array
+  } |
+  {
+    tag: 'external'
+    val: OplogExternalPayload
+  };
+  export type AgentTerminatedByQuotaError = {
+    environmentId: EnvironmentId;
+    resourceName: string;
+  };
+  export type EphemeralSleepTooLong = {
+    requestedNanos: bigint;
+    maxNanos: bigint;
+  };
+  export type EphemeralFuelExhausted = {
+    overdraftLimit: bigint;
+  };
+  export type EphemeralCannotSuspend = {
+    reason: string;
+  };
+  export type ReadOnlyViolation = {
+    method: string;
+    hostFunction: string;
+  };
+  /**
+   * Describes the error that occurred in the agent
+   */
+  export type WorkerError =
+  {
+    tag: 'unknown'
+    val: string
+  } |
+  {
+    tag: 'invalid-request'
+    val: string
+  } |
+  {
+    tag: 'stack-overflow'
+  } |
+  {
+    tag: 'out-of-memory'
+  } |
+  {
+    tag: 'exceeded-memory-limit'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
+  } |
+  {
+    tag: 'deterministic-trap'
+    val: string
+  } |
+  {
+    tag: 'transient-error'
+    val: string
+  } |
+  {
+    tag: 'permanent-error'
+    val: string
+  } |
+  {
+    tag: 'exceeded-table-limit'
+  } |
+  {
+    tag: 'exceeded-http-call-limit'
+  } |
+  {
+    tag: 'exceeded-rpc-call-limit'
+  } |
+  {
+    tag: 'agent-terminated-by-quota'
+    val: AgentTerminatedByQuotaError
+  } |
+  {
+    tag: 'ephemeral-sleep-too-long'
+    val: EphemeralSleepTooLong
+  } |
+  {
+    tag: 'ephemeral-fuel-exhausted'
+    val: EphemeralFuelExhausted
+  } |
+  {
+    tag: 'ephemeral-cannot-suspend'
+    val: EphemeralCannotSuspend
+  } |
+  {
+    tag: 'read-only-violation'
+    val: ReadOnlyViolation
+  };
+  export type RawCreateParameters = {
+    timestamp: Datetime;
+    agentId: AgentId;
+    agentMode: AgentMode;
+    componentRevision: ComponentRevision;
+    env: [string, string][];
+    environmentId: EnvironmentId;
+    createdBy: AccountId;
+    parent?: AgentId;
+    componentSize: bigint;
+    initialTotalLinearMemorySize: bigint;
+    initialActivePlugins: EnvironmentPluginGrantId[];
+    localAgentConfig: RawLocalAgentConfigEntry[];
+    originalPhantomId?: Uuid;
+    instanceId: Uuid;
+  };
+  export type RawStartParameters = {
+    timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
+    functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
+    request?: OplogPayload;
+    durableFunctionType: WrappedFunctionType;
+  };
+  export type RawEndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: OplogPayload;
+    forcedCommit: boolean;
+  };
+  export type RawCancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: OplogPayload;
+  };
+  export type RawCompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  export type RawCompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  /**
+   * Parameters for a host-stream-frame oplog entry, with the frame payload in raw
+   * (possibly externally stored) form.
+   */
+  export type RawHostStreamFrameParameters = {
+    timestamp: Datetime;
+    parentStartIndex: OplogIndex;
+    kind: HostStreamKind;
+    payload: OplogPayload;
+  };
+  /**
+   * A raw durable-stream producer record, stored inline or in external payload storage.
+   */
+  export type RawDurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: OplogPayload;
+  };
+  export type RawAgentInvocationStartedParameters = {
+    timestamp: Datetime;
+    idempotencyKey: string;
+    payload: OplogPayload;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[];
+  };
+  export type RawAgentInvocationFinishedParameters = {
+    timestamp: Datetime;
+    result: OplogPayload;
+    methodName?: string;
+    consumedFuel: bigint;
+    componentRevision: bigint;
+  };
+  export type RawErrorParameters = {
+    timestamp: Datetime;
+    kind: OplogErrorKind;
+    error: WorkerError;
+    retryFrom: OplogIndex;
+    insideAtomicRegion: boolean;
+    /** Persistent retry policy state, if a semantic retry policy is active. */
+    retryPolicyState?: RetryPolicyState;
+  };
+  export type RawPendingAgentInvocationParameters = {
+    timestamp: Datetime;
+    idempotencyKey: string;
+    payload: OplogPayload;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[];
+  };
+  export type RawSnapshotBasedUpdate = {
+    targetRevision: ComponentRevision;
+    payload: OplogPayload;
+    mimeType: string;
+  };
+  /**
+   * Raw update description used in oplog entries
+   */
+  export type RawUpdateDescription =
+  /** Automatic update by replaying the oplog on the new version */
+  {
+    tag: 'automatic'
+    val: ComponentRevision
+  } |
+  /** Custom update by loading a given snapshot on the new version */
+  {
+    tag: 'snapshot-based'
+    val: RawSnapshotBasedUpdate
+  };
+  export type RawPendingUpdateParameters = {
+    timestamp: Datetime;
+    description: RawUpdateDescription;
+  };
+  export type RawSuccessfulUpdateParameters = {
+    timestamp: Datetime;
+    targetRevision: ComponentRevision;
+    newComponentSize: bigint;
+    newActivePlugins: EnvironmentPluginGrantId[];
+  };
+  export type ResourceTypeId = {
+    name: string;
+    owner: string;
+  };
+  export type RawCreateResourceParameters = {
+    timestamp: Datetime;
+    id: AgentResourceId;
+    resourceTypeId: ResourceTypeId;
+  };
+  export type RawDropResourceParameters = {
+    timestamp: Datetime;
+    id: AgentResourceId;
+    resourceTypeId: ResourceTypeId;
+  };
+  export type RawActivatePluginParameters = {
+    timestamp: Datetime;
+    pluginGrantId: EnvironmentPluginGrantId;
+  };
+  export type RawDeactivatePluginParameters = {
+    timestamp: Datetime;
+    pluginGrantId: EnvironmentPluginGrantId;
+  };
+  export type RawBeginRemoteTransactionParameters = {
+    timestamp: Datetime;
+    transactionId: string;
+    originalBeginIndex?: OplogIndex;
+  };
+  export type RawSnapshotParameters = {
+    timestamp: Datetime;
+    data: OplogPayload;
+    mimeType: string;
+  };
+  export type RawOplogProcessorCheckpointParameters = {
+    timestamp: Datetime;
+    pluginGrantId: EnvironmentPluginGrantId;
+    targetAgentId: AgentId;
+    confirmedUpTo: OplogIndex;
+    sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
+  };
+  export type OplogEntry =
+  /** The initial agent oplog entry */
+  {
+    tag: 'create'
+    val: RawCreateParameters
+  } |
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
+  {
+    tag: 'start'
+    val: RawStartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: RawEndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: RawCancelledParameters
+  } |
+  /** The agent has been invoked */
+  {
+    tag: 'agent-invocation-started'
+    val: RawAgentInvocationStartedParameters
+  } |
+  /** The agent has completed an invocation */
+  {
+    tag: 'agent-invocation-finished'
+    val: RawAgentInvocationFinishedParameters
+  } |
+  /** Agent suspended */
+  {
+    tag: 'suspend'
+    val: Timestamp
+  } |
+  /** Agent failed */
+  {
+    tag: 'error'
+    val: RawErrorParameters
+  } |
+  /** A previously failed startup or replay completed successfully. */
+  {
+    tag: 'recovery-succeeded'
+    val: Timestamp
+  } |
+  /**
+   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
+   * more predictable.
+   */
+  {
+    tag: 'no-op'
+    val: Timestamp
+  } |
+  /**
+   * The agent needs to recover up to the given target oplog index and continue running from
+   * the source oplog index from there
+   * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+   * ignore all recorded operations in between.
+   */
+  {
+    tag: 'jump'
+    val: JumpParameters
+  } |
+  /**
+   * Indicates that the agent has been interrupted at this point.
+   * Only used to recompute the agent's (cached) status, has no effect on execution.
+   */
+  {
+    tag: 'interrupted'
+    val: Timestamp
+  } |
+  /** Indicates that the agent has been exited using WASI's exit function. */
+  {
+    tag: 'exited'
+    val: Timestamp
+  } |
+  /**
+   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+   * recovery except if there is a corresponding `EndAtomicRegion` entry.
+   */
+  {
+    tag: 'begin-atomic-region'
+    val: Timestamp
+  } |
+  /**
+   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+   * compaction.
+   */
+  {
+    tag: 'end-atomic-region'
+    val: EndAtomicRegionParameters
+  } |
+  /** An invocation request arrived while the agent was busy */
+  {
+    tag: 'pending-agent-invocation'
+    val: RawPendingAgentInvocationParameters
+  } |
+  /** An update request arrived and will be applied as soon the agent restarts */
+  {
+    tag: 'pending-update'
+    val: RawPendingUpdateParameters
+  } |
+  /** An update was successfully applied */
+  {
+    tag: 'successful-update'
+    val: RawSuccessfulUpdateParameters
+  } |
+  /** An update failed to be applied */
+  {
+    tag: 'failed-update'
+    val: FailedUpdateParameters
+  } |
+  /** Increased total linear memory size */
+  {
+    tag: 'grow-memory'
+    val: GrowMemoryParameters
+  } |
+  /** Created a resource instance */
+  {
+    tag: 'create-resource'
+    val: RawCreateResourceParameters
+  } |
+  /** Dropped a resource instance */
+  {
+    tag: 'drop-resource'
+    val: RawDropResourceParameters
+  } |
+  /** The agent emitted a log message */
+  {
+    tag: 'log'
+    val: LogParameters
+  } |
+  /** The agent has been restarted, forgetting all its history */
+  {
+    tag: 'restart'
+    val: Timestamp
+  } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
+    val: Timestamp
+  } |
+  /** Activates a plugin */
+  {
+    tag: 'activate-plugin'
+    val: RawActivatePluginParameters
+  } |
+  /** Deactivates a plugin */
+  {
+    tag: 'deactivate-plugin'
+    val: RawDeactivatePluginParameters
+  } |
+  /** Revert an agent to a previous state */
+  {
+    tag: 'revert'
+    val: RevertParameters
+  } |
+  /** Cancel a pending invocation */
+  {
+    tag: 'cancel-pending-invocation'
+    val: CancelPendingInvocationParameters
+  } |
+  /** Start a new span in the invocation context */
+  {
+    tag: 'start-span'
+    val: StartSpanParameters
+  } |
+  /** Finish an open span in the invocation context */
+  {
+    tag: 'finish-span'
+    val: FinishSpanParameters
+  } |
+  /** Set an attribute on an open span in the invocation context */
+  {
+    tag: 'set-span-attribute'
+    val: SetSpanAttributeParameters
+  } |
+  /** Begins a transaction operation */
+  {
+    tag: 'begin-remote-transaction'
+    val: RawBeginRemoteTransactionParameters
+  } |
+  /** Pre-Commit of the transaction, indicating that the transaction will be committed */
+  {
+    tag: 'pre-commit-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Pre-Rollback of the transaction, indicating that the transaction will be rolled back */
+  {
+    tag: 'pre-rollback-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Committed transaction operation, indicating that the transaction was committed */
+  {
+    tag: 'committed-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Rolled back transaction operation, indicating that the transaction was rolled back */
+  {
+    tag: 'rolled-back-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** A snapshot of the agent's state */
+  {
+    tag: 'snapshot'
+    val: RawSnapshotParameters
+  } |
+  /** Checkpoint for oplog processor plugin delivery tracking */
+  {
+    tag: 'oplog-processor-checkpoint'
+    val: RawOplogProcessorCheckpointParameters
+  } |
+  /** Sets or overwrites a named retry policy */
+  {
+    tag: 'set-retry-policy'
+    val: SetRetryPolicyParameters
+  } |
+  /** Removes a named retry policy by name */
+  {
+    tag: 'remove-retry-policy'
+    val: RemoveRetryPolicyParameters
+  } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: RawCardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
+  } |
+  /**
+   * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+   * attached to the durable host call identified by its start entry's index
+   */
+  {
+    tag: 'host-stream-frame'
+    val: RawHostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: RawDurableStreamRecordParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: RawCompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: RawCompletionDeliveredParameters
+  };
+  export type PublicOplogEntry =
+  /** The initial agent oplog entry */
+  {
+    tag: 'create'
+    val: CreateParameters
+  } |
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
+  {
+    tag: 'start'
+    val: StartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: EndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: CancelledParameters
+  } |
+  /** The agent has been invoked */
+  {
+    tag: 'agent-invocation-started'
+    val: AgentInvocationStartedParameters
+  } |
+  /** The agent has completed an invocation */
+  {
+    tag: 'agent-invocation-finished'
+    val: AgentInvocationFinishedParameters
+  } |
+  /** Agent suspended */
+  {
+    tag: 'suspend'
+    val: Timestamp
+  } |
+  /** Agent failed */
+  {
+    tag: 'error'
+    val: ErrorParameters
+  } |
+  /** A previously failed startup or replay completed successfully. */
+  {
+    tag: 'recovery-succeeded'
+    val: Timestamp
+  } |
+  /**
+   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
+   * more predictable.
+   */
+  {
+    tag: 'no-op'
+    val: Timestamp
+  } |
+  /**
+   * The agent needs to recover up to the given target oplog index and continue running from
+   * the source oplog index from there
+   * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+   * ignore all recorded operations in between.
+   */
+  {
+    tag: 'jump'
+    val: JumpParameters
+  } |
+  /**
+   * Indicates that the agent has been interrupted at this point.
+   * Only used to recompute the agent's (cached) status, has no effect on execution.
+   */
+  {
+    tag: 'interrupted'
+    val: Timestamp
+  } |
+  /** Indicates that the agent has been exited using WASI's exit function. */
+  {
+    tag: 'exited'
+    val: Timestamp
+  } |
+  /**
+   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+   * recovery except if there is a corresponding `EndAtomicRegion` entry.
+   */
+  {
+    tag: 'begin-atomic-region'
+    val: Timestamp
+  } |
+  /**
+   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+   * compaction.
+   */
+  {
+    tag: 'end-atomic-region'
+    val: EndAtomicRegionParameters
+  } |
+  /** An invocation request arrived while the agent was busy */
+  {
+    tag: 'pending-agent-invocation'
+    val: PendingAgentInvocationParameters
+  } |
+  /** An update request arrived and will be applied as soon the agent restarts */
+  {
+    tag: 'pending-update'
+    val: PendingUpdateParameters
+  } |
+  /** An update was successfully applied */
+  {
+    tag: 'successful-update'
+    val: SuccessfulUpdateParameters
+  } |
+  /** An update failed to be applied */
+  {
+    tag: 'failed-update'
+    val: FailedUpdateParameters
+  } |
+  /** Increased total linear memory size */
+  {
+    tag: 'grow-memory'
+    val: GrowMemoryParameters
+  } |
+  /** Created a resource instance */
+  {
+    tag: 'create-resource'
+    val: CreateResourceParameters
+  } |
+  /** Dropped a resource instance */
+  {
+    tag: 'drop-resource'
+    val: DropResourceParameters
+  } |
+  /** The agent emitted a log message */
+  {
+    tag: 'log'
+    val: LogParameters
+  } |
+  /** The agent's has been restarted, forgetting all its history */
+  {
+    tag: 'restart'
+    val: Timestamp
+  } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
+    val: Timestamp
+  } |
+  /** Activates a plugin */
+  {
+    tag: 'activate-plugin'
+    val: ActivatePluginParameters
+  } |
+  /** Deactivates a plugin */
+  {
+    tag: 'deactivate-plugin'
+    val: DeactivatePluginParameters
+  } |
+  /** Revert an agent to a previous state */
+  {
+    tag: 'revert'
+    val: RevertParameters
+  } |
+  /** Cancel a pending invocation */
+  {
+    tag: 'cancel-pending-invocation'
+    val: CancelPendingInvocationParameters
+  } |
+  /** Start a new span in the invocation context */
+  {
+    tag: 'start-span'
+    val: StartSpanParameters
+  } |
+  /** Finish an open span in the invocation context */
+  {
+    tag: 'finish-span'
+    val: FinishSpanParameters
+  } |
+  /** Set an attribute on an open span in the invocation context */
+  {
+    tag: 'set-span-attribute'
+    val: SetSpanAttributeParameters
+  } |
+  /** Begins a transaction operation */
+  {
+    tag: 'begin-remote-transaction'
+    val: BeginRemoteTransactionParameters
+  } |
+  /** Pre-Commit of the transaction, indicating that the transaction will be committed */
+  {
+    tag: 'pre-commit-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Pre-Rollback of the transaction, indicating that the transaction will be rolled back */
+  {
+    tag: 'pre-rollback-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Committed transaction operation, indicating that the transaction was committed */
+  {
+    tag: 'committed-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** Rolled back transaction operation, indicating that the transaction was rolled back */
+  {
+    tag: 'rolled-back-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  /** A snapshot of the worker's state */
+  {
+    tag: 'snapshot'
+    val: SnapshotParameters
+  } |
+  /** Checkpoint for oplog processor plugin delivery tracking */
+  {
+    tag: 'oplog-processor-checkpoint'
+    val: OplogProcessorCheckpointParameters
+  } |
+  /** Sets or overwrites a named retry policy */
+  {
+    tag: 'set-retry-policy'
+    val: SetRetryPolicyParameters
+  } |
+  /** Removes a named retry policy by name */
+  {
+    tag: 'remove-retry-policy'
+    val: RemoveRetryPolicyParameters
+  } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: CardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
+  } |
+  /**
+   * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+   * attached to the durable host call identified by its start entry's index
+   */
+  {
+    tag: 'host-stream-frame'
+    val: HostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: DurableStreamRecordParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: CompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: CompletionDeliveredParameters
+  };
+  export type OplogReadError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
+  };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
+}

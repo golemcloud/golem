@@ -35,8 +35,8 @@ use golem_common::schema::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
-    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
-    QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
+    CorsPreflightBehaviour, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment,
+    PathSegmentType, QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
 use http::Method;
@@ -276,6 +276,8 @@ fn call_agent_route(
         path,
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
+            route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+            base_path_variables: 0,
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
@@ -308,6 +310,80 @@ fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
     HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
         .expect("spec generation succeeds")
         .0
+}
+
+#[test]
+fn durable_stream_routes_do_not_break_rest_openapi() {
+    let rest = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "rest".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let mut stream = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "stream".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::string()))),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::string(),
+            )))),
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = stream.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut shared = call_agent_route(
+        Method::PUT,
+        rest.path.clone(),
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = shared.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut routes = vec![rest, stream, shared];
+    for path in [routes[0].path.clone(), routes[1].path.clone()] {
+        let mut preflight = call_agent_route(
+            Method::OPTIONS,
+            path,
+            RequestBodySchema::Unused,
+            vec![],
+            CompiledOutputSchema {
+                graph: SchemaGraph::empty(),
+                output_schema: OutputSchema::Unit,
+            },
+            None,
+        );
+        preflight.behavior = RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+            method_policies: vec![],
+        });
+        routes.push(preflight);
+    }
+    let spec = spec_for(routes);
+    assert!(spec["paths"]["/rest"]["get"].is_object());
+    assert!(spec["paths"]["/rest"]["options"].is_object());
+    assert!(spec["paths"]["/rest"]["put"].is_null());
+    assert!(spec["paths"]["/stream"].is_null());
 }
 
 /// Build the OpenAPI document for a single route and return its operation
@@ -999,9 +1075,9 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
 // --------------------------------------------------------------------------
 
 #[test]
-fn named_type_shared_across_routes_appears_once_in_components() {
+fn named_type_shared_across_routes_appears_once_per_direction_in_components() {
     // A named record used as both a request body and a response should appear
-    // exactly once in components/schemas, referenced by `$ref`.
+    // once per direction in components/schemas, referenced by `$ref`.
     let named = SchemaGraph {
         defs: vec![SchemaTypeDef {
             id: TypeId("User".to_string()),
@@ -1043,8 +1119,8 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         .collect();
     assert_eq!(
         user_keys.len(),
-        1,
-        "named type should appear exactly once, got keys: {:?}",
+        2,
+        "named type should appear once per direction, got keys: {:?}",
         schemas.keys().collect::<Vec<_>>()
     );
 
@@ -1055,13 +1131,19 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         body_schema["$ref"]
             .as_str()
             .unwrap()
-            .starts_with("#/components/schemas/"),
+            .starts_with("#/components/schemas/Input_"),
         "request body should reference the component, got: {body_schema}"
     );
-    // The response on the other route references the same component.
+    // The response references the output component for the same named type.
     let response_schema =
         &spec["paths"]["/b"]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
-    assert_eq!(response_schema["$ref"], body_schema["$ref"]);
+    assert_eq!(
+        response_schema["$ref"],
+        body_schema["$ref"]
+            .as_str()
+            .unwrap()
+            .replacen("/Input_", "/Output_", 1)
+    );
 }
 
 #[test]

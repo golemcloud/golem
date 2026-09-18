@@ -18,10 +18,8 @@
 // A `quota-token` is an unforgeable, affine capability: a guest may hold and
 // transfer it but must never extract the raw owned handle, re-wrap it, or
 // duplicate it — doing so would let it forge or double-spend the capability.
-// The privileged operations (`GuestQuotaTokenHandle.fromRaw`,
-// `QuotaToken._toSchemaValue` / `_fromSchemaValue` / `_fromHandle`) all require
-// this key as a witness, so only SDK-internal modules that can import it may
-// call them.
+// The privileged holder and bridge conversion functions all require this key
+// as a witness, so only SDK-internal modules that can import it may call them.
 //
 // This module is intentionally NOT re-exported from the package's public entry
 // point (`src/index.ts`) nor from the `internal/schema-model` barrel, so guest

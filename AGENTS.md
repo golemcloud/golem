@@ -156,6 +156,7 @@ Load these skills for guided workflows on complex tasks:
 | `adding-dependencies` | Adding or updating crate dependencies (covers workspace dependency management, versioning, features) |
 | `testing` | Running and debugging tests (covers test filtering, debugging failures, test components, timeouts) |
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
+| `understanding-durable-execution` | Changing, reviewing, or debugging worker executor replay, oplog, durable host calls, RPC exactly-once, streaming invocations, tool/entity invocations, snapshots, or worker lifecycle |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
@@ -190,6 +191,17 @@ Validate the smallest dependency and behavior scope that fully covers the change
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
 Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
+
+### Deployment diff model versioning
+
+Changes to the deployment diff representation or hashing under
+`golem-common/src/model/diff/` or `golem-common/src/base_model/diff/` require bumping
+`DIFF_MODEL_VERSION` in `golem-common/src/base_model/diff/mod.rs`. Generate a new
+`golem-common/tests/goldenfiles/diff_model_fingerprint_v<N>.txt` with
+`diff_model_version_matches_diff_module_fingerprint`, then rerun that test without golden-file
+updates enabled. Do not overwrite an existing version's fingerprint to make the test pass;
+preserve historical fingerprints. This version identifies the CLI/server diff contract and does
+not require compatibility parsing or migration support.
 
 ## Code Style
 
