@@ -42,6 +42,7 @@ pub mod invocation_context;
 pub mod json;
 pub mod login;
 pub mod mcp_deployment;
+pub mod mcp_import;
 pub mod oplog;
 pub mod optional_field_update;
 pub mod path;

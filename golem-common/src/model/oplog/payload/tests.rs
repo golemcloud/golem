@@ -18,12 +18,16 @@ use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
 use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::deployment::DeploymentRevision;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::host_functions::{
     GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
     GolemPermissionsInstallTransfer, HostFunctionName,
+};
+use crate::model::oplog::payload::types::{
+    SerializableDiscoveredTools, SerializableMcpImportDiscovery, SerializableToolDiscoverySnapshot,
 };
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
@@ -84,7 +88,6 @@ use proptest::strategy::LazyJust;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Add;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
@@ -1135,19 +1138,92 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
 }
 
 #[test]
+fn mcp_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::{
+        HostRequestMcpToolCall, HostRequestMcpToolPresence, HostResponseMcpToolCall,
+        HostResponseMcpToolPresence,
+    };
+    let request = HostRequestMcpToolCall {
+        input: "asymmetric tool input"
+            .to_string()
+            .into_typed_schema_value()
+            .unwrap(),
+    };
+    for result in [
+        Ok(br#"{"Ok":{"structuredContent":[3,7],"content":[]}}"#.to_vec()),
+        Err(SerializableToolRpcError::Cancelled),
+        Err(SerializableToolRpcError::RemoteInternalError(
+            "reauthorization required".into(),
+        )),
+    ] {
+        let response = HostResponseMcpToolCall { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response,
+        );
+    }
+    let request = HostRequestMcpToolPresence {
+        upstream_tool_name: "Exact_Upstream.Name".into(),
+    };
+    for result in [
+        Ok(true),
+        Ok(false),
+        Err(SerializableToolRpcError::Cancelled),
+    ] {
+        let response = HostResponseMcpToolPresence { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response,
+        );
+    }
+}
+
+#[test]
 fn tool_discovery_host_payload_pairs_roundtrip() {
-    let tool = Arc::new(discovered_tool("grep"));
+    let tool = discovered_tool("dynamic-grep");
+    let revision = DeploymentRevision::try_from(17_u64).unwrap();
+    let present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: vec![
+            SerializableMcpImportDiscovery {
+                import_index: 0,
+                tools: SerializableDiscoveredTools::default(),
+                exclusions: vec![("invalid".into(), "unsupported schema".into())],
+            },
+            SerializableMcpImportDiscovery {
+                import_index: 1,
+                tools: SerializableDiscoveredTools(vec![tool.clone()]),
+                exclusions: Vec::new(),
+            },
+        ],
+    };
+    let absent = SerializableToolDiscoverySnapshot {
+        deployment_revision: None,
+        dynamic_tools: Vec::new(),
+    };
+    let empty_present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: Vec::new(),
+    };
 
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
         HostRequestNoInput {},
         HostResponseGolemToolTools {
-            result: Ok(vec![tool.clone()]),
+            result: Ok(present.clone()),
         },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
         HostRequestNoInput {},
         HostResponseGolemToolTools {
-            result: Ok(vec![tool.clone()]),
+            result: Ok(empty_present.clone()),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
@@ -1167,7 +1243,7 @@ fn tool_discovery_host_payload_pairs_roundtrip() {
             name: "grep".to_string(),
         },
         HostResponseGolemToolTool {
-            result: Ok(Some(tool.clone())),
+            result: Ok(present.clone()),
         },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
@@ -1175,20 +1251,22 @@ fn tool_discovery_host_payload_pairs_roundtrip() {
             name: "grep".to_string(),
         },
         HostResponseGolemToolTool {
-            result: Ok(Some(tool)),
+            result: Ok(present),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {
             name: "missing".to_string(),
         },
-        HostResponseGolemToolTool { result: Ok(None) },
+        HostResponseGolemToolTool {
+            result: Ok(absent.clone()),
+        },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {
             name: "missing".to_string(),
         },
-        HostResponseGolemToolTool { result: Ok(None) },
+        HostResponseGolemToolTool { result: Ok(absent) },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {

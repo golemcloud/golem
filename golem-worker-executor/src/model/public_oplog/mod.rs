@@ -801,6 +801,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                     let request_value = match host_request {
                         HostRequest::EntityInvocation(request) => request.input,
+                        HostRequest::McpToolCall(request) => request.input,
                         HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
                             enrich_golem_rpc_invoke(components, inner).await,
                         )

@@ -948,11 +948,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // derived key depends on the oplog index. `begin_index()` is the durable-scope index of this
         // call; reusing it (rather than reading the live oplog index again) keeps the derived key
         // stable across an incomplete-replay re-execution, since the `Start` is reused.
-        let oplog_index = handle.begin_index();
+        // Reserve the logical position on replay too, even when the recorded result is returned.
+        let key = self.derive_idempotency_key(handle.begin_index());
 
         let result = handle
-            .run(self, async |ctx| {
-                let key = ctx.derive_idempotency_key(oplog_index);
+            .run(self, async |_| {
                 let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
                 Ok::<_, anyhow::Error>(HostResponseGolemApiIdempotencyKey { uuid })
             })

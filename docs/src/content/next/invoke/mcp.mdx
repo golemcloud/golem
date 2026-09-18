@@ -137,3 +137,114 @@ npx @modelcontextprotocol/inspector node build/index.js
 ```
 
 The inspector provides a web UI to browse available tools and resources, invoke them, and inspect the responses — useful for verifying your agent's MCP interface before connecting it to an AI model.
+
+## Importing tools from another MCP server
+
+`mcp.deployments` exposes Golem agents to external clients. In the opposite direction,
+`mcp.imports` makes an external MCP server's tools available to Golem agents through
+the ordinary tool APIs and generated tool clients.
+
+Declare imports in order for each environment:
+
+```yaml
+mcp:
+  imports:
+    local:
+      - url: https://tools.example.com/mcp
+        prefix: catalog
+        include: ["search*"]
+```
+
+Upstream names are sanitized to kebab-case before filtering. The prefix is joined
+with `-`, so `search_items` becomes `catalog-search-items`. Use either `include` or
+`exclude`, not both. Native tool declarations take precedence over imports; among
+imports, earlier entries win. Imports do not need top-level `tools` declarations.
+The optional `version` selects the MCP protocol revision, not a tool release.
+The supported import protocol is currently `2026-07-28` Streamable HTTP.
+
+### Generate typed clients
+
+Add the projected name to a component's tool dependencies, using the component's
+normal language template:
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [catalog-search-items]
+```
+
+`golem build` resolves the current manifest's imports before generating the
+consumer's tool clients. It does not use an older deployment's declarations.
+Rust, TypeScript, Effect, Scala and MoonBit use their existing tool-client APIs.
+Unavailable metadata fails client generation rather than silently generating
+stale types. A changed projection causes regeneration on the next build.
+
+The result has a `structured` field and a `content` variant. If the upstream tool
+declares `outputSchema`, `structured` has that schema's generated type. Otherwise
+it is optional JSON text. A single text, image or audio block uses stdout; its
+`content` descriptor carries the MIME type and annotations. Multiple blocks and
+resources stay ordered in `content`, without stdout. Embedded binary fields use
+the SDK's unstructured-binary type. Empty content and an empty stdout payload are
+distinct cases. Use the SDK's collection helper to consume stdout and the result
+concurrently.
+
+### Authorize an import before deployment
+
+For OAuth, reference a configured security scheme using `securityScheme` on the
+import. Alternatively, configure `auth.bearer` or `auth.basic` (`user` and
+`password`); inline authentication and `securityScheme` are mutually exclusive.
+Keep credentials out of committed manifests and use environment-variable templates
+for secret values.
+
+The calling agent needs network permission for the MCP endpoint and, when OAuth
+tokens must be refreshed, the provider's token endpoint. Discovery and refresh
+consume the environment owner's HTTP quota.
+
+OAuth-protected imports need consent before generating typed clients. The environment
+and security scheme must already exist, but the import need not be deployed:
+
+```shell
+golem api mcp-import authorize 0 --manifest
+# Open the authorization URL, then copy the full callback URL.
+golem api mcp-import complete 0 --manifest '<callback-url>'
+golem api mcp-import status 0 --manifest
+```
+
+The index is zero-based in the selected environment's import list. Keep the import
+declaration and its rendered environment variables unchanged between authorization
+and completion: consent is bound to that exact target. The CLI does not start a
+callback listener. These operations require permission to update the security
+scheme. Golem stores the grant under the environment owner's account; the provider
+identity is the one used during consent.
+
+For a deployed import, omit `--manifest` and use the revision printed by
+`authorize` when completing consent. `--manifest` and `--revision` are mutually
+exclusive. To revoke a grant, use `golem api mcp-import disconnect 0 --manifest`,
+or select a deployed revision instead. Redeploying alone does not grant consent.
+
+### Inspect and refresh deployed definitions
+
+```shell
+golem api mcp-import tools 0 --revision 42
+golem api mcp-import refresh 0 --revision 42
+```
+
+Omitting `--revision` selects the environment's current deployment. Inspection
+shows that import's projected definitions before native and earlier-import
+precedence, plus reasons for excluded definitions. Explicit refresh reports
+upstream failures; ordinary reads can retain usable last-successful metadata.
+Cache misses fetch on demand, so periodic refresh is only an optimization.
+
+Deployment attempts best-effort discovery using the operator's permissions. It
+reports excluded definitions, collisions and unavailable metadata as warnings,
+without blocking a valid deployment or dropping its import declarations. These
+warnings do not guarantee that a later agent call has the necessary permissions
+or that the upstream definitions remain unchanged.
+
+Durable invocations select imports from the deployment associated with the running
+agent and record the dynamic definition used. Completed tool calls replay their
+recorded results without contacting the MCP server or OAuth provider. An
+interrupted, incomplete call may be retried with the same derived idempotency key;
+avoiding duplicate upstream effects still requires the provider to honor that key.

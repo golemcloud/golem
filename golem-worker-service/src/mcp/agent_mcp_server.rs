@@ -23,14 +23,13 @@ use golem_common::base_model::domain_registration::Domain;
 use poem::http;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
-    model::*, service::RequestContext, task_handler, task_manager::OperationProcessor,
+    model::*, service::RequestContext,
 };
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    processor: Arc<Mutex<OperationProcessor>>,
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     tools: Arc<DashMap<String, Tool>>,
     resources: Arc<RwLock<ResourceRegistry>>,
@@ -50,7 +49,6 @@ impl GolemAgentMcpServer {
             tools: Arc::new(DashMap::new()),
             resources: Arc::new(RwLock::new(ResourceRegistry::default())),
             prompts: Arc::new(RwLock::new(PromptRegistry::default())),
-            processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
             worker_service,
@@ -219,22 +217,20 @@ pub async fn get_agent_capabilities(
 }
 
 #[allow(deprecated)]
-#[task_handler]
 impl ServerHandler for GolemAgentMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            // This is not the latest,
-            // ProtocolVersion::V_2025_06_18 is the latest, however RMCP
-            // is not widely tested with this version as per comments
-            protocol_version: ProtocolVersion::V_2025_03_26,
-            capabilities: ServerCapabilities::builder()
+        ServerConfig::new(
+            ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_resources()
                 .enable_tools()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: None,
-        }
+        )
+        .with_protocol_version(ProtocolVersion::V_2025_03_26)
+    }
+
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -251,18 +247,16 @@ impl ServerHandler for GolemAgentMcpServer {
         if let Some(tool_router) = tool_router.as_ref() {
             tracing::info!("Listing tools: {:?}", tool_router.list_all());
 
-            Ok(ListToolsResult {
-                tools: tool_router.list_all(),
-                meta: Some(Meta(object(::serde_json::Value::Object({
-                    let mut object = ::serde_json::Map::new();
-                    let _ = object.insert(
-                        ("tool_meta_key").into(),
-                        ::serde_json::to_value("tool_meta_value").unwrap(),
-                    );
-                    object
-                })))),
-                next_cursor: None,
-            })
+            let mut result = ListToolsResult::with_all_items(tool_router.list_all());
+            result.meta = Some(MetaObject(object(::serde_json::Value::Object({
+                let mut object = ::serde_json::Map::new();
+                let _ = object.insert(
+                    ("tool_meta_key").into(),
+                    ::serde_json::to_value("tool_meta_value").unwrap(),
+                );
+                object
+            }))));
+            Ok(result)
         } else {
             Err(McpError::invalid_params(
                 "tool router not initialized",
@@ -275,7 +269,7 @@ impl ServerHandler for GolemAgentMcpServer {
         &self,
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let tool_router = self.tool_router.read().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         if let Some(tool_router) = tool_router.as_ref() {
@@ -298,11 +292,7 @@ impl ServerHandler for GolemAgentMcpServer {
 
         tracing::info!("Listing {} static resources", resource_list.len());
 
-        Ok(ListResourcesResult {
-            resources: resource_list,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourcesResult::with_all_items(resource_list))
     }
 
     async fn list_resource_templates(
@@ -315,11 +305,9 @@ impl ServerHandler for GolemAgentMcpServer {
 
         tracing::info!("Listing {} resource templates", resource_templates.len());
 
-        Ok(ListResourceTemplatesResult {
-            next_cursor: None,
+        Ok(ListResourceTemplatesResult::with_all_items(
             resource_templates,
-            meta: None,
-        })
+        ))
     }
 
     async fn list_prompts(
@@ -332,23 +320,19 @@ impl ServerHandler for GolemAgentMcpServer {
 
         tracing::info!("Listing {} prompts", prompt_list.len());
 
-        Ok(ListPromptsResult {
-            prompts: prompt_list,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListPromptsResult::with_all_items(prompt_list))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         let registry = self.prompts.read().await;
 
         registry
             .get_by_name(&request.name)
-            .map(|p| p.get_prompt_result())
+            .map(|p| p.get_prompt_result().into())
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
             })
@@ -356,14 +340,15 @@ impl ServerHandler for GolemAgentMcpServer {
 
     async fn read_resource(
         &self,
-        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
+        ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let resource_registry = self.resources.read().await;
 
         if let Some(resource) = resource_registry.get_static(&uri) {
             return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
-                .await;
+                .await
+                .map(Into::into);
         }
 
         let parsed_resource_uri = McpResourceUri::parse(&uri)
@@ -378,7 +363,8 @@ impl ServerHandler for GolemAgentMcpServer {
                 &uri,
                 Some(params),
             )
-            .await;
+            .await
+            .map(Into::into);
         }
 
         Err(McpError::invalid_params(

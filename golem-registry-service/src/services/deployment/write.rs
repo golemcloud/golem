@@ -30,6 +30,7 @@ use crate::services::environment_tool_middleware_grant::{
 };
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::mcp_import::McpImportResolver;
 use crate::services::native_tool_catalog::NativeToolCatalog;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
@@ -47,6 +48,7 @@ use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
+use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::RemoteToolDeployment;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
@@ -159,6 +161,7 @@ pub struct DeploymentWriteService {
     environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
     tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
+    mcp_import_resolver: Arc<McpImportResolver>,
 }
 
 impl DeploymentWriteService {
@@ -178,6 +181,7 @@ impl DeploymentWriteService {
         environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
         tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
+        mcp_import_resolver: Arc<McpImportResolver>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -195,6 +199,7 @@ impl DeploymentWriteService {
             environment_tool_middleware_grant_service,
             tool_middleware_release_service,
             native_tool_catalog,
+            mcp_import_resolver,
         }
     }
 
@@ -216,6 +221,26 @@ impl DeploymentWriteService {
             })?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
+
+        let mcp_imports = data
+            .mcp_imports
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| {
+                import
+                    .into_parts(environment_id)
+                    .map(|(import, credential)| (index as u32, import, credential))
+                    .map_err(|reason| {
+                        DeploymentWriteError::DeploymentValidationFailed(vec![
+                            DeployValidationError::InvalidMcpImport {
+                                index: index as u32,
+                                reason,
+                            },
+                        ])
+                    })
+            })
+            .collect::<Result<Vec<(u32, McpImport, Option<McpImportCredential>)>, _>>()?;
 
         if data.current_revision
             != environment
@@ -412,6 +437,17 @@ impl DeploymentWriteService {
             })
             .collect();
 
+        for (index, import, _) in &mcp_imports {
+            if let Some(security_scheme) = &import.security_scheme
+                && !security_schemes_map.contains_key(security_scheme)
+            {
+                errors.push(DeployValidationError::McpImportSecuritySchemeNotFound {
+                    index: *index,
+                    security_scheme: security_scheme.clone(),
+                });
+            }
+        }
+
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
@@ -594,6 +630,10 @@ impl DeploymentWriteService {
             .hash_with_tools(
                 &compiled_tools,
                 &data.publish_tools,
+                &mcp_imports
+                    .iter()
+                    .map(|(_, import, _)| import.clone())
+                    .collect::<Vec<_>>(),
                 &registered_tool_middlewares,
                 &data.publish_tool_middlewares,
                 &data.universal_tool_middlewares,
@@ -621,6 +661,21 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
 
+        warnings.extend(
+            self.mcp_import_resolver
+                .deployment_warnings(
+                    environment_id,
+                    data.mcp_imports,
+                    compiled_tools
+                        .registered_tools
+                        .iter()
+                        .filter_map(|tool| tool.definition.name().map(str::to_owned))
+                        .collect(),
+                    auth.clone(),
+                )
+                .await,
+        );
+
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
             next_deployment_revision,
@@ -639,8 +694,8 @@ impl DeploymentWriteService {
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
                 .collect(),
-            compiled_tools.registered_tools,
-            compiled_tools.agent_tool_bindings,
+            compiled_tools,
+            mcp_imports,
             tool_releases,
             crate::repo::model::deployment::DeploymentMiddlewareCreationInput {
                 registered: registered_tool_middlewares,
@@ -708,6 +763,19 @@ impl DeploymentWriteService {
 
         let mut deployment: CurrentDeployment = ext_revision.try_into()?;
         deployment.validation_warnings = warnings;
+
+        for warning in &deployment.validation_warnings {
+            if let super::DeployValidationWarning::McpImportDiscovery(warning) = warning {
+                tracing::warn!(
+                    environment_id = %environment_id,
+                    deployment_revision = %deployment.revision,
+                    import_index = ?warning.import_index,
+                    upstream_tool_name = ?warning.upstream_tool_name,
+                    reason = %warning.reason,
+                    "MCP import deployment discovery warning"
+                );
+            }
+        }
 
         Ok(deployment)
     }

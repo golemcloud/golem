@@ -21,6 +21,7 @@ use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_valu
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
+use crate::model::mcp_import::McpImport;
 use crate::model::tool::{
     CompiledToolBinding, ConfigKeyScope, RegisteredTool, SecretKeyScope, ToolBindingInput,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
@@ -134,6 +135,20 @@ impl Hashable for RemoteToolDeployment {
 
 impl Diffable for RemoteToolDeployment {
     type DiffResult = RemoteToolDeployment;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new != current).then(|| new.clone()))
+    }
+}
+
+impl Hashable for McpImport {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for McpImport {
+    type DiffResult = McpImport;
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         Ok((new != current).then(|| new.clone()))
@@ -364,6 +379,9 @@ pub struct Deployment {
     pub mcp_deployments: BTreeMap<String, HashOf<McpDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
+    pub mcp_imports: BTreeMap<String, HashOf<McpImport>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
     pub remote_tools: BTreeMap<String, HashOf<RemoteToolDeployment>>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub published_tools: BTreeSet<String>,
@@ -393,6 +411,8 @@ pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_deployments: BTreeMapDiff<String, HashOf<McpDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_imports: BTreeMapDiff<String, HashOf<McpImport>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub remote_tools: BTreeMapDiff<String, HashOf<RemoteToolDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub published_tools: BTreeSetDiff<String>,
@@ -418,6 +438,7 @@ impl Diffable for Deployment {
         let mcp_deployments = new
             .mcp_deployments
             .diff_with_current(&current.mcp_deployments)?;
+        let mcp_imports = new.mcp_imports.diff_with_current(&current.mcp_imports)?;
         let remote_tools = new.remote_tools.diff_with_current(&current.remote_tools)?;
         let published_tools = new
             .published_tools
@@ -443,6 +464,7 @@ impl Diffable for Deployment {
             if components.is_some()
                 || http_api_deployments.is_some()
                 || mcp_deployments.is_some()
+                || mcp_imports.is_some()
                 || remote_tools.is_some()
                 || published_tools.is_some()
                 || remote_tool_middleware_deployments.is_some()
@@ -456,6 +478,7 @@ impl Diffable for Deployment {
                     components: components.unwrap_or_default(),
                     http_api_deployments: http_api_deployments.unwrap_or_default(),
                     mcp_deployments: mcp_deployments.unwrap_or_default(),
+                    mcp_imports: mcp_imports.unwrap_or_default(),
                     remote_tools: remote_tools.unwrap_or_default(),
                     published_tools: published_tools.unwrap_or_default(),
                     remote_tool_middleware_deployments: remote_tool_middleware_deployments
@@ -496,6 +519,8 @@ mod tests {
     use crate::model::deployment::DeploymentRevision;
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
+    use crate::model::mcp_import::{McpImport, McpImportAuth, McpInlineCredentialKind};
+    use crate::model::security_scheme::SecuritySchemeName;
     use crate::model::tool::{
         ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput,
         ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
@@ -544,6 +569,85 @@ mod tests {
         .unwrap()
     }
 
+    fn mcp_import() -> McpImport {
+        McpImport {
+            url: "http://internal.example/mcp".to_string(),
+            auth: Some(McpImportAuth {
+                kind: McpInlineCredentialKind::Bearer,
+                credential_digest: Hash::new(blake3::hash(b"credential-a")),
+            }),
+            security_scheme: None,
+            prefix: Some("upstream".to_string()),
+            include: Some(vec!["read-*".to_string()]),
+            exclude: None,
+            version: Some(crate::base_model::mcp_import::PROTOCOL_VERSION.to_string()),
+        }
+    }
+
+    #[test]
+    fn mcp_import_hash_covers_order_credentials_auth_scheme_filters_prefix_and_protocol() {
+        let first = mcp_import();
+        let second = McpImport {
+            url: "https://other.example/mcp".to_string(),
+            ..first.clone()
+        };
+        let ordered = |a: McpImport, b: McpImport| {
+            Deployment {
+                mcp_imports: BTreeMap::from([
+                    ("0".to_string(), a.into()),
+                    ("1".to_string(), b.into()),
+                ]),
+                ..Deployment::default()
+            }
+            .hash()
+            .unwrap()
+        };
+        assert_ne!(
+            ordered(first.clone(), second.clone()),
+            ordered(second, first.clone())
+        );
+
+        for changed in [
+            McpImport {
+                auth: Some(McpImportAuth {
+                    kind: McpInlineCredentialKind::Bearer,
+                    credential_digest: Hash::new(blake3::hash(b"credential-b")),
+                }),
+                ..first.clone()
+            },
+            McpImport {
+                auth: Some(McpImportAuth {
+                    kind: McpInlineCredentialKind::Basic,
+                    credential_digest: Hash::new(blake3::hash(b"credential-a")),
+                }),
+                ..first.clone()
+            },
+            McpImport {
+                auth: None,
+                security_scheme: Some(SecuritySchemeName("oauth".to_string())),
+                ..first.clone()
+            },
+            McpImport {
+                include: None,
+                exclude: Some(vec!["write-*".to_string()]),
+                ..first.clone()
+            },
+            McpImport {
+                prefix: Some("other".to_string()),
+                ..first.clone()
+            },
+            McpImport {
+                version: Some("2026-01-01".to_string()),
+                ..first.clone()
+            },
+            McpImport {
+                url: "https://internal.example/mcp".to_string(),
+                ..first.clone()
+            },
+        ] {
+            assert_ne!(first.hash().unwrap(), changed.hash().unwrap());
+        }
+    }
     fn registered_middleware(
         deployment_revision: DeploymentRevision,
         release_id: ToolMiddlewareReleaseId,

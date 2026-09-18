@@ -432,6 +432,7 @@ pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub agent_tool_bindings: BTreeMap<AgentTypeName, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub mcp_imports: Vec<crate::base_model::mcp_import::McpImport>,
     pub registered_tool_middlewares: BTreeMap<
         crate::model::tool_middleware::ToolMiddlewareName,
         crate::model::tool_middleware::RegisteredToolMiddleware,

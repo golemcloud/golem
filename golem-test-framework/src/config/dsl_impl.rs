@@ -1064,6 +1064,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             version: DeploymentVersion(Uuid::new_v4().to_string()),
             publish_tools: Vec::new(),
             remote_tools: Vec::new(),
+            mcp_imports: Vec::new(),
             publish_tool_middlewares: Vec::new(),
             remote_tool_middlewares: Vec::new(),
             universal_tool_middlewares: Vec::new(),

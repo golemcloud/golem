@@ -1254,7 +1254,12 @@ impl StreamSession {
                 }
             }
         }
-        let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+        let epoch = if self.has_local_session_authority() && self.attachment_attempt_id.is_none() {
+            self.authoritative_attachment_state().await?.epoch
+        } else {
+            self.attachment_epoch
+        };
+        let attachment = self.attachment_key(&mapping.handle, epoch)?;
         if self.topology_state(&attachment, Some(mapping)).await?
             == ConsumerAttachmentStatus::Active
         {
@@ -3406,6 +3411,7 @@ impl StreamSession {
                                             admission
                                                 .submit(move |_, context| async move {
                                                     let session = session_for_write;
+                                                    session.recover_session_mappings().await?;
                                                     for (output, nested_handle) in nested_outputs
                                                         .into_iter()
                                                         .zip(nested_handles)

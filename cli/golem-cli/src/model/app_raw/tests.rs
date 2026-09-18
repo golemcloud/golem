@@ -921,8 +921,64 @@ fn arb_mcp_model() -> BoxedStrategy<Mcp> {
     )
     .prop_map(|deployments| Mcp {
         deployments: IndexMap::from_iter(deployments),
+        imports: IndexMap::new(),
     })
     .boxed()
+}
+
+#[test]
+fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
+    let yaml = r#"
+mcp:
+  imports:
+    prod:
+      - url: https://first.example.com/mcp
+        auth:
+          bearer: "{{ MCP_TOKEN }}"
+        prefix: first
+        include: ["read_*", "list_*"]
+      - url: https://second.example.com/mcp
+        auth:
+          basic:
+            user: alice
+            password: "{{ MCP_PASSWORD }}"
+        exclude: ["delete_*"]
+        version: "2025-03-26"
+      - url: https://third.example.com/mcp
+        securityScheme: oauth
+"#;
+    let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let app: Application = serde_yaml::from_str(yaml).unwrap();
+    let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
+    assert_eq!(imports.len(), 3);
+    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+}
+
+#[test]
+fn mcp_imports_schema_and_semantic_validation_reject_conflicting_fields() {
+    for extra in [
+        serde_json::json!({ "auth": {} }),
+        serde_json::json!({ "auth": { "bearer": "token", "basic": { "user": "u", "password": "p" } } }),
+        serde_json::json!({ "auth": { "bearer": "token" }, "securityScheme": "oauth" }),
+        serde_json::json!({ "include": [], "exclude": [] }),
+    ] {
+        let mut import = serde_json::json!({ "url": "http://internal.example/mcp" });
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({ "mcp": { "imports": { "prod": [import.clone()] } } });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        let input: golem_common::model::mcp_import::McpImportDeployment =
+            serde_json::from_value(import).unwrap();
+        assert!(
+            input
+                .into_parts(golem_common::model::environment::EnvironmentId::new())
+                .is_err()
+        );
+    }
 }
 
 fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {

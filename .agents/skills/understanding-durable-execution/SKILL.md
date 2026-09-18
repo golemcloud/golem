@@ -556,6 +556,27 @@ are *entity bodies*: guest code in its own Wasmtime `Store` with **no oplog or c
 (`durable_host/entity.rs`). They record into the owner's oplog and share its `ReplayState`
 cursor (`OwnerExecution`, `worker/instance.rs`).
 
+- `get_all_tools_model` and `get_tool_model` durably record a
+  `SerializableToolDiscoverySnapshot`: the optional selected deployment revision plus ordered,
+  per-import projected MCP observations, including empty tool lists and exclusions. Live selection
+  chooses the latest deployment containing the running owner's component ID/revision, not the
+  environment current deployment and not a permanent worker pin. Replay exact-rehydrates fixed
+  definitions at the recorded revision (missing is terminal; transient registry failure retries
+  the same revision) and reuses dynamic observations without MCP/OAuth. `None` and a selected
+  revision with no dynamic observations are distinct. Native names, including unbound ones, are
+  reserved before dynamic names; earlier imports win dynamic collisions.
+- Dynamic MCP invocation is wired through a synthetic, filesystem-incapable native activation.
+  Admission freezes the complete projected tool, protocol version, exact deployment/import source,
+  binding and digest in the entity activation. The native body validates that projection, uses the
+  executor's shared MCP transport, and records `tools/call` as `WriteRemote` with the ordinary key
+  derived from its `Start`. Its encoded remote response is committed before result projection,
+  stdout publication, or best-effort 401 feedback; completed replay is therefore offline.
+- A remote `-32602` triggers a separate durable `ReadRemote` presence observation with a forced
+  exact-source refresh. Quota suspension or a crash can repair that read while preserving the
+  committed call (ordinary atomic-region rollback can still roll both back). Present or
+  observation-missing is `InvalidInput`; observed absence is `InvalidToolName`; MCP `isError`
+  becomes a custom tool error. Fixed discovery exact-rehydrates its recorded deployment revision,
+  while dynamic execution uses the source and full projection frozen at admission.
 - `dispatch_tool_call` claims (replay) or creates (live) an `EntityInvocationDurability`, a
   `DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>` in the owner's oplog. Its
   `Start` index is the entity invocation id; body host calls carry `parent_start_index`.

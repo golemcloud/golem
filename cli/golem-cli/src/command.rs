@@ -1828,6 +1828,31 @@ pub mod api {
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
+    use std::fmt::{Debug, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    pub struct OAuthCallbackUrl(url::Url);
+
+    impl OAuthCallbackUrl {
+        pub fn into_inner(self) -> url::Url {
+            self.0
+        }
+    }
+
+    impl Debug for OAuthCallbackUrl {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("OAuthCallbackUrl([REDACTED])")
+        }
+    }
+
+    impl FromStr for OAuthCallbackUrl {
+        type Err = url::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse().map(Self)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
@@ -1841,10 +1866,81 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
+        /// Inspect, refresh and authorize MCP imports
+        McpImport {
+            #[clap(subcommand)]
+            subcommand: McpImportSubcommand,
+        },
         /// Manage API Domains
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpImportSubcommand {
+        /// Inspect an import's projected tool definitions
+        Tools {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Fetch fresh upstream definitions for an import
+        Refresh {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Start authorization and print the provider consent URL
+        Authorize {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Complete authorization from the exact provider callback URL
+        Complete {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Exact provider callback URL received after consent, including query parameters
+            callback_url: OAuthCallbackUrl,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Show non-secret authorization state
+        Status {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Revoke the stored grant
+        Disconnect {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
     }
 

@@ -74,6 +74,8 @@ pub struct DeploymentDisplay {
     pub http_api_deployments: BTreeMap<String, DeploymentDisplayHttpApiDeployment>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_deployments: BTreeMap<String, DeploymentDisplayMcpDeployment>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_imports: BTreeMap<String, DeploymentDisplayMcpImport>,
 }
 
 pub struct DeploymentDisplayContext<'a> {
@@ -701,6 +703,13 @@ pub struct DeploymentDisplayMcpAgentOptions {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct DeploymentDisplayMcpImport {
+    pub hash: diff::Hash,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<golem_common::model::mcp_import::McpImport>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentDisplayRemoteTool {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -731,6 +740,23 @@ impl DeploymentDisplay {
             published_tools: display_published_tools(&ctx),
             http_api_deployments: display_http_api_deployments(&ctx),
             mcp_deployments: display_mcp_deployments(&ctx),
+            mcp_imports: display_keys(ctx.mode, &ctx.deployment.mcp_imports, &ctx.diff.mcp_imports)
+                .filter_map(|index| {
+                    ctx.deployment
+                        .mcp_imports
+                        .get(index)
+                        .map(|import| (index, import))
+                })
+                .map(|(index, import)| {
+                    Ok((
+                        index.clone(),
+                        DeploymentDisplayMcpImport {
+                            hash: import.hash()?,
+                            configuration: import.as_value().cloned(),
+                        },
+                    ))
+                })
+                .collect::<anyhow::Result<_>>()?,
         })
     }
 
@@ -766,6 +792,7 @@ impl DeploymentDisplay {
             && self.published_tools.is_empty()
             && self.http_api_deployments.is_empty()
             && self.mcp_deployments.is_empty()
+            && self.mcp_imports.is_empty()
     }
 }
 
@@ -1786,6 +1813,18 @@ impl TextOutput for DeploymentDiff {
             }
             logln("");
         }
+        if !self.mcp_imports.is_empty() {
+            logln("MCP import changes:".log_color_help_group().to_string());
+            for (index, import_diff) in &self.mcp_imports {
+                let action = match import_diff {
+                    BTreeMapDiffValue::Create => "create".green(),
+                    BTreeMapDiffValue::Delete => "delete".red(),
+                    BTreeMapDiffValue::Update(_) => "update".yellow(),
+                };
+                logln(format!("  - {action} MCP import at index {index}"));
+            }
+            logln("");
+        }
         if !self.remote_tools.is_empty() {
             logln("Remote tool changes:".log_color_help_group().to_string());
             for (tool_name, remote_tool_diff) in &self.remote_tools {
@@ -2082,6 +2121,7 @@ impl TextOutput for DeployPlanView<'_> {
         let has_deployment_request_changes = !self.deployment_diff.components.is_empty()
             || !self.deployment_diff.http_api_deployments.is_empty()
             || !self.deployment_diff.mcp_deployments.is_empty()
+            || !self.deployment_diff.mcp_imports.is_empty()
             || !self.deployment_diff.remote_tools.is_empty()
             || !self.deployment_diff.published_tools.is_empty();
 

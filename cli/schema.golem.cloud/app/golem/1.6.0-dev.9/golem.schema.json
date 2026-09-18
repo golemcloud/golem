@@ -1106,7 +1106,53 @@
               "$ref": "#/definitions/mcpDeployment"
             }
           }
+        },
+        "imports": {
+          "type": "object",
+          "description": "Ordered MCP imports by environment",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/mcpImport"
+            }
+          }
         }
+      }
+    },
+    "mcpImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "allOf": [
+        { "not": { "required": ["auth", "securityScheme"] } },
+        { "not": { "required": ["include", "exclude"] } }
+      ],
+      "properties": {
+        "url": { "type": "string" },
+        "auth": { "$ref": "#/definitions/mcpImportAuth" },
+        "securityScheme": { "type": "string" },
+        "prefix": { "type": "string" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "string" }
+      }
+    },
+    "mcpImportAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["bearer"] }, { "required": ["basic"] }],
+      "properties": {
+        "bearer": { "type": "string" },
+        "basic": { "$ref": "#/definitions/mcpImportBasicAuth" }
+      }
+    },
+    "mcpImportBasicAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user", "password"],
+      "properties": {
+        "user": { "type": "string" },
+        "password": { "type": "string" }
       }
     },
     "mcpDeployment": {

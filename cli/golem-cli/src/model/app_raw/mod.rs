@@ -1152,6 +1152,9 @@ pub struct HttpApiDeployment {
 pub struct Mcp {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub imports:
+        IndexMap<EnvironmentName, Vec<golem_common::model::mcp_import::McpImportDeployment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

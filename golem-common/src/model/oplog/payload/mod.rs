@@ -26,7 +26,8 @@ use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
     SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
-    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
+    SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -45,7 +46,6 @@ use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
 use crate::oplog_payload;
-use crate::schema::tool::DiscoveredTool;
 use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
@@ -294,6 +294,12 @@ oplog_payload! {
         },
         GolemToolGetTool {
             name: String
+        },
+        McpToolCall {
+            input: TypedSchemaValue
+        },
+        McpToolPresence {
+            upstream_tool_name: String
         },
         GolemApiOplogRead {
             agent_id: AgentId,
@@ -628,10 +634,16 @@ oplog_payload! {
             result: Result<(), CardInstallFailure>,
         },
         GolemToolTools {
-            result: Result<Vec<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
         },
         GolemToolTool {
-            result: Result<Option<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
+        },
+        McpToolCall {
+            result: Result<Vec<u8>, SerializableToolRpcError>
+        },
+        McpToolPresence {
+            result: Result<bool, SerializableToolRpcError>
         },
         GolemApiOplogChunk {
             result: Result<Option<Vec<u8>>, String>,
@@ -915,6 +927,8 @@ pub mod host_functions {
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
+        (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
+        (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
     }
 }

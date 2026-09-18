@@ -33,7 +33,7 @@ use crate::model::text_format::{NoTextOutput, TextOutput};
 use crate::model::tool_deployment::{
     ToolEntityPath, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
 };
-use anyhow::bail;
+use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::ToolName;
@@ -665,6 +665,37 @@ async fn collect_tool_manifest_targets_for_entry(
         )?;
     }
 
+    for imported in ctx.mcp_tools() {
+        let name = imported.definition.name().context("MCP tool has no name")?;
+        if ctx
+            .application()
+            .tool_declarations()
+            .keys()
+            .any(|declared| declared.as_str() == name)
+        {
+            continue;
+        }
+        let is_matching_name = matchers.remove(name);
+        if !is_matching_all && !is_matching_name {
+            continue;
+        }
+        targets.push(BridgeSdkTarget {
+            source: BridgeSdkTargetSource::McpImport {
+                import_index: imported.import_index,
+                projection_digest: imported.digest.clone(),
+                manifest_source: ctx
+                    .application()
+                    .mcp_imports_source(ctx.application().environment_name())
+                    .context("MCP imports have no declaring manifest")?
+                    .to_path_buf(),
+            },
+            subject: BridgeSdkTargetSubject::Tool(imported.definition.clone()),
+            target_language,
+            bridge_mode,
+            output_dir: ctx.application().tool_bridge_sdk_dir(name, target_language),
+        });
+    }
+
     if !ignore_unmatched_matchers && !matchers.is_empty() {
         for component_name in ctx.application().component_names() {
             if !selection_scope_component_names.contains(component_name) {
@@ -916,6 +947,55 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
+    let imported_dependencies = selection_scope_component_names
+        .iter()
+        .flat_map(|name| {
+            ctx.application()
+                .component(name)
+                .properties()
+                .dependencies
+                .clone()
+        })
+        .filter(|dependency| {
+            matches!(
+                dependency,
+                ComponentDependency::Tool {
+                    source: crate::model::app::SubjectSource::McpImport,
+                    ..
+                }
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for dependency in imported_dependencies {
+        let ComponentDependency::Tool { tool_name, .. } = &dependency else {
+            unreachable!()
+        };
+        let imported = ctx.mcp_tool(tool_name)?;
+        for target_language in dependency_guest_bridge_target_languages(
+            ctx,
+            &dependency,
+            selection_scope_component_names,
+        ) {
+            targets.push(BridgeSdkTarget {
+                source: BridgeSdkTargetSource::McpImport {
+                    import_index: imported.import_index,
+                    projection_digest: imported.digest.clone(),
+                    manifest_source: ctx
+                        .application()
+                        .mcp_imports_source(ctx.application().environment_name())
+                        .context("MCP imports have no declaring manifest")?
+                        .to_path_buf(),
+                },
+                subject: BridgeSdkTargetSubject::Tool(imported.definition.clone()),
+                target_language,
+                bridge_mode: BridgeMode::Guest,
+                output_dir: ctx
+                    .application()
+                    .dependency_tool_bridge_sdk_dir(tool_name.as_str(), target_language),
+            });
+        }
+    }
+
     Ok(targets)
 }
 
@@ -1035,6 +1115,9 @@ async fn gen_bridge_sdk_target(
             ctx.application().component(component_name).final_wasm()
         }
         BridgeSdkTargetSource::RemoteRelease {
+            manifest_source, ..
+        }
+        | BridgeSdkTargetSource::McpImport {
             manifest_source, ..
         } => manifest_source.clone(),
     };
@@ -1264,6 +1347,175 @@ mod tests {
     use strum::IntoEnumIterator;
     use tempfile::{TempDir, tempdir};
     use test_r::test;
+
+    #[test]
+    async fn mcp_manifest_targets_cover_all_languages_and_preserve_native_precedence() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: imported-tools
+environments:
+  local:
+    server: local
+mcp:
+  imports:
+    local:
+      - url: https://tools.example/mcp
+components:
+  app:second:
+    componentWasm: provider.wasm
+tools:
+  echo:
+    component: app:second
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let tools = ["echo", "search"].map(|name| golem_client::model::McpResolvedTool {
+            import_index: 2,
+            upstream_name: name.into(),
+            digest: format!("{name}-digest"),
+            definition: tool(name),
+        });
+        let ctx = BuildContext::new(&app_ctx, &build_config).with_mcp_tools(&tools);
+        let mut targets = vec![BridgeSdkTarget {
+            source: BridgeSdkTargetSource::local(ComponentName("app:second".into())),
+            subject: BridgeSdkTargetSubject::Tool(tool("echo")),
+            target_language: GuestLanguage::Rust,
+            bridge_mode: BridgeMode::Guest,
+            output_dir: ctx
+                .application()
+                .tool_bridge_sdk_dir("echo", GuestLanguage::Rust),
+        }];
+        for language in GuestLanguage::iter() {
+            collect_tool_manifest_targets_for_entry(
+                &ctx,
+                &[],
+                &[],
+                BridgeMode::Guest,
+                language,
+                BTreeSet::from(["*".into()]),
+                &BTreeSet::new(),
+                false,
+                true,
+                &mut targets,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(targets.len(), 6);
+        assert!(matches!(
+            targets[0].source,
+            BridgeSdkTargetSource::Local { .. }
+        ));
+        for language in GuestLanguage::iter() {
+            let names = targets
+                .iter()
+                .filter(|target| target.target_language == language)
+                .map(|target| target.subject.display_name())
+                .collect::<BTreeSet<_>>();
+            let expected = if language == GuestLanguage::Rust {
+                BTreeSet::from(["echo", "search"])
+            } else {
+                BTreeSet::from(["search"])
+            };
+            assert_eq!(names, expected);
+        }
+        assert!(targets.iter().skip(1).all(|target| matches!(&target.source,
+            BridgeSdkTargetSource::McpImport { import_index: 2, projection_digest, manifest_source }
+                if projection_digest.ends_with("-digest") && manifest_source.is_file())));
+        let mut named = vec![];
+        collect_tool_manifest_targets_for_entry(
+            &ctx,
+            &[],
+            &[],
+            BridgeMode::Guest,
+            GuestLanguage::Rust,
+            BTreeSet::from(["search".into()]),
+            &BTreeSet::new(),
+            false,
+            true,
+            &mut named,
+        )
+        .await
+        .unwrap();
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].subject.display_name(), "search");
+        assert!(
+            collect_tool_manifest_targets_for_entry(
+                &ctx,
+                &[],
+                &[],
+                BridgeMode::Guest,
+                GuestLanguage::Rust,
+                BTreeSet::from(["absent".into()]),
+                &BTreeSet::new(),
+                false,
+                true,
+                &mut vec![]
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[test]
+    async fn mcp_dependencies_require_resolved_metadata_before_consumer_build() {
+        for language in GuestLanguage::iter() {
+            let (application, _dir) = application_from_manifest(&format!(
+                r#"
+app: imported-tools
+environments:
+  local:
+    server: local
+mcp:
+  imports:
+    local:
+      - url: https://tools.example/mcp
+componentTemplates:
+  {language}-test:
+    componentWasm: consumer.wasm
+components:
+  app:consumer:
+    templates: {language}-test
+    dependencies:
+      tools: [search]
+"#,
+                language = language.id()
+            ));
+            let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+            let build_config = crate::model::app::BuildConfig::default();
+            let consumer = ComponentName("app:consumer".into());
+            let scope = [consumer];
+            let missing = BuildContext::new(&app_ctx, &build_config);
+            let error = plan_dependency_guest_bridge_generation_for_components_lenient(
+                &missing,
+                &[],
+                &scope,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("MCP tool dependency 'search'"));
+            let tools = [golem_client::model::McpResolvedTool {
+                import_index: 1,
+                upstream_name: "upstream-search".into(),
+                digest: "projection-identity".into(),
+                definition: tool("search"),
+            }];
+            let ctx = BuildContext::new(&app_ctx, &build_config).with_mcp_tools(&tools);
+            let plan =
+                plan_dependency_guest_bridge_generation_for_components_lenient(&ctx, &[], &scope)
+                    .await
+                    .unwrap();
+            assert_eq!(plan.targets.len(), 1);
+            assert_eq!(plan.targets[0].subject.display_name(), "search");
+            assert_eq!(plan.targets[0].target_language, language);
+            assert_eq!(
+                plan.targets[0].output_dir,
+                ctx.application()
+                    .dependency_tool_bridge_sdk_dir("search", language)
+            );
+        }
+    }
 
     #[test]
     fn validate_no_output_dir_collisions_rejects_nested_output_dirs() {

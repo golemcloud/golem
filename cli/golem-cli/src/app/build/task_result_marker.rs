@@ -628,6 +628,24 @@ mod tests {
     }
 
     #[test]
+    fn mcp_bridge_marker_covers_import_and_projection_identity() {
+        let source = |import_index, digest: &str| BridgeSdkTargetSource::McpImport {
+            import_index,
+            projection_digest: digest.into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let original = bridge_marker_source(&source(2, "first-projection"));
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(2, "changed-projection"))
+        );
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(3, "first-projection"))
+        );
+    }
+
+    #[test]
     fn remote_release_bridge_marker_covers_release_and_metadata_identity() {
         let release_id = ToolReleaseId::new();
         let remote_source = |release_id, metadata_version: &str, metadata: &[u8], source: &[u8]| {

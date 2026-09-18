@@ -1224,6 +1224,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (OwnerRuntime::Agent, _, Some(_)) => Err(WorkerExecutorError::runtime(
                 "Cannot install an entity invocation scope in the primary Store",
             )),
+            (OwnerRuntime::Agent, _, None) => Ok(()),
             (OwnerRuntime::Entity(_), Some(_), Some(_)) => Err(WorkerExecutorError::runtime(
                 "Entity invocation scope is already installed",
             )),
@@ -1231,6 +1232,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Entity invocation scope is not installed",
             )),
             _ => {
+                if let Some(scope) = &scope {
+                    self.state
+                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                    self.state.assume_idempotence = scope.assume_idempotence();
+                    self.state.entity_logical_key_position =
+                        scope.logical_key_positions().then_some(OplogIndex::INITIAL);
+                } else {
+                    self.state.current_idempotency_key = None;
+                    self.state.assume_idempotence = true;
+                    self.state.entity_logical_key_position = None;
+                }
                 self.entity_invocation_scope = scope;
                 Ok(())
             }
@@ -10006,6 +10018,9 @@ struct PrivateDurableWorkerState {
     agent_id: Option<ParsedAgentId>,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
+    /// Child positions under an entity seed admitted in a caller's atomic region.
+    /// This is Store-local derivation state, not an atomic scope or shared lease.
+    entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
@@ -10452,6 +10467,7 @@ impl PrivateDurableWorkerState {
             agent_config,
             owned_agent_id,
             current_idempotency_key: None,
+            entity_logical_key_position: None,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
@@ -10818,7 +10834,9 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
+        if let Some(position) = self.entity_logical_key_position.as_mut() {
+            next_atomic_region_idempotency_key_oplog_index(position)
+        } else if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
             next_atomic_region_idempotency_key_oplog_index(
                 &mut outermost_atomic_region.next_idempotency_key_oplog_index,
             )
@@ -10828,9 +10846,11 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_atomic_region_idempotency_key_oplog_index(&self) -> Option<OplogIndex> {
-        self.active_atomic_regions
-            .first()
-            .map(|region| region.next_idempotency_key_oplog_index)
+        self.entity_logical_key_position.or_else(|| {
+            self.active_atomic_regions
+                .first()
+                .map(|region| region.next_idempotency_key_oplog_index)
+        })
     }
 
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.

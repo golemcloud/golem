@@ -48,7 +48,7 @@ use golem_worker_executor::durable_host::tool::{
     ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError,
+    EnvironmentStateService, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -217,6 +217,7 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+        mcp_imports: Vec::new(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }
@@ -274,6 +275,7 @@ fn native_deployment_state(
         deployment_revision,
         registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
         agent_tool_bindings: BTreeMap::from([(agent_type, BTreeMap::from([(tool_name, binding)]))]),
+        mcp_imports: Vec::new(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     };
@@ -325,6 +327,7 @@ fn native_deployment_state(
 
 struct ReorderedToolActivationService {
     inner: TestEnvironmentStateService,
+    first_deployment: std::sync::RwLock<Option<Arc<ToolDeploymentState>>>,
     activation_calls: AtomicUsize,
     first_call_blocked: tokio::sync::Notify,
     release_first_call: tokio::sync::Notify,
@@ -334,6 +337,7 @@ impl Default for ReorderedToolActivationService {
     fn default() -> Self {
         Self {
             inner: TestEnvironmentStateService::default(),
+            first_deployment: std::sync::RwLock::new(None),
             activation_calls: AtomicUsize::new(0),
             first_call_blocked: tokio::sync::Notify::new(),
             release_first_call: tokio::sync::Notify::new(),
@@ -349,6 +353,11 @@ impl ReorderedToolActivationService {
         component_revision: ComponentRevision,
         deployment: Option<ToolDeploymentState>,
     ) {
+        *self.first_deployment.write().unwrap() = deployment.as_ref().map(|deployment| {
+            let mut deployment = deployment.clone();
+            deployment.agent_tool_bindings.clear();
+            Arc::new(deployment)
+        });
         self.inner.set_tool_deployment(
             environment_id,
             component_id,
@@ -423,28 +432,24 @@ impl EnvironmentStateService for ReorderedToolActivationService {
         self.inner.get_retry_policies(environment_id).await
     }
 
-    async fn get_tool_activation(
+    async fn get_live_tool_deployment_state(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
         component_id: golem_common::model::component::ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
-        tool_name: &ToolName,
-    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 self.first_call_blocked.notify_one();
                 self.release_first_call.notified().await;
-                Ok(ToolActivationOutcome::NotBound)
+                Ok(self.first_deployment.read().unwrap().clone())
             }
             1 => {
                 self.inner
-                    .get_tool_activation(
+                    .get_live_tool_deployment_state(
                         environment_id,
                         component_id,
                         component_revision,
-                        agent_type,
-                        tool_name,
                     )
                     .await
             }
@@ -540,6 +545,72 @@ async fn start_gated_http_server() -> (
             .expect("serve gated HTTP requests");
     });
     (port, task, first_rx, complete_rx)
+}
+
+#[derive(Clone)]
+struct IdempotencyEffectState {
+    keys: Arc<tokio::sync::Mutex<Vec<String>>>,
+    effects: Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
+    attempts: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+async fn idempotency_effect(
+    State(state): State<IdempotencyEffectState>,
+    request: Request,
+) -> Response<Body> {
+    let key = request
+        .headers()
+        .get("idempotency-key")
+        .expect("outgoing effect has an idempotency key")
+        .to_str()
+        .expect("idempotency key is text")
+        .to_string();
+    let attempt = {
+        let mut keys = state.keys.lock().await;
+        keys.push(key.clone());
+        keys.len()
+    };
+    state.effects.lock().await.insert(key.clone());
+    state
+        .attempts
+        .send(key)
+        .expect("record idempotent effect attempt");
+    if attempt == 1 {
+        std::future::pending::<()>().await;
+    }
+    Response::builder()
+        .status(200)
+        .body(Body::empty())
+        .expect("build idempotent effect response")
+}
+
+async fn start_idempotency_effect_server() -> (
+    u16,
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<String>,
+    Arc<tokio::sync::Mutex<Vec<String>>>,
+    Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind idempotency effect server");
+    let port = listener.local_addr().expect("effect server address").port();
+    let (attempts, attempt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let keys = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let effects = Arc::new(tokio::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let app = Router::new()
+        .route("/effect", post(idempotency_effect))
+        .with_state(IdempotencyEffectState {
+            keys: keys.clone(),
+            effects: effects.clone(),
+            attempts,
+        });
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve idempotency effects");
+    });
+    (port, task, attempt_rx, keys, effects)
 }
 
 async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
@@ -1036,7 +1107,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         "completed replay must not repeat native effects"
     );
     assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
-    assert!(environment_state.tool_activation_calls() >= 5);
+    assert!(environment_state.tool_deployment_calls() >= 5);
     Ok(())
 }
 
@@ -5329,6 +5400,151 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     executor.delete_worker(&worker_id).await?;
     checkpoint_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (effect_port, effect_server, mut attempts, keys, effects) =
+        start_idempotency_effect_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "IDEMPOTENCY_EFFECT_PORT".to_string(),
+                effect_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let input = b"entity-idempotency".to_vec();
+    let call = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "collect_capable",
+        data_value!("atomic-idempotency-parent", input.clone()),
+    );
+    let recover = async {
+        let first_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("initial idempotent HTTP effect timed out"))?
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?;
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let entity_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke" =>
+                {
+                    Some((entry.oplog_index, params.parent_start_index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let (child_start, Some(parent_start)) = entity_starts
+            .iter()
+            .find(|(_, parent)| parent.is_some())
+            .copied()
+            .expect("nested entity was admitted before its HTTP effect")
+        else {
+            unreachable!()
+        };
+        assert!(
+            oplog
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_))),
+            "the admitting atomic scope must close before the crash"
+        );
+
+        executor.simulated_crash(&worker_id).await?;
+        let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("reconstructed HTTP retry timed out"))?
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped before retry"))?;
+        assert_eq!(retry_key, first_key, "incomplete HTTP retry changed key");
+        Ok::<_, anyhow::Error>((parent_start, child_start))
+    };
+    let (result, (_parent_start, _child_start)) = tokio::try_join!(call, recover)?;
+    let result: StreamEvidence = result.into_typed()?;
+    assert_evidence(&result, &input, 1, input.len() as u64);
+    let recorded_keys = keys.lock().await;
+    assert_eq!(recorded_keys.len(), 2);
+    assert_eq!(recorded_keys[0], recorded_keys[1]);
+    drop(recorded_keys);
+    assert_eq!(
+        effects.lock().await.len(),
+        1,
+        "upstream effect was repeated"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::api::generate_idempotency-key"
+            ))
+            .count(),
+        1,
+        "completed generated-key call must replay instead of running live"
+    );
+    executor.delete_worker(&worker_id).await?;
+    effect_server.abort();
     Ok(())
 }
 
