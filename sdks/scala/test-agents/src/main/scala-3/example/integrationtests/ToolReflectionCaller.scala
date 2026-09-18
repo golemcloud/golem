@@ -10,9 +10,10 @@
 
 package example.integrationtests
 
-import golem.BaseAgent
-import golem.reflection.{DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
+import golem.{BaseAgent, Principal}
+import golem.reflection.{AgentClientDefinition, DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
 import golem.runtime.annotations.*
+import golem.runtime.{InputRecordCodec, OutputCodec}
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import zio.blocks.schema.json.Json
 
@@ -32,10 +33,22 @@ final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
 }
 
 @agentDefinition()
+trait ScalaPrincipalIdentity extends BaseAgent {
+  class Id(val name: String)
+  def who(): Future[String]
+}
+
+@agentImplementation()
+final class ScalaPrincipalIdentityImpl(name: String, principal: Principal) extends ScalaPrincipalIdentity {
+  override def who(): Future[String] = Future.successful(name)
+}
+
+@agentDefinition()
 trait ScalaToolReflectionCaller extends BaseAgent {
   class Id(val name: String)
   def roundTrip(): Future[String]
   def optionalRoundTrip(): Future[String]
+  def principalRoundTrip(): Future[String]
   def agentRoundTrip(): Future[String]
 }
 
@@ -61,6 +74,40 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
               SchemaValue.RecordValue(List(SchemaValue.OptionValue(Some(SchemaValue.StringValue("supplied")))))
             )
         } yield s"$omittedJson|$suppliedJson|$omittedNative|$suppliedNative"
+    }
+  }
+
+  override def principalRoundTrip(): Future[String] = {
+    val identityName = s"principal-${this.name}"
+    val full         = AgentClientDefinition.full[String]("ScalaPrincipalIdentity", InputRecordCodec.single[String]("name"))
+    val methodOnly   = AgentClientDefinition.methodOnly
+    val who          = full.method[Unit, String]("who", InputRecordCodec.unit, OutputCodec.single[String])
+    val prepared     = for {
+      agent <- Reflection
+                 .getAgentType("ScalaPrincipalIdentity")
+                 .flatMap(_.toRight(GolemReflectError.Discovery("ScalaPrincipalIdentity was not found")))
+      reflected       <- agent.client.get(Json.Object("name" -> Json.String(identityName)))
+      reflectedMethod <- reflected.method("who")
+      id              <- full.agentId(identityName)
+      parts           <- id.parts
+      _               <- Either.cond(
+             parts.constructorValue == SchemaValue.RecordValue(List(SchemaValue.StringValue(identityName))),
+             (),
+             GolemReflectError.Identity("principal appeared in the agent ID")
+           )
+      fullyBound  <- full.bind(id)
+      methodBound <- methodOnly.bind(id)
+    } yield (reflectedMethod, fullyBound, methodBound)
+
+    prepared match {
+      case Left(error)                                       => Future.successful(s"error:$error")
+      case Right((reflectedMethod, fullyBound, methodBound)) =>
+        for {
+          reflectedCall  <- reflectedMethod.invokeJson(Json.Object())
+          fullCall       <- fullyBound.method(who).invoke(())
+          methodOnlyCall <- methodBound.method(who).invoke(())
+          generatedCall  <- ScalaPrincipalIdentityClient.get(identityName).who()
+        } yield s"$reflectedCall|$fullCall|$methodOnlyCall|$generatedCall"
     }
   }
 
