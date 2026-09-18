@@ -63,6 +63,7 @@ humantime-serde.workspace = true
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 include_dir = { workspace = true }
+jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
 openidconnect = { workspace = true }
