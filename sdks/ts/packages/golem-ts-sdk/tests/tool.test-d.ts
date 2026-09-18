@@ -1047,7 +1047,12 @@ const mappedAdapterCause:
   | { readonly tag: 'invalid-command-path'; readonly val: string[] }
   | { readonly tag: 'invalid-input'; readonly val: string }
   | { readonly tag: 'constraint-violation'; readonly val: string }
-  | { readonly tag: 'invalid-result'; readonly val: string } = mappedAdapterError.cause;
+  | { readonly tag: 'invalid-result'; readonly val: string }
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: import('golem:tool/common@0.1.0').TypedSchemaValue;
+    } = mappedAdapterError.cause;
 void mappedAdapterCause;
 
 const protocolMiddlewareError = new ToolInvokeError<never>({

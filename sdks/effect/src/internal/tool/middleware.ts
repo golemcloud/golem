@@ -2,7 +2,6 @@ import type * as Common from "golem:tool/common@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
 import { Context, Effect, Exit, Layer, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
-import { compile } from "../../WitCodec.js"
 import {
   type BodyModel,
   type CommandError,
@@ -122,6 +121,7 @@ export type UniversalHandler<R = never> = (
 /** Universal middleware declaration. @since 1.6.0 @category models */
 export interface MiddlewareOptions<N extends string, R = never> {
   readonly name: N
+  readonly version?: string
   readonly aliases?: readonly string[]
   readonly doc?: string | Partial<Common.Doc>
   readonly handler: UniversalHandler<R>
@@ -153,6 +153,7 @@ const register = <N extends string, R>(
   entries.set(options.name, {
     wire: {
       name: options.name,
+      version: options.version ?? "0.0.0",
       aliases: [...(options.aliases ?? [])],
       doc: normalizeDoc(options.doc),
       scope,
@@ -321,7 +322,10 @@ const typedHandler =
         return yield* Effect.fail(
           new MiddlewareError({
             tag: "custom-error",
-            val: { graph: declared.codec.schemaGraph, value },
+            val: {
+              name: declared.spec.name,
+              payload: { graph: declared.codec.schemaGraph, value },
+            },
           }),
         )
       }
@@ -383,16 +387,13 @@ const buildUnderlying = (compiled: ReturnType<typeof compileDefinition>, raw: Un
                   const custom = customToolError(error.cause)
                   if (!custom) return Effect.fail(error)
                   return Effect.gen(function* () {
-                    let declared: (typeof body.errors)[number] | undefined
-                    for (const entry of body.errors) {
-                      const codec = yield* compile(entry.spec.schema)
-                      if (sameWireGraph(codec.schemaGraph, custom.val.graph)) {
-                        declared = entry
-                        break
-                      }
-                    }
+                    const declared = body.errors.find(
+                      (entry) => entry.spec.name === custom.val.name,
+                    )
                     if (!declared) return yield* Effect.fail(error)
-                    const decoded = yield* declared.codec.decode(custom.val.value)
+                    if (!sameWireGraph(declared.codec.schemaGraph, custom.val.payload.graph))
+                      return yield* Effect.fail(error)
+                    const decoded = yield* declared.codec.decode(custom.val.payload.value)
                     return yield* Effect.fail(err(declared.spec.name, decoded))
                   }).pipe(
                     Effect.mapError((cause) =>

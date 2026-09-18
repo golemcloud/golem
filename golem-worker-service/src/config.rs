@@ -51,6 +51,8 @@ pub struct WorkerServiceConfig {
     pub invocation_session_tokens: InvocationSessionTokenConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
+    #[serde(default)]
+    pub durable_streams: DurableStreamsConfig,
 }
 
 impl WorkerServiceConfig {
@@ -149,6 +151,13 @@ impl SafeDisplay for WorkerServiceConfig {
             self.agent_resolution_cache.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "durable streams:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.durable_streams.to_safe_string_indented()
+        );
+
         result
     }
 }
@@ -175,6 +184,7 @@ impl Default for WorkerServiceConfig {
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
             invocation_session_tokens: InvocationSessionTokenConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
+            durable_streams: DurableStreamsConfig::default(),
         }
     }
 }
@@ -361,6 +371,89 @@ impl Default for AgentResolutionCacheConfig {
             max_capacity: 10_000,
             ttl: Duration::from_secs(3600),
             eviction_period: Duration::from_secs(60),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsConfig {
+    #[serde(with = "humantime_serde")]
+    pub long_poll_timeout: Duration,
+    pub max_append_body_bytes: usize,
+    pub load: DurableStreamsLoadConfig,
+}
+
+impl SafeDisplay for DurableStreamsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "long_poll_timeout: {:?}",
+            self.long_poll_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_body_bytes: {}",
+            self.max_append_body_bytes
+        );
+        let _ = writeln!(&mut result, "load:");
+        let _ = writeln!(&mut result, "{}", self.load.to_safe_string_indented());
+        result
+    }
+}
+
+impl Default for DurableStreamsConfig {
+    fn default() -> Self {
+        Self {
+            long_poll_timeout: Duration::from_secs(30),
+            max_append_body_bytes: 1024 * 1024,
+            load: DurableStreamsLoadConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsLoadConfig {
+    pub max_concurrent_readers_per_stream: usize,
+    pub max_concurrent_readers_per_node: usize,
+    pub max_catch_up_requests_per_second_per_stream: u32,
+    pub max_append_requests_per_second_per_stream: u32,
+}
+
+impl SafeDisplay for DurableStreamsLoadConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_stream: {}",
+            self.max_concurrent_readers_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_node: {}",
+            self.max_concurrent_readers_per_node
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_catch_up_requests_per_second_per_stream: {}",
+            self.max_catch_up_requests_per_second_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_requests_per_second_per_stream: {}",
+            self.max_append_requests_per_second_per_stream
+        );
+        result
+    }
+}
+
+impl Default for DurableStreamsLoadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_readers_per_stream: 16,
+            max_concurrent_readers_per_node: 4096,
+            max_catch_up_requests_per_second_per_stream: 100,
+            max_append_requests_per_second_per_stream: 100,
         }
     }
 }

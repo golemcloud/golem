@@ -223,6 +223,7 @@ where
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
@@ -315,7 +316,7 @@ mod tests {
     use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::{
-        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecordV1, StreamSessionRecordV1,
+        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecord, StreamSessionRecord,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogPayload;
@@ -380,8 +381,8 @@ mod tests {
     fn stream_entry() -> OplogEntry {
         OplogEntry::stream_session(
             None,
-            OplogPayload::Inline(Box::new(StreamSessionRecordV1::ConsumerDeleting(
-                StreamConsumerDeletingRecordV1 {
+            OplogPayload::Inline(Box::new(StreamSessionRecord::ConsumerDeleting(
+                StreamConsumerDeletingRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
                     consumer: AgentId {

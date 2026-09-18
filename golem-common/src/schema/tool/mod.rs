@@ -37,6 +37,7 @@ pub use golem_schema::schema::tool::*;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct DiscoveredTool {
+    pub lookup_name: String,
     pub definition: Tool,
     pub implemented_by: ComponentId,
 }
@@ -62,7 +63,9 @@ impl From<RegisteredTool> for DiscoveredTool {
             }
         };
 
+        let lookup_name = definition.name().unwrap_or("<unnamed tool>").to_string();
         Self {
+            lookup_name,
             definition,
             implemented_by,
         }

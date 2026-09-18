@@ -172,7 +172,10 @@ pub enum NativeToolRpcError {
     InvalidCommandPath(Vec<String>),
     InvalidInput(String),
     InvalidResult(String),
-    Custom(TypedSchemaValue),
+    Custom {
+        name: String,
+        payload: TypedSchemaValue,
+    },
 }
 
 pub type NativeToolRpcResult = Result<NativeToolStructuredResult, NativeToolRpcError>;
