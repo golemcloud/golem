@@ -174,7 +174,7 @@ message CompletionDeliveredParameters {
 message AgentInvocationStartedParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocation invocation = 2;
-  optional PublicInvocationWalletPin wallet_pin = 3;
+  PublicInvocationWalletPin wallet_pin = 3;
 }
 
 message WalletVersionToken {
@@ -332,13 +332,13 @@ message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 message CardExpiredParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
-  optional uint64 wallet_generation = 3;
+  uint64 wallet_generation = 3;
 }
 
 message QueuedCardEvent {
@@ -386,7 +386,7 @@ message CardInstalledParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 message CardInstallFailedParameters {
@@ -408,7 +408,7 @@ message CardDerivedParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
   repeated golem.common.UUID parent_ids = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 // Source-agent durable transfer intent.
@@ -417,7 +417,7 @@ message CardTransferStartedParameters {
   golem.common.UUID transfer_id = 2;
   golem.common.UUID card_id = 3;
   CardHolder target_holder = 4;
-  optional uint64 source_wallet_generation = 5;
+  uint64 source_wallet_generation = 5;
 }
 
 // Target-agent durable admission of a transferred card.
@@ -427,13 +427,13 @@ message CardTransferredParameters {
   golem.common.UUID installed_card_id = 3;
   CardHolder target_holder = 4;
   golem.common.UUID source_card_id = 5;
-  optional uint64 target_wallet_generation = 6;
+  uint64 target_wallet_generation = 6;
 }
 
 message CardRevokedCascadeParameters {
   google.protobuf.Timestamp timestamp = 1;
   repeated golem.common.UUID revoked_card_ids = 2;
-  optional uint64 local_wallet_generation = 3;
+  uint64 local_wallet_generation = 3;
 }
 
 // Source-agent terminal receipt, written after target admission is durable.

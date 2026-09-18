@@ -5553,7 +5553,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
             let nested_stream_id = nested_record.handle.stream_id;
             let item_index = OplogIndex::from_u64(registration_index.as_u64() + 1);
             vec![
-                DurableStreamOplogRecord::Registered(None, nested_record),
+                DurableStreamOplogRecord::Registered(None, Box::new(nested_record)),
                 DurableStreamOplogRecord::Items(
                     None,
                     StreamItemsRecord {
@@ -5613,13 +5613,13 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
         .add_durable_stream_batch(Box::new(move |registration_index| {
             vec![DurableStreamOplogRecord::Registered(
                 None,
-                registration_record(
+                Box::new(registration_record(
                     registration_index,
                     environment_id,
                     agent_id,
                     producer_fingerprint,
                     nested,
-                ),
+                )),
             )]
         }))
         .await

@@ -1679,21 +1679,22 @@ mod tests {
                 fingerprint: identity.fingerprint,
                 agent_mode: AgentMode::Durable,
             };
-            let create = OplogEntry::create(
-                identity.agent_id.clone(),
-                AgentMode::Durable,
-                golem_common::model::component::ComponentRevision::INITIAL,
-                vec![],
-                identity.environment_id,
-                account,
-                None,
-                100,
-                100,
-                HashSet::new(),
-                vec![],
-                None,
-                identity.fingerprint.0,
-            );
+            let create =
+                OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+                    agent_id: identity.agent_id.clone(),
+                    agent_mode: AgentMode::Durable,
+                    component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    env: vec![],
+                    environment_id: identity.environment_id,
+                    created_by: account,
+                    parent: None,
+                    component_size: 100,
+                    initial_total_linear_memory_size: 100,
+                    initial_active_plugins: HashSet::new(),
+                    local_agent_config: vec![],
+                    original_phantom_id: None,
+                    instance_id: identity.fingerprint.0,
+                }));
             let oplog = primary
                 .create_fresh(
                     &mut primary.lock_lifecycle(&owner.agent_id).await,

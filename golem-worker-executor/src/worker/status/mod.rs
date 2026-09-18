@@ -1201,7 +1201,7 @@ pub(crate) fn calculate_pending_card_events(
                     timestamp: *timestamp,
                     oplog_index: *oplog_idx,
                     entity_parent_start_index: *entity_parent_start_index,
-                    event: event.clone(),
+                    event: event.as_ref().clone(),
                 });
             }
             OplogEntry::CardInstalled {
@@ -1273,11 +1273,7 @@ pub(crate) fn calculate_pending_card_events(
                         &event.event,
                         QueuedCardEvent::TransferReceived(receipt)
                             if receipt.transfer_id == *transfer_id
-                                && receipt.source_card_id.is_none_or(|receipt_source_card_id| {
-                                    source_card_id.is_none_or(|source_card_id| {
-                                        receipt_source_card_id == source_card_id
-                                    })
-                                })
+                                && receipt.source_card_id == *source_card_id
                                 && receipt.card_id == *installed_card_id
                                 && receipt.card.as_ref() == Some(card)
                     )
@@ -1295,11 +1291,10 @@ fn calculate_received_card_transfers(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> ReceivedCardTransferIndex {
     for entry in entries.values() {
-        let OplogEntry::CardEventQueued {
-            event: QueuedCardEvent::TransferReceived(receipt),
-            ..
-        } = entry
-        else {
+        let OplogEntry::CardEventQueued { event, .. } = entry else {
+            continue;
+        };
+        let QueuedCardEvent::TransferReceived(receipt) = event.as_ref() else {
             continue;
         };
 
@@ -1323,21 +1318,8 @@ fn calculate_received_card_transfers(
                 source_card_id,
                 card: recorded_card,
             }) => {
-                if recorded_card != card
-                    || matches!(
-                        (source_card_id, receipt.source_card_id),
-                        (Some(recorded), Some(received)) if *recorded != received
-                    )
-                {
+                if recorded_card != card || *source_card_id != receipt.source_card_id {
                     transfers.insert(receipt.transfer_id, ReceivedCardTransferState::Conflict);
-                } else if source_card_id.is_none() && receipt.source_card_id.is_some() {
-                    transfers.insert(
-                        receipt.transfer_id,
-                        ReceivedCardTransferState::Received {
-                            source_card_id: receipt.source_card_id,
-                            card: recorded_card.clone(),
-                        },
-                    );
                 }
             }
         }
@@ -1404,14 +1386,10 @@ fn calculate_update_fields(
         }
 
         match entry {
-            OplogEntry::Create {
-                component_revision,
-                component_size,
-                ..
-            } => {
-                revision = *component_revision;
-                component_revision_for_replay = *component_revision;
-                size = *component_size;
+            OplogEntry::Create { parameters, .. } => {
+                revision = parameters.component_revision;
+                component_revision_for_replay = parameters.component_revision;
+                size = parameters.component_size;
             }
             OplogEntry::PendingUpdate {
                 timestamp,
@@ -1609,11 +1587,8 @@ fn calculate_total_linear_memory_size(
         }
 
         match entry {
-            OplogEntry::Create {
-                initial_total_linear_memory_size,
-                ..
-            } => {
-                result = *initial_total_linear_memory_size;
+            OplogEntry::Create { parameters, .. } => {
+                result = parameters.initial_total_linear_memory_size;
             }
             OplogEntry::GrowMemory { delta, .. } => {
                 result = result.saturating_add(*delta);
@@ -1681,11 +1656,8 @@ fn calculate_active_plugins(
         }
 
         match entry {
-            OplogEntry::Create {
-                initial_active_plugins,
-                ..
-            } => {
-                result = initial_active_plugins.clone();
+            OplogEntry::Create { parameters, .. } => {
+                result = parameters.initial_active_plugins.clone();
             }
             OplogEntry::ActivatePlugin {
                 plugin_grant_id, ..

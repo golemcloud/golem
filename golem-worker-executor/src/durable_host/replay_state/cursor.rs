@@ -686,12 +686,9 @@ impl CursorTx<'_> {
         // End (via `start_index`) we decode the response and emit `ForkReplayed`
         // if necessary.
         match oplog_entry {
-            OplogEntry::AgentInvocationStarted {
-                wallet_pin: Some(wallet_pin),
-                ..
-            } => {
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
                 self.record_replay_event(ReplayEvent::InvocationWalletPinned {
-                    wallet_pin: wallet_pin.clone(),
+                    wallet_pin: wallet_pin.as_ref().clone(),
                 });
             }
             OplogEntry::CardInstalled {
@@ -700,7 +697,7 @@ impl CursorTx<'_> {
                 ..
             } => {
                 self.record_replay_event(ReplayEvent::CardInstalled {
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     wallet_generation: *wallet_generation,
                 });
             }
@@ -710,7 +707,7 @@ impl CursorTx<'_> {
                 ..
             } => {
                 self.record_replay_event(ReplayEvent::CardDerived {
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     wallet_generation: *wallet_generation,
                 });
             }
@@ -744,7 +741,7 @@ impl CursorTx<'_> {
                     source_card_id: *source_card_id,
                     installed_card_id: *installed_card_id,
                     target_holder: target_holder.clone(),
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     target_wallet_generation: *target_wallet_generation,
                 });
             }
@@ -934,7 +931,7 @@ impl CursorTx<'_> {
                         wallet_generation,
                         ..
                     } => self.record_replay_event(ReplayEvent::CardInstalled {
-                        card,
+                        card: *card,
                         wallet_generation,
                     }),
                     OplogEntry::CardDerived {
@@ -942,7 +939,7 @@ impl CursorTx<'_> {
                         wallet_generation,
                         ..
                     } => self.record_replay_event(ReplayEvent::CardDerived {
-                        card,
+                        card: *card,
                         wallet_generation,
                     }),
                     OplogEntry::CardTransferStarted {
@@ -972,7 +969,7 @@ impl CursorTx<'_> {
                         source_card_id,
                         installed_card_id,
                         target_holder,
-                        card,
+                        card: *card,
                         target_wallet_generation,
                     }),
                     OplogEntry::CardTransferConfirmed {
@@ -2620,10 +2617,7 @@ impl ReplayState {
         }
     }
 
-    pub async fn pending_card_derivation(
-        &self,
-        card_id: CardId,
-    ) -> Option<(StoredCard, Option<u64>)> {
+    pub async fn pending_card_derivation(&self, card_id: CardId) -> Option<(StoredCard, u64)> {
         self.cursor
             .pending_replay_events
             .lock()
@@ -2877,7 +2871,7 @@ impl ReplayState {
                             idempotency_key,
                             invocation_payload,
                             invocation_context,
-                            wallet_pin,
+                            wallet_pin: *wallet_pin,
                         }));
                     }
                     entry if entry.is_hint() => {}

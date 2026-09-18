@@ -673,7 +673,9 @@ impl StreamSessionIndexService {
             }
             if metadata.producer_fingerprint.is_none() {
                 metadata.producer_fingerprint = entries.values().find_map(|entry| match entry {
-                    OplogEntry::Create { instance_id, .. } => Some(AgentFingerprint(*instance_id)),
+                    OplogEntry::Create { parameters, .. } => {
+                        Some(AgentFingerprint(parameters.instance_id))
+                    }
                     _ => None,
                 });
             }

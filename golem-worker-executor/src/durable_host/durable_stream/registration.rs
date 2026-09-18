@@ -119,13 +119,13 @@ impl DurableStreamStore {
             .add_durable_stream_batch(Box::new(move |oplog_index| {
                 vec![DurableStreamOplogRecord::Registered(
                     entity_parent_start_index,
-                    registration_record(
+                    Box::new(registration_record(
                         oplog_index,
                         environment_id,
                         producer,
                         producer_fingerprint,
                         request_for_entry,
-                    ),
+                    )),
                 )]
             }))
             .await
@@ -427,7 +427,7 @@ impl DurableStreamStore {
                     handles.push(record.handle.clone());
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        record,
+                        Box::new(record),
                     ));
                 }
                 let session_record = make_result(handles);

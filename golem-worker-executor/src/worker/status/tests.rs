@@ -57,6 +57,17 @@ use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPin {
+    golem_common::model::card::InvocationWalletPin {
+        wallet_token: golem_common::model::card::WalletVersionToken {
+            wallet_id_hash: [0; 32],
+            generation: 0,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    }
+}
+
 #[test]
 async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let test_case = TestCase::builder(0).build();
@@ -437,7 +448,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
-                wallet_pin: None,
+                wallet_pin: Box::new(test_invocation_wallet_pin()),
             },
             {
                 let idempotency_key = idempotency_key.clone();
@@ -745,7 +756,7 @@ fn recovery_errors_are_not_invocation_results() {
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
-                wallet_pin: None,
+                wallet_pin: Box::new(test_invocation_wallet_pin()),
             },
         ),
         (
@@ -1765,21 +1776,23 @@ impl TestCaseBuilder {
         };
         TestCaseBuilder {
             entries: vec![TestEntry {
-                oplog_entry: OplogEntry::create(
-                    owned_agent_id.agent_id(),
-                    AgentMode::Durable,
-                    component_revision,
-                    vec![],
-                    owned_agent_id.environment_id(),
-                    account_id,
-                    None,
-                    100,
-                    200,
-                    HashSet::new(),
-                    Vec::new(),
-                    None,
-                    Uuid::new_v4(),
-                ),
+                oplog_entry: OplogEntry::create(Box::new(
+                    golem_common::model::oplog::CreateParameters {
+                        agent_id: owned_agent_id.agent_id(),
+                        agent_mode: AgentMode::Durable,
+                        component_revision,
+                        env: vec![],
+                        environment_id: owned_agent_id.environment_id(),
+                        created_by: account_id,
+                        parent: None,
+                        component_size: 100,
+                        initial_total_linear_memory_size: 200,
+                        initial_active_plugins: HashSet::new(),
+                        local_agent_config: Vec::new(),
+                        original_phantom_id: None,
+                        instance_id: Uuid::new_v4(),
+                    },
+                )),
                 expected_status: status.clone(),
             }],
             previous_status_record: status,
@@ -1821,7 +1834,7 @@ impl TestCaseBuilder {
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
                 invocation_context: vec![],
-                wallet_pin: None,
+                wallet_pin: Box::new(test_invocation_wallet_pin()),
             },
             move |mut status| {
                 status.current_idempotency_key = Some(idempotency_key);
@@ -2949,14 +2962,10 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
     };
     let test_case = TestCase::builder(0).build();
     let mut create = test_case.entries[0].oplog_entry.clone();
-    let OplogEntry::Create {
-        initial_active_plugins,
-        ..
-    } = &mut create
-    else {
+    let OplogEntry::Create { parameters, .. } = &mut create else {
         unreachable!()
     };
-    initial_active_plugins.insert(grant_id);
+    parameters.initial_active_plugins.insert(grant_id);
 
     let entries = BTreeMap::from([
         (OplogIndex::INITIAL, create),
@@ -3067,7 +3076,7 @@ fn card_revoked_entry_is_recorded_in_status() {
             entity_parent_start_index: None,
             queued_event_index: OplogIndex::from_u64(1),
             card_id,
-            wallet_generation: None,
+            wallet_generation: 1,
         },
     )]);
 
@@ -3102,7 +3111,7 @@ fn card_event_queued_revoke_is_pending() {
     let card_id = golem_common::model::card::CardId::new();
     let entries = BTreeMap::from([(
         OplogIndex::from_u64(1),
-        OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+        OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
     )]);
 
     let status = update_status_with_new_entries(
@@ -3130,11 +3139,11 @@ fn card_revoked_removes_pending_revoke_and_records_revoked_card() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, None),
+            OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, 1),
         ),
     ]);
 
@@ -3161,7 +3170,7 @@ fn card_revoked_cascade_records_every_revoked_card() {
             entity_parent_start_index: None,
             revoked_card_ids: vec![first_card_id, second_card_id],
             affected_wallets: Vec::new(),
-            local_wallet_generation: None,
+            local_wallet_generation: 1,
         },
     )]);
 
@@ -3187,7 +3196,7 @@ fn installing_reused_card_id_clears_prior_revocation_status() {
             entity_parent_start_index: None,
             revoked_card_ids: vec![card_id],
             affected_wallets: Vec::new(),
-            local_wallet_generation: Some(1),
+            local_wallet_generation: 1,
         },
     )]);
     let status_after_revoke = update_status_with_new_entries(
@@ -3201,7 +3210,7 @@ fn installing_reused_card_id_clears_prior_revocation_status() {
 
     let installed = BTreeMap::from([(
         OplogIndex::from_u64(2),
-        OplogEntry::card_installed(None, None, test_card(card_id).into(), Some(2)),
+        OplogEntry::card_installed(None, None, Box::new(test_card(card_id).into()), 2),
     )]);
     let status_after_install = update_status_with_new_entries(
         AgentMode::Durable,
@@ -3225,15 +3234,18 @@ fn card_revoked_cascade_completes_every_matching_pending_revoke() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(first_card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(first_card_id))),
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(second_card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(second_card_id))),
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(unrelated_card_id)),
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::revoke(unrelated_card_id)),
+            ),
         ),
         (
             OplogIndex::from_u64(4),
@@ -3242,7 +3254,7 @@ fn card_revoked_cascade_completes_every_matching_pending_revoke() {
                 entity_parent_start_index: None,
                 revoked_card_ids: vec![first_card_id, second_card_id],
                 affected_wallets: Vec::new(),
-                local_wallet_generation: Some(1),
+                local_wallet_generation: 1,
             },
         ),
     ]);
@@ -3275,7 +3287,7 @@ fn reverted_card_revoked_cascade_still_records_revoked_cards() {
                 entity_parent_start_index: None,
                 revoked_card_ids: vec![card_id],
                 affected_wallets: Vec::new(),
-                local_wallet_generation: None,
+                local_wallet_generation: 1,
             },
         ),
         (
@@ -3317,22 +3329,22 @@ fn card_transfer_confirmed_removes_only_the_matching_pending_transfer() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(
+                Box::new(QueuedCardEvent::transfer_started(
                     completed_transfer_id,
                     transferred_card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         ),
         (
             OplogIndex::from_u64(2),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(
+                Box::new(QueuedCardEvent::transfer_started(
                     pending_transfer_id,
                     pending_card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3388,12 +3400,12 @@ fn polymorphic_transfer_confirmation_matches_source_and_installed_child_ids() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     source_card_id,
                     installed_child.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3437,12 +3449,12 @@ fn polymorphic_transfer_confirmation_with_conflicting_source_keeps_pending_inten
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     source_card_id,
                     installed_child.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3478,7 +3490,11 @@ fn received_card_transfer_is_reconstructed_as_a_distinct_target_receipt() {
         OplogIndex::from_u64(1),
         OplogEntry::card_event_queued(
             None,
-            QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+            Box::new(QueuedCardEvent::transfer_received(
+                transfer_id,
+                source_card_id,
+                card.clone(),
+            )),
         ),
     )]);
 
@@ -3495,98 +3511,17 @@ fn received_card_transfer_is_reconstructed_as_a_distinct_target_receipt() {
         &status.pending_card_events[0].event,
         QueuedCardEvent::TransferReceived(receipt)
             if receipt.transfer_id == transfer_id
-                && receipt.source_card_id == Some(source_card_id)
+                && receipt.source_card_id == source_card_id
                 && receipt.card_id == card.card_id
                 && receipt.card.as_ref() == Some(&stored_card)
     ));
     assert!(matches!(
         status.received_card_transfers.get(&transfer_id),
         Some(ReceivedCardTransferState::Received {
-            source_card_id: Some(recorded_source_card_id),
+            source_card_id: recorded_source_card_id,
             card: recorded_card,
         }) if *recorded_source_card_id == source_card_id && recorded_card == &stored_card
     ));
-}
-
-#[test]
-fn received_card_transfer_index_refines_legacy_identity_and_detects_conflicts() {
-    use golem_common::base_model::oplog::QueuedCardEventTransferReceived;
-
-    let card = test_card(golem_common::model::card::CardId::new());
-    let stored_card = golem_common::model::card::StoredCard::from(card);
-    let transfer_id = uuid::Uuid::new_v4();
-    let source_card_id = golem_common::model::card::CardId::new();
-    let legacy_receipt = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
-        transfer_id,
-        source_card_id: None,
-        card_id: stored_card.card_id(),
-        card: Some(stored_card.clone()),
-    });
-
-    let status = update_status_with_new_entries(
-        AgentMode::Durable,
-        AgentStatusRecord::default(),
-        BTreeMap::from([(
-            OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, legacy_receipt),
-        )]),
-        &RetryConfig::default(),
-    )
-    .unwrap();
-    assert!(matches!(
-        status.received_card_transfers.get(&transfer_id),
-        Some(ReceivedCardTransferState::Received {
-            source_card_id: None,
-            card,
-        }) if card == &stored_card
-    ));
-
-    let status = update_status_with_new_entries(
-        AgentMode::Durable,
-        status,
-        BTreeMap::from([(
-            OplogIndex::from_u64(2),
-            OplogEntry::card_event_queued(
-                None,
-                QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    stored_card.clone(),
-                ),
-            ),
-        )]),
-        &RetryConfig::default(),
-    )
-    .unwrap();
-    assert!(matches!(
-        status.received_card_transfers.get(&transfer_id),
-        Some(ReceivedCardTransferState::Received {
-            source_card_id: Some(recorded_source_card_id),
-            card,
-        }) if *recorded_source_card_id == source_card_id && card == &stored_card
-    ));
-
-    let status = update_status_with_new_entries(
-        AgentMode::Durable,
-        status,
-        BTreeMap::from([(
-            OplogIndex::from_u64(3),
-            OplogEntry::card_event_queued(
-                None,
-                QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    golem_common::model::card::CardId::new(),
-                    stored_card,
-                ),
-            ),
-        )]),
-        &RetryConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        status.received_card_transfers.get(&transfer_id),
-        Some(&ReceivedCardTransferState::Conflict)
-    );
 }
 
 #[test]
@@ -3600,11 +3535,11 @@ fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(
+                Box::new(QueuedCardEvent::transfer_received(
                     skipped_transfer_id,
                     source_card_id,
                     card.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3621,11 +3556,11 @@ fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
             OplogIndex::from_u64(3),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(
+                Box::new(QueuedCardEvent::transfer_received(
                     deleted_transfer_id,
                     source_card_id,
                     card.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3649,7 +3584,7 @@ fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
         assert!(matches!(
             status.received_card_transfers.get(&transfer_id),
             Some(ReceivedCardTransferState::Received {
-                source_card_id: Some(recorded_source_card_id),
+                source_card_id: recorded_source_card_id,
                 card: recorded_card,
             }) if *recorded_source_card_id == source_card_id
                 && recorded_card == &card.clone().into()
@@ -3675,7 +3610,11 @@ fn target_card_transferred_clears_only_its_matching_receipt() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+                Box::new(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
             ),
         ),
         (
@@ -3683,57 +3622,11 @@ fn target_card_transferred_clears_only_its_matching_receipt() {
             OplogEntry::card_transferred(
                 None,
                 transfer_id,
-                Some(source_card_id),
+                source_card_id,
                 card.card_id,
                 target_holder,
-                card.into(),
-                Some(7),
-            ),
-        ),
-    ]);
-
-    let status = update_status_with_new_entries(
-        AgentMode::Durable,
-        AgentStatusRecord::default(),
-        entries,
-        &RetryConfig::default(),
-    )
-    .unwrap();
-
-    assert!(status.pending_card_events.is_empty());
-}
-
-#[test]
-fn legacy_target_card_transferred_clears_its_matching_receipt() {
-    use golem_common::model::card::{AgentCardHolder, CardHolder};
-
-    let card = test_card(golem_common::model::card::CardId::new());
-    let source_card_id = golem_common::model::card::CardId::new();
-    let transfer_id = uuid::Uuid::new_v4();
-    let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
-    });
-    let entries = BTreeMap::from([
-        (
-            OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(
-                None,
-                QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
-            ),
-        ),
-        (
-            OplogIndex::from_u64(2),
-            OplogEntry::card_transferred(
-                None,
-                transfer_id,
-                None,
-                card.card_id,
-                target_holder,
-                card.into(),
-                None,
+                Box::new(card.into()),
+                7,
             ),
         ),
     ]);
@@ -3767,7 +3660,11 @@ fn target_card_transferred_with_conflicting_source_keeps_the_receipt() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+                Box::new(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
             ),
         ),
         (
@@ -3775,11 +3672,11 @@ fn target_card_transferred_with_conflicting_source_keeps_the_receipt() {
             OplogEntry::card_transferred(
                 None,
                 transfer_id,
-                Some(golem_common::model::card::CardId::new()),
+                golem_common::model::card::CardId::new(),
                 card.card_id,
                 target_holder,
-                card.clone().into(),
-                Some(7),
+                Box::new(card.clone().into()),
+                7,
             ),
         ),
     ]);
@@ -3797,7 +3694,7 @@ fn target_card_transferred_with_conflicting_source_keeps_the_receipt() {
         &status.pending_card_events[0].event,
         QueuedCardEvent::TransferReceived(receipt)
             if receipt.transfer_id == transfer_id
-                && receipt.source_card_id == Some(source_card_id)
+                && receipt.source_card_id == source_card_id
                 && receipt.card.as_ref() == Some(&card.into())
     ));
 }
@@ -3820,11 +3717,11 @@ fn card_transfer_confirmed_with_conflicting_source_card_keeps_pending_transfer()
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(
+                Box::new(QueuedCardEvent::transfer_started(
                     transfer_id,
                     pending_card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         ),
         (
@@ -3874,7 +3771,11 @@ fn card_install_failure_does_not_clear_pending_transfer() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(transfer_id, card.clone(), target_holder.clone()),
+                Box::new(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
             ),
         ),
         (
@@ -3928,7 +3829,11 @@ fn target_card_transferred_does_not_clear_source_pending_transfer() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(transfer_id, card.clone(), target_holder.clone()),
+                Box::new(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
             ),
         ),
         (
@@ -3936,11 +3841,11 @@ fn target_card_transferred_does_not_clear_source_pending_transfer() {
             OplogEntry::card_transferred(
                 None,
                 transfer_id,
-                Some(card.card_id),
+                card.card_id,
                 card.card_id,
                 target_holder,
-                card.clone().into(),
-                None,
+                Box::new(card.clone().into()),
+                0,
             ),
         ),
     ]);
@@ -3980,7 +3885,11 @@ fn reverted_card_transfer_confirmation_still_closes_pending_transfer() {
             OplogIndex::from_u64(1),
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started(transfer_id, card.clone(), target_holder.clone()),
+                Box::new(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
             ),
         ),
         (
@@ -4019,15 +3928,15 @@ fn card_revoked_removes_only_matching_pending_revoke_index() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, None),
+            OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, 1),
         ),
     ]);
 
@@ -4055,7 +3964,7 @@ fn card_event_queued_install_is_pending() {
         OplogIndex::from_u64(1),
         OplogEntry::card_event_queued(
             Some(OplogIndex::from_u64(42)),
-            QueuedCardEvent::install(card.clone()),
+            Box::new(QueuedCardEvent::install(card.clone())),
         ),
     )]);
 
@@ -4085,11 +3994,16 @@ fn card_installed_removes_pending_install() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::install(card.clone())),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::install(card.clone()))),
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_installed(None, Some(OplogIndex::from_u64(1)), card.into(), None),
+            OplogEntry::card_installed(
+                None,
+                Some(OplogIndex::from_u64(1)),
+                Box::new(card.into()),
+                1,
+            ),
         ),
     ]);
 
@@ -4111,7 +4025,7 @@ fn card_install_failed_removes_pending_install() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::install(card)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::install(card))),
         ),
         (
             OplogIndex::from_u64(2),
@@ -4141,7 +4055,7 @@ fn queued_card_event_survives_deleted_region_without_terminal() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
         ),
         (
             OplogIndex::from_u64(3),
@@ -4170,11 +4084,16 @@ fn terminal_card_event_in_deleted_region_cleans_pending_event() {
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(None, QueuedCardEvent::install(card.clone())),
+            OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::install(card.clone()))),
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::card_installed(None, Some(OplogIndex::from_u64(1)), card.into(), None),
+            OplogEntry::card_installed(
+                None,
+                Some(OplogIndex::from_u64(1)),
+                Box::new(card.into()),
+                1,
+            ),
         ),
         (
             OplogIndex::from_u64(3),
@@ -4207,7 +4126,7 @@ fn card_revoked_entry_is_recorded_even_in_deleted_region() {
                 entity_parent_start_index: None,
                 queued_event_index: OplogIndex::from_u64(1),
                 card_id,
-                wallet_generation: None,
+                wallet_generation: 1,
             },
         ),
         (

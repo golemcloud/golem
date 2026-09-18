@@ -811,13 +811,10 @@ pub struct PublicQueuedCardEventTransfer {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(
-    feature = "full",
-    desert(evolution(FieldAdded("source_card_id", None::<CardId>)))
-)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QueuedCardEventTransferReceived {
     pub transfer_id: uuid::Uuid,
-    pub source_card_id: Option<CardId>,
+    pub source_card_id: CardId,
     pub card_id: CardId,
     pub card: Option<StoredCard>,
 }
@@ -899,7 +896,7 @@ impl QueuedCardEvent {
         let card = card.into();
         Self::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id,
-            source_card_id: Some(source_card_id),
+            source_card_id,
             card_id: card.card_id(),
             card: Some(card),
         })

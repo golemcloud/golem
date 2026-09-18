@@ -362,7 +362,7 @@ impl DurableStreamStore {
                     handles.push((transport_stream_id, record.handle.clone()));
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        record,
+                        Box::new(record),
                     ));
                 }
                 let prepared = make_prepared(handles);

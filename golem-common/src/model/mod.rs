@@ -1335,7 +1335,7 @@ impl Default for AgentStatusRecord {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum ReceivedCardTransferState {
     Received {
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     },
     Conflict,

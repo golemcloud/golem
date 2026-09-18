@@ -1129,13 +1129,17 @@ impl WorkerService for DefaultWorkerService {
             Some((
                 _,
                 OplogEntry::Create {
+                    timestamp,
+                    parameters,
+                },
+            )) => {
+                let golem_common::model::oplog::CreateParameters {
                     agent_id,
                     agent_mode: persisted_agent_mode,
                     component_revision,
                     env,
                     environment_id,
                     created_by,
-                    timestamp,
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
@@ -1143,8 +1147,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
-                },
-            )) => {
+                } = *parameters;
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
                 let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
@@ -1840,7 +1843,9 @@ mod tests {
     use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
-    use golem_common::model::card::{Card, CardId, StoredCard};
+    use golem_common::model::card::{
+        Card, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
+    };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::TraceId;
@@ -2080,7 +2085,14 @@ mod tests {
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
-                wallet_pin: None,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
             },
         );
         entries.insert(
@@ -2306,7 +2318,7 @@ mod tests {
         status.received_card_transfers.insert(
             transfer_id(1),
             ReceivedCardTransferState::Received {
-                source_card_id: Some(CardId::new()),
+                source_card_id: CardId::new(),
                 card: stored_card(CardId::new()),
             },
         );
@@ -2454,7 +2466,7 @@ mod tests {
         new.received_card_transfers.insert(
             transfer_id(2),
             ReceivedCardTransferState::Received {
-                source_card_id: Some(CardId::new()),
+                source_card_id: CardId::new(),
                 card: stored_card(CardId::new()),
             },
         );

@@ -237,7 +237,7 @@ fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
-        wallet_pin: Some(wallet_pin),
+        wallet_pin: Box::new(wallet_pin),
     }
 }
 
@@ -1544,8 +1544,8 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         OplogEntry::CardDerived {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
-            card: derived_card.clone(),
-            wallet_generation: Some(0),
+            card: Box::new(derived_card.clone()),
+            wallet_generation: 0,
         },
         start_now(),
     ] {
@@ -1561,12 +1561,12 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         .await
         .expect("failed to replay invocation start")
         .expect("expected invocation start");
-    assert_eq!(invocation.wallet_pin, Some(wallet_pin.clone()));
+    assert_eq!(invocation.wallet_pin, wallet_pin.clone());
     assert_eq!(
         replay_state
             .pending_card_derivation(derived_card.card_id())
             .await,
-        Some((derived_card.clone(), Some(0)))
+        Some((derived_card.clone(), 0))
     );
     assert_eq!(
         replay_state.take_new_replay_events(),
@@ -1574,7 +1574,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
             ReplayEvent::InvocationWalletPinned { wallet_pin },
             ReplayEvent::CardDerived {
                 card: derived_card,
-                wallet_generation: Some(0),
+                wallet_generation: 0,
             },
         ]
     );
@@ -1599,8 +1599,8 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             queued_event_index: None,
-            card: card.clone(),
-            wallet_generation: Some(7),
+            card: Box::new(card.clone()),
+            wallet_generation: 7,
         },
         custom_start("durable-operation", 41, None, 1),
         custom_end(3, 42),
@@ -1645,7 +1645,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         vec![
             ReplayEvent::CardInstalled {
                 card,
-                wallet_generation: Some(7),
+                wallet_generation: 7,
             },
             ReplayEvent::ReplayFinished,
         ],
@@ -1668,11 +1668,11 @@ async fn permission_events_are_recovered_from_skipped_regions() {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             transfer_id,
-            source_card_id: Some(source_card_id),
+            source_card_id,
             installed_card_id: card.card_id(),
             target_holder: target_holder.clone(),
-            card: card.clone(),
-            target_wallet_generation: Some(1),
+            card: Box::new(card.clone()),
+            target_wallet_generation: 1,
         },
         start_now(),
     ] {
@@ -1688,11 +1688,11 @@ async fn permission_events_are_recovered_from_skipped_regions() {
         replay_state.take_new_replay_events(),
         vec![ReplayEvent::CardTransferred {
             transfer_id,
-            source_card_id: Some(source_card_id),
+            source_card_id,
             installed_card_id: card.card_id(),
             target_holder,
             card,
-            target_wallet_generation: Some(1),
+            target_wallet_generation: 1,
         }]
     );
 }
@@ -1707,8 +1707,8 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             queued_event_index: None,
-            card,
-            wallet_generation: Some(1),
+            card: Box::new(card),
+            wallet_generation: 1,
         },
         start_now(),
     ] {

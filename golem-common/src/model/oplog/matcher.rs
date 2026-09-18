@@ -481,9 +481,12 @@ impl PublicOplogEntry {
                 Self::string_match("cardtransferred", &[], query_path, query)
                     || Self::string_match("card-transferred", &[], query_path, query)
                     || Self::string_match(&params.transfer_id.to_string(), &[], query_path, query)
-                    || params.source_card_id.as_ref().is_some_and(|card_id| {
-                        Self::string_match(&card_id.to_string(), &[], query_path, query)
-                    })
+                    || Self::string_match(
+                        &params.source_card_id.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
                     || Self::string_match(
                         &params.installed_card_id.to_string(),
                         &[],
