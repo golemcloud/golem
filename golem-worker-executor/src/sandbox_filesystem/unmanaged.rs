@@ -185,21 +185,3 @@ impl UnmanagedProvisioning {
         Ok(filesystem)
     }
 }
-
-pub(super) fn copy_file(
-    root: &Path,
-    source: &Path,
-    target: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let parent = create_copy_parent(root, target)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut source = File::open(source)?;
-    std::io::copy(&mut source, &mut temporary)?;
-    temporary.as_file().sync_all()?;
-    set_file_permissions(temporary.as_file(), read_only)?;
-    temporary
-        .persist_noclobber(target)
-        .map_err(|error| error.error)?;
-    Ok(())
-}
