@@ -15,11 +15,12 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use fred::error::ErrorKind;
-use fred::types::SetOptions;
+use fred::types::{Expiration, SetOptions};
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 
@@ -90,20 +91,33 @@ impl RedisKeyValueStorage {
             KeyValueStorageNamespace::Worker { .. } => None,
             // Per-agent hash: each agent's split status fields live in their own hash so that
             // `hkeys`/`hdel` operate on a single agent's fields and multi-field writes are atomic.
-            KeyValueStorageNamespace::AgentStatus { agent_id } => {
-                Some(format!("agent-status:{}", agent_id.to_redis_key()))
-            }
-            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => Some(format!(
-                "agent-invocation-result-index:{}",
+            KeyValueStorageNamespace::AgentStatus {
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "agent-status:{}:{fingerprint}",
+                agent_id.to_redis_key()
+            )),
+            KeyValueStorageNamespace::AgentInvocationResultIndex {
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "agent-invocation-result-index:{}:{fingerprint}",
                 agent_id.to_redis_key()
             )),
             // Per-agent clean checkpoint hash; same per-agent isolation as `AgentStatus`.
-            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => Some(format!(
-                "agent-status-checkpoint:{}",
-                agent_id.to_redis_key()
+            KeyValueStorageNamespace::AgentStatusCheckpoint {
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "agent-status-checkpoint:{}:{fingerprint}",
+                agent_id.to_redis_key(),
             )),
-            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => Some(format!(
-                "agent:durable_stream_session_index:{}",
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "agent:durable_stream_session_index:{}:{fingerprint}",
                 agent_id.to_redis_key()
             )),
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => Some(format!(
@@ -145,6 +159,41 @@ impl KeyValueStorage for RedisKeyValueStorage {
                 .redis
                 .with(svc_name, api_name)
                 .set(key, value, None, None, false)
+                .await
+                .map_err(KeyValueStorageError::from),
+        }
+    }
+
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        record_redis_serialized_size(svc_name, entity_name, value.len());
+        match Self::use_hash(&namespace) {
+            Some(ns) => self
+                .redis
+                .with(svc_name, api_name)
+                .set_hash_with_expiry(ns, key, value, expiry)
+                .await
+                .map_err(KeyValueStorageError::from),
+            None => self
+                .redis
+                .with(svc_name, api_name)
+                .set(
+                    key,
+                    value,
+                    Some(Expiration::PX(
+                        i64::try_from(expiry.as_millis()).unwrap_or(i64::MAX).max(1),
+                    )),
+                    None,
+                    false,
+                )
                 .await
                 .map_err(KeyValueStorageError::from),
         }
@@ -204,6 +253,41 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .compare_and_set_many_hash(namespace, key, expected, pairs)
             .await
             .map_err(KeyValueStorageError::from)
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        for (_, value) in sets {
+            record_redis_serialized_size(svc_name, entity_name, value.len());
+        }
+        match Self::use_hash(&namespace) {
+            Some(namespace) => self
+                .redis
+                .with(svc_name, api_name)
+                .compare_and_mutate_many_hash(namespace, key, expected, sets, deletions, expiry)
+                .await
+                .map_err(KeyValueStorageError::from),
+            None if sets.is_empty() && deletions == [key] => self
+                .redis
+                .with(svc_name, api_name)
+                .compare_and_delete(key, expected)
+                .await
+                .map_err(KeyValueStorageError::from),
+            None => Err(KeyValueStorageError::Other(
+                "compare_and_mutate_many only supports compare-delete for flat Redis namespaces"
+                    .to_string(),
+            )),
+        }
     }
 
     async fn set_if_not_exists(

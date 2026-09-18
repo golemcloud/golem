@@ -455,11 +455,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasWorkerService + HasOplogService,
     {
-        let agent_mode = deps
+        let identity = deps
             .worker_service()
-            .get_agent_mode(owned_agent_id)
+            .resolve_agent_identity(owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let agent_mode = identity.agent_mode;
 
         let oplog_service = deps.oplog_service();
         let observed_oplog_index = oplog_service

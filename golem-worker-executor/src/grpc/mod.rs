@@ -1523,15 +1523,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1627,15 +1628,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {

@@ -41,7 +41,8 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus, OwnedAgentId, ScanCursor,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus,
+    OwnedAgentId, ScanCursor,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -92,6 +93,43 @@ where
             Err(err) => {
                 panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
             }
+        }
+    }
+}
+
+async fn retry_storage_op_fallible<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, IndexedStorageError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(IndexedStorageError::Transient(message)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    record_oplog_storage_retry(op_name);
+                    warn!(
+                        op = op_name,
+                        key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {message}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(IndexedStorageError::Transient(format!(
+                        "operation '{op_name}' failed for key '{key}' after {attempts} attempts: {message}"
+                    )));
+                }
+            }
+            Err(error) => return Err(error),
         }
     }
 }
@@ -606,6 +644,7 @@ impl OplogService for PrimaryOplogService {
                     owned_agent_id.clone(),
                     agent_mode,
                     initial_worker_metadata.created_by,
+                    initial_worker_metadata.fingerprint,
                     self.stream_session_index(),
                 ),
             )
@@ -699,6 +738,38 @@ impl OplogService for PrimaryOplogService {
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
         }
+    }
+
+    async fn read_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<Option<OplogEntry>, String> {
+        record_oplog_call("read_initial_entry");
+        let indexed_storage = self.indexed_storage.clone();
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: owned_agent_id.agent_id(),
+            agent_mode,
+        };
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        retry_storage_op_fallible(&self.retry_config, "read_initial_entry", &key, || {
+            let indexed_storage = indexed_storage.clone();
+            let namespace = namespace.clone();
+            let key = key.clone();
+            async move {
+                read_persisted_oplog_entries(
+                    indexed_storage,
+                    namespace,
+                    key,
+                    OplogIndex::INITIAL.as_u64(),
+                    OplogIndex::INITIAL.as_u64(),
+                )
+                .await
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .map(|entries| entries.into_iter().next().map(|(_, entry)| entry))
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -815,6 +886,7 @@ struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
+    fingerprint: AgentFingerprint,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
 }
 
@@ -832,6 +904,7 @@ impl CreateOplogConstructor {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     ) -> Self {
         Self {
@@ -846,6 +919,7 @@ impl CreateOplogConstructor {
             owned_agent_id,
             agent_mode,
             account_id,
+            fingerprint,
             stream_session_index,
         }
     }
@@ -882,6 +956,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.owned_agent_id,
             self.agent_mode,
             self.account_id,
+            self.fingerprint,
             self.stream_session_index,
             close,
         ))
@@ -927,6 +1002,7 @@ struct PrimaryOplog {
     key: String,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    fingerprint: AgentFingerprint,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     close: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
@@ -1037,6 +1113,7 @@ impl PrimaryOplog {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
@@ -1057,6 +1134,7 @@ impl PrimaryOplog {
             owned_agent_id,
             agent_mode,
             account_id,
+            fingerprint,
             account_id_label,
             environment_id_label,
             last_added_non_hint_entry: None,
@@ -1065,6 +1143,7 @@ impl PrimaryOplog {
         };
         let owned_agent_id = state.owned_agent_id.clone();
         let agent_mode = state.agent_mode;
+        let fingerprint = state.fingerprint;
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<OplogJob>();
         let actor = tokio::spawn(async move {
@@ -1306,6 +1385,7 @@ impl PrimaryOplog {
             key,
             owned_agent_id,
             agent_mode,
+            fingerprint,
             stream_session_index,
             close: Mutex::new(Some(close)),
         }
@@ -1490,6 +1570,7 @@ struct PrimaryOplogState {
     last_reported_commit_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    fingerprint: AgentFingerprint,
     account_id: AccountId,
     account_id_label: String,
     environment_id_label: String,
@@ -1867,6 +1948,7 @@ impl Oplog for PrimaryOplog {
                 self.stream_session_index.as_ref(),
                 &self.owned_agent_id,
                 self.agent_mode,
+                self.fingerprint,
                 snapshot.committed,
                 &snapshot.buffer,
                 session_key,

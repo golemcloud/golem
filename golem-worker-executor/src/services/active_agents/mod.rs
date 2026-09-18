@@ -77,7 +77,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -826,9 +826,26 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        self.get_existing_with_fingerprint(deps, owned_agent_id, principal, None)
+            .await
+    }
+
+    pub(crate) async fn get_existing_with_fingerprint<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
-        let result = worker.ensure_existing(principal).in_current_span().await;
+        let result = worker
+            .ensure_existing_with_fingerprint(principal, expected_fingerprint)
+            .in_current_span()
+            .await;
         if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
             && Arc::strong_count(&active_agent) == 2
             && Arc::strong_count(&worker) == 2

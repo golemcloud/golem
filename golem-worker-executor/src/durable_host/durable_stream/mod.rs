@@ -450,7 +450,8 @@ pub struct DurableStreamStore {
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
     worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
-    control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
+    control_metadata_provider:
+        std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode, AgentFingerprint)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,

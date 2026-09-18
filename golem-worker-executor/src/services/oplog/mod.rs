@@ -192,6 +192,19 @@ pub trait OplogService: Debug + Send + Sync {
         self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
+    /// Reads the initial entry without treating an absent oplog or a storage failure as a
+    /// fail-stop condition. Identity resolution uses this narrow fallible path.
+    async fn read_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<Option<OplogEntry>, String> {
+        Ok(self
+            .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .await
+            .remove(&OplogIndex::INITIAL))
+    }
+
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 

@@ -596,6 +596,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             let last_known_status = calculate_last_known_status_with_checkpoint(
                 &status_deps,
                 &owned_agent_id,
+                initial_worker_metadata.fingerprint,
                 agent_mode,
                 last_known_status,
             )

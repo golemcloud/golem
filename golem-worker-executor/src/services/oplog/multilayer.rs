@@ -98,6 +98,17 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
+    async fn read_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<Option<OplogEntry>, String> {
+        Ok(self
+            .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .await
+            .remove(&OplogIndex::INITIAL))
+    }
+
     /// Checks if an oplog archive exists for a worker
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 
@@ -471,6 +482,7 @@ impl OplogConstructor for CreateOplogConstructor {
         };
 
         let account_id = self.initial_worker_metadata.created_by;
+        let fingerprint = self.initial_worker_metadata.fingerprint;
 
         match agent_mode {
             AgentMode::Durable => {
@@ -560,6 +572,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     EphemeralOplog::new(
                         self.owned_agent_id,
                         agent_mode,
+                        fingerprint,
                         last_oplog_index,
                         self.service.max_operations_before_commit_ephemeral,
                         self.primary.clone(),
@@ -746,6 +759,48 @@ impl OplogService for MultiLayerOplogService {
         }
 
         fail_stop(read.finish())
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut result = self
+            .primary
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await;
+        for layer in &self.lower {
+            if result.len() >= n as usize {
+                break;
+            }
+            for (index, entry) in layer.read_source(owned_agent_id, agent_mode, idx, n).await {
+                result.entry(index).or_insert(entry);
+            }
+        }
+        result
+    }
+
+    async fn read_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<Option<OplogEntry>, String> {
+        if let Some(entry) = self
+            .primary
+            .read_initial_entry(owned_agent_id, agent_mode)
+            .await?
+        {
+            return Ok(Some(entry));
+        }
+        for layer in &self.lower {
+            if let Some(entry) = layer.read_initial_entry(owned_agent_id, agent_mode).await? {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

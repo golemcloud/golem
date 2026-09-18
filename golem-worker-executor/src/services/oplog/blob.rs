@@ -26,6 +26,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
@@ -117,6 +118,81 @@ impl OplogArchiveService for BlobOplogArchiveService {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         let archive = self.open(owned_agent_id, agent_mode).await;
         archive.read_source(idx, n).await
+    }
+
+    async fn read_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<Option<OplogEntry>, String> {
+        let namespace = BlobStorageNamespace::CompressedOplog {
+            environment_id: owned_agent_id.environment_id(),
+            component_id: owned_agent_id.component_id(),
+            agent_mode,
+            level: self.level,
+        };
+        let agent_name = owned_agent_id.agent_name();
+        let directory = Path::new(&agent_name);
+        let storage = self.blob_storage.with("blob_oplog", "read_initial_entry");
+        if storage
+            .exists(namespace.clone(), directory)
+            .await
+            .map_err(|error| error.to_string())?
+            != ExistsResult::Directory
+        {
+            return Ok(None);
+        }
+        let paths = storage
+            .list_dir(namespace.clone(), directory)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut chunks = Vec::with_capacity(paths.len());
+        for path in paths {
+            let index = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.parse::<u64>().ok())
+                .map(OplogIndex::from_u64)
+                .ok_or_else(|| format!("invalid compressed oplog chunk path: {path:?}"))?;
+            chunks.push((index, path));
+        }
+        let Some((last_index, path)) = chunks.into_iter().min_by_key(|(index, _)| *index) else {
+            return Ok(None);
+        };
+        let chunk_bytes = storage
+            .get_raw(namespace, &path)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("compressed oplog chunk {path:?} is missing"))?;
+        let chunk: CompressedOplogChunk = try_deserialize(&chunk_bytes)
+            .map_err(|error| format!("failed to decode compressed oplog chunk {path:?}: {error}"))?
+            .ok_or_else(|| {
+                format!(
+                    "compressed oplog chunk {path:?} has a missing or unsupported serialization version"
+                )
+            })?;
+        let entries = chunk.decompress().map_err(|error| error.to_string())?;
+        if chunk.count == 0 || entries.len() as u64 != chunk.count {
+            return Err(format!(
+                "compressed oplog chunk ending at {last_index} has invalid count {}",
+                chunk.count
+            ));
+        }
+        let first_index = last_index
+            .as_u64()
+            .checked_sub(chunk.count - 1)
+            .ok_or_else(|| {
+                format!(
+                    "compressed oplog chunk ending at {last_index} has invalid count {}",
+                    chunk.count
+                )
+            })?;
+        if first_index > OplogIndex::INITIAL.as_u64() {
+            return Ok(None);
+        }
+        Ok(entries
+            .into_iter()
+            .nth((OplogIndex::INITIAL.as_u64() - first_index) as usize))
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

@@ -6315,6 +6315,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 calculate_last_known_status_with_checkpoint(
                     this,
                     &owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
                     agent_mode,
                     worker.last_known_status,
                 )
@@ -6326,22 +6327,47 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                Worker::get_or_create_running(
+                let expected_fingerprint = worker.initial_worker_metadata.fingerprint;
+                let activation = Worker::get_existing_running_with_fingerprint(
                     this,
                     &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    expected_fingerprint,
                 )
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
-                    )
-                })?;
+                .await;
+                match activation {
+                    Ok(_) => {}
+                    Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
+                        let current = this
+                            .worker_service()
+                            .resolve_agent_identity(&owned_agent_id)
+                            .await?;
+                        if current
+                            .as_ref()
+                            .is_none_or(|identity| identity.fingerprint != expected_fingerprint)
+                        {
+                            this.worker_service()
+                                .remove_assignment_tracking(&owned_agent_id, expected_fingerprint)
+                                .await
+                                .map_err(anyhow::Error::msg)?;
+                            crate::metrics::workers::record_stale_running_worker(
+                                if current.is_none() {
+                                    "absent"
+                                } else {
+                                    "fingerprint_mismatch"
+                                },
+                            );
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(anyhow!(
+                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                        ));
+                    }
+                }
             }
         }
 

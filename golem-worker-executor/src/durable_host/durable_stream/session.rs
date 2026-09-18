@@ -18,8 +18,17 @@ use super::*;
 
 impl DurableStreamStore {
     /// Installs the runtime service used to project durable session control metadata.
-    pub fn set_control_metadata_provider(&self, service: Arc<dyn WorkerService>, mode: AgentMode) {
-        assert!(self.control_metadata_provider.set((service, mode)).is_ok());
+    pub fn set_control_metadata_provider(
+        &self,
+        service: Arc<dyn WorkerService>,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+    ) {
+        assert!(
+            self.control_metadata_provider
+                .set((service, mode, fingerprint))
+                .is_ok()
+        );
     }
 
     /// Loads control metadata reconstructed from committed session records.
@@ -28,7 +37,7 @@ impl DurableStreamStore {
         key: &StreamSessionKey,
     ) -> Result<Option<SessionControlMetadata>, String> {
         self.ensure_healthy()?;
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
         let activity = self
@@ -37,7 +46,7 @@ impl DurableStreamStore {
             .ok_or(StreamStoreError::RecoveryRequired)?;
         let owner = OwnedAgentId::new(self.environment_id, &self.producer);
         activity
-            .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, key))
+            .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
     }
@@ -49,7 +58,7 @@ impl DurableStreamStore {
         stream: StreamId,
     ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
         self.ensure_healthy()?;
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
         let activity = self
@@ -60,7 +69,7 @@ impl DurableStreamStore {
             .scope(async {
                 let owner = OwnedAgentId::new(self.environment_id, &self.producer);
                 let metadata = service
-                    .lookup_durable_stream_control_metadata(&owner, *mode, key)
+                    .lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key)
                     .await?;
                 let count = metadata.consumer_record_count(stream);
                 let page_size =
@@ -68,7 +77,7 @@ impl DurableStreamStore {
                 let mut positions = Vec::new();
                 for page in 0..count.div_ceil(page_size) {
                     let records = service
-                        .read_durable_stream_consumer_page(&owner, key, stream, page)
+                        .read_durable_stream_consumer_page(&owner, *fingerprint, key, stream, page)
                         .await?;
                     let needed = (count - page * page_size).min(page_size) as usize;
                     if records.len() < needed {
