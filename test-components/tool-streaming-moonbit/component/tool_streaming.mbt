@@ -119,6 +119,8 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
       "resource-exhausted"
     Err(@tool.ToolError::Rpc(error)) => "rpc:" + repr(error)
     Err(@tool.ToolError::Tool(_)) => "tool-error"
+    Err(@tool.ToolError::UnknownToolError(name, _)) =>
+      "unknown-tool-error:" + name
     Ok(_) => "ok"
   }
   stdout_terminal + ":" + result_terminal

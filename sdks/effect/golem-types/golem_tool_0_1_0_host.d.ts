@@ -20,7 +20,7 @@ declare module 'golem:tool/host@0.1.0' {
    * addition of per-caller access filtering. Order is
    * unspecified; callers that
    * want a stable ordering should sort by
-   * `definition.commands.nodes[0].name`.
+   * `lookup-name`.
    */
   export function getAllTools(): RegisteredTool[];
   /**
@@ -146,6 +146,8 @@ declare module 'golem:tool/host@0.1.0' {
    * component-id) for host-implemented privileged tools (§4.6).
    */
   export type RegisteredTool = {
+    /** Stable leaf name used to construct tool-rpc, independent of adapters. */
+    lookupName: string;
     definition: Tool;
     implementedBy: ComponentId;
   };

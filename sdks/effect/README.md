@@ -336,9 +336,8 @@ There are three build worlds:
 - `tool-middleware-guest`: standalone middleware (`@golemcloud/effect-golem/middleware`)
 - `agent-tool-middleware-guest`: combined agent/tool/middleware component
 
-The SDK and templates support all three worlds. **The current Golem CLI still rejects attaching
-tool middleware to an application manifest (GOL-39), so do not claim or depend on deployed
-middleware attachment yet.**
+The SDK and templates support all three worlds. The CLI accepts middleware metadata and manifest
+attachment; runtime traversal and invocation behavior remain separate deployment concerns.
 
 ## Durability 1.6
 

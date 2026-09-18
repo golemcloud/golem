@@ -266,7 +266,11 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 

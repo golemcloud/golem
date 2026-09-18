@@ -36,6 +36,7 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
+use golem_common::model::tool_middleware::RegisteredToolMiddleware;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -193,15 +194,15 @@ impl DeploymentService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
-        let identity = self
+        let mut staged_identity = self
             .deployment_repo
             .get_staged_identity(environment_id.0)
             .await?;
-        let ambient_tools = self.native_tool_catalog.plan_entries();
-        let mut summary =
-            identity.into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
+        staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
+        let mut summary: DeploymentPlan = staged_identity
+            .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
 
-        summary.ambient_tools = ambient_tools;
+        summary.ambient_tools = self.native_tool_catalog.plan_entries();
 
         Ok(summary)
     }
@@ -420,6 +421,24 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
+    pub async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredToolMiddleware>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+        let state: ToolDeploymentState = self
+            .deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .try_into()?;
+        Ok(state.registered_tool_middlewares.into_values().collect())
+    }
+
     pub async fn get_current_tool_deployment_state(
         &self,
         environment_id: EnvironmentId,
@@ -611,6 +630,7 @@ mod tests {
             name: EnvironmentName::try_from("dev").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),

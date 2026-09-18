@@ -193,7 +193,16 @@ async fn host_result_keeps_declared_tool_errors_separate() {
         )
         .await
         .unwrap();
-    assert!(matches!(declared, Err(NativeToolRpcError::Custom(_))));
+    let Err(NativeToolRpcError::Custom { name, payload }) = declared else {
+        panic!("expected declared tool error")
+    };
+    assert_eq!(name, "rejected");
+    assert_eq!(
+        payload.value(),
+        &SchemaValue::Tuple {
+            elements: Vec::new()
+        }
+    );
 
     let infrastructure = invoker
         .invoke(

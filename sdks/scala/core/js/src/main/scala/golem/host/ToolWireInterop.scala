@@ -43,6 +43,7 @@ object ToolWireInterop {
   def toolMiddlewareToJs(middleware: ToolMiddlewareDescriptor): JsToolMiddleware =
     JsToolMiddleware(
       middleware.name,
+      middleware.version,
       middleware.aliases.toJSArray,
       docToJs(middleware.doc),
       middleware.scope match {
@@ -68,7 +69,8 @@ object ToolWireInterop {
           )
         case "universal" => ToolMiddlewareScope.Universal
         case other       => throw new IllegalArgumentException(s"unknown tool middleware scope tag: $other")
-      }
+      },
+      middleware.version
     )
 
   def toolToJs(t: WitTool): JsTool =
@@ -92,7 +94,8 @@ object ToolWireInterop {
       case WitToolError.InvalidInput(message)    => JsToolError.invalidInput(message)
       case WitToolError.ConstraintViolation(msg) => JsToolError.constraintViolation(msg)
       case WitToolError.InvalidResult(message)   => JsToolError.invalidResult(message)
-      case WitToolError.CustomError(payload)     => JsToolError.customError(SchemaWireInterop.typedToJs(payload))
+      case WitToolError.CustomError(error)       =>
+        JsToolError.customError(error.name, SchemaWireInterop.typedToJs(error.payload))
     }
 
   def toolErrorFromJs(j: JsToolError): WitToolError =
@@ -104,8 +107,14 @@ object ToolWireInterop {
       case "constraint-violation" => WitToolError.ConstraintViolation(valOf(j).asInstanceOf[String])
       case "invalid-result"       => WitToolError.InvalidResult(valOf(j).asInstanceOf[String])
       case "custom-error"         =>
+        val error = valOf(j)
         WitToolError.CustomError(
-          SchemaWireInterop.typedFromJs(valOf(j).asInstanceOf[golem.host.js.schema.JsTypedSchemaValue])
+          WitCustomToolError(
+            error.selectDynamic("name").asInstanceOf[String],
+            SchemaWireInterop.typedFromJs(
+              error.selectDynamic("payload").asInstanceOf[golem.host.js.schema.JsTypedSchemaValue]
+            )
+          )
         )
       case other => throw new IllegalArgumentException(s"Unknown tool-error tag: $other")
     }

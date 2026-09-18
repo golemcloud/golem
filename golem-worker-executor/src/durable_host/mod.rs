@@ -23,8 +23,8 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
-pub(crate) mod durable_session;
-pub(crate) mod durable_stream;
+pub mod durable_session;
+pub mod durable_stream;
 pub mod entity;
 pub mod golem;
 pub mod http;
@@ -37,13 +37,13 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
-pub(crate) mod schema_value_stream;
+pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 mod sockets;
-pub(crate) mod stream_bus;
-pub(crate) mod stream_session;
-pub(crate) mod stream_transport;
+pub mod stream_bus;
+pub mod stream_session;
+pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
 pub mod tool;
@@ -149,7 +149,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -173,7 +174,7 @@ use golem_service_base::model::{
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -4178,7 +4179,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+        let invocation_loops = self
+            .public_state
+            .worker()
+            .active_agents()
+            .invocation_loops();
+        Arc::new(move || {
+            stream_runtime_teardown.load(Ordering::Acquire) || invocation_loops.is_shut_down()
+        })
     }
 
     pub(crate) fn begin_stream_runtime_teardown(&self) {
@@ -5018,6 +5026,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -5056,6 +5065,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -6000,9 +6010,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -6012,7 +6022,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -6220,10 +6230,29 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 store, &error,
                             )))
                         } else {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        }
+                    }
+                    SnapshotRecoveryResult::Unavailable(error) => {
+                        if store
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::ManualUpdate)
+                        {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        } else {
                             Err(error)
                         }
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
                     SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
@@ -6252,6 +6281,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
@@ -6722,10 +6755,11 @@ fn recovered_status(
 }
 
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
-    matches!(
-        status.status,
-        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
-    ) || status.has_pending_work()
+    status.status != AgentStatus::Interrupted
+        && (matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
+        ) || status.has_pending_work())
 }
 
 fn store_is_live(
@@ -8619,6 +8653,33 @@ mod tests {
         assert!(!should_restart_after_shard_assignment_change(&status));
     }
 
+    #[test]
+    fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Interrupted,
+            current_idempotency_key: Some(IdempotencyKey::fresh()),
+            ..AgentStatusRecord::default()
+        };
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.pending_invocations.push(PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(IdempotencyKey::fresh()),
+            manual_update_target_revision: None,
+        });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL.next(),
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.status = AgentStatus::Suspended;
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
     fn recovered_agent() -> OwnedAgentId {
         OwnedAgentId::new(
             EnvironmentId::new(),
@@ -9238,6 +9299,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {
@@ -10138,8 +10202,8 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
-    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    /// Number of live durable host calls currently in flight. Shared wait scheduling uses this
+    /// to defer voluntary suspension while work outside registered waits is progressing.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
@@ -10147,10 +10211,10 @@ struct PrivateDurableWorkerState {
     /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
     tail_work: tail_work::TailWorkTracker,
 
-    /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
-    /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
-    /// deadline and are woken by promise completion.
-    suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
+    /// Suspend-capable waits currently parked by sleep, promise, and RPC APIs. Deadline waits use
+    /// their wall-clock deadline (if any); RPC waits use a bounded resume delay so their transport
+    /// can be checked again after the worker resumes.
+    suspendable_waits: suspendable_wait::SuspendableWaitRegistry,
     next_suspendable_wait_id: AtomicU64,
 
     /// Latched when the current invocation's wall-clock deadline
@@ -10170,6 +10234,7 @@ struct PrivateDurableWorkerState {
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
     ),
+    dropped_call_event_backlog: VecDeque<concurrent::DropEvent>,
     completion_marker_recorder: concurrent::CompletionMarkerRecorder,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
@@ -10457,6 +10522,7 @@ impl PrivateDurableWorkerState {
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
+            dropped_call_event_backlog: VecDeque::new(),
             completion_marker_recorder,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
@@ -10660,11 +10726,11 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {
+    pub(crate) fn suspendable_waits(&self) -> suspendable_wait::SuspendableWaitRegistry {
         self.suspendable_waits.clone()
     }
 
-    fn next_suspendable_wait_id(&self) -> u64 {
+    pub(crate) fn next_suspendable_wait_id(&self) -> u64 {
         self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
     }
 
@@ -10676,19 +10742,21 @@ impl PrivateDurableWorkerState {
         )
     }
 
-    fn safe_to_suspend(&self) -> bool {
-        Self::suspend_admissible(
-            self.live_host_calls.load(Ordering::Acquire),
-            self.suspendable_waits.lock().unwrap().len(),
-            !self.active_durable_scopes.is_empty(),
-            !self.pending_p3_http_request_transmissions.is_empty(),
-        )
+    fn safe_to_suspend(&mut self) -> bool {
+        let markers_settled = self.settle_completed_marker_events();
+        markers_settled
+            && Self::suspend_admissible(
+                self.live_host_calls.load(Ordering::Acquire),
+                self.suspendable_waits.lock().unwrap().len(),
+                !self.active_durable_scopes.is_empty(),
+                !self.pending_p3_http_request_transmissions.is_empty(),
+            )
     }
 
-    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
-    /// without constructing worker state: the worker may suspend when every live durable host
-    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
-    /// request transmission is pending.
+    /// Shared scheduling heuristic for voluntary suspension, not a recoverability boundary.
+    /// Explicit interruption and arbitrary Store loss still reconstruct from durable history.
+    /// Defer automatic yielding until every live call is in a registered wait, no durable
+    /// scope is open, and no P3 HTTP request transmission is pending.
     fn suspend_admissible(
         live_host_calls: usize,
         suspendable_waits: usize,
@@ -10709,11 +10777,26 @@ impl PrivateDurableWorkerState {
     }
 
     fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
-        let mut events = Vec::new();
+        let mut events: Vec<_> = self.dropped_call_event_backlog.drain(..).collect();
         while let Ok(event) = self.dropped_call_events.1.try_recv() {
             events.push(event);
         }
         events
+    }
+
+    fn take_next_dropped_call_event(&mut self) -> Option<concurrent::DropEvent> {
+        self.dropped_call_event_backlog
+            .pop_front()
+            .or_else(|| self.dropped_call_events.1.try_recv().ok())
+    }
+
+    /// Releases only marker events known to have completed successfully. Every other event stays
+    /// worker-owned and in its original order for the next ordinary asynchronous drain.
+    fn settle_completed_marker_events(&mut self) -> bool {
+        while let Ok(event) = self.dropped_call_events.1.try_recv() {
+            self.dropped_call_event_backlog.push_back(event);
+        }
+        concurrent::settle_completed_marker_events(&mut self.dropped_call_event_backlog)
     }
 
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
