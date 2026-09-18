@@ -35,6 +35,9 @@ use golem_service_base::custom_api::{
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use tokio::time::Instant;
 use tracing::debug;
 
 pub struct ResolvedRouteEntry {
@@ -67,8 +70,12 @@ impl SafeDisplay for RouteResolverError {
     }
 }
 
+type DomainApiCache = Cache<(Domain, u64), (), Arc<DomainHttpApi>, ()>;
+
 pub struct RouteResolver {
-    domain_api_cache: Cache<Domain, (), DomainHttpApi, ()>,
+    domain_api_cache: Option<DomainApiCache>,
+    generation: AtomicU64,
+    max_age: Duration,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
     trusted_ingress_addresses: Vec<IpAddr>,
 }
@@ -79,15 +86,21 @@ impl RouteResolver {
         api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
     ) -> Self {
         Self {
-            domain_api_cache: Cache::new(
-                Some(config.router_cache_max_capacity),
-                FullCacheEvictionMode::LeastRecentlyUsed(1),
-                BackgroundEvictionMode::OlderThan {
-                    ttl: config.router_cache_ttl,
-                    period: config.router_cache_eviction_period,
-                },
-                "route_resolver_routers",
-            ),
+            domain_api_cache: (config.router_cache_max_capacity > 0
+                && !config.router_cache_ttl.is_zero())
+            .then(|| {
+                Cache::new(
+                    Some(config.router_cache_max_capacity),
+                    FullCacheEvictionMode::LeastRecentlyUsed(1),
+                    BackgroundEvictionMode::OlderThan {
+                        ttl: config.router_cache_ttl,
+                        period: config.router_cache_eviction_period,
+                    },
+                    "route_resolver_routers",
+                )
+            }),
+            generation: AtomicU64::new(0),
+            max_age: config.router_cache_ttl,
             api_definition_lookup,
             trusted_ingress_addresses: config.trusted_ingress_addresses.clone(),
         }
@@ -160,47 +173,79 @@ impl RouteResolver {
             .map_err(|_| "Invalid request origin".to_string())
     }
 
-    pub async fn invalidate_domain(&self, domain: &Domain) {
-        self.domain_api_cache.remove(domain).await;
+    pub async fn invalidate_domain(&self, _domain: &Domain) {
+        self.clear_all().await;
     }
 
     pub async fn clear_all(&self) {
-        let keys = self.domain_api_cache.keys().await;
-        for key in keys {
-            self.domain_api_cache.remove(&key).await;
+        // Pending lookups do not yet identify their environment. A global generation
+        // fences them too, without allowing an old fill to replace a current snapshot.
+        // Late old-generation fills remain unreachable and expire through normal eviction.
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(cache) = &self.domain_api_cache {
+            for key in cache.keys().await {
+                if key.1 < generation {
+                    cache.remove_if_cached(&key, |_| true).await;
+                }
+            }
         }
     }
 
-    pub async fn invalidate_domains_for_environment(&self, environment_id: EnvironmentId) {
-        let entries = self.domain_api_cache.iter().await;
-        for (domain, domain_api) in entries {
-            if domain_api.environment_id == environment_id {
-                self.domain_api_cache.remove(&domain).await;
-            }
-        }
+    pub async fn invalidate_domains_for_environment(&self, _environment_id: EnvironmentId) {
+        self.clear_all().await;
     }
 
     async fn get_or_build_domain_api(
         &self,
         domain: &Domain,
-    ) -> Result<DomainHttpApi, RouteResolverError> {
-        self.domain_api_cache
-            .get_or_insert_simple(domain, async || {
-                self.fetch_and_build_domain_api(domain).await
-            })
-            .await
-            .map_err(|_| RouteResolverError::CouldNotBuildRouter)
+    ) -> Result<Arc<DomainHttpApi>, RouteResolverError> {
+        for _ in 0..3 {
+            let generation = self.generation.load(Ordering::SeqCst);
+            let key = (domain.clone(), generation);
+            let lookup = self.api_definition_lookup.clone();
+            let domain = domain.clone();
+            let fetch = move || async move {
+                Self::fetch_and_build_domain_api(lookup, &domain)
+                    .await
+                    .map(Arc::new)
+            };
+            let result = match &self.domain_api_cache {
+                Some(cache) => cache.get_or_insert_simple_spawned(&key, fetch).await,
+                None => fetch().await,
+            };
+            if self.generation.load(Ordering::SeqCst) != generation {
+                continue;
+            }
+            let api = result.map_err(|_| RouteResolverError::CouldNotBuildRouter)?;
+            if let Some(cache) = &self.domain_api_cache
+                && api.created_at.elapsed() >= self.max_age
+            {
+                cache
+                    .remove_if_cached(&key, |value| Arc::ptr_eq(value, &api))
+                    .await;
+                continue;
+            }
+            // This check admits the snapshot. Later invalidations must not change
+            // the routing, policy or immutable file index of an admitted request.
+            if self.generation.load(Ordering::SeqCst) == generation {
+                return Ok(api);
+            }
+        }
+        Err(RouteResolverError::CouldNotBuildRouter)
     }
 
-    async fn fetch_and_build_domain_api(&self, domain: &Domain) -> Result<DomainHttpApi, ()> {
-        let compiled_routes = self.api_definition_lookup.get(domain).await;
+    async fn fetch_and_build_domain_api(
+        lookup: Arc<dyn HttpApiDefinitionsLookup>,
+        domain: &Domain,
+    ) -> Result<DomainHttpApi, ()> {
+        let compiled_routes = lookup.get(domain).await;
 
         let compiled_routes = match compiled_routes {
             Ok(value) => value,
             Err(ApiDefinitionLookupError::UnknownSite(_)) => {
                 return Ok(DomainHttpApi {
                     domain_exists: false,
-                    environment_id: EnvironmentId(uuid::Uuid::nil()),
+                    created_at: Instant::now(),
                     reserved: [Router::new(), Router::new()],
                     typed: [Router::new(), Router::new()],
                     mounts: Arc::new(Vec::new()),
@@ -213,7 +258,6 @@ impl RouteResolver {
             }
         };
 
-        let environment_id = compiled_routes.environment_id;
         let finalized_routes = match Self::finalize_routes(compiled_routes).await {
             Ok(value) => value,
             Err(err) => {
@@ -247,11 +291,11 @@ impl RouteResolver {
 
         Ok(DomainHttpApi {
             domain_exists: true,
-            environment_id,
             reserved: build_router(reserved)?,
             typed: build_router(typed)?,
             mounts: Arc::new(mounts),
             openapi_spec,
+            created_at: Instant::now(),
         })
     }
 
@@ -394,10 +438,9 @@ fn mount_specificity(path: &[PathSegment]) -> impl Iterator<Item = bool> + '_ {
         .map(|segment| matches!(segment, PathSegment::Literal { .. }))
 }
 
-#[derive(Clone)]
 struct DomainHttpApi {
     domain_exists: bool,
-    environment_id: EnvironmentId,
+    created_at: Instant,
     reserved: [Router<Arc<RichCompiledRoute>>; 2],
     typed: [Router<Arc<RichCompiledRoute>>; 2],
     mounts: Arc<Vec<Arc<RichCompiledRoute>>>,
@@ -566,6 +609,192 @@ pub(super) mod tests {
                 allowed_patterns: vec![],
             },
         }
+    }
+
+    struct ControlledLookup {
+        calls: tokio::sync::mpsc::UnboundedSender<
+            tokio::sync::oneshot::Sender<Result<CompiledRoutes, ApiDefinitionLookupError>>,
+        >,
+    }
+
+    #[async_trait::async_trait]
+    impl HttpApiDefinitionsLookup for ControlledLookup {
+        async fn get(&self, _: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.calls.send(tx).unwrap();
+            rx.await.unwrap()
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cache_invalidation_fences_pending_negative_and_obsolete_fills() {
+        for invalidation in 0..3 {
+            let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+            let resolver = Arc::new(RouteResolver::new(
+                &RouteResolverConfig::default(),
+                Arc::new(ControlledLookup { calls: tx }),
+            ));
+            let domain = Domain("example.com".into());
+            let old_request = {
+                let resolver = resolver.clone();
+                let domain = domain.clone();
+                tokio::spawn(async move { resolver.get_or_build_domain_api(&domain).await })
+            };
+            let old_fill = calls.recv().await.unwrap();
+            match invalidation {
+                0 => resolver.invalidate_domain(&domain).await,
+                1 => {
+                    resolver
+                        .invalidate_domains_for_environment(EnvironmentId::new())
+                        .await
+                }
+                _ => resolver.clear_all().await,
+            }
+            let new_request = {
+                let resolver = resolver.clone();
+                let domain = domain.clone();
+                tokio::spawn(async move { resolver.get_or_build_domain_api(&domain).await })
+            };
+            let new_fill = calls.recv().await.unwrap();
+            new_fill
+                .send(LiteralLookup(vec![]).get(&domain).await)
+                .unwrap();
+            let current = new_request.await.unwrap().unwrap();
+            old_fill
+                .send(Err(ApiDefinitionLookupError::UnknownSite(domain.clone())))
+                .unwrap();
+            let retried = old_request.await.unwrap().unwrap();
+            assert!(current.domain_exists);
+            assert!(Arc::ptr_eq(&current, &retried));
+            assert!(Arc::ptr_eq(
+                &current,
+                &resolver.get_or_build_domain_api(&domain).await.unwrap()
+            ));
+            assert!(calls.try_recv().is_err());
+            resolver.clear_all().await;
+            assert!(
+                current.domain_exists,
+                "invalidation must not mutate admitted snapshots"
+            );
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cache_fill_survives_owner_cancellation_and_invalidates_cached_absence() {
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let resolver = Arc::new(RouteResolver::new(
+            &RouteResolverConfig::default(),
+            Arc::new(ControlledLookup { calls: tx }),
+        ));
+        let domain = Domain("example.com".into());
+        let owner = {
+            let resolver = resolver.clone();
+            let domain = domain.clone();
+            tokio::spawn(async move { resolver.get_or_build_domain_api(&domain).await })
+        };
+        let fill = calls.recv().await.unwrap();
+        owner.abort();
+        assert!(matches!(owner.await, Err(error) if error.is_cancelled()));
+        fill.send(Err(ApiDefinitionLookupError::UnknownSite(domain.clone())))
+            .unwrap();
+        let absent = resolver.get_or_build_domain_api(&domain).await.unwrap();
+        assert!(!absent.domain_exists);
+        assert!(
+            calls.try_recv().is_err(),
+            "waiters share the surviving fill"
+        );
+        resolver.invalidate_domain(&domain).await;
+        let next = {
+            let resolver = resolver.clone();
+            let domain = domain.clone();
+            tokio::spawn(async move { resolver.get_or_build_domain_api(&domain).await })
+        };
+        calls
+            .recv()
+            .await
+            .unwrap()
+            .send(LiteralLookup(vec![]).get(&domain).await)
+            .unwrap();
+        assert!(next.await.unwrap().unwrap().domain_exists);
+        assert!(!absent.domain_exists);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cache_invalidation_storm_fails_after_bounded_retries() {
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let resolver = Arc::new(RouteResolver::new(
+            &RouteResolverConfig::default(),
+            Arc::new(ControlledLookup { calls: tx }),
+        ));
+        let request = {
+            let resolver = resolver.clone();
+            tokio::spawn(async move {
+                resolver
+                    .get_or_build_domain_api(&Domain("example.com".into()))
+                    .await
+            })
+        };
+        for _ in 0..3 {
+            let fill = calls.recv().await.unwrap();
+            resolver.clear_all().await;
+            fill.send(Err(ApiDefinitionLookupError::UnknownSite(Domain(
+                "example.com".into(),
+            ))))
+            .unwrap();
+        }
+        assert!(matches!(
+            request.await.unwrap(),
+            Err(RouteResolverError::CouldNotBuildRouter)
+        ));
+        assert!(calls.try_recv().is_err());
+    }
+
+    #[test]
+    fn cache_max_age_expires_hot_entries_and_disabled_cache_never_retains_entries() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::pause();
+                let resolver = RouteResolver::new(
+                    &RouteResolverConfig::default(),
+                    Arc::new(LiteralLookup(vec![])),
+                );
+                let domain = Domain("example.com".into());
+                let initial = resolver.get_or_build_domain_api(&domain).await.unwrap();
+                for _ in 0..9 {
+                    tokio::time::advance(Duration::from_secs(60)).await;
+                    assert!(Arc::ptr_eq(
+                        &initial,
+                        &resolver.get_or_build_domain_api(&domain).await.unwrap()
+                    ));
+                }
+                tokio::time::advance(Duration::from_secs(60)).await;
+                assert!(!Arc::ptr_eq(
+                    &initial,
+                    &resolver.get_or_build_domain_api(&domain).await.unwrap()
+                ));
+                for config in [
+                    RouteResolverConfig {
+                        router_cache_max_capacity: 0,
+                        ..Default::default()
+                    },
+                    RouteResolverConfig {
+                        router_cache_ttl: Duration::ZERO,
+                        ..Default::default()
+                    },
+                ] {
+                    let resolver = RouteResolver::new(&config, Arc::new(LiteralLookup(vec![])));
+                    assert!(resolver.domain_api_cache.is_none());
+                    let first = resolver.get_or_build_domain_api(&domain).await.unwrap();
+                    let second = resolver.get_or_build_domain_api(&domain).await.unwrap();
+                    assert!(!Arc::ptr_eq(&first, &second));
+                }
+            });
     }
 
     struct RoutesLookup(std::sync::Mutex<Option<CompiledRoutes>>);

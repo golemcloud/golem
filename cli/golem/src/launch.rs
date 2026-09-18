@@ -454,6 +454,7 @@ fn worker_service_config(
         port: 0,
         custom_request_port: args.custom_request_port,
         mcp_port: args.mcp_port,
+        blob_storage: blob_storage_config(args),
         grpc: golem_worker_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
@@ -599,6 +600,25 @@ mod tests {
             );
             assert_eq!(config.memory.worker_memory_ratio, 0.8);
             assert!(config.memory.enable_measured_admission);
+            let registry_config = registry_service_config(
+                &args,
+                &golem_component_compilation_service::RunDetails {
+                    http_port: 0,
+                    grpc_port: 0,
+                },
+            )
+            .unwrap();
+            let worker_config = worker_service_config(&args, &shard_manager, &registry).unwrap();
+            let BlobStorageConfig::LocalFileSystem(registry_blobs) = registry_config.blob_storage
+            else {
+                panic!("expected filesystem blobs")
+            };
+            let BlobStorageConfig::LocalFileSystem(worker_blobs) = worker_config.blob_storage
+            else {
+                panic!("expected filesystem blobs")
+            };
+            assert_eq!(worker_blobs.root, registry_blobs.root);
+            assert_eq!(worker_blobs.root, args.data_dir.join("blobs"));
         }
     }
 }

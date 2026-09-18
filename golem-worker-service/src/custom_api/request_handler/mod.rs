@@ -32,6 +32,7 @@ use anyhow::anyhow;
 use golem_schema::schema::render::json_value::to_json_value_redacted;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::StatusCode;
 use poem::{Request, Response};
 use std::sync::Arc;
@@ -71,6 +72,7 @@ impl RequestHandler {
         webhook_callback_handler: Arc<WebhookCallbackHandler>,
         worker_service: Arc<crate::service::worker::WorkerService>,
         http_session_limits: crate::config::HttpSessionLimits,
+        initial_files: Arc<InitialAgentFilesService>,
     ) -> Self {
         Self {
             route_resolver,
@@ -78,7 +80,7 @@ impl RequestHandler {
             durable_streams_handler,
             oidc_handler,
             webhook_callback_handler,
-            raw_handler: RawHandler::new(worker_service, http_session_limits),
+            raw_handler: RawHandler::new(worker_service, http_session_limits, initial_files),
         }
     }
 
@@ -520,6 +522,9 @@ mod mounted_tests {
                 )),
                 harness.worker_service.clone(),
                 Default::default(),
+                Arc::new(InitialAgentFilesService::new(Arc::new(
+                    golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                ))),
             );
             let request = Request::builder()
                 .uri(input["target"].as_str().unwrap().parse().unwrap())

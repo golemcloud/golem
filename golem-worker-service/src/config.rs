@@ -21,6 +21,7 @@ use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -35,6 +36,7 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
+    pub blob_storage: BlobStorageConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
@@ -70,6 +72,12 @@ impl SafeDisplay for WorkerServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "gateway session storage:");
         let _ = writeln!(
             result,
@@ -177,6 +185,7 @@ impl Default for WorkerServiceConfig {
         Self {
             environment: "local".to_string(),
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
+            blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,

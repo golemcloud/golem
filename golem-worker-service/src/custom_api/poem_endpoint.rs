@@ -36,6 +36,7 @@ impl CustomApiPoemEndpoint {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
+        let is_head = request.method() == http::Method::HEAD;
         let record = recorded_http_api_request!("execute",
             method = %request.method(),
             uri = %request.uri()
@@ -53,7 +54,11 @@ impl CustomApiPoemEndpoint {
                 log_internal_errors(&failure.error);
                 let mut error = CustomApiEndpointError::from(failure.error);
                 record.fail((), &mut error);
-                error_response(error, failure.cors_headers)
+                let mut response = error_response(error, failure.cors_headers);
+                if is_head {
+                    response.set_body(());
+                }
+                response
             }
         }
     }

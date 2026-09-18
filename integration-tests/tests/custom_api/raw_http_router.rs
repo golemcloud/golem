@@ -650,3 +650,184 @@ async fn raw_router_cors_preflight_does_not_invoke(
     assert_eq!(count().await?, before);
     Ok(())
 }
+
+#[test]
+#[timeout("120s")]
+async fn immutable_router_files_from_registry_blob_storage(
+    #[dimension(db)] raw_router_context: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use crate::custom_api::http_test_context::make_test_context_with_files;
+    use golem_common::model::ScanCursor;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+    use golem_test_framework::dsl::TestDsl;
+    use golem_test_framework::model::IFSEntry;
+    let context = make_test_context_with_files(
+        &raw_router_context.user.deps,
+        vec![(
+            AgentTypeName("StaticHttpRouter".into()),
+            HttpApiDeploymentAgentOptions::default(),
+        )],
+        "golem_it_agent_rpc_rust_release",
+        "golem-it:agent-rpc-rust",
+        HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
+        &[(
+            "StaticHttpRouter",
+            vec![
+                IFSEntry {
+                    source_path: "initial-file-system/files/foo.txt".into(),
+                    target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt")
+                        .map_err(anyhow::Error::msg)?,
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: "initial-file-system/files/baz.txt".into(),
+                    target_path: CanonicalFilePath::from_abs_str("/assets/private.txt")
+                        .map_err(anyhow::Error::msg)?,
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )],
+    )
+    .await?;
+    let etag = format!("\"blake3-{}\"", blake3::hash(b"foo\n").to_hex());
+    for (method, path, range, condition, status, length, expected) in [
+        (
+            Method::GET,
+            "/raw/static/asset.txt",
+            None,
+            None,
+            200,
+            Some("4"),
+            b"foo\n".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/favicon",
+            None,
+            None,
+            200,
+            Some("4"),
+            b"foo\n".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/static/asset.txt",
+            Some("bytes=1-2"),
+            None,
+            206,
+            Some("2"),
+            b"oo".as_slice(),
+        ),
+        (
+            Method::HEAD,
+            "/raw/static/asset.txt",
+            Some("bytes=99-"),
+            None,
+            200,
+            Some("4"),
+            b"".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/static/asset.txt",
+            Some("bytes=99-"),
+            Some(etag.as_str()),
+            304,
+            None,
+            b"".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/static/asset.txt",
+            Some("bytes=4-"),
+            None,
+            416,
+            Some("0"),
+            b"".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/static/asset.txt/",
+            None,
+            None,
+            403,
+            Some("0"),
+            b"".as_slice(),
+        ),
+        (
+            Method::GET,
+            "/raw/static/",
+            None,
+            None,
+            403,
+            Some("0"),
+            b"".as_slice(),
+        ),
+    ] {
+        let mut request = context
+            .client
+            .request(method, context.base_url.join(path)?)
+            .header("origin", "https://allowed.test");
+        if let Some(range) = range {
+            request = request.header("range", range);
+        }
+        if let Some(condition) = condition {
+            request = request.header("if-none-match", condition);
+        }
+        let response = request.send().await?;
+        assert_eq!(response.status().as_u16(), status, "{path}");
+        assert_eq!(
+            response
+                .headers()
+                .get("content-length")
+                .map(|v| v.to_str().unwrap()),
+            length,
+            "{path}"
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "https://allowed.test"
+        );
+        assert!(!response.headers().contains_key("x-echo-path"));
+        if status != 403 {
+            assert_eq!(response.headers()["etag"], etag);
+            assert_eq!(response.headers()["cache-control"], "no-cache");
+        }
+        if status == 200 || status == 206 {
+            assert_eq!(response.headers()["content-type"], "text/plain");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        }
+        assert_eq!(response.bytes().await?.as_ref(), expected, "{path}");
+    }
+    let (_, agents) = context
+        .user
+        .get_workers_metadata(
+            &context.component_id,
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
+        .await?;
+    assert!(
+        agents.is_empty(),
+        "Static requests created an executor agent"
+    );
+    for (method, path) in [
+        (Method::GET, "/raw/static/private.txt"),
+        (Method::GET, "/raw/static/missing.txt"),
+        (Method::POST, "/raw/static/asset.txt"),
+    ] {
+        let response = context
+            .client
+            .request(method, context.base_url.join(path)?)
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-echo-path"], path);
+        assert!(!response.headers().contains_key("etag"));
+        assert!(response.bytes().await?.is_empty());
+    }
+    Ok(())
+}

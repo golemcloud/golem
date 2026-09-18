@@ -35,9 +35,15 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::clients::shard_manager::{GrpcShardManager, ShardManager};
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::service::routing_table::RoutingTableService;
+use golem_service_base::storage::blob::{
+    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, s3::S3BlobStorage,
+    sqlite::SqliteBlobStorage,
+};
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 
@@ -60,6 +66,20 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
+            BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+            BlobStorageConfig::LocalFileSystem(config) => {
+                Arc::new(FileSystemBlobStorage::new(&config.root).await?)
+            }
+            BlobStorageConfig::Sqlite(config) => {
+                Arc::new(SqliteBlobStorage::new(SqlitePool::configured(config).await?).await?)
+            }
+            BlobStorageConfig::InMemory(_) => Arc::new(InMemoryBlobStorage::new()),
+            BlobStorageConfig::KVStoreSqlite(_) => {
+                anyhow::bail!("Worker-service does not support KVStoreSqlite blob storage")
+            }
+        };
+        let initial_files = Arc::new(InitialAgentFilesService::new(blob_storage));
         let invocation_session_token_keyring = Arc::new(
             InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
                 .map_err(anyhow::Error::msg)?,
@@ -189,6 +209,7 @@ impl Services {
             webhook_callback_handler.clone(),
             worker_service.clone(),
             config.http_session.clone(),
+            initial_files,
         ));
 
         Ok(Self {

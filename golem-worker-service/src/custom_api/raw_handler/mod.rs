@@ -33,6 +33,7 @@ use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
 use golem_schema::schema::validation::validate_value;
 use golem_service_base::custom_api::HttpRouterBehaviour;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::StatusCode;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,13 +46,19 @@ const BODY_STREAM_ID: u64 = 1;
 pub(super) struct RawHandler {
     worker_service: Arc<WorkerService>,
     limits: HttpSessionLimits,
+    initial_files: Arc<InitialAgentFilesService>,
 }
 
 impl RawHandler {
-    pub(super) fn new(worker_service: Arc<WorkerService>, limits: HttpSessionLimits) -> Self {
+    pub(super) fn new(
+        worker_service: Arc<WorkerService>,
+        limits: HttpSessionLimits,
+        initial_files: Arc<InitialAgentFilesService>,
+    ) -> Self {
         Self {
             worker_service,
             limits,
+            initial_files,
         }
     }
 
@@ -206,10 +213,21 @@ impl RawHandler {
 impl MountBackend for RawHandler {
     async fn file(
         &mut self,
-        _: &mut RichRequest,
-        _: &ResolvedRouteEntry,
-        _: MountFile<'_>,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+        file: MountFile<'_>,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
+        if let MountFile::Initial(entry) = file {
+            return super::immutable_files::serve(
+                &self.initial_files,
+                selected.route.environment_id,
+                entry,
+                request.underlying.method(),
+                request.underlying.headers(),
+            )
+            .await
+            .map(Some);
+        }
         Ok(Some(RouteExecutionResult {
             status: StatusCode::NOT_IMPLEMENTED,
             headers: http::HeaderMap::new(),

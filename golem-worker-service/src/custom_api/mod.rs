@@ -20,6 +20,7 @@ pub mod error;
 mod http_completion;
 mod http_envelope;
 pub mod http_session;
+mod immutable_files;
 pub mod model;
 mod mounted_dispatch;
 pub mod oidc;

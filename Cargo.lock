@@ -4204,6 +4204,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.0",
  "lazy_static",
+ "libsqlite3-sys",
  "metrics-prometheus",
  "openidconnect",
  "pin-project",

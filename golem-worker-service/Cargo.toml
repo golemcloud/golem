@@ -118,4 +118,5 @@ rustls = { workspace = true, features = ["ring"] }
 rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tryhard = { workspace = true }
