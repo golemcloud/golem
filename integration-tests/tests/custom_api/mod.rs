@@ -17,6 +17,7 @@ mod agent_http_routes_rust;
 mod agent_http_routes_ts;
 mod durable_streams;
 mod http_test_context;
+mod live_files;
 mod mcp;
 mod openapi_generation;
 mod raw_http_router;

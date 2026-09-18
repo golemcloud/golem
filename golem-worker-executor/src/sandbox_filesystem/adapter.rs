@@ -529,7 +529,12 @@ impl SandboxResolvedNamespaceTarget {
 impl SandboxTargetIdentity {
     /// Reports whether two policy targets share a namespace entry or native object identity.
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.namespace == other.namespace
+        // Conservative coordination keys deliberately collide for distinct sibling names.
+        // Use proven name equivalence or resolved object identity for policy checks.
+        (self.namespace.parent == other.namespace.parent
+            && (self.namespace.name.name == other.namespace.name.name
+                || (self.namespace.name.mode != NativeNameComparisonMode::Conservative
+                    && self.namespace.name == other.namespace.name)))
             || self
                 .object_identity
                 .as_ref()
@@ -4797,6 +4802,64 @@ mod tests {
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    async fn conservative_policy_identity_distinguishes_siblings_but_protects_aliases() {
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+            unmanaged_provisioning(parent.path().to_path_buf()),
+            name(),
+            None,
+        )
+        .await
+        .unwrap();
+        std::fs::create_dir(filesystem.root().join("public")).unwrap();
+        std::fs::write(filesystem.root().join("public/ro.txt"), b"read-only").unwrap();
+        std::fs::write(filesystem.root().join("public/rw.txt"), b"writable").unwrap();
+        std::fs::hard_link(
+            filesystem.root().join("public/ro.txt"),
+            filesystem.root().join("public/alias.txt"),
+        )
+        .unwrap();
+        let mut identities = Vec::new();
+        for path in ["ro.txt", "rw.txt", "missing", "alias.txt", "ro.txt"] {
+            let target = filesystem
+                .resolve_namespace_target(SandboxPath::at_root(format!("public/{path}")))
+                .await
+                .unwrap();
+            let mut identity = target.target_identity(SandboxFollow::No).unwrap();
+            identity.namespace.name.mode = NativeNameComparisonMode::Conservative;
+            identities.push(identity);
+        }
+        let read_only = &identities[0];
+        assert!(read_only.namespace == identities[1].namespace);
+        assert!(!read_only.matches(&identities[1]));
+        assert!(!read_only.matches(&identities[2]));
+        assert!(read_only.matches(&identities[3]));
+        assert!(read_only.matches(&identities[4]));
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn policy_identity_matches_case_insensitive_namespace_entries_without_object_identity() {
+        let parent = SandboxDirectoryCoordinationKey(NativeFileIdentity::Scripted("parent".into()));
+        let identity = |name: &str| SandboxTargetIdentity {
+            namespace: SandboxNamespaceCoordinationKey {
+                parent: parent.clone(),
+                name: NativeNameCoordinationKey {
+                    name: name.into(),
+                    mode: NativeNameComparisonMode::WindowsInsensitive,
+                },
+            },
+            object_identity: None,
+        };
+
+        assert!(identity("READ-ONLY.TXT").matches(&identity("read-only.txt")));
+        assert!(!identity("READ-ONLY.TXT").matches(&identity("other.txt")));
     }
 
     #[cfg(unix)]

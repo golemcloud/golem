@@ -41,13 +41,31 @@ fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
 }
 
 fn endpoint(harness: &InvocationHarness, routes: Vec<CompiledRoute>) -> CustomApiPoemEndpoint {
-    CustomApiPoemEndpoint::new(Arc::new(request_handler_with_worker(
+    endpoint_with_timeout(harness, routes, std::time::Duration::from_secs(300))
+}
+
+fn endpoint_with_timeout(
+    harness: &InvocationHarness,
+    routes: Vec<CompiledRoute>,
+    timeout: std::time::Duration,
+) -> CustomApiPoemEndpoint {
+    let files = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let mut handler = request_handler_with_worker(
         test_resolver(routes),
-        Arc::new(InitialAgentFilesService::new(Arc::new(
-            InMemoryBlobStorage::new(),
-        ))),
+        files.clone(),
         harness.worker_service.clone(),
-    )))
+    );
+    handler.raw_handler = RawHandler::new(
+        harness.worker_service.clone(),
+        crate::config::HttpSessionLimits {
+            exchange_timeout: timeout,
+            ..Default::default()
+        },
+        files,
+    );
+    CustomApiPoemEndpoint::new(Arc::new(handler))
 }
 
 fn request(method: &str, path: &str, headers: &[(&str, &str)]) -> Request {
@@ -108,6 +126,131 @@ fn decode(value: &serde_json::Value) -> Vec<u8> {
         .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn live_http_wire_deadlines_disconnects_and_late_failure() {
+    use std::time::Duration;
+    use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
+
+    for http2 in [false, true] {
+        for scenario in [
+            "head-deadline",
+            "head-disconnect",
+            "body-deadline",
+            "body-disconnect",
+            "body-error",
+            "unread-upload",
+        ] {
+            let harness = invocation_harness();
+            let cancelled = CancellationToken::new();
+            let guard = cancelled.clone().drop_guard();
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let started = entered.clone();
+            let fail = Arc::new(tokio::sync::Notify::new());
+            let trigger = fail.clone();
+            harness.file_reads.responses.lock().unwrap().push_back(
+                async move {
+                    started.notify_one();
+                    if scenario.starts_with("head-") {
+                        let _guard = guard;
+                        std::future::pending().await
+                    } else if scenario == "unread-upload" {
+                        drop(guard);
+                        Ok(file(3, 0, 3, b"abc"))
+                    } else {
+                        Ok(FileReadResponse {
+                            head: file(3, 0, 3, b"abc").head,
+                            body: futures::stream::once(async { Ok(Bytes::from_static(b"abc")) })
+                                .chain(futures::stream::once(async move {
+                                    let _guard = guard;
+                                    fail.notified().await;
+                                    Err(FileReadError::Lifecycle)
+                                }))
+                                .boxed(),
+                        })
+                    }
+                }
+                .boxed(),
+            );
+            // H1 may not notice disconnect until the pending handler's deadline.
+            let deadline =
+                if scenario.ends_with("deadline") || (!http2 && scenario == "head-disconnect") {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::from_secs(10)
+                };
+            let endpoint = Arc::new(endpoint_with_timeout(
+                &harness,
+                vec![route(&[("/*", "/a/$1")])],
+                deadline,
+            ));
+            let endpoint = poem::endpoint::make(move |request| {
+                let endpoint = endpoint.clone();
+                async move { endpoint.execute(request).await }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+            let _server = AbortOnDropHandle::new(tokio::spawn(crate::gateway_server::run(
+                acceptor, endpoint,
+            )));
+            let builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
+            let client = if http2 {
+                builder.http2_prior_knowledge()
+            } else {
+                builder.http1_only()
+            }
+            .build()
+            .unwrap();
+            let response = tokio::spawn(async move {
+                let mut request = client.get(format!("http://{address}/sites/42/a"));
+                if scenario == "unread-upload" {
+                    request = request.body(reqwest::Body::wrap_stream(
+                        futures::stream::once(async {
+                            Ok::<_, std::io::Error>(Bytes::from_static(b"unfinished upload"))
+                        })
+                        .chain(futures::stream::pending()),
+                    ));
+                }
+                request.send().await
+            });
+            tokio::time::timeout(Duration::from_secs(3), entered.notified())
+                .await
+                .unwrap_or_else(|_| panic!("{http2} {scenario}: file read not started"));
+            if scenario == "head-disconnect" {
+                response.abort();
+                let _ = response.await;
+            } else {
+                let mut response = response.await.unwrap().unwrap();
+                if scenario == "head-deadline" {
+                    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+                } else if scenario == "unread-upload" {
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.bytes().await.unwrap(), b"abc".as_slice());
+                } else {
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.chunk().await.unwrap().unwrap(), b"ab".as_slice());
+                    if scenario == "body-disconnect" {
+                        drop(response);
+                    } else {
+                        if scenario == "body-error" {
+                            trigger.notify_one();
+                        }
+                        assert!(
+                            response.bytes().await.is_err(),
+                            "{http2} {scenario}: false successful EOF"
+                        );
+                    }
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(2), cancelled.cancelled())
+                .await
+                .unwrap_or_else(|_| panic!("{http2} {scenario}: source retained"));
+            assert_eq!(harness.file_reads.calls.lock().unwrap().len(), 1);
+        }
+    }
 }
 
 #[test]
