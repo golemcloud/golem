@@ -135,7 +135,7 @@ const importObject = {
 for (const imported of WebAssembly.Module.imports(module)) {
   if (
     imported.kind === "function" &&
-    ((imported.module === "golem:agent/host@2.0.0" &&
+    ((imported.module === "golem:agent/durable-streams@2.0.0" &&
       ["[async-lower]read-durable-stream-batch", "[async-lower]append-durable-stream-batch"].includes(imported.name)) ||
       (imported.module === "wasi:clocks/monotonic-clock@0.3.0" &&
         imported.name === "[async-lower]wait-for") ||

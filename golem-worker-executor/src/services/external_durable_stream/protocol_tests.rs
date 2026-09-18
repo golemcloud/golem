@@ -22,6 +22,119 @@ use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use test_r::test;
 
+#[test]
+fn codec_reservations_preserve_bounds_and_reject_overflow() {
+    for max in [1, 17, 65_537, 8 * 1024 * 1024] {
+        for transport in [
+            DurableStreamTransport::CatchUp,
+            DurableStreamTransport::LongPoll,
+        ] {
+            assert_eq!(
+                read_memory_reservation(transport, max),
+                Some(6 * max as u64 + 2_097_152)
+            );
+        }
+        assert_eq!(
+            append_memory_reservation(max),
+            Some(6 * max as u64 + 2_097_152)
+        );
+        assert_eq!(
+            read_memory_reservation(DurableStreamTransport::Sse, max),
+            Some(32 * max as u64 + 2_097_152)
+        );
+    }
+    if usize::BITS == 64 {
+        assert_eq!(append_memory_reservation(usize::MAX), None);
+        assert_eq!(
+            read_memory_reservation(DurableStreamTransport::Sse, usize::MAX),
+            None
+        );
+        let last = ((u64::MAX - 2_097_152) / 32) as usize;
+        assert!(read_memory_reservation(DurableStreamTransport::Sse, last).is_some());
+        assert_eq!(
+            read_memory_reservation(DurableStreamTransport::Sse, last + 1),
+            None
+        );
+    }
+}
+
+#[test]
+fn sse_retained_capacity_fits_reservation_at_growth_boundaries() {
+    for max in [1, 17, 65_537] {
+        for base64 in [false, true] {
+            let mut parser = SseParser::new(max, base64, DurableStreamMode::Bytes);
+            let value = "x".repeat(max);
+            let encoded = if base64 {
+                base64::engine::general_purpose::STANDARD.encode(value)
+            } else {
+                value
+            };
+            // Retain the completed payload while growing a subsequent event's line/data.
+            // Unknown events and comments still consume the bounded framing budget.
+            let wire = format!(
+                "event: data\ndata: {encoded}\n\nevent: unknown\ndata: {}\n:{}",
+                "c".repeat(max),
+                "d".repeat(max)
+            );
+            let reservation = read_memory_reservation(DurableStreamTransport::Sse, max).unwrap();
+            for byte in wire.bytes() {
+                assert!(parser.push(byte).unwrap().is_none());
+                let retained = parser.line.capacity()
+                    + parser.data.capacity()
+                    + parser.event.capacity()
+                    + parser.pending.as_ref().map_or(0, Vec::capacity);
+                // Add one replacement allocation while either growable buffer reallocates.
+                let transient = parser.line.capacity().max(parser.data.capacity()) * 2;
+                assert!((retained + transient) as u64 <= reservation);
+            }
+            assert_eq!(parser.pending.as_ref().unwrap().len(), max);
+        }
+    }
+}
+
+#[test]
+async fn injected_service_uses_single_attempts_and_does_not_follow_redirects() {
+    use super::super::{DefaultExternalDurableStreamService, ExternalDurableStreamService};
+
+    let target = Server::new(vec![]).await;
+    let server = Server::new(vec![
+        response(307, &[("location", &target.url)], Body::empty()),
+        response(503, &[], Body::from("private-server-error")),
+        response(
+            204,
+            &[("producer-epoch", "7"), ("producer-seq", "11")],
+            Body::empty(),
+        ),
+    ])
+    .await;
+    let service: Arc<dyn ExternalDurableStreamService> =
+        Arc::new(DefaultExternalDurableStreamService::new().unwrap());
+    assert_eq!(
+        service
+            .read_batch(&read_request(&server.url), Some("private-token"), 1024)
+            .await
+            .unwrap_err()
+            .kind,
+        DurableStreamErrorKind::ProtocolError
+    );
+    let error = service
+        .append_batch(&append_request(&server.url), None, 1024)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, DurableStreamErrorKind::Unavailable);
+    assert!(!error.message.contains("private"));
+    let receipt = service
+        .append_batch(&append_request(&server.url), None, 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        (receipt.epoch, receipt.sequence, receipt.next_offset),
+        (7, 11, None)
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
+    assert!(target.requests.lock().unwrap().is_empty());
+}
+
 struct Captured {
     method: Method,
     uri: Uri,
@@ -222,20 +335,34 @@ fn append_validates_exact_json_and_preserves_lexemes() {
 
 #[test]
 async fn rejects_invalid_bodies_and_credentials_without_a_request() {
+    use super::super::{DefaultExternalDurableStreamService, ExternalDurableStreamService};
+
     let server = Server::new(vec![]).await;
     let client = client();
+    let service = DefaultExternalDurableStreamService::new().unwrap();
     let mut request = append_request(&server.url);
-    request.payload = DurableStreamAppendPayload::Json(vec!["1 2".to_owned()]);
-    assert_eq!(
-        append_batch(&client, &request, None, 1024)
-            .await
-            .unwrap_err()
-            .kind,
-        DurableStreamErrorKind::InvalidRequest
-    );
+    for value in ["1 2".to_owned(), "[".repeat(1022)] {
+        request.payload = DurableStreamAppendPayload::Json(vec![value]);
+        // Preflight cannot allocate the JSON parser's payload-sized nesting stack.
+        assert!(preflight_append(&request, 1024).is_ok());
+        assert_eq!(
+            service
+                .append_batch(&request, None, 1024)
+                .await
+                .unwrap_err()
+                .kind,
+            DurableStreamErrorKind::InvalidRequest
+        );
+        assert!(server.requests.lock().unwrap().is_empty());
+    }
     request.payload = DurableStreamAppendPayload::Json(vec![]);
+    assert!(preflight_append(&request, 1024).is_err());
     assert!(append_batch(&client, &request, None, 1024).await.is_err());
     request = append_request(&server.url);
+    assert_eq!(
+        preflight_append(&request, 2).unwrap_err().kind,
+        DurableStreamErrorKind::PayloadTooLarge
+    );
     assert_eq!(
         append_batch(&client, &request, None, 2)
             .await

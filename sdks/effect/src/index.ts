@@ -103,6 +103,9 @@ export * as Datetime from "./Datetime.js"
  */
 export * as Durability from "./Durability.js"
 
+/** External Durable Streams readers and producers. @since 1.6.0 @category modules */
+export * as DurableStreams from "./DurableStreams.js"
+
 /** Schema-value RPC for callers that only have an agent identity. @since 1.6.0 @category modules */
 export * as DynamicClient from "./DynamicClient.js"
 

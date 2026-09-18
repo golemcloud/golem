@@ -11,7 +11,7 @@ import {
   type DurableStreamError as HostError,
   type DurableStreamErrorKind,
   type DurableStreamReadRequest,
-} from 'golem:agent/host@2.0.0';
+} from 'golem:agent/durable-streams@2.0.0';
 import type { Secret as SecretHandle } from 'golem:core/types@2.0.0';
 import { AgentStream } from './schema/agentStream';
 import { compileSchema } from './schema/adapter';

@@ -19,7 +19,7 @@ fn batch(
   closed? : Bool = false,
   up_to_date? : Bool = true,
   content_type? : String = "application/json",
-) -> @host.DurableStreamBatch {
+) -> @durable-streams.DurableStreamBatch {
   {
     payload: FixedArray::from_array(payload.to_array()),
     content_type,
@@ -77,7 +77,7 @@ test "reader drains final nested JSON batch before EOF and checkpoint promotion"
 ///|
 test "now resolves once via catchup then pins content type cursor and SSE" {
   run_async(async fn() {
-    let requests : Array[@host.DurableStreamReadRequest] = []
+    let requests : Array[@durable-streams.DurableStreamReadRequest] = []
     let waits : Array[UInt64] = []
     let base : Reader[Int] = json_reader(
       "https://example.test/stream",
@@ -281,7 +281,7 @@ test "raw JSON codecs preserve large numeric lexemes and nested arrays" {
     writer.prepare([18446744073709551615, 9007199254740993], false)
     assert_eq(
       writer.pending.unwrap().payload,
-      @host.DurableStreamAppendPayload::Json([
+      @durable-streams.DurableStreamAppendPayload::Json([
         "18446744073709551615", "9007199254740993",
       ]),
     )
@@ -292,7 +292,7 @@ test "raw JSON codecs preserve large numeric lexemes and nested arrays" {
     arrays.prepare([[1, 2]], false)
     assert_eq(
       arrays.pending.unwrap().payload,
-      @host.DurableStreamAppendPayload::Json(["[1,2]"]),
+      @durable-streams.DurableStreamAppendPayload::Json(["[1,2]"]),
     )
   })
 }
@@ -330,7 +330,7 @@ test "AgentStream source is lazy affine and emits the pending remainder" {
 ///|
 test "writer cancellation retains exact body tuple and close before ack" {
   run_async(async fn() {
-    let calls : Array[@host.DurableStreamAppendRequest] = []
+    let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let base = byte_writer(
       "https://example.test/bytes",
       producer_id="stable",
@@ -376,7 +376,7 @@ test "writer cancellation retains exact body tuple and close before ack" {
     assert_eq(calls[0], calls[1])
     assert_eq(
       calls[0].payload,
-      @host.DurableStreamAppendPayload::Bytes([0, 255, 7]),
+      @durable-streams.DurableStreamAppendPayload::Bytes([0, 255, 7]),
     )
     assert_true(calls[0].close)
     assert_eq(writer.producer.sequence, 1)
@@ -388,7 +388,7 @@ test "writer cancellation retains exact body tuple and close before ack" {
 ///|
 test "writer retry loop keeps exact request and only ack advances sequence" {
   run_async(async fn() {
-    let calls : Array[@host.DurableStreamAppendRequest] = []
+    let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let waits : Array[UInt64] = []
     let base : Writer[Int] = json_writer(
       "https://example.test/stream",
@@ -413,7 +413,10 @@ test "writer retry loop keeps exact request and only ack advances sequence" {
     assert_eq(writer.producer.sequence, 1)
     ignore(writer.close())
     assert_eq(calls[2].producer.sequence, 1)
-    assert_eq(calls[2].payload, @host.DurableStreamAppendPayload::Json([]))
+    assert_eq(
+      calls[2].payload,
+      @durable-streams.DurableStreamAppendPayload::Json([]),
+    )
     assert_true(calls[2].close)
     assert_eq(writer.producer.sequence, 2)
   })

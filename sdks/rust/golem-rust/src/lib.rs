@@ -153,7 +153,7 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::{common, host};
+            pub use crate::raw_bindings::golem::agent::{common, durable_streams, host};
         }
 
         pub mod permissions {

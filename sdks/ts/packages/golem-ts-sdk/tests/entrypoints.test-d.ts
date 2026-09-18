@@ -26,6 +26,17 @@ import {
 import { ComponentId as ReflectionComponentId, getAgentType } from '../dist/reflection.mjs';
 import { z } from 'zod';
 import { v } from '../dist/schema.mjs';
+import * as durableStreams from 'golem:agent/durable-streams@2.0.0';
+import * as agentHost from 'golem:agent/host@2.0.0';
+
+declare const readBatch: ReturnType<typeof durableStreams.readDurableStreamBatch>;
+declare const appendReceipt: ReturnType<typeof durableStreams.appendDurableStreamBatch>;
+readBatch satisfies Promise<durableStreams.DurableStreamBatch>;
+appendReceipt satisfies Promise<durableStreams.DurableStreamAppendReceipt>;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.readDurableStreamBatch;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.appendDurableStreamBatch;
 
 const componentId = new ComponentId(new Uuid(1n, 2n));
 const reflectionComponentId: ReflectionComponentId = componentId;

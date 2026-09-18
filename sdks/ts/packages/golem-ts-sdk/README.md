@@ -76,7 +76,8 @@ in the item type, for example `stream<result<T, E>>`, when needed.
 ## External Durable Streams
 
 The SDK reads and appends existing external Durable Streams through two finite, asynchronous
-Golem host operations. It does not create streams or send HTTP itself.
+operations in `golem:agent/durable-streams@2.0.0`. It does not create streams or send HTTP itself.
+Custom component worlds using these APIs must import that interface.
 
 ```ts
 import {

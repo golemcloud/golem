@@ -1,5 +1,5 @@
 import {
-  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/interface/golem/agent/durable-streams",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/monotonic-clock" @clock,
   "golemcloud/golem_sdk/api",

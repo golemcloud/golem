@@ -1,17 +1,17 @@
 ///|
-pub type Checkpoint = @host.DurableStreamCheckpoint
+pub type Checkpoint = @durable-streams.DurableStreamCheckpoint
 
 ///|
-pub type Transport = @host.DurableStreamTransport
+pub type Transport = @durable-streams.DurableStreamTransport
 
 ///|
-pub type Receipt = @host.DurableStreamAppendReceipt
+pub type Receipt = @durable-streams.DurableStreamAppendReceipt
 
 ///|
-pub type HostError = @host.DurableStreamError
+pub type HostError = @durable-streams.DurableStreamError
 
 ///|
-pub type ErrorKind = @host.DurableStreamErrorKind
+pub type ErrorKind = @durable-streams.DurableStreamErrorKind
 
 ///|
 pub suberror DurableStreamError {

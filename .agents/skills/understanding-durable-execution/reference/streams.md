@@ -280,11 +280,16 @@ retries from the committed intent.
 ### Consuming and appending to external Durable Streams
 
 `durable_host/external_durable_stream/mod.rs` implements two finite async imports in
-`golem:agent/host`: `read-durable-stream-batch` (`ReadRemote`) and
+`golem:agent/durable-streams@2.0.0`: `read-durable-stream-batch` (`ReadRemote`) and
 `append-durable-stream-batch` (`WriteRemote`). Each uses one cancellable `DurableCallSession`
 with exact request-payload identity. There is no external cursor resource, new session journal,
 background ingestion task, or top-level oplog entry. External reads are positional host inputs;
 forwarding their values into native agent streams uses the ordinary stream machinery above.
+
+`services/external_durable_stream/` owns the injected HTTP client and protocol codec. The
+`ExternalDurableStreamService` is propagated through `All` and `HasExternalDurableStreamService`
+to the worker context, including fork, direct RPC and debug construction. The host retains
+durability, authorization, secret resolution, quotas, memory admission and interruption handling.
 
 Read `End` records the complete payload together with the peer's opaque offset and transport
 cursor. HTTP reads consume a complete bounded body; SSE closes after its first complete
@@ -310,9 +315,12 @@ is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and 
 retries are disabled. Remote errors are typed durable results. SDK retry budgets/backoff use
 durable clocks and waits, outside custom durability wrappers.
 
-`durable_stream.external_batch_max_bytes` bounds payloads. Codec buffer reservation uses existing
-memory admission and is held through durable completion; this is not a bound on imported DTOs or
-the HTTP/TLS implementation's buffers. Existing HTTP quotas apply. A long-poll remains resident
+`durable_stream.external_batch_max_size` bounds payloads and accepts human-readable SI/IEC sizes
+(default `8 MiB`). Codec buffer reservation uses existing memory admission and is held through
+durable completion: ordinary batches reserve `6 * max_size + 2 MiB`, SSE reserves
+`32 * max_size + 2 MiB`. The codec documents retained buffers, allocation growth and raw-JSON
+nesting-stack accounting beside its limits. This is not a bound on imported DTOs or the HTTP/TLS
+implementation's buffers. Existing HTTP quotas apply. A long-poll remains resident
 until its bounded attempt finishes; durable SDK sleeps between attempts can unload normally.
 
 Fork/revert uses ordinary retained-prefix replay: a cut before read `End` repeats the read, an

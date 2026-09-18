@@ -7,7 +7,7 @@ test "generated async read append and clock imports preserve borrowed secret and
   defer set_host_mode(0)
   run_async(async fn() {
     let secret = @types.Secret::Secret(77)
-    let read = @host.read_durable_stream_batch(
+    let read = @durable-streams.read_durable_stream_batch(
       {
         url: "https://example.test/stream",
         checkpoint: { offset: "now", cursor: None, },
@@ -18,7 +18,7 @@ test "generated async read append and clock imports preserve borrowed secret and
       },
       Some(secret),
     )
-    let append = @host.append_durable_stream_batch(
+    let append = @durable-streams.append_durable_stream_batch(
       {
         url: "https://example.test/stream",
         content_type: "application/json",

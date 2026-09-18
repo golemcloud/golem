@@ -39,6 +39,7 @@ full = [
     "dep:figment",
     "dep:fred",
     "dep:heck",
+    "dep:humansize",
     "dep:itertools",
     "dep:lazy_static",
     "dep:mac_address",
@@ -47,6 +48,7 @@ full = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
     "dep:opentelemetry-otlp",
+    "dep:parse-size",
     "dep:poem",
     "dep:poem-openapi",
     "dep:prometheus",
@@ -97,6 +99,7 @@ fred = { workspace = true, optional = true }
 glob-match = { workspace = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
+humansize = { workspace = true, optional = true }
 humantime = { workspace = true }
 humantime-serde = { workspace = true }
 ident-mash = { workspace = true }
@@ -110,6 +113,7 @@ openidconnect = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
+parse-size = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }

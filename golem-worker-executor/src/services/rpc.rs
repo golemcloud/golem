@@ -15,8 +15,12 @@
 use super::agent_webhooks::AgentWebhooksService;
 use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
+use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
+use super::{
+    HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService,
+    HasWebSocketConnectionPool,
+};
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
@@ -896,6 +900,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
+    external_durable_streams: Arc<dyn ExternalDurableStreamService>,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
     extra_deps: Ctx::ExtraDeps,
@@ -937,6 +942,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             extra_deps: self.extra_deps.clone(),
@@ -966,6 +972,12 @@ impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentWebhooksService for DirectWorkerInvocationRpc<Ctx> {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.agent_webhooks_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasExternalDurableStreamService for DirectWorkerInvocationRpc<Ctx> {
+    fn external_durable_streams(&self) -> Arc<dyn ExternalDurableStreamService> {
+        self.external_durable_streams.clone()
     }
 }
 
@@ -1197,6 +1209,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn ExternalDurableStreamService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         extra_deps: Ctx::ExtraDeps,
@@ -1235,6 +1248,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             http_connection_pool,
             websocket_connection_pool,
             extra_deps,

@@ -459,7 +459,8 @@ async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(start)
-                if start.function_name == "golem::agent::read_durable_stream_batch" =>
+                if start.function_name
+                    == "golem::agent::durable-streams::read_durable_stream_batch" =>
             {
                 Some(entry.oplog_index)
             }
@@ -559,7 +560,8 @@ async fn concurrent_reads_keep_request_identity_in_both_completion_orders(
                 .iter()
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
-                        if start.function_name == "golem::agent::read_durable_stream_batch" =>
+                        if start.function_name
+                            == "golem::agent::durable-streams::read_durable_stream_batch" =>
                     {
                         Some(entry.oplog_index)
                     }
@@ -808,7 +810,8 @@ async fn concurrent_appends_keep_identity_in_both_completion_orders(
                 .iter()
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
-                        if start.function_name == "golem::agent::append_durable_stream_batch" =>
+                        if start.function_name
+                            == "golem::agent::durable-streams::append_durable_stream_batch" =>
                     {
                         Some(entry.oplog_index)
                     }

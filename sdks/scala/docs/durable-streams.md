@@ -3,7 +3,9 @@
 `golem.streams.DurableStreams` reads and appends to an existing external Durable
 Streams server. Stream creation, deletion, external forks and subscriptions are
 not part of this API. The host performs HTTP, framing, authentication, validation
-and durable recording through two finite asynchronous operations.
+and durable recording through the two finite asynchronous operations in
+`golem:agent/durable-streams@2.0.0`: `read-durable-stream-batch` and
+`append-durable-stream-batch`.
 
 ## Read ordinary agent streams
 

@@ -24,6 +24,48 @@ use std::time::Duration;
 
 const MAX_INTEGER: u64 = (1 << 53) - 1;
 const MAX_METADATA: usize = 16 * 1024;
+const MAX_SSE_CONTROL_BYTES: usize = 64 * 1024;
+const SSE_WIRE_PAYLOAD_FACTOR: usize = 16;
+const SSE_RETAINED_PAYLOAD_FACTOR: usize = 4;
+
+// read_body retains up to 2 payloads of capacity, or 3 during growth. Borrowed
+// RawValue avoids a DOM but serde_json::Deserializer::ignore_value maintains a
+// growable nesting stack: malformed input consisting entirely of '[' can use one
+// stack byte per payload byte, or 3 payloads during growth. Reserve 2 + 3 + 1:
+// retained body, nesting-stack growth, and exact-capacity append framing. Body
+// growth and JSON validation do not overlap. The append allowance is conservative
+// even though a response is read only after sending the request body.
+const BODY_BUFFER_SLOTS: u64 = 6;
+// Each retained SSE buffer is capped at B = 4 * payload + 64 KiB. Allow 2B for
+// the line, 3B for data during growth, 2B for pending non-base64 data (into_bytes
+// preserves String capacity), and B for base64 decode/validation scratch. These
+// lifetimes need not all overlap; their sum deliberately overestimates the peak.
+const SSE_BUFFER_SLOTS: u64 = 8;
+// The eight SSE slots include eight control-sized allowances. Retain another 24
+// for control JSON unescaping/owned fields, URL/query/header copies and allocation
+// floors. This is headroom, not an assertion that metadata has 32 live copies.
+// Imported request DTOs and reqwest/TLS/socket buffers are outside this codec budget.
+const METADATA_RESERVATION_BYTES: u64 = 32 * MAX_SSE_CONTROL_BYTES as u64;
+
+pub(crate) fn read_memory_reservation(
+    transport: DurableStreamTransport,
+    max_bytes: usize,
+) -> Option<u64> {
+    let slots = if transport == DurableStreamTransport::Sse {
+        SSE_BUFFER_SLOTS * SSE_RETAINED_PAYLOAD_FACTOR as u64
+    } else {
+        BODY_BUFFER_SLOTS
+    };
+    (max_bytes as u64)
+        .checked_mul(slots)?
+        .checked_add(METADATA_RESERVATION_BYTES)
+}
+
+pub(crate) fn append_memory_reservation(max_bytes: usize) -> Option<u64> {
+    (max_bytes as u64)
+        .checked_mul(BODY_BUFFER_SLOTS)?
+        .checked_add(METADATA_RESERVATION_BYTES)
+}
 
 fn invalid(message: &'static str) -> DurableStreamError {
     DurableStreamError::new(DurableStreamErrorKind::InvalidRequest, message)
@@ -125,7 +167,7 @@ fn validate_url(value: &str, timeout_ms: u64, max_bytes: usize) -> Result<Url, D
 }
 
 /// Validates before authorization and returns the exact canonical URL used by the GET.
-pub(super) fn validate_read(
+pub(crate) fn validate_read(
     request: &DurableStreamReadRequest,
     max_bytes: usize,
 ) -> Result<Url, DurableStreamError> {
@@ -168,8 +210,10 @@ pub(super) fn validate_read(
     Ok(url)
 }
 
-/// Validates all values and the framed size without allocating a second append body.
-pub(super) fn validate_append(
+/// Validates metadata and framed size before authorization and memory admission.
+/// JSON syntax validation belongs to the admitted service operation because its
+/// nesting stack can grow with the payload.
+pub(crate) fn preflight_append(
     request: &DurableStreamAppendRequest,
     max_bytes: usize,
 ) -> Result<Url, DurableStreamError> {
@@ -189,13 +233,9 @@ pub(super) fn validate_append(
         return Err(invalid("Empty append requires close"));
     }
     match &request.payload {
-        DurableStreamAppendPayload::Json(values) => {
+        DurableStreamAppendPayload::Json(_) => {
             if !is_json(&mime) {
                 return Err(invalid("JSON payload requires application/json"));
-            }
-            for value in values {
-                serde_json::from_str::<&RawValue>(value)
-                    .map_err(|_| invalid("Invalid JSON append value"))?;
             }
         }
         DurableStreamAppendPayload::Bytes(bytes) if is_json(&mime) && !bytes.is_empty() => {
@@ -204,6 +244,20 @@ pub(super) fn validate_append(
             ));
         }
         DurableStreamAppendPayload::Bytes(_) => {}
+    }
+    Ok(url)
+}
+
+fn validate_append(
+    request: &DurableStreamAppendRequest,
+    max_bytes: usize,
+) -> Result<Url, DurableStreamError> {
+    let url = preflight_append(request, max_bytes)?;
+    if let DurableStreamAppendPayload::Json(values) = &request.payload {
+        for value in values {
+            serde_json::from_str::<&RawValue>(value)
+                .map_err(|_| invalid("Invalid JSON append value"))?;
+        }
     }
     Ok(url)
 }
@@ -634,11 +688,13 @@ impl SseParser {
             // Bound all framing, comments and control JSON as well as data. This allows
             // even base64 split one character per CRLF data line, plus 64 KiB metadata.
             // Excessive framing fails at the original checkpoint, never as a partial batch.
-            wire_limit: max_bytes.saturating_mul(16).saturating_add(64 * 1024),
-            // A separate retained-buffer limit keeps codec-owned allocations below
-            // 32 * max_bytes + 2 MiB, including transient growth and JSON parsing.
-            // Imported DTOs and HTTP/TLS implementation buffers are accounted separately.
-            buffer_limit: max_bytes.saturating_mul(4).saturating_add(64 * 1024),
+            wire_limit: max_bytes
+                .saturating_mul(SSE_WIRE_PAYLOAD_FACTOR)
+                .saturating_add(MAX_SSE_CONTROL_BYTES),
+            // See read_memory_reservation for retained-buffer and transient-growth accounting.
+            buffer_limit: max_bytes
+                .saturating_mul(SSE_RETAINED_PAYLOAD_FACTOR)
+                .saturating_add(MAX_SSE_CONTROL_BYTES),
             max_bytes,
             base64,
             mode,
@@ -740,7 +796,7 @@ impl SseParser {
                 Ok(None)
             }
             "control" => {
-                if data.len() > 64 * 1024 {
+                if data.len() > MAX_SSE_CONTROL_BYTES {
                     return Err(too_large());
                 }
                 let control = serde_json::from_str::<Control>(&data)

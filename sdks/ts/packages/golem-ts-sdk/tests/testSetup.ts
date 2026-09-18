@@ -30,9 +30,12 @@ const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
   create: vi.fn(makeWasmRpc),
 });
 
-vi.mock('golem:agent/host@2.0.0', () => ({
+vi.mock('golem:agent/durable-streams@2.0.0', () => ({
   readDurableStreamBatch: vi.fn(),
   appendDurableStreamBatch: vi.fn(),
+}));
+
+vi.mock('golem:agent/host@2.0.0', () => ({
   getAllAgentTypes: vi.fn(() => []),
   getAgentType: vi.fn((agentTypeName: string) => {
     if (agentTypeName === 'FooAgent') {

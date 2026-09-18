@@ -4,18 +4,18 @@
 pub struct Writer[T] {
   priv url : String
   priv content_type : String
-  priv encode : (Array[T]) -> @host.DurableStreamAppendPayload raise
+  priv encode : (Array[T]) -> @durable-streams.DurableStreamAppendPayload raise
   priv auth : @types.Secret?
   priv timeout_ms : UInt64
-  priv mut producer : @host.DurableStreamProducer
-  priv mut pending : @host.DurableStreamAppendRequest?
+  priv mut producer : @durable-streams.DurableStreamProducer
+  priv mut pending : @durable-streams.DurableStreamAppendRequest?
   priv mut closed : Bool
   priv retry : Retry
   priv lock : @async-core.Mutex
-  priv append_batch : async (@host.DurableStreamAppendRequest, @types.Secret?) -> Result[
-    Receipt,
-    HostError,
-  ]
+  priv append_batch : async (
+    @durable-streams.DurableStreamAppendRequest,
+    @types.Secret?,
+  ) -> Result[Receipt, HostError]
   priv wait : async (UInt64) -> Unit
 }
 
@@ -23,7 +23,7 @@ pub struct Writer[T] {
 fn[T] make_writer(
   url : String,
   content_type : String,
-  encode : (Array[T]) -> @host.DurableStreamAppendPayload raise,
+  encode : (Array[T]) -> @durable-streams.DurableStreamAppendPayload raise,
   producer_id : String?,
   epoch : UInt64,
   auth : @types.Secret?,
@@ -53,7 +53,7 @@ fn[T] make_writer(
     closed: false,
     retry,
     lock: @async-core.Mutex(),
-    append_batch: @host.append_durable_stream_batch,
+    append_batch: @durable-streams.append_durable_stream_batch,
     wait: wait_ms,
   }
 }
@@ -101,7 +101,7 @@ pub fn[T] json_writer_with_codec(
         ignore(@json.parse(text))
         text
       })
-      @host.DurableStreamAppendPayload::Json(encoded)
+      @durable-streams.DurableStreamAppendPayload::Json(encoded)
     },
     producer_id,
     epoch,
@@ -125,7 +125,9 @@ pub fn byte_writer(
     url,
     content_type,
     values => {
-      @host.DurableStreamAppendPayload::Bytes(FixedArray::from_array(values))
+      @durable-streams.DurableStreamAppendPayload::Bytes(
+        FixedArray::from_array(values),
+      )
     },
     producer_id,
     epoch,

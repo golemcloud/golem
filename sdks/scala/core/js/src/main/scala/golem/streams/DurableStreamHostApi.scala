@@ -141,7 +141,7 @@ private[streams] object DurableStreamHostApi {
   )
 
   @js.native
-  @JSImport("golem:agent/host@2.0.0", JSImport.Namespace)
+  @JSImport("golem:agent/durable-streams@2.0.0", JSImport.Namespace)
   private object Host extends js.Object {
     def readDurableStreamBatch(request: js.Object, auth: js.UndefOr[js.Any]): js.Promise[js.Dynamic]   = js.native
     def appendDurableStreamBatch(request: js.Object, auth: js.UndefOr[js.Any]): js.Promise[js.Dynamic] = js.native

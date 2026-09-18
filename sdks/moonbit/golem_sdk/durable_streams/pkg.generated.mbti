@@ -2,7 +2,7 @@
 package "golemcloud/golem_sdk/durable_streams"
 
 import {
-  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/interface/golem/agent/durable-streams",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema",
   "moonbitlang/core/debug",
@@ -10,13 +10,13 @@ import {
 }
 
 // Values
-pub fn byte_reader(String, offset? : String, cursor? : String, transport? : @host.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[Byte] raise
+pub fn byte_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[Byte] raise
 
 pub fn byte_writer(String, content_type? : String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int) -> Writer[Byte] raise
 
-pub fn[T : @json.FromJson] json_reader(String, offset? : String, cursor? : String, transport? : @host.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
+pub fn[T : @json.FromJson] json_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
 
-pub fn[T] json_reader_with_codec(String, (String) -> T raise, offset? : String, cursor? : String, transport? : @host.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
+pub fn[T] json_reader_with_codec(String, (String) -> T raise, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
 
 pub fn[T : ToJson] json_writer(String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int) -> Writer[T] raise
 
@@ -24,7 +24,7 @@ pub fn[T] json_writer_with_codec(String, (T) -> String raise, producer_id? : Str
 
 // Errors
 pub suberror DurableStreamError {
-  Remote(@host.DurableStreamError)
+  Remote(@durable-streams.DurableStreamError)
   InvalidState(String)
 } derive(@debug.Debug)
 
@@ -32,7 +32,7 @@ pub suberror DurableStreamError {
 pub struct Reader[T] {
   // private fields
 }
-pub fn[T] Reader::checkpoint(Self[T]) -> @host.DurableStreamCheckpoint
+pub fn[T] Reader::checkpoint(Self[T]) -> @durable-streams.DurableStreamCheckpoint
 pub fn[T] Reader::close(Self[T]) -> Unit
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] Reader::into_stream(Self[T]) -> @schema.AgentStream[T] raise
 pub async fn[T] Reader::read(Self[T]) -> T?
@@ -40,21 +40,21 @@ pub async fn[T] Reader::read(Self[T]) -> T?
 pub struct Writer[T] {
   // private fields
 }
-pub async fn[T] Writer::append(Self[T], Array[T], close? : Bool) -> @host.DurableStreamAppendReceipt
-pub async fn Writer::append_bytes(Self[Byte], Bytes, close? : Bool) -> @host.DurableStreamAppendReceipt
-pub async fn[T] Writer::close(Self[T]) -> @host.DurableStreamAppendReceipt
+pub async fn[T] Writer::append(Self[T], Array[T], close? : Bool) -> @durable-streams.DurableStreamAppendReceipt
+pub async fn Writer::append_bytes(Self[Byte], Bytes, close? : Bool) -> @durable-streams.DurableStreamAppendReceipt
+pub async fn[T] Writer::close(Self[T]) -> @durable-streams.DurableStreamAppendReceipt
 pub fn[T] Writer::has_pending(Self[T]) -> Bool
-pub async fn[T] Writer::retry_pending(Self[T]) -> @host.DurableStreamAppendReceipt
+pub async fn[T] Writer::retry_pending(Self[T]) -> @durable-streams.DurableStreamAppendReceipt
 
 // Type aliases
-pub using @host {type DurableStreamCheckpoint as Checkpoint}
+pub using @durable-streams {type DurableStreamCheckpoint as Checkpoint}
 
-pub using @host {type DurableStreamErrorKind as ErrorKind}
+pub using @durable-streams {type DurableStreamErrorKind as ErrorKind}
 
-pub using @host {type DurableStreamError as HostError}
+pub using @durable-streams {type DurableStreamError as HostError}
 
-pub using @host {type DurableStreamAppendReceipt as Receipt}
+pub using @durable-streams {type DurableStreamAppendReceipt as Receipt}
 
-pub using @host {type DurableStreamTransport as Transport}
+pub using @durable-streams {type DurableStreamTransport as Transport}
 
 // Traits

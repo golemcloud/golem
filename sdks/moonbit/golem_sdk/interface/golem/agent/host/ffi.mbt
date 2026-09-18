@@ -61,12 +61,6 @@ fn wasmImportMethodCancellationTokenCancel(p0 : Int)  = "golem:agent/host@2.0.0"
 fn wasmImportGetConfigValue(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int, p5 : Int, p6 : Int, p7 : Int)  = "golem:agent/host@2.0.0" "get-config-value"
 
 ///|
-fn wasmImportReadDurableStreamBatch(p0 : Int, p1 : Int) -> Int = "golem:agent/host@2.0.0" "[async-lower]read-durable-stream-batch"
-
-///|
-fn wasmImportAppendDurableStreamBatch(p0 : Int, p1 : Int) -> Int = "golem:agent/host@2.0.0" "[async-lower]append-durable-stream-batch"
-
-///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
 #|(func (param i32) (result i32) local.get 0)

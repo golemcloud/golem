@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod protocol;
-
 use crate::durable_host::authorization::targets::{http_target, secret_target};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
@@ -25,9 +23,12 @@ use crate::durable_host::secrets::{
     validate_secret_value,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::preview2::golem::agent::host as wit;
+use crate::preview2::golem::agent::durable_streams as wit;
 use crate::services::active_agents::MemoryGrant;
-use crate::services::{HasActiveAgents, HasWorker};
+use crate::services::external_durable_stream::{
+    append_memory_reservation, preflight_append, read_memory_reservation, validate_read,
+};
+use crate::services::{HasActiveAgents, HasExternalDurableStreamService, HasWorker};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::SecretVerb;
 use golem_common::model::oplog::DurableFunctionType;
@@ -41,16 +42,10 @@ use golem_common::model::oplog::payload::{
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::wit::SecretHandleRep;
-use std::sync::LazyLock;
 use std::time::Duration;
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
-static CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .build()
-});
+impl<Ctx: WorkerCtx> wit::Host for DurableWorkerCtx<Ctx> {}
 
 impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn read_durable_stream_batch(
@@ -59,7 +54,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
         auth: Option<Resource<SecretHandleRep>>,
     ) -> anyhow::Result<Result<wit::DurableStreamBatch, wit::DurableStreamError>> {
         let request: DurableStreamReadRequest = request.into();
-        let (auth, limit) = prepare(accessor, auth, "read-durable-stream-batch")?;
+        let (auth, limit) = prepare(accessor, auth)?;
         let recorded = HostRequestDurableStreamRead {
             request: request.clone(),
             auth: auth.as_ref().map(SecretEntry::to_snapshot),
@@ -82,18 +77,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
                 CallReplayOutcome::Incomplete(live) => call = live,
             }
         }
+        let service = accessor.with(|mut access| {
+            access
+                .get()
+                .public_state
+                .worker()
+                .external_durable_streams()
+        });
         let (result, _memory) = match live_attempt(
             accessor,
-            protocol::validate_read(&request, limit),
+            validate_read(&request, limit),
             auth,
             request.timeout_ms,
-            limit,
-            if request.transport == DurableStreamTransport::Sse {
-                32
-            } else {
-                4
-            },
-            async |client, token| protocol::read_batch(client, &request, token, limit).await,
+            read_memory_reservation(request.transport, limit),
+            async |token| service.read_batch(&request, token, limit).await,
         )
         .await
         {
@@ -116,7 +113,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
         auth: Option<Resource<SecretHandleRep>>,
     ) -> anyhow::Result<Result<wit::DurableStreamAppendReceipt, wit::DurableStreamError>> {
         let request: DurableStreamAppendRequest = request.into();
-        let (auth, limit) = prepare(accessor, auth, "append-durable-stream-batch")?;
+        let (auth, limit) = prepare(accessor, auth)?;
         let recorded = HostRequestDurableStreamAppend {
             request: request.clone(),
             auth: auth.as_ref().map(SecretEntry::to_snapshot),
@@ -139,14 +136,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
                 CallReplayOutcome::Incomplete(live) => call = live,
             }
         }
+        let service = accessor.with(|mut access| {
+            access
+                .get()
+                .public_state
+                .worker()
+                .external_durable_streams()
+        });
         let (result, _memory) = match live_attempt(
             accessor,
-            protocol::validate_append(&request, limit),
+            preflight_append(&request, limit),
             auth,
             request.timeout_ms,
-            limit,
-            4,
-            async |client, token| protocol::append_batch(client, &request, token, limit).await,
+            append_memory_reservation(limit),
+            async |token| service.append_batch(&request, token, limit).await,
         )
         .await
         {
@@ -167,18 +170,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
 fn prepare<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     auth: Option<Resource<SecretHandleRep>>,
-    function: &str,
 ) -> anyhow::Result<(Option<SecretEntry>, usize)> {
     accessor.with(|mut access| {
         let ctx = access.get();
-        ctx.observe_function_call("golem:agent/host", function);
         let entry = auth
             .as_ref()
             .map(|auth| secret_entry(ctx, auth).cloned())
             .transpose()?;
         Ok((
             entry,
-            ctx.state.config.durable_stream.external_batch_max_bytes,
+            ctx.state.config.durable_stream.external_batch_max_size,
         ))
     })
 }
@@ -188,9 +189,8 @@ async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
     url: Result<reqwest::Url, DurableStreamError>,
     auth: Option<SecretEntry>,
     timeout_ms: u64,
-    limit: usize,
-    buffer_multiplier: u64,
-    operation: impl AsyncFnOnce(&reqwest::Client, Option<&str>) -> Result<T, DurableStreamError>,
+    reservation: Option<u64>,
+    operation: impl AsyncFnOnce(Option<&str>) -> Result<T, DurableStreamError>,
 ) -> anyhow::Result<(Result<T, DurableStreamError>, Option<MemoryGrant>)> {
     let url = match url {
         Ok(url) => url,
@@ -241,11 +241,8 @@ async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
             ctx.create_interrupt_signal(),
         )
     });
-    // HTTP needs body capacity, a chunk and append framing; SSE additionally retains
-    // line/event buffers and base64 data. Hold the reservation through durable handoff.
-    let reservation = (limit as u64)
-        .checked_mul(buffer_multiplier)
-        .and_then(|bytes| bytes.checked_add(2 * 1024 * 1024))
+    // The codec owns the allocation estimate; the host holds admission through durable handoff.
+    let reservation = reservation
         .ok_or_else(|| anyhow::anyhow!("External durable stream batch limit is too large"))?;
     let memory = match active_agents.try_acquire(reservation).await {
         Some(memory) => memory,
@@ -306,13 +303,7 @@ async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
         } else {
             None
         };
-        let client = CLIENT.as_ref().map_err(|_| {
-            DurableStreamError::new(
-                DurableStreamErrorKind::Unavailable,
-                "HTTP client unavailable",
-            )
-        })?;
-        operation(client, token.as_deref()).await
+        operation(token.as_deref()).await
     };
     let result = tokio::select! {
         result = tokio::time::timeout(Duration::from_millis(timeout_ms), action) => {

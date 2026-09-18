@@ -14,7 +14,7 @@ fn Items::length(self : Items) -> Int {
 
 ///|
 priv struct PendingBatch {
-  batch : @host.DurableStreamBatch
+  batch : @durable-streams.DurableStreamBatch
   items : Items
   mut index : Int
 }
@@ -23,7 +23,7 @@ priv struct PendingBatch {
 /// One bounded batch is retained until every item has been delivered. State is
 /// reconstructed by ordinary durable execution, not by serializing native handles.
 pub struct Reader[T] {
-  priv mut request : @host.DurableStreamReadRequest
+  priv mut request : @durable-streams.DurableStreamReadRequest
   priv auth : @types.Secret?
   priv live_transport : Transport
   priv decode : (Items, Int) -> T raise
@@ -34,17 +34,17 @@ pub struct Reader[T] {
   priv mut closed : Bool
   priv mut transferred : Bool
   priv lock : @async-core.Mutex
-  priv read_batch : async (@host.DurableStreamReadRequest, @types.Secret?) -> Result[
-    @host.DurableStreamBatch,
-    HostError,
-  ]
+  priv read_batch : async (
+    @durable-streams.DurableStreamReadRequest,
+    @types.Secret?,
+  ) -> Result[@durable-streams.DurableStreamBatch, HostError]
   priv wait : async (UInt64) -> Unit
 }
 
 ///|
 fn[T] make_reader(
   url : String,
-  mode : @host.DurableStreamMode,
+  mode : @durable-streams.DurableStreamMode,
   decode : (Items, Int) -> T raise,
   offset : String,
   cursor : String?,
@@ -74,7 +74,7 @@ fn[T] make_reader(
     closed: false,
     transferred: false,
     lock: @async-core.Mutex(),
-    read_batch: @host.read_durable_stream_batch,
+    read_batch: @durable-streams.read_durable_stream_batch,
     wait: wait_ms,
   }
 }
@@ -172,7 +172,7 @@ pub fn byte_reader(
 ///|
 fn[T] Reader::install(
   self : Reader[T],
-  batch : @host.DurableStreamBatch,
+  batch : @durable-streams.DurableStreamBatch,
 ) -> Unit raise {
   let bytes = Bytes::from_array(batch.payload)
   let items = match self.request.mode {
@@ -192,7 +192,7 @@ fn[T] Reader::install(
 ///|
 fn[T] Reader::promote(
   self : Reader[T],
-  batch : @host.DurableStreamBatch,
+  batch : @durable-streams.DurableStreamBatch,
 ) -> Unit {
   self.request = {
     ..self.request,

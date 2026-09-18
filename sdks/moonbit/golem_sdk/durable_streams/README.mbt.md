@@ -5,6 +5,10 @@ external Durable Streams URL. The Golem host owns HTTP, SSE framing, authenticat
 status validation and durable call recording. This package owns application codecs,
 one pending batch, its item index, checkpoints and producer state.
 
+The SDK calls the stateless `read-durable-stream-batch` and
+`append-durable-stream-batch` functions in `golem:agent/durable-streams@2.0.0`.
+Custom component worlds using this package must import that interface.
+
 ```mbt check
 ///|
 test "construct an external source without starting HTTP" {

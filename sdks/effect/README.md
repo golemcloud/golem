@@ -205,6 +205,63 @@ cleanup. A downstream drop stops future source pulls and eventually calls the pr
 later invocation. Terminal errors are not transported; model recoverable failures as stream items
 (for example `Result<T, E>`). Streams cannot be snapshotted, triggered, or scheduled.
 
+## External Durable Streams
+
+`DurableStreams.readJson(schema, options)` and `readBytes(options)` return lazy native Effect
+streams. They read finite host batches, starting with catch-up and following with long-poll
+(default) or SSE. Offsets and cursors are opaque. `offset: "now"` is resolved once per stream
+execution; an empty live batch is not EOF, and a closed batch emits its payload before EOF.
+Each execution of a local stream starts at its configured offset. Native agent-stream forwarding
+works without an iterator or Promise adapter.
+
+Before passing a host-dependent stream to an agent method (or returning it through an agent-stream
+schema), capture its services within the invocation:
+
+```ts
+const forward = Effect.gen(function* () {
+  const source = DurableStreams.readBytes({ url })
+  const context = yield* Effect.context<Stream.Services<typeof source>>()
+  return yield* sink.collect({ bytes: source.pipe(Stream.provideContext(context)) })
+})
+```
+
+```ts
+import { Effect, Schema, Stream } from "effect"
+import { DurableStreams, defineConfig } from "@golemcloud/effect-golem"
+
+class StreamConfig extends defineConfig("Stream.Config", {
+  bearer: Schema.Redacted(Schema.String),
+}) {}
+
+const roundtrip = Effect.gen(function* () {
+  const cfg = yield* StreamConfig
+  const auth = yield* cfg.bearer.borrow // opaque handle; does not reveal the token
+  const options = { url: "https://streams.example/events", auth }
+  const writer = yield* DurableStreams.makeJsonWriter(Schema.String, options)
+  yield* writer.append(["first", "last"], { close: true })
+  return yield* DurableStreams.readJson(Schema.String, options).pipe(Stream.runCollect)
+})
+```
+
+Writers serialize concurrent effects and retain one immutable producer ID/epoch/sequence, body,
+and close flag after a failed or interrupted append. New data is rejected while `hasPending` is
+true: explicitly run `writer.retryPending` to resolve the same request. `writer.close` consumes
+a sequence too. The pending operation also retains its automatic retry budget and interrupted
+backoff; an explicit retry does not reset either. A receipt's `nextOffset` may be absent on a duplicate acknowledgement; there is
+no duplicate boolean. Finite host attempts have bounded retries (`maxRetries`, `retryDelayMs`,
+`timeoutMs`) and honor Retry-After. Fiber cancellation stops waiting but does not prove the remote
+append was cancelled; its retained request must still be resolved.
+
+JSON uses the SDK's schema codecs and canonical JSON representation. Arrays inside a message
+stay arrays. The default codec rejects unsafe integers rather than rounding them. For exact
+unquoted 64-bit integers, use `WitTypes.Uint64` with deterministic `decode: BigInt` / `encode: String`
+callbacks; callbacks receive one complete message and schema validation still applies.
+
+Producer identity generation uses the runtime's durable randomness. Replay must reproduce the
+same construction and operation order; a fork retains its producer identity and must not be
+treated as an independent producer. These stateful writer objects and live readers are not
+snapshot values. Unit-test host fakes validate SDK state transitions, not executor crash recovery.
+
 ## Generated Effect bridges
 
 Effect components receive Effect-native guest clients for their manifest `dependencies.agents`
@@ -415,6 +472,48 @@ npm run check:artifacts # fail if bundles/templates/WASM drift
 For a focused real-runtime check, build all three templates first, then run the relevant harness
 case under `integration-test`. Unit tests use injectable host-service layers under `src/host`; they
 do not replace a real WASM integration check.
+
+### Durable Streams runtime fixture
+
+The focused `durable-streams` harness case starts an in-process HTTP peer on an ephemeral local
+port. Run it with a local worker executor exposing `golem:agent/durable-streams@2.0.0`; no Docker
+or external stream server is needed. The peer commits the first JSON append but drops its
+response, checks the retry's identical producer tuple/body/close, and acknowledges the duplicate
+without an offset. It also verifies exact JSON/byte payloads and authenticated request counts.
+
+`durable-streams.golem.yaml` builds only the fixture and its native-stream sink. It provisions the
+test-only secret `durableStreamToken`. Each method borrows that capability once and shares it
+between append and read without revealing it. After building fresh SDK bundles and all templates,
+run from `sdks/effect/integration-test` against a local Golem server:
+
+```sh
+npm ci
+export GOLEM_APP_MANIFEST_PATH="$PWD/durable-streams.golem.yaml"
+golem --local --yes build
+golem --local --yes deploy
+npm run test:integration -- --filter '^durable-streams$' --no-infra --no-server --no-build
+```
+
+To prepare the consumer without the Golem CLI, bundle only its entrypoint and inject it directly
+(from `sdks/effect/integration-test`):
+
+```sh
+(cd components/agents && \
+  GOLEM_APP_ROOT="$PWD/../.." GOLEM_TEMP="$PWD/../../golem-temp" \
+  GOLEM_COMPONENT_NAME=effect-golem-durable-streams \
+  npx --no rollup -- -c ../../rollup.config.component.mjs --input ./src/durable-streams-agent.ts)
+mkdir -p golem-temp/agents
+wasm-rquickjs inject-js --input ../wasm/agent_guest.wasm \
+  --js golem-temp/ts-dist/effect-golem-durable-streams/main.js \
+  --output golem-temp/agents/effect_golem_durable_streams.dynamic.wasm
+```
+
+Expected results are `[["first", "a,b"], ["last"]]` and `[3, 249, 17]`. `forwardBytes` consumes
+the external source in a separate agent through native Preview 3 stream RPC. The harness creates
+fresh peer state and agent names on every run. This case exercises real host calls and uncertain
+acknowledgements, not executor crash recovery. Restart/replay acceptance additionally needs peer
+request counters and oplog inspection; returning the same values alone does not prove HTTP was
+not repeated. The unit reconstruction test only checks the SDK's deterministic-call assumptions.
 
 ## Packaging and release convention
 

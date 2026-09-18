@@ -1,7 +1,7 @@
 ///|
 test "one writer serializes concurrent appends without reusing the sequence" {
   run_async(async fn() {
-    let calls : Array[@host.DurableStreamAppendRequest] = []
+    let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let (gate, release) : (@async-core.Future[Unit], @async-core.Promise[Unit]) = @async-core.Future::new()
     let (started, signal) = @async-core.Future::new()
     let (queued, signal_queued) = @async-core.Future::new()
@@ -38,8 +38,14 @@ test "one writer serializes concurrent appends without reusing the sequence" {
     assert_eq(calls.length(), 2)
     assert_eq(calls[0].producer.sequence, 0)
     assert_eq(calls[1].producer.sequence, 1)
-    assert_eq(calls[0].payload, @host.DurableStreamAppendPayload::Json(["11"]))
-    assert_eq(calls[1].payload, @host.DurableStreamAppendPayload::Json(["3"]))
+    assert_eq(
+      calls[0].payload,
+      @durable-streams.DurableStreamAppendPayload::Json(["11"]),
+    )
+    assert_eq(
+      calls[1].payload,
+      @durable-streams.DurableStreamAppendPayload::Json(["3"]),
+    )
   })
 }
 
@@ -174,7 +180,7 @@ test "closing during a host read discards completion without advancing" {
 ///|
 test "cancelled idle wait retains resolved now and retry_pending retains exhausted budget" {
   run_async(async fn() {
-    let requests : Array[@host.DurableStreamReadRequest] = []
+    let requests : Array[@durable-streams.DurableStreamReadRequest] = []
     let base : Reader[Int] = json_reader(
       "https://example.test/stream",
       offset="now",
@@ -204,7 +210,7 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
     assert_eq(reader.read(), Some(6))
     assert_eq(requests[1].checkpoint.offset, "fixed-tail")
     assert_eq(requests[1].transport, SSE)
-    let calls : Array[@host.DurableStreamAppendRequest] = []
+    let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let recovered = Ref(false)
     let waits : Array[UInt64] = []
     let writer_base : Writer[Int] = json_writer(
@@ -253,7 +259,10 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
     for call in calls {
       assert_eq(call, pending.unwrap())
     }
-    assert_eq(calls[4].payload, @host.DurableStreamAppendPayload::Json(["17"]))
+    assert_eq(
+      calls[4].payload,
+      @durable-streams.DurableStreamAppendPayload::Json(["17"]),
+    )
     assert_eq(waits, [100, 200])
     assert_eq(writer.retry.failures, 0)
     assert_eq(writer.retry.backoff_ms, 100)

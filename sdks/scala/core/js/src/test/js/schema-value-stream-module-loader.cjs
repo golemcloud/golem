@@ -66,6 +66,10 @@ Module._load = function (request) {
     return {
       getConfigValue: missingHostImport("getConfigValue"),
       parseAgentId: missingHostImport("parseAgentId"),
+    };
+  }
+  if (request === "golem:agent/durable-streams@2.0.0") {
+    return {
       readDurableStreamBatch: missingHostImport("readDurableStreamBatch"),
       appendDurableStreamBatch: missingHostImport("appendDurableStreamBatch"),
     };

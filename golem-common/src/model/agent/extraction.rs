@@ -601,7 +601,7 @@ fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
             "golem:core/types@2.0.0"
                 | "golem:secrets/types@0.1.0"
                 | "golem:secrets/reveal@0.1.0"
-                | "golem:agent/host@2.0.0"
+                | "golem:agent/durable-streams@2.0.0"
         )
 }
 

@@ -3,6 +3,7 @@ package golem:agent-guest;
 world agent-guest {
   import golem:api/host@1.5.0;
   import golem:agent/host@2.0.0;
+  import golem:agent/durable-streams@2.0.0;
   import golem:tool/host@0.1.0;
 
   import golem:rdbms/postgres@1.5.0;
@@ -43,6 +44,7 @@ world agent-guest {
 
 world tool-middleware-guest {
   include golem:tool/tool-middleware@0.1.0;
+  import golem:agent/durable-streams@2.0.0;
 }
 
 world agent-tool-middleware-guest {
