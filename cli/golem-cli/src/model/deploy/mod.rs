@@ -667,6 +667,8 @@ pub struct DeploymentDisplayHttpEndpoint {
 pub struct DeploymentDisplayHttpApiDeployment {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<golem_common::model::http_api_deployment::HttpApiDeploymentScheme>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub webhooks_prefix: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1188,6 +1190,7 @@ fn display_http_api_deployments(
                     domain.clone(),
                     DeploymentDisplayHttpApiDeployment {
                         hash: hash.clone(),
+                        scheme: Some(deployment.scheme),
                         webhooks_prefix: deployment.webhooks_prefix.clone(),
                         openapi_endpoint_prefix: deployment.openapi_endpoint_prefix.clone(),
                         agents: deployment
@@ -1212,6 +1215,7 @@ fn display_http_api_deployments(
                         domain.clone(),
                         DeploymentDisplayHttpApiDeployment {
                             hash: Some(hash),
+                            scheme: None,
                             webhooks_prefix: String::new(),
                             openapi_endpoint_prefix: String::new(),
                             agents: BTreeMap::new(),
@@ -1672,6 +1676,9 @@ impl TextOutput for DeploymentDiff {
                                 "update".yellow(),
                                 domain.log_color_highlight()
                             ));
+                            if diff.scheme_changed {
+                                logln("    - scheme");
+                            }
                             if diff.webhooks_url_changed {
                                 logln("    - webhooks_url");
                             }

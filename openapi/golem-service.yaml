@@ -23035,6 +23035,8 @@ components:
           format: uuid
         domain:
           type: string
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         hash:
           type: string
           format: hash
@@ -23054,6 +23056,7 @@ components:
       - revision
       - environmentId
       - domain
+      - scheme
       - hash
       - agents
       - webhooksPrefix
@@ -23112,6 +23115,13 @@ components:
       properties:
         domain:
           type: string
+        scheme:
+          description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+          default: https
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentScheme'
+          - description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+            default: https
         webhooksPrefix:
           type: string
         openapiEndpointPrefix:
@@ -23125,6 +23135,11 @@ components:
       - webhooksPrefix
       - openapiEndpointPrefix
       - agents
+    HttpApiDeploymentScheme:
+      type: string
+      enum:
+      - http
+      - https
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
       type: object
@@ -23132,6 +23147,8 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         webhookPrefix:
           type: string
         openapiEndpointPrefix:

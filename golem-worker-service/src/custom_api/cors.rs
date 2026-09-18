@@ -834,6 +834,7 @@ mod tests {
                 body: RequestBodySchema::Unused,
                 behavior: RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                     format: OpenApiSpecFormat::Json,
+                    scheme: Default::default(),
                 }),
                 security: RichRouteSecurity::None,
                 cors: CorsOptions { allowed_patterns },
@@ -844,6 +845,7 @@ mod tests {
             )
             .unwrap(),
             openapi_spec: None,
+            openapi_inputs: None,
         }
     }
 }

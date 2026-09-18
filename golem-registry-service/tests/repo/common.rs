@@ -3904,6 +3904,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         data: Blob::new(HttpApiDeploymentData {
+            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
             agents: BTreeMap::from_iter([(
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),

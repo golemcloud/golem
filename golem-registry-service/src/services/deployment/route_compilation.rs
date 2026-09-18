@@ -666,7 +666,10 @@ pub fn add_openapi_spec_routes(
             route_match: HttpMethod::Get(Empty {}).into(),
             path,
             body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }),
+            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format,
+                scheme: deployment.scheme,
+            }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -1074,6 +1077,7 @@ mod tests {
 
     fn test_deployment(environment_id: EnvironmentId) -> HttpApiDeployment {
         HttpApiDeployment {
+            scheme: Default::default(),
             id: HttpApiDeploymentId::new(),
             revision:
                 golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
@@ -1318,6 +1322,7 @@ mod tests {
 
     fn test_deployment_with_openapi(openapi_endpoint: &str) -> HttpApiDeployment {
         HttpApiDeployment {
+            scheme: Default::default(),
             id: HttpApiDeploymentId::new(),
             revision:
                 golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
@@ -1396,7 +1401,8 @@ mod tests {
 
     #[test]
     fn add_openapi_spec_routes_uses_custom_prefix_and_formats() {
-        let deployment = test_deployment_with_openapi("/docs");
+        let mut deployment = test_deployment_with_openapi("/docs");
+        deployment.scheme = golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http;
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
 
@@ -1418,7 +1424,8 @@ mod tests {
         assert!(matches!(
             &compiled_routes[0].behaviour,
             RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                format: OpenApiSpecFormat::Json
+                format: OpenApiSpecFormat::Json,
+                scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
             })
         ));
 
@@ -1436,7 +1443,8 @@ mod tests {
         assert!(matches!(
             &compiled_routes[1].behaviour,
             RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                format: OpenApiSpecFormat::Yaml
+                format: OpenApiSpecFormat::Yaml,
+                scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
             })
         ));
     }

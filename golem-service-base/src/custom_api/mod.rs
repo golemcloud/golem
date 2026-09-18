@@ -649,6 +649,7 @@ pub struct WebhookCallbackBehaviour {
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {
     pub format: OpenApiSpecFormat,
+    pub scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme,
 }
 
 #[derive(Debug, Clone, Copy, BinaryCodec)]

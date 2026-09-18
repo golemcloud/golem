@@ -67,6 +67,7 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
     let environment = test_environment();
     let domain = Domain("example.com".into());
     let deployment = HttpApiDeployment {
+        scheme: Default::default(),
         id: HttpApiDeploymentId::new(),
         revision: HttpApiDeploymentRevision::INITIAL,
         environment_id: environment.id,
@@ -709,6 +710,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
         context.http_api_deployments.insert(
             domain.clone(),
             HttpApiDeployment {
+                scheme: Default::default(),
                 id: HttpApiDeploymentId::new(),
                 revision: HttpApiDeploymentRevision::INITIAL,
                 environment_id: environment.id,

@@ -21,7 +21,6 @@ use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
 use golem_common::schema::schema_type::{
@@ -308,7 +307,7 @@ fn call_agent_route(
 
 /// Build the OpenAPI document for a set of routes (panics on error).
 fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
-    HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
+    HttpApiOpenApiSpec::from_routes(&routes.iter().collect::<Vec<_>>(), "https://example.com")
         .expect("spec generation succeeds")
         .0
 }
@@ -491,9 +490,7 @@ fn generated_security_never_treats_protected_routes_as_public() {
     );
     let mut unavailable = route();
     unavailable.security = RichRouteSecurity::Unavailable;
-    assert!(
-        HttpApiOpenApiSpec::from_routes(&[unavailable], &Domain("example.com".into())).is_err()
-    );
+    assert!(HttpApiOpenApiSpec::from_routes(&[&unavailable], "https://example.com").is_err());
 }
 
 #[test]
@@ -540,10 +537,7 @@ fn generated_duplicate_operations_fail_before_overwriting() {
             None,
         )
     };
-    assert!(
-        HttpApiOpenApiSpec::from_routes(&[route(), route()], &Domain("example.com".into()))
-            .is_err()
-    );
+    assert!(HttpApiOpenApiSpec::from_routes(&[&route(), &route()], "https://example.com").is_err());
 }
 
 #[test]
@@ -598,8 +592,8 @@ fn distinct_single_binding_methods_with_colliding_ids_fail_instead_of_losing_ids
     };
     assert!(
         HttpApiOpenApiSpec::from_routes(
-            &[route("one", "a-b", "c"), route("two", "a", "b-c")],
-            &Domain("example.com".into())
+            &[&route("one", "a-b", "c"), &route("two", "a", "b-c")],
+            "https://example.com"
         )
         .is_err()
     );
@@ -1262,6 +1256,7 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
             RequestBodySchema::Unused,
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
+                scheme: Default::default(),
             }),
         ),
         "/openapi.json",

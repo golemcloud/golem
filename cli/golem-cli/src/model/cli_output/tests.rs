@@ -4157,6 +4157,7 @@ fn arb_http_api_deployment() -> BoxedStrategy<golem_client::model::HttpApiDeploy
         arb_small_u64(),
         arb_uuid(),
         arb_small_string(),
+        proptest::bool::ANY,
         proptest::collection::btree_map(
             arb_agent_type_name(),
             arb_http_api_deployment_agent_options(),
@@ -4172,12 +4173,18 @@ fn arb_http_api_deployment() -> BoxedStrategy<golem_client::model::HttpApiDeploy
                 revision,
                 environment_id,
                 domain,
+                use_http,
                 agents,
                 webhooks_prefix,
                 openapi_endpoint_prefix,
                 created_at,
             )| {
                 golem_client::model::HttpApiDeployment {
+                    scheme: if use_http {
+                        golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                    } else {
+                        golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                    },
                     id: golem_common::model::http_api_deployment::HttpApiDeploymentId(id),
                     revision:
                         golem_common::model::http_api_deployment::HttpApiDeploymentRevision::new(
@@ -5062,6 +5069,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     http_key.clone(),
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::HttpApiDeployment {
+                            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https,
                             webhooks_prefix: "new-webhooks".to_string(),
                             openapi_endpoint_prefix: "new-openapi".to_string(),
                             agents: BTreeMap::from_iter([(
@@ -5078,6 +5086,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     http_key,
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::HttpApiDeployment {
+                            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
                             webhooks_prefix: "old-webhooks".to_string(),
                             openapi_endpoint_prefix: "old-openapi".to_string(),
                             agents: BTreeMap::from_iter([(

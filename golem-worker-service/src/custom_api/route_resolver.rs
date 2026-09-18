@@ -15,7 +15,7 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::openapi::HttpApiOpenApiSpec;
+use super::openapi::{HttpApiOpenApiSpec, OpenApiInputs};
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -48,6 +48,7 @@ pub struct ResolvedRouteEntry {
     pub captured_path_parameters: Vec<String>,
     pub request_target: HttpRequestTarget,
     pub openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
+    pub openapi_inputs: Option<Arc<OpenApiInputs>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,6 +169,7 @@ impl RouteResolver {
             request_target,
             route: route_entry.clone(),
             openapi_spec: domain_api.openapi_spec.clone(),
+            openapi_inputs: domain_api.openapi_inputs.clone(),
         })
     }
 
@@ -263,6 +265,7 @@ impl RouteResolver {
                     typed: [Router::new(), Router::new()],
                     mounts: Arc::new(Vec::new()),
                     openapi_spec: None,
+                    openapi_inputs: None,
                 });
             }
             Err(ApiDefinitionLookupError::InternalError(err)) => {
@@ -279,8 +282,23 @@ impl RouteResolver {
             }
         };
 
-        let openapi_spec = match HttpApiOpenApiSpec::from_routes(&finalized_routes, domain) {
-            Ok(spec) => Some(Arc::new(spec)),
+        let finalized_routes: Vec<_> = finalized_routes.into_iter().map(Arc::new).collect();
+        let openapi_inputs = finalized_routes.iter().find_map(|route| {
+            if let RichRouteBehaviour::OpenApiSpec(behavior) = &route.behavior {
+                Some(Arc::new(OpenApiInputs {
+                    public_origin: behavior.scheme.origin(domain),
+                    routes: finalized_routes.clone(),
+                }))
+            } else {
+                None
+            }
+        });
+        let openapi_spec = match openapi_inputs
+            .as_ref()
+            .map(|inputs| inputs.generated_spec())
+            .transpose()
+        {
+            Ok(spec) => spec.map(Arc::new),
             Err(e) => {
                 tracing::warn!("Failed to build openapi spec for http api: {e}");
                 None
@@ -299,7 +317,7 @@ impl RouteResolver {
                     | RichRouteBehaviour::OpenApiSpec(_)
             )
         });
-        let mut mounts: Vec<_> = mounts.into_iter().map(Arc::new).collect();
+        let mut mounts = mounts;
         mounts.sort_by(|a, b| mount_specificity(&b.path).cmp(mount_specificity(&a.path)));
 
         Ok(DomainHttpApi {
@@ -308,6 +326,7 @@ impl RouteResolver {
             typed: build_router(typed)?,
             mounts: Arc::new(mounts),
             openapi_spec,
+            openapi_inputs,
             created_at: Instant::now(),
         })
     }
@@ -414,7 +433,9 @@ fn compile_route_security(
     }
 }
 
-fn build_router(routes: Vec<RichCompiledRoute>) -> Result<[Router<Arc<RichCompiledRoute>>; 2], ()> {
+fn build_router(
+    routes: Vec<Arc<RichCompiledRoute>>,
+) -> Result<[Router<Arc<RichCompiledRoute>>; 2], ()> {
     let mut routers = [Router::new(), Router::new()];
 
     for route in routes {
@@ -430,11 +451,7 @@ fn build_router(routes: Vec<RichCompiledRoute>) -> Result<[Router<Arc<RichCompil
             .try_into()
             .expect("finalized route has a valid concrete method");
         let callback = matches!(route.behavior, RichRouteBehaviour::OidcCallback(_));
-        if !routers[usize::from(*trailing_slash)].add_route(
-            method,
-            route.path.clone(),
-            Arc::new(route),
-        ) {
+        if !routers[usize::from(*trailing_slash)].add_route(method, route.path.clone(), route) {
             if callback {
                 tracing::warn!("Ignoring conflicting OIDC callback binding");
                 continue;
@@ -458,6 +475,7 @@ struct DomainHttpApi {
     typed: [Router<Arc<RichCompiledRoute>>; 2],
     mounts: Arc<Vec<Arc<RichCompiledRoute>>>,
     openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
+    openapi_inputs: Option<Arc<OpenApiInputs>>,
 }
 
 impl DomainHttpApi {
@@ -548,6 +566,7 @@ pub(super) mod tests {
             }),
             "reserved" => RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
+                scheme: Default::default(),
             }),
             _ => RouteBehaviour::CallAgent(CallAgentBehaviour {
                 route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
@@ -628,6 +647,38 @@ pub(super) mod tests {
         calls: tokio::sync::mpsc::UnboundedSender<
             tokio::sync::oneshot::Sender<Result<CompiledRoutes, ApiDefinitionLookupError>>,
         >,
+    }
+
+    #[test]
+    async fn openapi_snapshot_uses_deployment_origin_and_retains_shared_inputs() {
+        use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+        for (scheme, expected) in [
+            (HttpApiDeploymentScheme::Http, "http://example.com:9006"),
+            (HttpApiDeploymentScheme::Https, "https://example.com:9006"),
+        ] {
+            let mut route = test_route(1, "/openapi.json", Some("GET"), "reserved");
+            let RouteBehaviour::OpenApiSpec(behavior) = &mut route.behavior else {
+                unreachable!()
+            };
+            behavior.scheme = scheme;
+            let domain = Domain("example.com:9006".into());
+            let mut compiled = LiteralLookup(vec![]).get(&domain).await.unwrap();
+            compiled.routes = vec![route, test_route(2, "/mount", None, "router")];
+            let api = RouteResolver::fetch_and_build_domain_api(
+                Arc::new(RoutesLookup(std::sync::Mutex::new(Some(compiled)))),
+                &domain,
+            )
+            .await
+            .unwrap();
+            let inputs = api.openapi_inputs.unwrap();
+            assert_eq!(inputs.public_origin, expected);
+            assert_eq!(
+                api.openapi_spec.unwrap().0["servers"],
+                serde_json::json!([{"url": expected}])
+            );
+            assert_eq!(inputs.routes.len(), 2);
+            assert!(Arc::ptr_eq(&inputs.routes[1], &api.mounts[0]));
+        }
     }
 
     #[async_trait::async_trait]
@@ -964,8 +1015,15 @@ pub(super) mod tests {
                 ]),
                 routes: vec![test_route(5, "/health", Some("GET"), "typed")],
             };
-            let routers =
-                build_router(RouteResolver::finalize_routes(compiled).await.unwrap()).unwrap();
+            let routers = build_router(
+                RouteResolver::finalize_routes(compiled)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect(),
+            )
+            .unwrap();
             assert_eq!(
                 routers[0]
                     .route(&http::Method::GET, &["health"])

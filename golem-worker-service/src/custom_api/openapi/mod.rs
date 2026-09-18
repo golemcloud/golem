@@ -22,3 +22,20 @@ mod schema_mapping;
 mod tests;
 
 pub use http_openapi_spec::*;
+
+use crate::custom_api::RichCompiledRoute;
+use std::sync::Arc;
+
+pub struct OpenApiInputs {
+    pub public_origin: String,
+    pub routes: Vec<Arc<RichCompiledRoute>>,
+}
+
+impl OpenApiInputs {
+    pub fn generated_spec(&self) -> Result<HttpApiOpenApiSpec, String> {
+        HttpApiOpenApiSpec::from_routes(
+            &self.routes.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+            &self.public_origin,
+        )
+    }
+}

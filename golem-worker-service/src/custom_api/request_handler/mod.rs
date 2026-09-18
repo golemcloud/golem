@@ -188,7 +188,7 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format, .. }) => {
                 let spec = resolved_route
                     .openapi_spec
                     .clone()

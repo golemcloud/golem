@@ -28,7 +28,6 @@ use super::schema_mapping::{
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use golem_common::model::domain_registration::Domain;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::{AgentRouteMode, PathSegment, RouteMatch};
 use serde_json::{Map, Value, json};
@@ -37,7 +36,7 @@ use std::collections::{BTreeMap, HashSet};
 pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
-    pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
+    pub fn from_routes(routes: &[&RichCompiledRoute], public_origin: &str) -> Result<Self, String> {
         let mut ds_only_paths: HashSet<_> = routes
             .iter()
             .filter_map(|route| match &route.behavior {
@@ -66,6 +65,7 @@ impl HttpApiOpenApiSpec {
                 RichRouteBehaviour::CorsPreflight(_) => !ds_only_paths.contains(&route.path),
                 _ => true,
             })
+            .copied()
             .collect();
         let document = build_document_schema(&routes).map_err(|e| e.to_string())?;
         let graph = &document.graph;
@@ -135,13 +135,13 @@ impl HttpApiOpenApiSpec {
                 "version": "1.0.0",
             },
             "servers": [
-                { "url": format!("https://{}", domain.0) },
+                { "url": public_origin },
             ],
             "paths": Value::Object(paths_value),
             "components": Value::Object(components),
         });
 
-        super::merge::merge(spec, vec![], &format!("https://{}", domain.0))
+        super::merge::merge(spec, vec![], public_origin)
             .map(HttpApiOpenApiSpec)
             .map_err(|error| format!("{:?} at {}", error.category, error.location))
     }

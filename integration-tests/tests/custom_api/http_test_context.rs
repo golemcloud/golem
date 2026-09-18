@@ -103,6 +103,7 @@ pub async fn make_test_context_with_files(
     let component = component.store().await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter(agent_and_http_options),
         webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),

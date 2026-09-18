@@ -172,6 +172,7 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         )
         .unwrap(),
         openapi_spec: None,
+        openapi_inputs: None,
     }
 }
 

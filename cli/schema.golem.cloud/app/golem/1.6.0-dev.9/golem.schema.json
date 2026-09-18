@@ -1043,6 +1043,12 @@
       "additionalProperties": false,
       "description": "HTTP API deployment",
       "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "default": "https",
+          "description": "Public scheme advertised in OpenAPI. Does not configure the HTTP listener."
+        },
         "domain": {
           "type": "string",
           "description": "Full concrete domain for the HTTP API deployment. Use this for custom domains and custom server environments."

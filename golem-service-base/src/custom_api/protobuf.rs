@@ -27,6 +27,7 @@ use crate::custom_api::{
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
@@ -301,7 +302,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                 }))
             }
             Kind::OpenApiSpec(open_api_spec) => {
-                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+                use proto::golem::customapi::route_behaviour::open_api_spec::{Format, Scheme};
 
                 let format = Format::try_from(open_api_spec.format)
                     .map_err(|_| "Invalid OpenApiSpec.format".to_string())?;
@@ -314,7 +315,17 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     Format::Yaml => OpenApiSpecFormat::Yaml,
                 };
 
-                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }))
+                let scheme = match Scheme::try_from(open_api_spec.scheme)
+                    .map_err(|_| "Invalid OpenApiSpec.scheme".to_string())?
+                {
+                    Scheme::Unspecified => return Err("OpenApiSpec.scheme missing".to_string()),
+                    Scheme::Http => HttpApiDeploymentScheme::Http,
+                    Scheme::Https => HttpApiDeploymentScheme::Https,
+                };
+                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                    format,
+                    scheme,
+                }))
             }
             Kind::HttpRouter(value) => Ok(RouteBehaviour::HttpRouter(HttpRouterBehaviour {
                 component_id: value
@@ -497,8 +508,8 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
-                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format, scheme }) => {
+                use proto::golem::customapi::route_behaviour::open_api_spec::{Format, Scheme};
 
                 Self {
                     kind: Some(Kind::OpenApiSpec(
@@ -508,6 +519,10 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                                 OpenApiSpecFormat::Yaml => Format::Yaml,
                             }
                             .into(),
+                            scheme: match scheme {
+                                HttpApiDeploymentScheme::Http => Scheme::Http,
+                                HttpApiDeploymentScheme::Https => Scheme::Https,
+                            }.into(),
                         },
                     )),
                 }
@@ -1080,6 +1095,37 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn openapi_scheme_roundtrips_codecs_and_rejects_missing_or_unknown_wire_values() {
+        use proto::golem::customapi::route_behaviour::{Kind, OpenApiSpec};
+        for scheme in [
+            HttpApiDeploymentScheme::Http,
+            HttpApiDeploymentScheme::Https,
+        ] {
+            let behavior = OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Yaml,
+                scheme,
+            };
+            let bytes = desert_rust::serialize_to_byte_vec(&behavior).unwrap();
+            let decoded: OpenApiSpecBehaviour = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded.scheme, scheme);
+            let encoded: proto::golem::customapi::RouteBehaviour =
+                RouteBehaviour::OpenApiSpec(decoded).into();
+            let RouteBehaviour::OpenApiSpec(decoded) = RouteBehaviour::try_from(encoded).unwrap()
+            else {
+                panic!("wrong behavior")
+            };
+            assert_eq!(decoded.scheme, scheme);
+            assert!(matches!(decoded.format, OpenApiSpecFormat::Yaml));
+        }
+        for scheme in [0, 3, -1] {
+            let encoded = proto::golem::customapi::RouteBehaviour {
+                kind: Some(Kind::OpenApiSpec(OpenApiSpec { format: 1, scheme })),
+            };
+            assert!(RouteBehaviour::try_from(encoded).is_err());
+        }
+    }
+
+    #[test]
     fn unavailable_route_security_roundtrip_is_not_public() {
         let encoded: proto::golem::customapi::RouteSecurity = RouteSecurity::Unavailable.into();
         assert!(matches!(
@@ -1247,6 +1293,7 @@ mod tests {
         let encoded: proto::golem::customapi::CompiledRoute =
             route(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
+                scheme: HttpApiDeploymentScheme::Https,
             }))
             .into();
         assert!(CompiledRoute::try_from(encoded).is_err());
@@ -1324,7 +1371,8 @@ mod tests {
                 .validate(
                     &[],
                     &RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                        format: OpenApiSpecFormat::Json
+                        format: OpenApiSpecFormat::Json,
+                        scheme: HttpApiDeploymentScheme::Https,
                     })
                 )
                 .is_err()

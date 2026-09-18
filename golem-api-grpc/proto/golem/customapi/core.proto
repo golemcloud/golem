@@ -269,7 +269,14 @@ message RouteBehaviour {
       YAML = 2;
     }
 
+    enum Scheme {
+      SCHEME_UNSPECIFIED = 0;
+      HTTP = 1;
+      HTTPS = 2;
+    }
+
     Format format = 1;
+    Scheme scheme = 2;
   }
 
   message HttpRouter {
