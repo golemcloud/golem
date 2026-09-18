@@ -744,8 +744,11 @@ fn stale_openapi_retries_share_original_request_deadline() {
 async fn ordinary_traffic_lazy_openapi_corpus() {
     use crate::custom_api::openapi::test_support::{controlled, provider_routes};
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use futures::{FutureExt, StreamExt};
     use golem_common::model::agent::FileMapping;
+    use golem_common::model::filesystem::FileReadHead;
     use golem_service_base::custom_api::RouterFileIndexEntry;
+    use golem_service_base::model::FileReadResponse;
     use golem_service_base::replayable_stream::ReplayableStream;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
@@ -787,14 +790,23 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
     };
     filesystem.filesystem_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
     routes.push(live);
-    let mut handler = request_handler_with(test_resolver(routes), files);
+    let harness = invocation_harness();
+    harness.file_reads.responses.lock().unwrap().push_back(
+        std::future::ready(Ok(FileReadResponse {
+            head: FileReadHead::Absent,
+            body: futures::stream::empty().boxed(),
+        }))
+        .boxed(),
+    );
+    let mut handler =
+        request_handler_with_worker(test_resolver(routes), files, harness.worker_service.clone());
     let (service, mut calls, _cleanups) = controlled();
     handler.openapi_service = Arc::new(service);
     for event in case["input"]["events"].as_array().unwrap() {
         let (path, status) = match event.as_str().unwrap() {
             "request-handler" => ("/r1/missing", StatusCode::NOT_FOUND),
             "request-static" => ("/r1/static", StatusCode::OK),
-            "request-live-files" => ("/live/file", StatusCode::NOT_IMPLEMENTED),
+            "request-live-files" => ("/live/file", StatusCode::NOT_FOUND),
             other => panic!("unhandled ordinary event {other}"),
         };
         let response = handler.handle_request(openapi_request(path)).await.unwrap();
@@ -806,6 +818,9 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
             );
         }
     }
+    let file_reads = harness.file_reads.calls.lock().unwrap();
+    assert_eq!(file_reads.len(), 1);
+    assert_eq!(file_reads[0].path, "/file");
     let mut observed = 0;
     while calls.try_recv().is_ok() {
         observed += 1;
