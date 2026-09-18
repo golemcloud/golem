@@ -3,6 +3,30 @@
 struct MoonBitReflectionTest {}
 
 ///|
+#derive.golem_schema
+pub(all) struct AuditLogConstructor {
+  name : String
+}
+
+///|
+pub(all) struct EmptyAgentInput {}
+
+///|
+pub impl @schema.IntoSchema for EmptyAgentInput with fn type_id() {
+  "golem_moonbit_examples.EmptyAgentInput"
+}
+
+///|
+pub impl @schema.IntoSchema for EmptyAgentInput with fn register_in(_b) {
+  @model.schema_type(Record([]))
+}
+
+///|
+pub impl @schema.IntoSchema for EmptyAgentInput with fn to_value(_self) {
+  Record([])
+}
+
+///|
 pub fn MoonBitReflectionTest::echo(label : String) -> String {
   "moonbit-tool:" + label
 }
@@ -145,6 +169,77 @@ pub async fn MoonBitToolReflectionCaller::optional_round_trip(
     Err(_) => return "generated-supplied-error"
   }
   "\{text_json(omitted_json)}|\{text_json(supplied_json)}|\{text_native(omitted_native)}|\{text_native(supplied_native)}|\{generated_omitted}|\{generated_supplied}"
+}
+
+///|
+pub async fn MoonBitToolReflectionCaller::principal_round_trip(
+  self : Self,
+) -> String {
+  let name = "principal-" + self.name
+  let agent_type = match @reflection.get_agent_type("AuditLog") {
+    Some(value) => value
+    None => return "missing-audit-log"
+  }
+  let reflected = agent_type.get_json(
+    Json::object({ "name": Json::string(name) }),
+  ) catch {
+    error => return "reflected-binding:\{Repr(error)}"
+  }
+  defer reflected.drop()
+  let reflected_result = reflected.invoke_json("get_creator", Json::object({})) catch {
+    error => return "reflected-call:\{Repr(error)}"
+  }
+  let parts = reflected_result.metadata.agent_id.parts() catch {
+    error => return "id:\{Repr(error)}"
+  }
+  guard parts.constructor_value ==
+    @model.SchemaValue::Record([@model.SchemaValue::String(name)]) else {
+    return "principal-in-id"
+  }
+  let full = @reflection.FullAgentClient::bind(
+    "AuditLog",
+    reflected_result.metadata.agent_id,
+    (@schema.type_tag() : @schema.TypeTag[AuditLogConstructor]),
+  ) catch {
+    error => return "full-binding:\{Repr(error)}"
+  }
+  defer full.drop()
+  let method_only = @reflection.MethodOnlyAgentClient::bind(
+    reflected_result.metadata.agent_id,
+  ) catch {
+    error => return "method-binding:\{Repr(error)}"
+  }
+  defer method_only.drop()
+  let full_result : @reflection.Invocation[String] = full.invoke(
+    "get_creator",
+    EmptyAgentInput::{ },
+  ) catch {
+    error => return "full-call:\{Repr(error)}"
+  }
+  let method_result : @reflection.Invocation[String] = method_only.invoke(
+    "get_creator",
+    EmptyAgentInput::{ },
+  ) catch {
+    error => return "method-call:\{Repr(error)}"
+  }
+  let generated = AuditLogClient::get(name) catch {
+    error => return "generated-binding:\{Repr(error)}"
+  }
+  defer generated.drop()
+  let generated_id = generated.get_agent_id() catch {
+    error => return "generated-id:\{Repr(error)}"
+  }
+  guard full_result.metadata.agent_id == reflected_result.metadata.agent_id &&
+    method_result.metadata.agent_id == reflected_result.metadata.agent_id &&
+    generated_id == reflected_result.metadata.agent_id.value else {
+    return "identity-mismatch"
+  }
+  let generated_result = generated.get_creator()
+  let reflected_text = match reflected_result.value {
+    Some(Json::String(value)) => value
+    _ => return "reflected-output"
+  }
+  "\{reflected_text}|\{full_result.value}|\{method_result.value}|\{generated_result}"
 }
 
 ///|
