@@ -16,7 +16,8 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, normalized_blob_path,
+    blob_copy_changes_nothing, blob_path_is_root, blob_path_to_string, normalized_blob_path,
+    reject_root_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -690,7 +691,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
+            &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -719,6 +720,8 @@ impl BlobStorage for S3BlobStorage {
                 ),
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                // A directory that create_dir made keeps a marker object below its path, and the
+                // time of the marker is the time of the directory.
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join(DIR_MARKER);
                     let marker_str = blob_path_to_string(&marker)?;
@@ -779,6 +782,8 @@ impl BlobStorage for S3BlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         let path = &*normalized_blob_path(path)?;
+        reject_root_blob_path(path)?;
+
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -819,6 +824,8 @@ impl BlobStorage for S3BlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         let path = &*normalized_blob_path(path)?;
+        reject_root_blob_path(path)?;
+
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -1203,6 +1210,14 @@ impl BlobStorage for S3BlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        if blob_copy_changes_nothing(from, to)? {
+            return match self.exists(target_label, op_label, namespace, from).await? {
+                ExistsResult::File => Ok(()),
+                _ => Err(anyhow!("Blob storage entry not found: {from:?}")),
+            };
+        }
+
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);

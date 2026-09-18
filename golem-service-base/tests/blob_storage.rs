@@ -460,8 +460,14 @@ fn custom_storage() -> BlobStorageNamespace {
 }
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
+// The in-memory backend stands in for S3 in the tests of other crates, so the two must give the
+// same answer. The filesystem and the SQLite backends do not give it yet, which GOL-622 tracks.
+define_matrix_dimension!(mem_and_s3: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3", "s3_prefixed");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
+
+/// The paths that are at the root of a namespace, because none of them has a name in it.
+const ROOT_PATHS: [&str; 4] = ["", ".", "./", "././"];
 
 #[test]
 #[tracing::instrument]
@@ -2563,4 +2569,585 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
             .unwrap(),
         ExistsResult::File
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_read_at_a_root_path_finds_no_blob(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_read_at_a_root_path_finds_no_blob";
+
+    // A blob at the root of the namespace must not answer for the root itself.
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    for root_path in ROOT_PATHS {
+        let path = Path::new(root_path);
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-raw", namespace.clone(), path)
+                .await
+                .unwrap(),
+            None,
+            "get_raw({root_path:?})"
+        );
+
+        assert!(
+            storage
+                .get_stream(label, "get-stream", namespace.clone(), path)
+                .await
+                .unwrap()
+                .is_none(),
+            "get_stream({root_path:?})"
+        );
+
+        assert!(
+            storage
+                .get_metadata(label, "get-metadata", namespace.clone(), path)
+                .await
+                .unwrap()
+                .is_none(),
+            "get_metadata({root_path:?})"
+        );
+
+        assert_eq!(
+            storage
+                .get_raw_slice(label, "get-raw-slice", namespace.clone(), path, 0, 1)
+                .await
+                .unwrap(),
+            None,
+            "get_raw_slice({root_path:?})"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_write_at_a_root_path_is_an_error(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_write_at_a_root_path_is_an_error";
+    let data = Bytes::from("payload").to_vec();
+
+    for root_path in ROOT_PATHS {
+        let path = Path::new(root_path);
+
+        assert!(
+            storage
+                .put_raw(label, "put-raw", namespace.clone(), path, &data)
+                .await
+                .is_err(),
+            "put_raw({root_path:?}) wrote a blob"
+        );
+
+        let stream = (&data)
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible)
+            .erased();
+
+        assert!(
+            storage
+                .put_stream(label, "put-stream", namespace.clone(), path, &stream)
+                .await
+                .is_err(),
+            "put_stream({root_path:?}) wrote a blob"
+        );
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-raw", namespace.clone(), path)
+                .await
+                .unwrap(),
+            None,
+            "a write at {root_path:?} left a blob behind"
+        );
+    }
+
+    assert_eq!(
+        storage
+            .list_dir(label, "list-root", namespace.clone(), Path::new(""))
+            .await
+            .unwrap(),
+        Vec::<PathBuf>::new()
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_at_a_root_path_deletes_no_blob(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_delete_at_a_root_path_deletes_no_blob";
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    for root_path in ROOT_PATHS {
+        storage
+            .delete(label, "delete", namespace.clone(), Path::new(root_path))
+            .await
+            .unwrap_or_else(|err| panic!("delete({root_path:?}) failed: {err}"));
+
+        storage
+            .delete_many(
+                label,
+                "delete-many",
+                namespace.clone(),
+                &[PathBuf::from(root_path)],
+            )
+            .await
+            .unwrap_or_else(|err| panic!("delete_many([{root_path:?}]) failed: {err}"));
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-blob", namespace.clone(), Path::new("blob"))
+                .await
+                .unwrap(),
+            Some(Bytes::from("payload").to_vec()),
+            "a delete at {root_path:?} removed a blob"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_copy_or_a_move_at_a_root_path_is_an_error(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_copy_or_a_move_at_a_root_path_is_an_error";
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    for root_path in ROOT_PATHS {
+        for (from, to) in [(root_path, "blob"), ("blob", root_path)] {
+            assert!(
+                storage
+                    .copy(
+                        label,
+                        "copy",
+                        namespace.clone(),
+                        Path::new(from),
+                        Path::new(to)
+                    )
+                    .await
+                    .is_err(),
+                "copy({from:?}, {to:?})"
+            );
+
+            assert!(
+                storage
+                    .r#move(
+                        label,
+                        "move",
+                        namespace.clone(),
+                        Path::new(from),
+                        Path::new(to)
+                    )
+                    .await
+                    .is_err(),
+                "move({from:?}, {to:?})"
+            );
+        }
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-blob", namespace.clone(), Path::new("blob"))
+                .await
+                .unwrap(),
+            Some(Bytes::from("payload").to_vec()),
+            "a copy or a move at {root_path:?} changed the blob"
+        );
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-root", namespace.clone(), Path::new(root_path))
+                .await
+                .unwrap(),
+            None,
+            "a copy or a move at {root_path:?} left a blob behind"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_directory_of_blobs_goes_when_its_last_blob_goes";
+
+    // No create_dir: the directory `only` exists because a blob is below it.
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("only/blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .delete(
+            label,
+            "delete-blob",
+            namespace.clone(),
+            Path::new("only/blob"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .exists(label, "exists-only", namespace.clone(), Path::new("only"))
+            .await
+            .unwrap(),
+        ExistsResult::DoesNotExist
+    );
+
+    assert!(
+        !storage
+            .delete_dir(label, "delete-only", namespace.clone(), Path::new("only"))
+            .await
+            .unwrap()
+    );
+
+    // A directory that create_dir made stays after its last blob goes.
+    storage
+        .create_dir(label, "create-kept", namespace.clone(), Path::new("kept"))
+        .await
+        .unwrap();
+
+    storage
+        .put_raw(
+            label,
+            "put-kept-blob",
+            namespace.clone(),
+            Path::new("kept/blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .delete(
+            label,
+            "delete-kept-blob",
+            namespace.clone(),
+            Path::new("kept/blob"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .exists(label, "exists-kept", namespace.clone(), Path::new("kept"))
+            .await
+            .unwrap(),
+        ExistsResult::Directory
+    );
+
+    assert!(
+        storage
+            .delete_dir(label, "delete-kept", namespace.clone(), Path::new("kept"))
+            .await
+            .unwrap()
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_deletes_a_directory_further_up_that_only_holds_blobs(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "delete_dir_deletes_a_directory_further_up_that_only_holds_blobs";
+    let blob_path = Path::new("a/b/c/blob");
+
+    // No create_dir: the directories `a`, `a/b` and `a/b/c` exist because a blob is below them.
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            blob_path,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        storage
+            .delete_dir(label, "delete-dir", namespace.clone(), Path::new("a"))
+            .await
+            .unwrap()
+    );
+
+    assert_eq!(
+        storage
+            .get_raw(label, "get-blob", namespace.clone(), blob_path)
+            .await
+            .unwrap(),
+        None
+    );
+
+    assert_eq!(
+        storage
+            .exists(label, "exists-dir", namespace.clone(), Path::new("a"))
+            .await
+            .unwrap(),
+        ExistsResult::DoesNotExist
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_metadata_of_a_created_directory_gives_metadata(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "get_metadata_of_a_created_directory_gives_metadata";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+
+    // A container of the blob store gets its time from here, so a directory that create_dir made
+    // has metadata.
+    assert!(
+        storage
+            .get_metadata(
+                label,
+                "get-metadata-dir",
+                namespace.clone(),
+                Path::new("made")
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_metadata_of_a_created_directory_gives_a_size_of_zero(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "get_metadata_of_a_created_directory_gives_a_size_of_zero";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_metadata(
+                label,
+                "get-metadata-dir",
+                namespace.clone(),
+                Path::new("made")
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .size,
+        0
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_metadata_of_a_directory_of_blobs_finds_no_blob(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "get_metadata_of_a_directory_of_blobs_finds_no_blob";
+
+    // No create_dir: the directory `implied` exists because a blob is below it.
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("implied/blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        storage
+            .get_metadata(
+                label,
+                "get-metadata-dir",
+                namespace.clone(),
+                Path::new("implied")
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert_eq!(
+        storage
+            .get_metadata(
+                label,
+                "get-metadata-blob",
+                namespace.clone(),
+                Path::new("implied/blob")
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .size,
+        "payload".len() as u64
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_copy_or_a_move_onto_itself_changes_nothing(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_copy_or_a_move_onto_itself_changes_nothing";
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("dir/blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    // Two forms of one path name the same blob.
+    for (from, to) in [
+        ("dir/blob", "dir/blob"),
+        ("dir/blob", "./dir/blob"),
+        ("./dir/blob", "dir/blob"),
+    ] {
+        storage
+            .copy(
+                label,
+                "copy",
+                namespace.clone(),
+                Path::new(from),
+                Path::new(to),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("copy({from:?}, {to:?}) failed: {err}"));
+
+        storage
+            .r#move(
+                label,
+                "move",
+                namespace.clone(),
+                Path::new(from),
+                Path::new(to),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("move({from:?}, {to:?}) failed: {err}"));
+
+        assert_eq!(
+            storage
+                .get_raw(label, "get-blob", namespace.clone(), Path::new("dir/blob"))
+                .await
+                .unwrap(),
+            Some(Bytes::from("payload").to_vec()),
+            "copy({from:?}, {to:?}) or move({from:?}, {to:?}) changed the blob"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_copy_or_a_move_onto_itself_needs_a_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_copy_or_a_move_onto_itself_needs_a_blob";
+
+    // Two forms of one path name the same blob.
+    for (from, to) in [
+        ("missing/blob", "missing/blob"),
+        ("./missing/blob", "missing/blob"),
+    ] {
+        assert!(
+            storage
+                .copy(
+                    label,
+                    "copy",
+                    namespace.clone(),
+                    Path::new(from),
+                    Path::new(to)
+                )
+                .await
+                .is_err(),
+            "copy({from:?}, {to:?})"
+        );
+
+        assert!(
+            storage
+                .r#move(
+                    label,
+                    "move",
+                    namespace.clone(),
+                    Path::new(from),
+                    Path::new(to)
+                )
+                .await
+                .is_err(),
+            "move({from:?}, {to:?})"
+        );
+    }
 }
