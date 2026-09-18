@@ -1,7 +1,10 @@
 use super::*;
-use futures::TryStreamExt;
+use crate::custom_api::file_response::tag_matches;
+use bytes::Bytes;
+use futures::{StreamExt, TryStreamExt};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use http::StatusCode;
 use std::sync::Arc;
 use test_r::test;
 
