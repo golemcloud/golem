@@ -15,7 +15,7 @@
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
-use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::{OplogLifecycleGuard, OplogService};
@@ -27,7 +27,7 @@ use crate::storage::keyvalue::{
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
-use golem_common::base_model::durable_stream::{StreamId, StreamSessionKeyV1};
+use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
@@ -95,9 +95,9 @@ type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 
 pub struct DurableStreamRecoveryMetadata {
     pub(crate) covered_through: OplogIndex,
-    pub(crate) sessions: Vec<(StreamSessionKeyV1, SessionControlMetadata)>,
+    pub(crate) sessions: Vec<(StreamSessionKey, SessionControlMetadata)>,
     pub(crate) consumer_deleting:
-        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
 }
 
 /// The potentially large parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
@@ -355,7 +355,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
     ) -> Result<SessionControlMetadata, String> {
         Err("durable stream control metadata is unavailable".into())
     }
@@ -372,7 +372,7 @@ pub trait WorkerService: Send + Sync {
     async fn read_durable_stream_consumer_page(
         &self,
         _owned_agent_id: &OwnedAgentId,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
         _stream: StreamId,
         _page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
@@ -383,7 +383,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _key: &StreamSessionKeyV1,
+        _key: &StreamSessionKey,
         _attempt: golem_common::model::durable_stream::AttemptId,
     ) -> Result<Option<OplogIndex>, String> {
         Err("durable stream resume index is unavailable".into())
@@ -1040,6 +1040,7 @@ impl DefaultWorkerService {
             status.status,
             AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
         ) || status.has_pending_work()
+            || !status.pending_durable_stream_cancellations.is_empty()
     }
 }
 
@@ -1070,7 +1071,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         attempt: golem_common::model::durable_stream::AttemptId,
     ) -> Result<Option<OplogIndex>, String> {
         self.stream_session_index
@@ -1082,7 +1083,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
     ) -> Result<SessionControlMetadata, String> {
         self.stream_session_index
             .lookup_control_metadata(owned_agent_id, agent_mode, key)
@@ -1092,7 +1093,7 @@ impl WorkerService for DefaultWorkerService {
     async fn read_durable_stream_consumer_page(
         &self,
         owned_agent_id: &OwnedAgentId,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         stream: StreamId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
@@ -2878,6 +2879,44 @@ mod tests {
         };
 
         assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+    }
+
+    #[test]
+    fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
+        use golem_common::model::durable_stream::{
+            StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
+            StreamInvocationId,
+        };
+
+        let mut status = AgentStatusRecord::default();
+        status
+            .pending_durable_stream_cancellations
+            .insert(StreamConsumerCancelIntentRecord {
+                format_version: 1,
+                session_key: StreamInvocationId {
+                    callee_environment_id: EnvironmentId::new(),
+                    callee: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "remote".into(),
+                    },
+                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                    idempotency_key: IdempotencyKey::new("caller-side".into()),
+                },
+                stream_id: StreamId(uuid::Uuid::new_v4()),
+                epoch: 1,
+                role: StreamCancelRole::OutputConsumer,
+                reason: StreamCancelReason::Cancelled,
+                details: None,
+            });
+
+        assert!(status.durable_stream_sessions.iter().next().is_none());
+        assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+        status.pending_durable_stream_cancellations.clear();
+        assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
             &status
         ));
     }
