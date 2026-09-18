@@ -14,7 +14,7 @@
 
 use super::{
     FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanCursor, ScanResume,
+    IndexedStorageNamespace, ScanCursor, ScanResume, WriterId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -37,6 +37,9 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
+    /// Recorded beside the epoch on every oplog this process claims, so an equal epoch from
+    /// another process is refused rather than shared. One per process; see [`WriterId`].
+    writer_id: WriterId,
 }
 
 impl SqliteIndexedStorage {
@@ -55,7 +58,18 @@ impl SqliteIndexedStorage {
             .await
             .map_err(|err| format!("Sqlite indexed storage pool initialization failed: {err:?}"))?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            writer_id: WriterId::process(),
+        })
+    }
+
+    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
+    /// give every storage it opens one identity, and a test uses it to play two executors racing
+    /// over one oplog inside a single process.
+    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
+        self.writer_id = writer_id;
+        self
     }
 
     /// Apply the indexed storage migrations on the given sqlite config without
@@ -68,7 +82,10 @@ impl SqliteIndexedStorage {
     }
 
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            writer_id: WriterId::process(),
+        }
     }
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
@@ -115,6 +132,13 @@ impl SqliteIndexedStorage {
                 "SQLite indexed storage cannot represent {field_name}={value} as i64"
             ))
         })
+    }
+
+    /// A stored epoch that will not fit a `u64` is corruption, not a fence: `to_i64` refuses to
+    /// write one, so a negative column value came from outside this code, and reading it back as
+    /// `u64` would wrap it into a spuriously huge epoch.
+    fn epoch_from_i64(value: i64, key: &str) -> String {
+        format!("SQLite indexed storage read a negative shard epoch {value} for key '{key}'")
     }
 
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
@@ -336,6 +360,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         }
 
+        let writer_id = self.writer_id.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
@@ -345,21 +370,33 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // check cannot be interleaved. Raising that cap means switching this to
                     // `BEGIN IMMEDIATE`.
                     if let Some(expected) = shard_epoch {
-                        let stored: Option<(i64,)> = tx
+                        let stored: Option<(i64, String)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                                    "SELECT epoch, owner FROM oplog_metadata WHERE namespace = ? AND key = ?;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
                             )
                             .await?;
-                        let actual = stored.map(|(epoch,)| ShardEpoch(epoch as u64));
-                        if actual != Some(expected) {
+                        let mut actual = None;
+                        let mut owner_matches = false;
+                        if let Some((epoch, owner)) = stored {
+                            let epoch = u64::try_from(epoch).map_err(|_| {
+                                FencedTxError::Corrupt(Self::epoch_from_i64(epoch, &key))
+                            })?;
+                            actual = Some(ShardEpoch(epoch));
+                            owner_matches = owner == writer_id;
+                        }
+                        // The epoch says which generation may write; the writer says which of two
+                        // processes holding that generation recorded it, which only a shard
+                        // manager that lost its state can produce.
+                        if actual != Some(expected) || !owner_matches {
                             return Err(FencedTxError::Fenced {
                                 key: key.clone(),
                                 expected,
                                 actual,
+                                owner_conflict: actual == Some(expected) && !owner_matches,
                             });
                         }
                     }
@@ -390,10 +427,12 @@ impl IndexedStorage for SqliteIndexedStorage {
             })
     }
 
-    /// Monotonic compare-and-set: the `WHERE` on the conflict path means a lower epoch updates no
-    /// row, so while a record exists a stale writer cannot walk it back and un-fence itself. With
-    /// no record there is no conflict and any epoch is inserted. The unqualified `epoch` there is
-    /// the existing row's.
+    /// Monotonic compare-and-set on the epoch and its writer: the `WHERE` on the conflict path
+    /// means a lower epoch updates no row, so while a record exists a stale writer cannot walk it
+    /// back and un-fence itself, and an equal epoch updates the row only for the process that
+    /// recorded it, so two processes cannot share one generation. With no record there is no
+    /// conflict and any epoch is inserted. The unqualified `epoch`/`owner` there are the existing
+    /// row's.
     async fn upsert_oplog_metadata(
         &self,
         svc_name: &'static str,
@@ -409,36 +448,49 @@ impl IndexedStorage for SqliteIndexedStorage {
         // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
         let epoch = Self::to_i64(shard_epoch.0, "shard_epoch")?;
 
+        let writer_id = self.writer_id.to_string();
+
         let mut api = self.pool.with_rw(svc_name, api_name);
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO oplog_metadata (namespace, key, epoch) VALUES (?, ?, ?)
-                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
-                       WHERE epoch <= excluded.epoch;"#,
+                    r#"INSERT INTO oplog_metadata (namespace, key, epoch, owner) VALUES (?, ?, ?, ?)
+                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch, owner = excluded.owner
+                       WHERE epoch < excluded.epoch
+                          OR (epoch = excluded.epoch AND owner = excluded.owner);"#,
                 )
                 .bind(namespace.clone())
                 .bind(key)
-                .bind(epoch),
+                .bind(epoch)
+                .bind(writer_id.clone()),
             )
             .await
             .map_err(Self::classify_repo_error)?;
 
         if result.rows_affected() == 0 {
-            let stored: Option<(i64,)> = api
+            let stored: Option<(i64, String)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                        "SELECT epoch, owner FROM oplog_metadata WHERE namespace = ? AND key = ?;",
                     )
                     .bind(namespace)
                     .bind(key),
                 )
                 .await
                 .map_err(Self::classify_repo_error)?;
+            let mut actual = None;
+            let mut owner_matches = false;
+            if let Some((epoch, owner)) = stored {
+                let epoch = u64::try_from(epoch)
+                    .map_err(|_| IndexedStorageError::Other(Self::epoch_from_i64(epoch, key)))?;
+                actual = Some(ShardEpoch(epoch));
+                owner_matches = owner == writer_id;
+            }
             return Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
                 expected: shard_epoch,
-                actual: stored.map(|(epoch,)| ShardEpoch(epoch as u64)),
+                actual,
+                owner_conflict: actual == Some(shard_epoch) && !owner_matches,
             });
         }
 

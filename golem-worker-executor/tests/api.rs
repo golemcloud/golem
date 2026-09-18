@@ -46,7 +46,7 @@ use golem_test_framework::dsl::{
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
-    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, WorkerDeletionHook, WorkerDeletionStage,
+    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, Worker, WorkerDeletionHook, WorkerDeletionStage,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
@@ -7505,6 +7505,172 @@ async fn a_stop_through_a_relinquished_generation_leaves_the_next_generation_cac
     assert!(
         Arc::ptr_eq(&cached, &fresh),
         "the cached generation changed under a stop through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A retry scheduled before the shard moved must not resume the agent afterwards.
+///
+/// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent has
+/// been given up, and the loop's backstop (`is_relinquished()` ahead of the retry decision,
+/// invocation_loop.rs) has to take the given-up exit instead: no restart here, no `Resumed` written
+/// to an oplog the new owner is taking over, and the caller told to reroute. Without the backstop
+/// the retry would win the race and resume an agent this executor no longer owns.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn a_retry_scheduled_before_a_revoke_does_not_resume_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "retry-after-revoke");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // The crash schedules the loop's restart; the revoke lands while it is pending.
+    let _ = executor.simulated_crash(&worker_id).await;
+    revoke_shard_zero(&executor).await?;
+
+    // Given up, so the pending retry must not bring it back: the agent leaves the cache and stays
+    // out of it.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    let result = tokio::time::timeout(Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| anyhow!("the caller was never answered after the revoke"))??;
+    assert!(
+        result.is_err(),
+        "the invocation must be handed back to the caller to reroute, not completed by an \
+         executor that no longer owns the shard"
+    );
+
+    sleep(Duration::from_secs(2)).await;
+    assert!(
+        !executor.worker_is_cached(&owned_agent_id).await,
+        "a retry scheduled before the revoke resumed an agent this executor had given up"
+    );
+
+    // The shard coming back is what may start it again, from the oplog, as a new generation.
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// The other half of the stale-handle contract: a handle kept past its generation must not be able
+/// to *start* it either.
+///
+/// The stop-side test above pins that a stale handle cannot evict the generation that replaced it.
+/// This one pins the guard at the other end (`start_if_needed_internal`, worker/mod.rs): a start
+/// through a given-up generation would take permits, could append `Resumed` to an oplog the new
+/// owner is now writing, and would publish its failures, by agent id, to the waiters of the
+/// generation that replaced it. The caller gets a retriable error instead, and the live generation
+/// is untouched.
+#[test]
+#[tracing::instrument]
+async fn a_start_through_a_relinquished_generation_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-start");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    let refused = Worker::start_if_needed(stale.clone()).await;
+    match refused {
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {}
+        Err(other) => panic!(
+            "a start through a given-up generation must be answered with something the caller can \
+             retry on the new owner, got {other}"
+        ),
+        Ok(_) => panic!("a start through a relinquished generation was allowed"),
+    }
+
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a start through a stale handle"
     );
     executor
         .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))

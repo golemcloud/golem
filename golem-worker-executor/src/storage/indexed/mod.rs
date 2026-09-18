@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,6 +23,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::RepoError;
+use uuid::Uuid;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -47,7 +48,8 @@ pub enum IndexedStorageError {
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
     /// The write was refused because the writer no longer owns the agent's shard: the epoch it
-    /// asserted is behind the one recorded for that oplog.
+    /// asserted is behind the one recorded for that oplog, or the record is held by another
+    /// writer at the same epoch.
     ///
     /// Never retriable — retrying cannot make this executor the owner again. It is not a failure
     /// of the storage either: the write was rejected on purpose, by a newer owner's claim.
@@ -55,7 +57,40 @@ pub enum IndexedStorageError {
         key: String,
         expected: ShardEpoch,
         actual: Option<ShardEpoch>,
+        /// The stored epoch equals the asserted one but another writer recorded it. Only a shard
+        /// manager that lost its state mints a generation somebody already holds, so this says
+        /// the epoch itself has to be minted past - see [`WriterId`].
+        owner_conflict: bool,
     },
+}
+
+/// The process behind an oplog write, recorded alongside the epoch it asserts.
+///
+/// One value per executor process, kept for the life of the process. It is deliberately *not* the
+/// executor's lease identity (`GrpcShardManagerService::executor_id`), which is regenerated
+/// whenever the manager answers `LeaseNotFound`: that identity changes while the process goes on
+/// holding the same epochs for the same oplogs, and a row keyed on it would refuse the process its
+/// own agents after every re-registration.
+///
+/// What it buys is the one thing an epoch cannot say by itself: which of two writers holding the
+/// same number wrote the record. A manager whose state was wiped mints from zero again and can
+/// grant a live owner's epoch to somebody else; both would then pass an equality check. With the
+/// writer recorded, the newcomer is refused, reports the collision, and the manager mints above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WriterId(pub Uuid);
+
+impl WriterId {
+    /// This process's writer identity, created once on first use.
+    pub fn process() -> Self {
+        static PROCESS: OnceLock<WriterId> = OnceLock::new();
+        *PROCESS.get_or_init(|| WriterId(Uuid::new_v4()))
+    }
+}
+
+impl Display for WriterId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 impl IndexedStorageError {
@@ -77,7 +112,13 @@ impl Display for IndexedStorageError {
                 key,
                 expected,
                 actual,
+                owner_conflict,
             } => match actual {
+                Some(actual) if *owner_conflict => write!(
+                    f,
+                    "Oplog write fenced for key {key}: asserted shard epoch {expected}, \
+                     which another writer holds - the stored epoch is {actual}"
+                ),
                 Some(actual) => write!(
                     f,
                     "Oplog write fenced for key {key}: asserted shard epoch {expected}, \
@@ -117,7 +158,11 @@ pub(crate) enum FencedTxError {
         key: String,
         expected: ShardEpoch,
         actual: Option<ShardEpoch>,
+        owner_conflict: bool,
     },
+    /// A stored value the schema should have made impossible - a negative epoch, say. Not a fence:
+    /// nobody took the oplog over, the row itself cannot be trusted.
+    Corrupt(String),
 }
 
 impl From<RepoError> for FencedTxError {
@@ -138,11 +183,14 @@ impl FencedTxError {
                 key,
                 expected,
                 actual,
+                owner_conflict,
             } => IndexedStorageError::Fenced {
                 key,
                 expected,
                 actual,
+                owner_conflict,
             },
+            FencedTxError::Corrupt(msg) => IndexedStorageError::Other(msg),
         }
     }
 }
@@ -378,17 +426,21 @@ pub trait IndexedStorage: Debug + Sync {
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError>;
 
-    /// Records the shard epoch that is authorised to write the given key, as a monotonic
-    /// compare-and-set: the write is accepted when `shard_epoch` is at least the stored one, and
-    /// refused with [`IndexedStorageError::Fenced`] when it is behind. Inserts the record if the
-    /// key has none.
+    /// Records the shard epoch that is authorised to write the given key, and this process as its
+    /// writer, as a monotonic compare-and-set: the write is accepted when `shard_epoch` is above
+    /// the stored one, or equal to it and recorded by this same writer, and refused with
+    /// [`IndexedStorageError::Fenced`] otherwise. Inserts the record if the key has none.
     ///
     /// Monotonic rather than a plain overwrite so that a writer holding a stale epoch cannot walk
-    /// the record backwards and un-fence itself against the current owner. That holds only for a
-    /// key that already has a record. A key with none accepts any epoch, whether it was never
-    /// written, removed by [`Self::delete_oplog_metadata`], or written before the record existed.
-    /// For such a key the fence cannot tell a stale executor's first open from the owner's; only
-    /// the lease's admission check bounds that window.
+    /// the record backwards and un-fence itself against the current owner. Equality is what the
+    /// writer ([`WriterId`]) settles: a re-open by the process that already holds the epoch is the
+    /// ordinary case, while another process presenting the same epoch is a manager that lost its
+    /// state and minted a generation twice - refused here, reported, and minted past.
+    ///
+    /// That holds only for a key that already has a record. A key with none accepts any epoch,
+    /// whether it was never written, removed by [`Self::delete_oplog_metadata`], or written before
+    /// the record existed. For such a key the fence cannot tell a stale executor's first open from
+    /// the owner's; only the lease's admission check bounds that window.
     ///
     /// The default does nothing and accepts everything: a backend that cannot fence has no record
     /// to keep.

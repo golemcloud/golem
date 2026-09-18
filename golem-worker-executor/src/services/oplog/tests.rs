@@ -515,6 +515,7 @@ impl InjectedAppendFailure {
                 key: key.to_string(),
                 expected: shard_epoch.unwrap_or_default(),
                 actual: shard_epoch.map(|epoch| ShardEpoch(epoch.0 + 1)),
+                owner_conflict: false,
             }),
             _ => None,
         }
@@ -9507,6 +9508,7 @@ async fn a_refused_open_or_create_reports_the_stored_epoch_to_the_fence_observer
         agent_id: agent_id.clone(),
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
+        owner_conflict: false,
     };
 
     for agent_id in [&opened, &created] {
@@ -9669,6 +9671,7 @@ async fn a_create_refused_behind_a_cached_handle_still_reports_the_stored_epoch(
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(5),
             actual_epoch: Some(ShardEpoch(6)),
+            owner_conflict: false,
         }]
     );
 }
@@ -9729,6 +9732,7 @@ async fn a_refused_append_reports_the_stored_epoch_and_the_latch_does_not_report
         agent_id: agent_id.clone(),
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
+        owner_conflict: false,
     };
     assert_eq!(
         recorder.fences(),

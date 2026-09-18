@@ -30,7 +30,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanCursor,
+    IndexedStorageNamespace, ScanCursor, WriterId,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -48,6 +48,16 @@ trait GetIndexedStorage: Debug {
     /// Whether this backend is expected to enforce the shard-epoch fence. Stated here rather than
     /// read off the storage so that a backend silently losing its fence fails a test.
     fn expects_fencing(&self) -> bool;
+
+    /// Two handles onto the SAME store, writing as two different processes - what a shard manager
+    /// that lost its state can produce by minting one epoch twice. A backend that cannot fence
+    /// returns two handles that write as the same process; nothing it does is checked.
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    );
 }
 
 struct InMemoryIndexedStorageWrapper;
@@ -67,6 +77,16 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let kvs = InMemoryIndexedStorage::new();
         Arc::new(kvs)
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let shared: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(InMemoryIndexedStorage::new());
+        (shared.clone(), shared)
     }
 }
 
@@ -111,6 +131,16 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
         .unwrap();
         let kvs = RedisIndexedStorage::new(redis_pool);
         Arc::new(kvs)
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let shared = self.get_indexed_storage().await;
+        (shared.clone(), shared)
     }
 }
 
@@ -165,6 +195,35 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
         let sis = SqliteIndexedStorage::configured(&config).await.unwrap();
         Arc::new(sis)
     }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let database = tempdir
+            .path()
+            .join("indexed.db")
+            .to_string_lossy()
+            .into_owned();
+        self.tempdirs.lock().unwrap().push(tempdir);
+        let config = golem_common::config::DbSqliteConfig {
+            database,
+            max_connections: 10,
+            foreign_keys: false,
+        };
+        let first = SqliteIndexedStorage::configured(&config)
+            .await
+            .unwrap()
+            .for_writer(WriterId(Uuid::new_v4()));
+        let second = SqliteIndexedStorage::configured(&config)
+            .await
+            .unwrap()
+            .for_writer(WriterId(Uuid::new_v4()));
+        (Arc::new(first), Arc::new(second))
+    }
 }
 
 #[test_dep(scope = Shared, tagged_as = "sqlite")]
@@ -206,6 +265,22 @@ impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
         let storage = MultiSqliteIndexedStorage::new(&path, 10, true);
         Arc::new(storage)
     }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+        let first =
+            MultiSqliteIndexedStorage::new(&path, 10, true).for_writer(WriterId(Uuid::new_v4()));
+        let second =
+            MultiSqliteIndexedStorage::new(&path, 10, true).for_writer(WriterId(Uuid::new_v4()));
+        (Arc::new(first), Arc::new(second))
+    }
 }
 
 #[test_dep(scope = Shared, tagged_as = "multi_sqlite")]
@@ -225,13 +300,10 @@ impl Debug for PostgresIndexedStorageWrapper {
     }
 }
 
-#[async_trait]
-impl GetIndexedStorage for PostgresIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        true
-    }
-
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+impl PostgresIndexedStorageWrapper {
+    /// A fresh database, and the config that reaches it. Separated from `get_indexed_storage` so a
+    /// second storage can be opened onto the same database as a different writer.
+    async fn fresh_database(&self) -> IndexedStoragePostgresConfig {
         let db_name = format!("idx_{}", Uuid::new_v4().simple());
 
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
@@ -259,17 +331,45 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
             acquire_timeout: None,
         };
 
-        let config = IndexedStoragePostgresConfig {
+        IndexedStoragePostgresConfig {
             postgres,
             drop_prefix_delete_batch_size: 1024,
             max_concurrent_ops: None,
-        };
+        }
+    }
+}
 
+#[async_trait]
+impl GetIndexedStorage for PostgresIndexedStorageWrapper {
+    fn expects_fencing(&self) -> bool {
+        true
+    }
+
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let config = self.fresh_database().await;
         let storage = PostgresIndexedStorage::configured(&config)
             .await
             .expect("Cannot create postgres indexed storage");
 
         Arc::new(storage)
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let config = self.fresh_database().await;
+        let first = PostgresIndexedStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres indexed storage")
+            .for_writer(WriterId(Uuid::new_v4()));
+        let second = PostgresIndexedStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres indexed storage")
+            .for_writer(WriterId(Uuid::new_v4()));
+        (Arc::new(first), Arc::new(second))
     }
 }
 
@@ -1993,6 +2093,188 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
     } else {
         result.unwrap();
         assert_eq!(length, 3);
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn another_writer_at_the_same_epoch_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // A shard manager that lost its state mints from zero again and can hand a live owner's epoch
+    // to somebody else. The epoch alone cannot separate them, so the row's writer does: the owner
+    // holds it, and the newcomer is refused at the open rather than sharing the generation.
+    let fencing = is.expects_fencing();
+    let (owner, newcomer) = is.get_two_writers().await;
+    let key = "fence-two-writers";
+
+    owner
+        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+
+    let claim = newcomer
+        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await;
+
+    if !fencing {
+        claim.unwrap();
+        return;
+    }
+
+    match claim {
+        Err(IndexedStorageError::Fenced {
+            expected,
+            actual,
+            owner_conflict,
+            ..
+        }) => {
+            assert_eq!(expected, ShardEpoch(4), "expected epoch");
+            assert_eq!(actual, Some(ShardEpoch(4)), "stored epoch");
+            assert!(
+                owner_conflict,
+                "the epochs match, so the refusal has to name the writer as the reason - that is \
+                 what tells the shard manager to mint past this epoch rather than leave it shared"
+            );
+        }
+        other => panic!("expected a Fenced error, got {other:?}"),
+    }
+
+    // And the newcomer cannot write behind the owner's back either.
+    let append = newcomer
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(1, Bytes::from_static(b"a"))]),
+            Some(ShardEpoch(4)),
+        )
+        .await;
+    match append {
+        Err(IndexedStorageError::Fenced { owner_conflict, .. }) => assert!(owner_conflict),
+        other => panic!("expected a Fenced error, got {other:?}"),
+    }
+    assert_eq!(
+        owner
+            .length("svc", "api", ns.ns.clone(), key)
+            .await
+            .unwrap(),
+        0,
+        "a refused append writes nothing"
+    );
+
+    // The owner is untouched by the attempt.
+    owner
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(1, Bytes::from_static(b"a"))]),
+            Some(ShardEpoch(4)),
+        )
+        .await
+        .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn the_same_writer_re_opens_at_the_same_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // The ordinary case the writer column must not break: one process re-opening an oplog it
+    // already holds, at the epoch it already holds, which happens on every cache eviction.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-reopen";
+
+    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([(1, Bytes::from_static(b"a"))]),
+        Some(ShardEpoch(4)),
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_newcomer_minted_above_the_collision_takes_the_oplog_over(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // The repair the refusal above sets off: the newcomer reports the collision, the shard manager
+    // mints past it, and the higher epoch takes the oplog over - at which point the old owner is
+    // the one being refused.
+    let fencing = is.expects_fencing();
+    if !fencing {
+        return;
+    }
+    let (owner, newcomer) = is.get_two_writers().await;
+    let key = "fence-re-mint";
+
+    owner
+        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    newcomer
+        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    newcomer
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(1, Bytes::from_static(b"a"))]),
+            Some(ShardEpoch(5)),
+        )
+        .await
+        .unwrap();
+
+    let refused = owner
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(2, Bytes::from_static(b"b"))]),
+            Some(ShardEpoch(4)),
+        )
+        .await;
+    match refused {
+        Err(IndexedStorageError::Fenced {
+            actual,
+            owner_conflict,
+            ..
+        }) => {
+            assert_eq!(actual, Some(ShardEpoch(5)));
+            assert!(
+                !owner_conflict,
+                "this one is an ordinary takeover, not two writers on one epoch"
+            );
+        }
+        other => panic!("expected a Fenced error, got {other:?}"),
     }
 }
 

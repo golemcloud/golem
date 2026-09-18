@@ -350,18 +350,23 @@ async fn record_owning_epoch(
     match outcome {
         Ok(()) => None,
         Err(IndexedStorageError::Fenced {
-            expected, actual, ..
+            expected,
+            actual,
+            owner_conflict,
+            ..
         }) => {
             warn!(
                 agent_id = %owned_agent_id,
                 expected_epoch = expected.0,
                 actual_epoch = ?actual.map(|epoch| epoch.0),
+                owner_conflict,
                 "Oplog opened at a stale shard epoch: the shard has a new owner"
             );
             let fence = OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
+                owner_conflict,
             };
             if let Some(observer) = fence_observer {
                 observer.fenced(&fence);
@@ -2110,11 +2115,15 @@ impl PrimaryOplogState {
     fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
         match err {
             IndexedStorageError::Fenced {
-                expected, actual, ..
+                expected,
+                actual,
+                owner_conflict,
+                ..
             } => OplogError::Fenced(OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
+                owner_conflict,
             }),
             other => OplogError::Storage(other.to_string()),
         }

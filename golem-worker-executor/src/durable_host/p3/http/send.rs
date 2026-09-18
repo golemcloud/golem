@@ -1553,6 +1553,7 @@ mod tests {
             },
             expected_epoch: ShardEpoch(8),
             actual_epoch: Some(ShardEpoch(9)),
+            owner_conflict: false,
         });
         record_frame_entry(
             oplog.clone(),

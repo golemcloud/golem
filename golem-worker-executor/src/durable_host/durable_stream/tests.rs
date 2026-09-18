@@ -94,7 +94,7 @@ impl TestOplog {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
 
-    fn committed_length(&self) -> u64 {
+    pub(crate) fn committed_length(&self) -> u64 {
         self.state.lock().unwrap().committed.as_u64()
     }
 
@@ -112,11 +112,11 @@ impl TestOplog {
             .collect()
     }
 
-    fn refuse_adds(&self, fence: crate::services::oplog::OplogFence) {
+    pub(crate) fn refuse_adds(&self, fence: crate::services::oplog::OplogFence) {
         self.state.lock().unwrap().refused_adds = Some(fence);
     }
 
-    fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
+    pub(crate) fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
         self.state.lock().unwrap().fence = Some(fence);
     }
 }
@@ -5919,11 +5919,12 @@ async fn session_control_batch_validates_before_appending_any_record() {
     }
 }
 
-fn test_fence() -> crate::services::oplog::OplogFence {
+pub(crate) fn test_fence() -> crate::services::oplog::OplogFence {
     crate::services::oplog::OplogFence {
         agent_id: identity().agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+        owner_conflict: false,
     }
 }
 

@@ -2111,6 +2111,7 @@ mod tests {
             agent_id: agent_on_shard(shard),
             expected_epoch: ShardEpoch(expected),
             actual_epoch: Some(ShardEpoch(stored)),
+            owner_conflict: false,
         }
     }
 

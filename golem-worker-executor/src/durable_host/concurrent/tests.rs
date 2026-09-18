@@ -474,6 +474,7 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
         agent_id: agent_id.clone(),
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+        owner_conflict: false,
     }));
     let seed_oplog = Arc::new(InMemoryOplog::new());
     seed_oplog

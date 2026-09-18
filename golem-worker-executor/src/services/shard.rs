@@ -327,10 +327,14 @@ impl OplogFenceObserver for ShardServiceDefault {
         // Only a record ahead of the epoch this executor asserted says anything the shard manager
         // may have lost. An absent record carries no epoch, and one at or below the assertion is
         // not a generation above it.
-        let Some(stored) = fence
-            .actual_epoch
-            .filter(|stored| *stored > fence.expected_epoch)
-        else {
+        //
+        // The exception is a record at the assertion held by another writer: that one says the
+        // manager handed the same generation to two executors, which only a manager that lost its
+        // state does, and it has to mint past the epoch rather than leave it shared.
+        let Some(stored) = fence.actual_epoch.filter(|stored| {
+            *stored > fence.expected_epoch
+                || (fence.owner_conflict && *stored == fence.expected_epoch)
+        }) else {
             return;
         };
         let shard_id = {
@@ -454,6 +458,7 @@ mod tests {
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(expected),
             actual_epoch: actual.map(ShardEpoch),
+            owner_conflict: false,
         }
     }
 

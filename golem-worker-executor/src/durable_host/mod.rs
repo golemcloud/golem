@@ -3078,6 +3078,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.current_retry_point = result;
             Ok(result)
         } else {
+            // No scope opens, so nothing is written before the side effect runs and a fence
+            // already latched would only surface at the commit after it - by which time the
+            // effect has happened and the shard's new owner, having no record of it, runs it
+            // again. Reading the latch costs no storage round trip, so a write whose effect is
+            // about to run is refused here instead. It does not close the window where the shard
+            // moves *during* the call: that one needs a round trip per call, which is exactly what
+            // an idempotent write is declared to avoid.
+            if self.state.is_live()
+                && matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemote
+                        | DurableFunctionType::WriteRemoteBatched(_)
+                        | DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                && let Some(fence) = self.state.oplog.fence()
+            {
+                return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
+            }
+
             // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
             // because they are nondeterministic.

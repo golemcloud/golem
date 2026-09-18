@@ -518,6 +518,10 @@ pub struct OplogFence {
     pub agent_id: AgentId,
     pub expected_epoch: ShardEpoch,
     pub actual_epoch: Option<ShardEpoch>,
+    /// The stored epoch is the one this executor asserted, but another process recorded it. The
+    /// epoch alone therefore says nothing about who may write, and the shard manager has to mint
+    /// past it rather than leave two holders on one generation.
+    pub owner_conflict: bool,
 }
 
 /// Told of every refusal the storage returns, carrying the epoch recorded on the oplog.

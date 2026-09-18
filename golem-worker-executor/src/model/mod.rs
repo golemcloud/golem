@@ -961,6 +961,7 @@ mod tests {
             },
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+            owner_conflict: false,
         };
 
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
@@ -1008,6 +1009,7 @@ mod tests {
             },
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+            owner_conflict: false,
         }
     }
 

@@ -443,7 +443,7 @@ impl ShardManagement {
             // applied first, a fenced epoch at or above the claim ends one past it, and a higher
             // claim still wins. They reach a state that was wiped or replaced as well, because the
             // executor keeps reporting them until a renewal under its re-registered id is granted.
-            let re_minted = shard_state.raise_epoch_floor_past(&fenced);
+            let re_minted = shard_state.raise_epoch_floor_past(executor_id, &fenced);
             let fence_re_minted_owners = owners_re_minted_by(shard_state, &re_minted, executor_id);
             if !re_minted.is_empty() {
                 warn!(

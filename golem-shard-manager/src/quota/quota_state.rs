@@ -325,7 +325,7 @@ impl QuotaState {
         pod: Pod,
         lease_duration: Duration,
         min_executors: u64,
-    ) -> AcquireLeaseResult {
+    ) -> Result<AcquireLeaseResult, QuotaError> {
         let expired = self.housekeep();
 
         if let Some(existing) = self.leases.get(&pod) {
@@ -353,19 +353,23 @@ impl QuotaState {
 
         let pod_lease = self.leases.get_mut(&pod).expect("just inserted");
         let epoch = pod_lease.epoch;
-        pod_lease.epoch = epoch.next();
+        pod_lease.epoch = epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {epoch}"
+            ))
+        })?;
         self.remaining -= allocated_amount;
         pod_lease.allocated = allocated_amount;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
 
-        AcquireLeaseResult {
+        Ok(AcquireLeaseResult {
             epoch,
             allocated_amount,
             expires_at,
             expired,
             total_available_amount,
-        }
+        })
     }
 
     pub fn renew_lease(
@@ -406,7 +410,11 @@ impl QuotaState {
             .get_mut(pod)
             .expect("just validated and refreshed");
         let new_epoch = pod_lease.epoch;
-        pod_lease.epoch = new_epoch.next();
+        pod_lease.epoch = new_epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {new_epoch}"
+            ))
+        })?;
 
         let allocated_amount = self.compute_allocation(pod, min_executors);
         let total_available_amount = self.total_available_amount();

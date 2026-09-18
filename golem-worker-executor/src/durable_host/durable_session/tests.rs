@@ -1,7 +1,7 @@
 use super::*;
 use crate::durable_host::durable_stream::AttachedStreamSegmentSource;
 use crate::durable_host::durable_stream::tests::{
-    TestIdentity, TestOplog, attachment_key, identity, registration,
+    TestIdentity, TestOplog, attachment_key, identity, registration, test_fence,
 };
 use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
 use crate::services::oplog::CommitLevel;
@@ -1507,6 +1507,147 @@ async fn foreign_cancellation_can_drain_its_local_owner_from_the_rpc_callback() 
 #[test_r::timeout("15s")]
 async fn foreign_preparation_releases_local_owner_when_rpc_requests_retirement() {
     retirement_from_foreign_rpc(true).await;
+}
+
+/// A foreign mapping prepared while this agent's oplog is already fenced must fail as a fence and
+/// leave the session unlocked.
+///
+/// Activating a foreign mapping is one of the paths that runs while a shard is being taken away:
+/// it writes a session record, so a latched fence has to stop it rather than let it record a
+/// mapping the new owner will never see. The session lock matters as much as the error - a
+/// preparation that failed while holding it would strand every later call on this session, and the
+/// agent is about to be given up, not restarted.
+#[test]
+#[test_r::timeout("15s")]
+async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
+    let local = identity();
+    let mut remote = identity();
+    remote.agent_id.agent_id.push_str("-remote");
+    remote.invocation.callee = remote.agent_id.clone();
+    let remote_producer = DurableStreamStore::load(
+        Arc::new(TestOplog::default()),
+        remote.environment_id,
+        remote.agent_id.clone(),
+        remote.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = remote_producer
+        .register(
+            None,
+            registration(
+                &remote,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: remote.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        local.environment_id,
+        local.agent_id.clone(),
+        local.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let attachment_id = AttachmentId::primary(
+        local.environment_id,
+        &local.agent_id,
+        &local.invocation.idempotency_key,
+    )
+    .unwrap();
+    let attempt_id = AttemptId::fresh();
+    let pending_invocation_oplog_index = append_prepared_pending(
+        &producer,
+        &oplog,
+        &local,
+        attachment_id,
+        attempt_id,
+        &handle,
+        SessionStreamRole::Input,
+    )
+    .await;
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: local.invocation.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
+        .await
+        .unwrap();
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog.clone(),
+        local.invocation.clone(),
+        [StreamSessionMappingRecord {
+            transport_stream_id: 7,
+            handle: handle.clone(),
+            role: SessionStreamRole::Input,
+        }],
+    )
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
+    .with_attachment(1, attempt_id)
+    .with_rpc(Arc::new(AttachedProducerRpc {
+        producer: remote_producer,
+        cancellation_owner: None,
+        stall_next_cancel: Default::default(),
+        scripted_reads: Mutex::default(),
+        pending_read: Mutex::default(),
+        read_requests: Mutex::default(),
+    }))
+    .with_auth_ctx(AuthCtx::System);
+
+    let committed_before = oplog.committed_length();
+    // Both halves of what a real fenced oplog does: the latch every reader consults, and the
+    // refusal an add itself gets once it has latched (`PrimaryOplogState::refuse_if_fenced`).
+    oplog.latch_fence(test_fence());
+    oplog.refuse_adds(test_fence());
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        streams.prepare_foreign_mapping(
+            StreamSessionMappingRecord {
+                transport_stream_id: 7,
+                handle,
+                role: SessionStreamRole::Input,
+            },
+            1,
+        ),
+    )
+    .await
+    .expect("a foreign mapping on a fenced oplog hung instead of failing")
+    .unwrap_err();
+
+    assert!(
+        error.contains("Fenced"),
+        "a foreign mapping on a fenced oplog must report the fence itself, so the caller reroutes \
+         instead of treating it as a local failure, got {error}"
+    );
+    assert_eq!(
+        oplog.committed_length(),
+        committed_before,
+        "nothing may be committed for a mapping the storage refused"
+    );
+    assert!(
+        streams.session_lock.try_lock().is_ok(),
+        "the session lock has to be released, or every later call on this session strands"
+    );
 }
 
 async fn retirement_from_foreign_rpc(prepare: bool) {
