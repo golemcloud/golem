@@ -766,11 +766,6 @@ pub(all) struct SetSpanAttributeParameters {
   value : @context.AttributeValue
 } derive(Eq, @debug.Debug)
 
-pub(all) struct SnapshotData {
-  data : FixedArray[Byte]
-  mime_type : String
-} derive(Eq, @debug.Debug)
-
 pub(all) struct SnapshotBasedUpdateParameters {
   payload : FixedArray[Byte]
   mime_type : String
@@ -780,6 +775,11 @@ pub(all) struct SnapshotBasedUpdateParameters {
 pub(all) struct SnapshotConfirmedParameters {
   timestamp : @system-clock.Instant
   filesystem_snapshot : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SnapshotData {
+  data : FixedArray[Byte]
+  mime_type : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct SnapshotParameters {
