@@ -844,7 +844,6 @@ mod tests {
                 "/notes",
             )
             .unwrap(),
-            openapi_spec: None,
             openapi_inputs: None,
         }
     }

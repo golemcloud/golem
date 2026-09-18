@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::openapi::HttpApiOpenApiSpec;
+use crate::custom_api::openapi::OpenApiDocument;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
@@ -142,7 +142,7 @@ pub enum ResponseBody {
         body: TextSource,
     },
     OpenApiSchema {
-        spec: Arc<HttpApiOpenApiSpec>,
+        spec: Arc<OpenApiDocument>,
         format: OpenApiSpecFormat,
     },
     Stream(poem::Body),
@@ -161,7 +161,7 @@ impl fmt::Debug for ResponseBody {
             ResponseBody::UnstructuredTextBody { .. } => f.write_str("UnstructuredTextBody"),
             ResponseBody::OpenApiSchema { spec, format } => f
                 .debug_struct("OpenApiSchema")
-                .field("spec", &spec.0)
+                .field("spec", spec)
                 .field("format", format)
                 .finish(),
             ResponseBody::Stream(_) => f.write_str("Stream"),

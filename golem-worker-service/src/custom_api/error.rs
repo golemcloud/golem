@@ -59,8 +59,8 @@ pub enum RequestHandlerError {
     UnknownOidcState,
     #[error("OIDC token exchange failed")]
     OidcTokenExchangeFailed,
-    #[error("OpenAPI spec generation for api failed")]
-    OpenApiSpecGenerationFailed,
+    #[error(transparent)]
+    OpenApi(#[from] super::openapi::OpenApiError),
     #[error("Invariant violated: {msg}")]
     InvariantViolated { msg: &'static str },
     #[error("Resolving route failed: {0}")]
@@ -105,7 +105,7 @@ impl SafeDisplay for RequestHandlerError {
             Self::UnknownOidcState => self.to_string(),
             Self::OidcTokenExchangeFailed => self.to_string(),
             Self::OidcSchemeMismatch => self.to_string(),
-            Self::OpenApiSpecGenerationFailed { .. } => self.to_string(),
+            Self::OpenApi(_) => self.to_string(),
 
             Self::InvariantViolated { .. } => "internal error".to_string(),
 

@@ -15,7 +15,7 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::openapi::{HttpApiOpenApiSpec, OpenApiInputs};
+use super::openapi::OpenApiInputs;
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -47,7 +47,6 @@ pub struct ResolvedRouteEntry {
     pub route: Arc<RichCompiledRoute>,
     pub captured_path_parameters: Vec<String>,
     pub request_target: HttpRequestTarget,
-    pub openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
     pub openapi_inputs: Option<Arc<OpenApiInputs>>,
 }
 
@@ -168,7 +167,6 @@ impl RouteResolver {
             captured_path_parameters,
             request_target,
             route: route_entry.clone(),
-            openapi_spec: domain_api.openapi_spec.clone(),
             openapi_inputs: domain_api.openapi_inputs.clone(),
         })
     }
@@ -264,7 +262,6 @@ impl RouteResolver {
                     reserved: [Router::new(), Router::new()],
                     typed: [Router::new(), Router::new()],
                     mounts: Arc::new(Vec::new()),
-                    openapi_spec: None,
                     openapi_inputs: None,
                 });
             }
@@ -293,17 +290,6 @@ impl RouteResolver {
                 None
             }
         });
-        let openapi_spec = match openapi_inputs
-            .as_ref()
-            .map(|inputs| inputs.generated_spec())
-            .transpose()
-        {
-            Ok(spec) => spec.map(Arc::new),
-            Err(e) => {
-                tracing::warn!("Failed to build openapi spec for http api: {e}");
-                None
-            }
-        };
 
         let (mounts, concrete_routes): (Vec<_>, Vec<_>) = finalized_routes
             .into_iter()
@@ -325,7 +311,6 @@ impl RouteResolver {
             reserved: build_router(reserved)?,
             typed: build_router(typed)?,
             mounts: Arc::new(mounts),
-            openapi_spec,
             openapi_inputs,
             created_at: Instant::now(),
         })
@@ -474,7 +459,6 @@ struct DomainHttpApi {
     reserved: [Router<Arc<RichCompiledRoute>>; 2],
     typed: [Router<Arc<RichCompiledRoute>>; 2],
     mounts: Arc<Vec<Arc<RichCompiledRoute>>>,
-    openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
     openapi_inputs: Option<Arc<OpenApiInputs>>,
 }
 
@@ -673,7 +657,7 @@ pub(super) mod tests {
             let inputs = api.openapi_inputs.unwrap();
             assert_eq!(inputs.public_origin, expected);
             assert_eq!(
-                api.openapi_spec.unwrap().0["servers"],
+                inputs.generated_contribution().unwrap()["servers"],
                 serde_json::json!([{"url": expected}])
             );
             assert_eq!(inputs.routes.len(), 2);

@@ -25,6 +25,9 @@ pub(super) const METHODS: [&str; 8] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Category {
     Size,
+    MergedSize,
+    Timeout,
+    Depth,
     Json,
     Structure,
     Unsupported,
@@ -84,10 +87,24 @@ pub(super) fn parse(router: &str, input: &str) -> Result<ProviderDocument, Docum
         return Err(DocumentError::new(router, Category::Size, ""));
     }
     let mut deserializer = serde_json::Deserializer::from_str(input);
-    let mut value = StrictJson { depth: 0 }
-        .deserialize(&mut deserializer)
-        .and_then(|value| deserializer.end().map(|()| value))
-        .map_err(|_| DocumentError::new(router, Category::Json, ""))?;
+    let depth_exceeded = std::cell::Cell::new(false);
+    let mut value = StrictJson {
+        depth: 0,
+        depth_exceeded: &depth_exceeded,
+    }
+    .deserialize(&mut deserializer)
+    .and_then(|value| deserializer.end().map(|()| value))
+    .map_err(|_| {
+        DocumentError::new(
+            router,
+            if depth_exceeded.get() {
+                Category::Depth
+            } else {
+                Category::Json
+            },
+            "",
+        )
+    })?;
     if value.get("openapi").and_then(Value::as_str) != Some("3.1.0")
         || !value.get("paths").is_some_and(Value::is_object)
     {
@@ -264,11 +281,12 @@ fn offline_options() -> jsonschema::ValidationOptions {
 
 /// Counts containers, not scalar values. Duplicate detection also applies in
 /// opaque payloads: they are opaque to OpenAPI, but still must be strict JSON.
-struct StrictJson {
+struct StrictJson<'a> {
     depth: usize,
+    depth_exceeded: &'a std::cell::Cell<bool>,
 }
 
-impl<'de> DeserializeSeed<'de> for StrictJson {
+impl<'de> DeserializeSeed<'de> for StrictJson<'_> {
     type Value = Value;
 
     fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
@@ -276,7 +294,7 @@ impl<'de> DeserializeSeed<'de> for StrictJson {
     }
 }
 
-impl<'de> Visitor<'de> for StrictJson {
+impl<'de> Visitor<'de> for StrictJson<'_> {
     type Value = Value;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -311,11 +329,13 @@ impl<'de> Visitor<'de> for StrictJson {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
         if self.depth == 64 {
+            self.depth_exceeded.set(true);
             return Err(A::Error::custom("container depth"));
         }
         let mut result = Vec::new();
         while let Some(value) = seq.next_element_seed(StrictJson {
             depth: self.depth + 1,
+            depth_exceeded: self.depth_exceeded,
         })? {
             result.push(value);
         }
@@ -324,6 +344,7 @@ impl<'de> Visitor<'de> for StrictJson {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
         if self.depth == 64 {
+            self.depth_exceeded.set(true);
             return Err(A::Error::custom("container depth"));
         }
         let mut result = Map::new();
@@ -333,6 +354,7 @@ impl<'de> Visitor<'de> for StrictJson {
             }
             let value = map.next_value_seed(StrictJson {
                 depth: self.depth + 1,
+                depth_exceeded: self.depth_exceeded,
             })?;
             result.insert(key, value);
         }

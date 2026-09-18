@@ -37,6 +37,16 @@ pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes(routes: &[&RichCompiledRoute], public_origin: &str) -> Result<Self, String> {
+        let spec = Self::contribution_from_routes(routes, public_origin)?;
+        super::merge::merge(spec, vec![], public_origin)
+            .map(HttpApiOpenApiSpec)
+            .map_err(|error| format!("{:?} at {}", error.category, error.location))
+    }
+
+    pub(super) fn contribution_from_routes(
+        routes: &[&RichCompiledRoute],
+        public_origin: &str,
+    ) -> Result<Value, String> {
         let mut ds_only_paths: HashSet<_> = routes
             .iter()
             .filter_map(|route| match &route.behavior {
@@ -128,7 +138,7 @@ impl HttpApiOpenApiSpec {
             .map(|(k, v)| (k, Value::Object(v)))
             .collect();
 
-        let spec = json!({
+        Ok(json!({
             "openapi": "3.1.0",
             "info": {
                 "title": "Managed api provided by Golem",
@@ -139,11 +149,7 @@ impl HttpApiOpenApiSpec {
             ],
             "paths": Value::Object(paths_value),
             "components": Value::Object(components),
-        });
-
-        super::merge::merge(spec, vec![], public_origin)
-            .map(HttpApiOpenApiSpec)
-            .map_err(|error| format!("{:?} at {}", error.category, error.location))
+        }))
     }
 }
 
@@ -444,7 +450,7 @@ fn set_schema_description(schema: &mut Value, description: &str) {
     }
 }
 
-fn render_full_path(path_segments: &[PathSegment]) -> String {
+pub(super) fn render_full_path(path_segments: &[PathSegment]) -> String {
     let suffix = path_segments
         .iter()
         .map(|ps| match ps {

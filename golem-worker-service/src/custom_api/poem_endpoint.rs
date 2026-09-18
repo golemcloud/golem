@@ -108,6 +108,12 @@ impl From<RequestHandlerError> for CustomApiEndpointError {
                 "GatewayTimeout",
                 false,
             )),
+            RequestHandlerError::OpenApi(error) => Some((
+                error.status(),
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                error.category(),
+                false,
+            )),
             _ => None,
         };
 

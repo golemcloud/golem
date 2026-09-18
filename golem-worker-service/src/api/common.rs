@@ -486,7 +486,7 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::InternalError(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
-            RequestHandlerError::OpenApiSpecGenerationFailed => {
+            RequestHandlerError::OpenApi(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
             RequestHandlerError::RawRequest(_) => {

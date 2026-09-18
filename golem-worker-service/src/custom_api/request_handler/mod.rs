@@ -21,6 +21,7 @@ use super::durable_streams::DurableStreamsHandler;
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
 use super::oidc::handler::OidcHandler;
+use super::openapi::OpenApiService;
 use super::raw_handler::RawHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
@@ -44,6 +45,7 @@ pub struct RequestHandler {
     oidc_handler: Arc<OidcHandler>,
     webhook_callback_handler: Arc<WebhookCallbackHandler>,
     raw_handler: RawHandler,
+    openapi_service: OpenApiService,
 }
 
 #[derive(Debug)]
@@ -79,6 +81,7 @@ impl RequestHandler {
             durable_streams_handler,
             oidc_handler,
             webhook_callback_handler,
+            openapi_service: OpenApiService::new(worker_service.clone()),
             raw_handler: RawHandler::new(worker_service, http_session_limits, initial_files),
         }
     }
@@ -189,10 +192,10 @@ impl RequestHandler {
             }
 
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format, .. }) => {
-                let spec = resolved_route
-                    .openapi_spec
-                    .clone()
-                    .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
+                let inputs = resolved_route.openapi_inputs.clone().ok_or_else(|| {
+                    RequestHandlerError::invariant_violated("Missing OpenAPI inputs")
+                })?;
+                let spec = self.openapi_service.generate(inputs).await?;
 
                 Ok(RouteExecutionResult {
                     status: StatusCode::OK,
@@ -342,17 +345,11 @@ fn route_execution_result_to_response(
         ResponseBody::OpenApiSchema { spec: body, format } => {
             let response = match format {
                 OpenApiSpecFormat::Json => {
-                    let body_json = serde_json::to_vec(&body.0)
-                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
-
-                    response.set_body(body_json);
+                    response.set_body(body.json.clone());
                     response.set_content_type("application/json")
                 }
                 OpenApiSpecFormat::Yaml => {
-                    let body_yaml = serde_yaml::to_string(&body.0)
-                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
-
-                    response.set_body(body_yaml);
+                    response.set_body(body.yaml.clone());
                     response.set_content_type("application/yaml")
                 }
             };
