@@ -24,6 +24,7 @@ jobs:
           cache-save-if: 'true'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
+          install-protoc: 'true'
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:

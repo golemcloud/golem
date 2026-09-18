@@ -14,6 +14,52 @@ use uuid::Uuid;
 test_r::enable!();
 
 #[test]
+#[timeout("10s")]
+async fn invocation_shutdown_fences_before_drop_and_waits_for_drain() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::oneshot;
+    use tokio_util::sync::CancellationToken;
+
+    struct DropProbe(Arc<AtomicBool>, Option<oneshot::Sender<bool>>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let _ = self.1.take().unwrap().send(self.0.load(Ordering::Acquire));
+        }
+    }
+
+    let shutdown = CancellationToken::new();
+    let loops = super::InvocationLoops::new(shutdown.clone());
+    let fenced = Arc::new(AtomicBool::new(false));
+    let (dropped, was_fenced) = oneshot::channel();
+    let probe = DropProbe(fenced.clone(), Some(dropped));
+    let (started, running) = oneshot::channel();
+    let (release, drain) = oneshot::channel();
+    let task = loops.spawn(
+        async move {
+            let _probe = probe;
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        },
+        move || {
+            fenced.store(true, Ordering::Release);
+            Box::pin(async move { drain.await.unwrap() })
+        },
+    );
+    running.await.unwrap();
+    shutdown.cancel();
+    assert!(was_fenced.await.unwrap());
+    assert!(!task.is_finished());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), loops.wait_for_exit())
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    task.await.unwrap();
+    loops.wait_for_exit().await;
+}
+
+#[test]
 fn filesystem_pressure_eligibility_accepts_only_loaded_idle_agents() {
     assert!(is_loaded_idle_filesystem_pressure_candidate(Some(
         crate::worker::EvictionClass::LoadedIdle

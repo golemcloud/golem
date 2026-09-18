@@ -14,7 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, validate_relative_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
+    validate_relative_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -346,6 +347,11 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if blob_path_is_root(path) {
+            return Ok(false);
+        }
+
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 

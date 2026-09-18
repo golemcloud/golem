@@ -20,8 +20,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
-    DurableSessionStreams, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
-    strip_streams,
+    StreamSession, durable_stream_mapping_from_proto, strip_streams,
 };
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
@@ -50,7 +49,7 @@ use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{AgentVerb, PermissionTarget, ScopeCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{StreamInvocationIdV1, StreamSessionKeyV1};
+use golem_common::model::durable_stream::{StreamInvocationId, StreamSessionKey};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -707,7 +706,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let caller_revision = self.owner_component_metadata().revision;
             let input_root = rpc_input_root(&prepared);
             let output_root = rpc_output_root(&prepared);
-            let (input, input_mappings) = streams
+            let input = streams
                 .materialize_agent_input(
                     &prepared.input_value,
                     &prepared.remote_agent_type.schema,
@@ -754,6 +753,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .caller_attempt_id()
                 .await
                 .map_err(anyhow::Error::msg)?;
+            let input_mappings = input.proto_mappings();
             let interrupt_signal = self.create_interrupt_signal();
             let remote_result = {
                 let _wait = register_rpc_wait(self);
@@ -770,11 +770,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &remote_agent_id,
                     idempotency_key,
                     prepared.method_name.clone(),
-                    input,
-                    input_mappings
-                        .iter()
-                        .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                        .collect(),
+                    input.value,
+                    input_mappings,
                     target_fingerprint,
                     attempt_id.0,
                     created_by,
@@ -1316,7 +1313,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
             .await?;
             let caller_revision = self.owner_component_metadata().revision;
-            let (input, input_mappings) = streams
+            let input = streams
                 .materialize_agent_input(
                     &input_value,
                     &remote_agent_type.schema,
@@ -1331,11 +1328,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .map_err(anyhow::Error::msg)?;
             let params = DurableStreamingTaskParams {
                 streams,
-                input,
-                input_mappings: input_mappings
-                    .iter()
-                    .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                    .collect(),
+                input_mappings: input.proto_mappings(),
+                input: input.value,
                 expected_callee_fingerprint: target_fingerprint,
                 attempt_id: attempt_id.0,
                 output_graph: Arc::new(remote_agent_type.schema.clone()),
@@ -2570,26 +2564,26 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     remote_fingerprint: AgentFingerprint,
     child_key: IdempotencyKey,
     auth_ctx: AuthCtx,
-) -> Result<DurableSessionStreams, Error> {
+) -> Result<StreamSession, Error> {
     let worker = ctx.public_state.worker();
     let caller = worker.get_initial_worker_metadata();
     let parent_key = ctx
         .state
         .get_current_idempotency_key()
         .ok_or_else(|| anyhow::anyhow!("durable streaming RPC requires a caller invocation key"))?;
-    let session_key = StreamSessionKeyV1 {
+    let session_key = StreamSessionKey {
         callee_environment_id: remote_agent_id.environment_id,
         callee: remote_agent_id.agent_id(),
         callee_fingerprint: remote_fingerprint,
         idempotency_key: child_key,
     };
-    let consumer_invocation = StreamInvocationIdV1 {
+    let consumer_invocation = StreamInvocationId {
         callee_environment_id: caller.environment_id,
         callee: caller.agent_id,
         callee_fingerprint: caller.fingerprint,
         idempotency_key: parent_key,
     };
-    let streams = DurableSessionStreams::new(
+    let streams = StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),
         session_key,
@@ -4446,7 +4440,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 
 #[derive(Clone)]
 struct DurableStreamingTaskParams {
-    streams: DurableSessionStreams,
+    streams: StreamSession,
     input: golem_api_grpc::proto::golem::schema::SchemaValue,
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,

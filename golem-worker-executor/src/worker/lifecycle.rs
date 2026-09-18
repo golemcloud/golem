@@ -117,7 +117,7 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    async fn get_existing_suspended<T>(
+    pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         principal: Principal,
@@ -202,13 +202,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             InterruptDecision::Restart => InterruptKind::Restart,
             InterruptDecision::Ignore => unreachable!(),
         };
-        if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
-            await_interruption.recv().await.unwrap();
-        }
-
         if decision == InterruptDecision::Interrupt {
-            // Dropping the resident worker also closes live connections associated with it.
-            worker.remove_from_active_agents().await;
+            worker.interrupt_and_retire(interrupt_kind).await?;
+        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
+            await_interruption.recv().await.unwrap();
         }
         Ok(())
     }
