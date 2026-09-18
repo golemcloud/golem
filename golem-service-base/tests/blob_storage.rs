@@ -2519,3 +2519,48 @@ async fn list_dir_of_a_path_with_nothing_gives_an_empty_list(
 
     assert_eq!(entries, empty, "list_dir(\"no-such-dir\")");
 }
+
+#[test]
+#[tracing::instrument]
+async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "exists_on_a_blob_that_also_has_blobs_below_gives_a_file";
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("a"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    // A blob and a directory cannot share one path on the filesystem backend, which refuses
+    // this write, so the rest of the case belongs to the other backends.
+    if storage
+        .put_raw(
+            label,
+            "put-below",
+            namespace.clone(),
+            Path::new("a/b"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    assert_eq!(
+        storage
+            .exists(label, "exists-blob", namespace.clone(), Path::new("a"))
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+}

@@ -455,6 +455,17 @@ impl BlobStorage for InMemoryBlobStorage {
             return Ok(ExistsResult::Directory);
         }
 
+        // A blob at the path wins over a directory at the same path, because the other backends
+        // answer that way: a key that holds bytes is a file, whatever sits below it.
+        let file_key = Key {
+            namespace: namespace.clone(),
+            dir: blob_parent_to_string(path)?,
+            file: Some(blob_file_name_to_string(path)?),
+        };
+        if self.data.contains_async(&file_key).await {
+            return Ok(ExistsResult::File);
+        }
+
         let path_str = blob_path_to_string(path)?;
         let dir_key = Key {
             namespace: namespace.clone(),
@@ -463,15 +474,6 @@ impl BlobStorage for InMemoryBlobStorage {
         };
         if self.data.contains_async(&dir_key).await {
             return Ok(ExistsResult::Directory);
-        }
-
-        let file_key = Key {
-            namespace: namespace.clone(),
-            dir: blob_parent_to_string(path)?,
-            file: Some(blob_file_name_to_string(path)?),
-        };
-        if self.data.contains_async(&file_key).await {
-            return Ok(ExistsResult::File);
         }
 
         // A directory keeps an entry of its own only for the directory of a blob, so a
