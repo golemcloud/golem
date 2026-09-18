@@ -3294,6 +3294,7 @@ mod tests {
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(filesystem, Box::new([entry])).await
     }
 
+    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::symlink_metadata(path)
@@ -3985,6 +3986,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     async fn copy_contents_copies_what_is_under_the_source_minus_the_exclusions() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -4055,6 +4057,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn path_attributes_report_write_permission_and_object_identity() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -4095,6 +4098,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn copy_contents_refuses_a_target_that_is_not_an_empty_directory() {
         let parent = tempfile::tempdir().unwrap();
@@ -4217,6 +4221,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_puts_entries_in_order_and_stops_at_the_first_failure() {
         let parent = tempfile::tempdir().unwrap();
@@ -4281,6 +4286,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_access_sets_the_write_permission_of_seeded_files() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -4372,6 +4378,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_gives_a_made_target_directory_the_source_attributes_and_keeps_a_merged_one() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -4437,11 +4444,12 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_reports_the_error_of_a_directory_that_it_cannot_make() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let parent = tempfile::tempdir().unwrap();
@@ -4479,6 +4487,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_file_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
@@ -4576,6 +4585,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_symlink_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
@@ -4667,6 +4677,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_reads_a_source_symlink_without_following_it() {
         let parent = tempfile::tempdir().unwrap();
@@ -4732,6 +4743,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_cannot_write_outside_the_root() {
         let parent = tempfile::tempdir().unwrap();
@@ -4820,6 +4832,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn seed_directory_entries_merge_and_follow_the_placement() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -6067,6 +6080,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn namespace_resolution_fails_when_the_parent_cannot_be_searched() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -6095,6 +6109,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     async fn following_a_symlink_loop_fails_and_a_dangling_symlink_is_not_read_only() {
         let parent = tempfile::tempdir().unwrap();

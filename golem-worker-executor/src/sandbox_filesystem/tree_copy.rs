@@ -810,8 +810,11 @@ fn list_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use cap_std::fs::PermissionsExt as _;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, UNIX_EPOCH};
     use test_r::test;
@@ -840,6 +843,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn fixture_tree(root: &Path) {
         std::fs::create_dir_all(root.join("data/nested")).unwrap();
         std::fs::create_dir(root.join("static")).unwrap();
@@ -917,6 +921,7 @@ mod tests {
         assert!(excluded.contains(Path::new("directory")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_skips_excluded_paths_and_their_contents() {
         let source = tempfile::tempdir().unwrap();
@@ -960,6 +965,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_refuses_a_file_that_is_not_regular() {
         let source = tempfile::tempdir().unwrap();
@@ -991,6 +997,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_does_not_follow_a_symlink_to_a_directory() {
         let source = tempfile::tempdir().unwrap();
@@ -1011,6 +1018,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_contents_copies_everything_except_the_exclusions() {
         let source = tempfile::tempdir().unwrap();
@@ -1078,6 +1086,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn seed_recreates_the_tree_through_the_capability() {
         let source = tempfile::tempdir().unwrap();
@@ -1149,6 +1158,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_contents_copies_a_symlink_with_several_names_once_and_reports_its_names() {
         let source = tempfile::tempdir().unwrap();

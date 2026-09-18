@@ -8663,4 +8663,7 @@ proptest! {
     }
 }
 
+// The module reads the permission bits, the inode identity and the hard-link counts of a
+// captured tree, and its model of a tree carries them, so all of it is Unix-only.
+#[cfg(unix)]
 mod capture_and_baseline;
