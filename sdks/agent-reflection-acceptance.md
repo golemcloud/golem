@@ -42,6 +42,10 @@ Other tool level × contract × style combinations are `U`: typed clients requir
 
 No tool matrix cell is complete solely from a mock-host test.
 
+Union JSON Schema exports combine each discriminator condition with its branch schema. Regex
+discriminators are emitted unchanged; external validators may use a different regex engine from
+the SDK runtime, so equivalence across engines is not guaranteed.
+
 The TS and Effect `H+` cells were exercised by the deployed cross-SDK fixture's
 `RUN_TOOL_REFLECTION_ONLY=1` path. Each caller discovered the other SDK's tool and invoked its
 required-stdin/required-stdout command with canonical JSON, a reflected native schema value,

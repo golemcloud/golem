@@ -8,6 +8,33 @@ const ref = (root: SchemaGraph["root"]) =>
   new SchemaRef(schemaGraphToWit({ defs: new Map(), root }))
 
 describe("SchemaRef", () => {
+  it("keeps union branch bodies and regex discriminators as separate JSON Schema conditions", () => {
+    const schema = ref(
+      t.union([
+        {
+          tag: "named",
+          body: t.record([field("kind", t.string()), field("payload", t.string())]),
+          discriminator: { tag: "field-equals", val: { fieldName: "kind", literal: "named" } },
+          metadata: { aliases: [], examples: [] },
+        },
+        {
+          tag: "pattern",
+          body: t.string(),
+          discriminator: { tag: "regex", val: "^[a-z]+$" },
+          metadata: { aliases: [], examples: [] },
+        },
+      ]),
+    )
+    expect(schema.toJsonSchema()).toMatchObject({
+      oneOf: [
+        {
+          allOf: [{ required: ["kind", "payload"] }, { properties: { kind: { const: "named" } } }],
+        },
+        { allOf: [{ type: "string" }, { pattern: "^[a-z]+$" }] },
+      ],
+    })
+  })
+
   it("renders numeric restrictions and required nullable fields", () => {
     const schema = ref(
       t.record([

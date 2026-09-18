@@ -39,6 +39,7 @@ import { SchemaRef, type JsonValue } from './schema/ref';
 import { ComponentId } from './ids';
 import {
   createToolClientRuntime,
+  createToolClientTransport,
   isRpcError,
   mapSettledToolResult,
   startedToolInvocation,
@@ -213,7 +214,7 @@ export class ToolCommand {
       const actual = values.get(argument.name)!;
       if (reference.tag === 'value-is')
         return valueMatches(actual, schemaValueFromWit(reference.val.value));
-      return valuePresent(actual, argument.default);
+      return valuePresent(actual, argument.default, argument.kind === 'flag');
     };
     const quantify = (refs: readonly ToolRef[], quantifier: 'all' | 'any'): boolean =>
       quantifier === 'all' ? refs.every(matches) : refs.some(matches);
@@ -301,16 +302,18 @@ export class ToolCommand {
     stdin?: ToolInputStream,
   ): StartedToolInvocation<JsonValue | undefined> {
     const started = this.startValue(this.packJson(input), stdin);
-    const settled = started.result.then((value) =>
-      value === undefined ? undefined : this.unpackResult(value),
-    );
+    const unpackResult = (value: SchemaValue | undefined) =>
+      value === undefined ? undefined : this.unpackResult(value);
     return {
-      ...started,
-      result: settled,
+      stdout: started.stdout,
+      get result() {
+        return started.result.then(unpackResult);
+      },
+      cancel: () => started.cancel(),
       collect: async () => {
         const collected = await started.collect();
         return {
-          result: collected.result === undefined ? undefined : this.unpackResult(collected.result),
+          result: unpackResult(collected.result),
           stdout: collected.stdout,
         };
       },
@@ -417,7 +420,8 @@ export class ToolType {
       if (!type) throw new TypeError(`Tool schema node ${index} is missing`);
       return type;
     };
-    const transport = runtime ?? createToolClientRuntime(this.lookupName);
+    const transport =
+      runtime ?? createToolClientRuntime(this.lookupName, createToolClientTransport(this.lookupName, true));
     const visited = new Set<number>();
     const build = (
       index: number,
@@ -497,7 +501,7 @@ export class DynamicToolClient {
     readonly name: string,
     runtime?: ToolClientRuntime,
   ) {
-    this.runtime = runtime ?? createToolClientRuntime(name);
+    this.runtime = runtime ?? createToolClientRuntime(name, createToolClientTransport(name, true));
   }
 
   start(
@@ -573,7 +577,8 @@ function flagArgument(
   });
 }
 
-function valuePresent(value: SchemaValue, defaultValue?: SchemaValue): boolean {
+function valuePresent(value: SchemaValue, defaultValue?: SchemaValue, flag = false): boolean {
+  if (flag) return defaultValue !== undefined && !schemaValueEquals(value, defaultValue);
   if (defaultValue !== undefined && schemaValueEquals(value, defaultValue)) return false;
   switch (value.tag) {
     case 'option':

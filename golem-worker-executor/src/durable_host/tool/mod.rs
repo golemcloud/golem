@@ -4758,6 +4758,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
 }
 
 impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
+    async fn new(&mut self, tool_name: String) -> anyhow::Result<Resource<ToolRpcEntry>> {
+        self.observe_function_call("golem::tool::host::tool-rpc", "new");
+        let tool_name = ToolName::try_from(tool_name).map_err(anyhow::Error::msg)?;
+        let rpc = tool_rpc_for_current_owner(self, tool_name)?;
+        Ok(self.table().push(rpc)?)
+    }
+
     async fn create(
         &mut self,
         tool_name: String,

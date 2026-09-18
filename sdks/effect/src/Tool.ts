@@ -116,10 +116,14 @@ export const liveToolStart = (
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   withStdout: boolean,
+  reflected = false,
 ) =>
   Effect.gen(function* () {
     const host = yield* ToolClient
-    const rpc = host.rpc(tool)
+    const rpc = yield* Effect.try({
+      try: () => (reflected ? host.createRpc(tool) : host.rpc(tool)),
+      catch: (cause) => new ToolClientError("invoke", cause),
+    })
     const inputEndpoints = stdin ? host.createStdin() : undefined
     const output = withStdout ? host.createStdout() : undefined
     const future = yield* Effect.try({

@@ -38,7 +38,7 @@ object ToolRpcClient {
 
   /** A transport bound to one remote tool name. */
   def transport(toolName: String): ToolRpcTransport =
-    new JsToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName))
+    new JsToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
 }
 
 /**

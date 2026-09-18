@@ -32,6 +32,8 @@ export type JsonValue =
 export interface RenderIssue {
   readonly path: ReadonlyArray<string | number>
   readonly message: string
+  readonly phase?: string
+  readonly cause?: unknown
 }
 
 export class SchemaRenderError extends TypeError {
@@ -751,42 +753,38 @@ function applyDiscriminator(
   schema: Record<string, JsonValue>,
   rule: { tag: string; val?: unknown },
 ): Record<string, JsonValue> {
+  let condition: Record<string, JsonValue>
   switch (rule.tag) {
     case "prefix":
-      return { ...schema, pattern: `^${escapeRegex(rule.val as string)}` }
+      condition = { type: "string", pattern: `^${escapeRegex(rule.val as string)}` }
+      break
     case "suffix":
-      return { ...schema, pattern: `${escapeRegex(rule.val as string)}$` }
+      condition = { type: "string", pattern: `${escapeRegex(rule.val as string)}$` }
+      break
     case "contains":
-      return { ...schema, pattern: escapeRegex(rule.val as string) }
+      condition = { type: "string", pattern: escapeRegex(rule.val as string) }
+      break
     case "regex":
-      return { ...schema, pattern: rule.val as string }
+      condition = { type: "string", pattern: rule.val as string }
+      break
     case "field-equals": {
       const field = rule.val as { fieldName: string; literal?: string }
-      const properties = (schema.properties ?? {}) as Record<string, JsonValue>
-      const fieldSchema = (properties[field.fieldName] ?? { type: "string" }) as Record<
-        string,
-        JsonValue
-      >
-      return {
-        ...schema,
-        required: [
-          ...new Set([...((schema.required as string[] | undefined) ?? []), field.fieldName]),
-        ],
+      condition = {
+        type: "object",
+        required: [field.fieldName],
         ...(field.literal === undefined
           ? {}
-          : {
-              properties: {
-                ...properties,
-                [field.fieldName]: { ...fieldSchema, const: field.literal },
-              },
-            }),
+          : { properties: { [field.fieldName]: { const: field.literal } } }),
       }
+      break
     }
     case "field-absent":
-      return { ...schema, not: { required: [rule.val as string] } }
+      condition = { type: "object", not: { required: [rule.val as string] } }
+      break
     default:
       return schema
   }
+  return { allOf: [schema, condition] }
 }
 
 function escapeRegex(value: string): string {

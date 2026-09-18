@@ -12448,6 +12448,17 @@ pub async fn ToolStdoutWriter::fail(self : ToolStdoutWriter, reason : ByteStream
 
 }
 ///|
+/// Binds an ordinary tool client to its configured tool name.
+pub fn ToolRpc::tool_rpc(tool_name : String) -> ToolRpc {
+
+      let ptr = mbt_ffi_str2ptr(tool_name)
+      let result : Int =  wasmImportConstructorToolRpc(ptr, tool_name.length());
+      let ret = ToolRpc::ToolRpc(result)
+      mbt_ffi_free(ptr)
+      return ret
+
+}
+///|
 /// Creates a tool RPC resource without trapping on invalid caller input.
 pub fn ToolRpc::create(tool_name : String) -> Result[ToolRpc, RpcError] {
 

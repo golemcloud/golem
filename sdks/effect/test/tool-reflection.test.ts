@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { Effect, Schema } from "effect"
-import { compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
+import { c, compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
 import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
@@ -19,6 +19,40 @@ const registered = {
 }
 
 describe("native tool reflection", () => {
+  it("treats a default-true negatable flag as present when set to false", () => {
+    const definition = toolDefinition("negatable-reflection").body((body) =>
+      body
+        .flag("enabled", { default: true, negatable: true })
+        .constraint(c.requiresAll(c.present("enabled"))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "negatable-reflection",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ enabled: false }).success).toBe(true)
+    expect(command.validateJson({ enabled: true }).success).toBe(false)
+  })
+
+  it("matches ValueIs through an optional positional carrier", () => {
+    const expected = Effect.runSync(
+      compile(Schema.String).pipe(Effect.flatMap((codec) => codec.encode("needle"))),
+    )
+    const definition = toolDefinition("nested-value-is").body((body) =>
+      body
+        .positional("maybe", Schema.String, { required: false })
+        .constraint(c.requiresAll(c.valueIs("maybe", expected))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "nested-value-is",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ maybe: "needle" }).success).toBe(true)
+    expect(command.validateJson({ maybe: null }).success).toBe(false)
+    expect(command.validateJson({ maybe: "other" }).success).toBe(false)
+  })
+
   it("sends optional inputs with a graph that accepts both carriers", async () => {
     const optionalDefinition = toolDefinition("effect-optional-reflection").body((body) =>
       body.option("maybe", Schema.String).returns(Schema.String),
@@ -52,6 +86,7 @@ describe("native tool reflection", () => {
       createStdinFromStream: vi.fn() as never,
       createStdout: vi.fn() as never,
       rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
     })
     const command = new ToolType(optionalRegistered).client.command([])
     expect(new SchemaRef(compiled.bodies.get("")!.input.schemaGraph).toJsonSchema()).toEqual(
@@ -81,7 +116,13 @@ describe("native tool reflection", () => {
     const command = tool.client.command([])
     expect(command.path).toEqual([])
     expect(command.validateJson({ name: "hello" }).success).toBe(true)
-    expect(command.validateJson({ name: 4 }).success).toBe(false)
+    const invalid = command.validateJson({ name: 4 })
+    expect(invalid.success).toBe(false)
+    if (!invalid.success) {
+      expect(invalid.issues[0]?.phase).toBe("input")
+      expect(invalid.issues[0]?.cause).toBeInstanceOf(Error)
+      expect(invalid.issues[0]?.path).toEqual(["name"])
+    }
     expect(command.result?.toJsonSchema()).toBeDefined()
   })
 
@@ -107,6 +148,7 @@ describe("native tool reflection", () => {
       createStdinFromStream: vi.fn() as never,
       createStdout: vi.fn() as never,
       rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
     })
     const call = new ToolType(registered).client
       .command([])
@@ -140,6 +182,7 @@ describe("native tool reflection", () => {
       createStdinFromStream: vi.fn() as never,
       createStdout: vi.fn() as never,
       rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
     })
     const call = new ToolType(registered).client
       .command([])

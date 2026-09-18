@@ -21,6 +21,7 @@ import {
   schemaValueFromWit,
 } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, type JsonValue } from "./SchemaRef.js"
+import { SchemaRenderError } from "./internal/reflection/schemaRender.js"
 
 /** A local schema, metadata, or remote output failure. @since 1.6.0 @category errors */
 export class ToolReflectionError {
@@ -180,7 +181,18 @@ export class ToolCommand {
     try {
       return { success: true, value: this.packJson(input) }
     } catch (error) {
-      return { success: false, issues: [{ path: [], message: String(error) }] }
+      const cause = error instanceof ToolReflectionError ? error.cause : error
+      return {
+        success: false,
+        issues: [
+          {
+            path: cause instanceof SchemaRenderError ? cause.path : [],
+            message: cause instanceof Error ? cause.message : String(cause),
+            phase: error instanceof ToolReflectionError ? error.phase : "input",
+            cause,
+          },
+        ],
+      }
     }
   }
 
@@ -200,7 +212,7 @@ export class ToolCommand {
         throw new ToolReflectionError("schema", `unknown constraint argument '${name}'`)
       const actual = values.get(argument.name)!
       return reference.tag === "present"
-        ? valuePresent(actual, argument.default)
+        ? valuePresent(actual, argument.default, argument.kind === "flag")
         : valueMatches(actual, schemaValueFromWit(reference.val.value))
     }
     const quantify = (refs: ReadonlyArray<Common.Ref>, quantifier: Common.Quantifier) =>
@@ -266,7 +278,7 @@ export class ToolCommand {
       })
       if (command.stdin?.required && !stdin)
         return yield* Effect.fail(new ToolReflectionError("input", "command requires stdin"))
-      const runtime = createToolClientRuntime(command.toolName)
+      const runtime = createToolClientRuntime(command.toolName, true)
       const started = yield* runtime.start<never>(
         command.path,
         { graph: command.wireGraph, value: schemaValueFromWit(input) },
@@ -582,7 +594,7 @@ export class DynamicToolClient {
         }),
         catch: (cause) => new ToolReflectionError("input", cause),
       })
-      const started = yield* createToolClientRuntime(name).start<never>(
+      const started = yield* createToolClientRuntime(name, true).start<never>(
         path,
         encoded,
         stdin,
@@ -708,7 +720,8 @@ function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
   })
 }
 
-function valuePresent(value: SchemaValue, defaultValue?: SchemaValue): boolean {
+function valuePresent(value: SchemaValue, defaultValue?: SchemaValue, flag = false): boolean {
+  if (flag) return defaultValue !== undefined && !schemaValueEquals(value, defaultValue)
   if (defaultValue !== undefined && schemaValueEquals(value, defaultValue)) return false
   switch (value.tag) {
     case "option":

@@ -189,7 +189,7 @@ impl RustToolBridgeGenerator {
                 quote! {
                     pub fn new() -> Self {
                         Self {
-                            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::create(#tool_name).expect("tool RPC creation failed"),
+                            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(#tool_name),
                             inherited: Vec::new(),
                         }
                     }
@@ -308,7 +308,7 @@ impl RustToolBridgeGenerator {
                 let mut inherited = self.inherited.clone();
                 #(#encodes)*
                 #child_struct {
-                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::create(#tool_name).expect("tool RPC creation failed"),
+                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(#tool_name),
                     inherited,
                 }
             }

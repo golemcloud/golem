@@ -4,12 +4,20 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
-import { toolDefinition, getExtendedToolDefinition } from '../src/tool';
+import { c, toolDefinition, getExtendedToolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 import { compileSchema } from '../src/schema/adapter';
 import { ToolRemoteOutputError, ToolType } from '../src/toolReflection';
 import type { ToolClientRuntime } from '../src/bridge/tool';
-import { schemaShapesMatch, v } from '../src/internal/schema-model';
+import {
+  emptyMetadata,
+  field,
+  schemaShapesMatch,
+  schemaType,
+  t,
+  v,
+} from '../src/internal/schema-model';
+import { toCanonicalJsonSchema } from '../src/schema/render';
 
 function fixture(result: { readonly malformed?: boolean } = {}) {
   const definition = toolDefinition('reflect-demo').body((body) =>
@@ -35,6 +43,71 @@ function fixture(result: { readonly malformed?: boolean } = {}) {
 }
 
 describe('native tool reflection', () => {
+  it('treats a default-true negatable flag as present when set to false', () => {
+    const definition = toolDefinition('negatable-reflection').body((body) =>
+      body
+        .flag('enabled', { default: true, negatable: true })
+        .constraint(c.requiresAll([c.present('enabled')])),
+    );
+    const command = new ToolType(
+      {
+        lookupName: 'negatable-reflection',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    expect(command.validateJson({ enabled: false }).success).toBe(true);
+    expect(command.validateJson({ enabled: true }).success).toBe(false);
+  });
+
+  it('matches ValueIs through an optional positional carrier', () => {
+    const definition = toolDefinition('nested-value-is').body((body) =>
+      body
+        .positional('maybe', z.string(), { required: false })
+        .constraint(c.requiresAll([c.valueIs('maybe', 'needle')])),
+    );
+    const command = new ToolType(
+      {
+        lookupName: 'nested-value-is',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    expect(command.validateJson({ maybe: 'needle' }).success).toBe(true);
+    expect(command.validateJson({ maybe: null }).success).toBe(false);
+    expect(command.validateJson({ maybe: 'other' }).success).toBe(false);
+  });
+
+  it('renders discriminator conditions without replacing the branch schema', () => {
+    const root = schemaType({
+      tag: 'union',
+      branches: [
+        {
+          tag: 'named',
+          body: t.record([field('kind', t.string()), field('payload', t.string())]),
+          discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'named' } },
+          metadata: emptyMetadata(),
+        },
+        {
+          tag: 'pattern',
+          body: t.string(),
+          discriminator: { tag: 'regex', val: '^[a-z]+$' },
+          metadata: emptyMetadata(),
+        },
+      ],
+    });
+    expect(toCanonicalJsonSchema({ defs: new Map(), root }, root, false)).toMatchObject({
+      oneOf: [
+        {
+          allOf: [{ required: ['kind', 'payload'] }, { properties: { kind: { const: 'named' } } }],
+        },
+        { allOf: [{ type: 'string' }, { pattern: '^[a-z]+$' }] },
+      ],
+    });
+  });
+
   it('builds a canonical input schema and rejects invalid JSON before dispatch', async () => {
     const { tool, start } = fixture();
     const command = tool.client.command([]);
@@ -83,6 +156,9 @@ describe('native tool reflection', () => {
       ToolRemoteOutputError,
     );
     await expect(command.startJson({ value: 'hello' }).result).rejects.toBeInstanceOf(
+      ToolRemoteOutputError,
+    );
+    await expect(command.startJson({ value: 'hello' }).collect()).rejects.toBeInstanceOf(
       ToolRemoteOutputError,
     );
   });

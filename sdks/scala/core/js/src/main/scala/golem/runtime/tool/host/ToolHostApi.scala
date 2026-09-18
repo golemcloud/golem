@@ -150,7 +150,7 @@ private[golem] object ToolHostApi {
 
   @js.native
   @JSImport("golem:tool/host@0.1.0", "ToolRpc")
-  final class RawToolRpc extends js.Object {
+  final class RawToolRpc(toolName: String) extends js.Object {
     def invokeAndAwait(
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
