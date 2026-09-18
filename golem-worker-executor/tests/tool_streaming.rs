@@ -1389,15 +1389,47 @@ async fn rust_generated_client_streams_live_and_handles_edges(
     );
     executor.delete_worker(&raw_worker_id).await?;
 
-    let stdout_drop: Vec<String> = executor
-        .invoke_and_await_agent(
+    eprintln!("starting stdout_drop_preserves_sibling");
+    let stdout_drop_result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
             &caller_component,
             &agent_id,
             "stdout_drop_preserves_sibling",
             data_value!(),
-        )
-        .await?
-        .into_typed()?;
+        ),
+    )
+    .await;
+    let stdout_drop: Vec<String> = match stdout_drop_result {
+        Ok(result) => result?.into_typed()?,
+        Err(_) => {
+            let active = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                executor.active_entity_metadata(&owned_agent_id),
+            )
+            .await;
+            let oplog = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                executor.get_oplog(&worker_id, OplogIndex::INITIAL),
+            )
+            .await;
+            let oplog_tail = oplog.as_ref().ok().and_then(|result| {
+                result
+                    .as_ref()
+                    .ok()
+                    .map(|entries| entries.iter().rev().take(20).rev().collect::<Vec<_>>())
+            });
+            let oplog_error = match &oplog {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("{error:#}")),
+                Err(_) => Some("oplog read timed out".to_string()),
+            };
+            anyhow::bail!(
+                "stdout_drop_preserves_sibling timed out for {owned_agent_id}; active metadata: {active:#?}; committed oplog tail: {oplog_tail:#?}; oplog error: {oplog_error:#?}"
+            )
+        }
+    };
+    eprintln!("completed stdout_drop_preserves_sibling");
     assert_eq!(stdout_drop, ["blocked-writer-woke", "sibling-completed"]);
 
     let edge_lifecycles: Vec<String> = executor
