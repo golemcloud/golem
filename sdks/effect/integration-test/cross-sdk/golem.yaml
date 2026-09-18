@@ -39,6 +39,7 @@ components:
     dependencies:
       agents:
         - effect-cross-sdk:ts-peer/TsPeer
+        - effect-cross-sdk:ts-peer/TsPrincipalPeer
         - effect-cross-sdk:ts-peer/TsEphemeralPeer
         - effect-cross-sdk:rust-peer/RustPeer
       tools:

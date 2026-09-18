@@ -2,7 +2,9 @@ import { Effect, Schema, Stream } from "effect"
 import {
   AgentIdentity,
   defineAgent,
+  defineAgentClient,
   method,
+  Principal,
   Quota,
   Reflection,
   Tool,
@@ -49,12 +51,19 @@ const RustPeer = defineAgent({
   methods: { echo: method({ input: { value: Schema.String }, success: Schema.String }) },
 })
 
+const TsPrincipalPeer = defineAgent({
+  name: "TsPrincipalPeer",
+  id: { tenant: Schema.String, caller: Principal.PrincipalSchema },
+  methods: { value: method({ input: {}, success: Schema.String }) },
+})
+
 defineAgent({
   name: "EffectConsumer",
   id: { name: Schema.String },
   methods: {
     roundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
     reflectedRoundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
+    principalIdentityRoundTrip: method({ input: {}, success: Schema.String }),
     ephemeralRoundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
     nonfiniteReflection: method({ input: {}, success: Schema.String }),
     nestedStreamRoundTrip: method({
@@ -113,6 +122,34 @@ defineAgent({
             value: string
           }
           return `${reflected.name}:${echo.name}:${output.language}:${output.value}|${dynamicOutput.language}:${dynamicOutput.value}`
+        }),
+      ),
+    principalIdentityRoundTrip: () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tenant = `principal-effect-${name}`
+          const reflected = yield* Reflection.getAgentType("TsPrincipalPeer")
+          if (reflected === undefined || reflected.mode !== "durable")
+            return "missing-principal-type"
+          const client = yield* reflected.client.get({ tenant })
+          const first = yield* (yield* client.method("value")).invoke({})
+          const identity = yield* AgentIdentity.parse(first.metadata.agentId)
+          if (
+            identity.typeName !== "TsPrincipalPeer" ||
+            identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value")
+              .length !== 1
+          ) {
+            return "principal-in-id"
+          }
+          const localId = yield* TsPrincipalPeer.agentId({ tenant })
+          if (localId.encoded !== identity.encoded) return "identity-mismatch"
+          const full = yield* identity.client(TsPrincipalPeer)
+          const methodOnly = yield* identity.client(
+            defineAgentClient({ methods: TsPrincipalPeer.methods }),
+          )
+          const second = yield* full.value({})
+          const third = yield* methodOnly.value({})
+          return `${first.value}|${second}|${third}`
         }),
       ),
     ephemeralRoundTrip: ({ value }) =>

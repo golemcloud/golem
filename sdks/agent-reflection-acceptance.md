@@ -1,6 +1,6 @@
 # Agent reflection acceptance matrix
 
-This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK unit test, a compiler check, and a host-backed deployment are different evidence. A combination is complete only after its applicable behavior has passed against a deployed worker on the current branch.
+This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK unit test, a compiler check, and a host-backed deployment are different evidence. A combination is complete only after its applicable behavior has passed against a deployed worker on its PR branch.
 
 ## Surface matrix
 
@@ -8,14 +8,20 @@ This checklist tracks the contract in draft PRs #3873–#3876. A focused SDK uni
 
 | Level | Caller contract | Style | TypeScript | Effect | Rust | Scala | MoonBit |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1. Generated | Fully defined client | Typed | F | F | C | C | C |
-| 2. Caller-authored | Fully defined client | Typed | F | F | C | F | F |
-| 2. Caller-authored | Method-only client | Typed | F | F | C | F | F |
-| 3. Reflected | Fully defined deployed schema | JSON | H+ | H+ | C | F | F |
-| 3. Reflected | Fully defined deployed schema | Native | H+ | H+ | C | F | F |
-| 4. Dynamic | Method-only client | Native | H+ | H+ | C | F | F |
+| 1. Generated | Fully defined client | Typed | H+ | F | C | H+ | H+ |
+| 2. Caller-authored | Fully defined client | Typed | F | H+ | H+ | H+ | H+ |
+| 2. Caller-authored | Method-only client | Typed | F | H+ | H+ | H+ | H+ |
+| 3. Reflected | Fully defined deployed schema | JSON | H+ | H+ | H+ | H+ | H+ |
+| 3. Reflected | Fully defined deployed schema | Native | H+ | H+ | H+ | H+ | H+ |
+| 4. Dynamic | Method-only client | Native | H+ | H+ | H+ | H+ | H+ |
 
 Every other agent level × contract × style combination is `U`: generated and caller-authored methods use typed language values; reflected clients use the fully defined schema published by the deployed type rather than a caller-authored method-only contract; dynamic clients deliberately have no schema to validate canonical JSON.
+
+The remaining `F` and `C` agent cells have focused or compiler evidence but no
+deployed call from that SDK at that exact level: Effect's generated client,
+Rust's generated client, and TypeScript's caller-authored full and method-only
+contracts. The positive reflected and dynamic cells do not yet include every
+negative lifecycle and malformed-output case listed below.
 
 ## Native tool reflection matrix
 
@@ -23,13 +29,18 @@ The tool matrix covers all five SDKs, including Effect. A tool has a command pat
 
 | Level | Caller contract | Style | TypeScript | Effect | Rust | Scala | MoonBit |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1. Exact definition or generated | Fully defined client | Typed | H+ | H+ | P | P | P |
+| 1. Exact definition or generated | Fully defined client | Typed | H+ | H+ | P | P | H+ |
 | 2. Caller-authored | Fully defined or command subset | Typed | P | H+ | P | P | P |
-| 3. Reflected | Fully defined deployed tool schema | JSON | H+ | H+ | P | P | P |
-| 3. Reflected | Fully defined deployed tool schema | Native | H+ | H+ | P | P | P |
-| 4. Dynamic | Name and command path only | Native | H+ | H+ | P | P | P |
+| 3. Reflected | Fully defined deployed tool schema | JSON | H+ | H+ | H+ | H+ | H+ |
+| 3. Reflected | Fully defined deployed tool schema | Native | H+ | H+ | H+ | H+ | H+ |
+| 4. Dynamic | Name and command path only | Native | H+ | H+ | H+ | H+ | H+ |
 
 Other tool level × contract × style combinations are `U`: typed clients require caller-owned codecs, reflected JSON requires discovered schemas, and dynamic calls deliberately have no schema for JSON packing. No SDK is intentionally unavailable for native tool reflection.
+
+The `P` typed-tool cells are pending because Rust and Scala have no deployed
+generated-tool call in this fixture, and TypeScript, Rust, Scala, and MoonBit
+have no deployed caller-authored typed-tool call. Their reflected and dynamic
+calls do not substitute for those typed contracts.
 
 ### Tool behavior evidence
 
@@ -68,6 +79,15 @@ through canonical JSON and schema-native inputs. All eight calls returned the ex
 `omitted` or `supplied` result. Focused model tests also cover both carrier values and the
 host's conversion of optional options and positionals into command arguments.
 
+The deployed Rust peer invoked the TypeScript optional tool with omitted and supplied
+values through JSON and native schema values. The deployed Scala reflection fixture
+returned the same results from its optional command through both styles. MoonBit's
+deployed fixture returned the same values through reflected JSON, reflected native,
+and generated typed calls. Its provider-side canonical model now wraps optional
+scalar and positional fields as the host does; a focused tool-core test covers both
+carrier values. Rust, Scala, and MoonBit also passed deployed plain-tool reflection,
+including native dynamic calls.
+
 The deployed cross-SDK fixture's `RUN_AGENT_REFLECTION_ONLY=1` path invoked `TsPeer` twice from
 the same durable Effect caller, parsed the host-produced remote ID, resolved its deployed type,
 and invoked it again through a schema-free dynamic client bound to that ID.
@@ -85,8 +105,18 @@ then from `1` to `2`. The same deployed caller also invoked `TsPrincipalPeer`, w
 declares a host-injected principal. The host-produced ID parsed into exactly one caller-supplied
 tenant field. Fully defined and reflected clients, including bindings through that ID, advanced the
 same worker's counter through `1, 2, 3, 4`, then `5, 6, 7, 8` on a second caller invocation.
-Principal identity checks in the other SDKs and negative
-host cases remain pending.
+The Effect caller's principal-ID round trip uses reflected, fully defined, and
+method-only clients against `TsPrincipalPeer`. The Rust caller verifies the same
+host ID and advances one worker through those three tiers. Scala and MoonBit
+deployed principal-injected agents and checked that their IDs contain only the
+caller-supplied name; reflected, fully defined, method-only, and generated clients
+reached those agents. Negative host cases remain pending.
+
+The Rust, Scala, and MoonBit reflected agent JSON, native, and dynamic cells also
+passed deployed positive calls against their respective peer agents. Rust's
+`TsPeer` counter advanced across repeated invocations and ID rebinding; Scala's
+`StatefulCounter` advanced from `0` to `2`; MoonBit's `Counter` returned
+`0|0|1|1` across JSON, native, and dynamic reads.
 
 That deployment also created an `EffectFixture` worker from the reflected TypeScript factory with
 a local `prefix` override. A second factory call passed a different override for the same worker;
@@ -98,7 +128,7 @@ host-provisioned secrets, and the other SDK callers remain pending.
 
 | Behavior | Local evidence | Host evidence still required |
 | --- | --- | --- |
-| Principal-scoped identity: only caller-supplied constructor fields appear in IDs; host-produced IDs round-trip through fully defined and reflected bindings | Shared `golem-common` regression, TypeScript and Effect focused checks | TypeScript deployment passed; other SDK callers remain pending |
+| Principal-scoped identity: only caller-supplied constructor fields appear in IDs; host-produced IDs round-trip through fully defined and reflected bindings | Shared `golem-common` regression, TypeScript and Effect focused checks | Positive deployed round trips passed for TypeScript, Effect, Rust, Scala, and MoonBit; negative host cases remain pending |
 | Durable, ephemeral, and known phantom lifecycle | Factory and binding unit checks in TypeScript, Effect, Scala, and MoonBit; Rust SDK and test targets compile | Final ephemeral identity from invocation metadata, one-shot known phantom, durable resume, and duplicate invocation against a deployed target |
 | Required, optional, defaulted, unknown, invalid, and secret config | Local negative/positive tests in TypeScript, Effect, Scala, and MoonBit; Rust config checks compile | Reflected TS new-worker override, existing-worker persistence, unknown and invalid local rejection passed; host-provisioned secrets, missing-required rejection, and other SDK callers remain pending; direct TS/Rust RPC new-worker overrides and persisted existing-worker config passed |
 | Local rejection before an RPC opens | TypeScript, Effect, Scala, and MoonBit focused checks | Deployed callers with a connection/open counter or equivalent host observation |

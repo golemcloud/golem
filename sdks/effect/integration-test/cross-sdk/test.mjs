@@ -107,6 +107,12 @@ try {
         second.includes(`TsPeer:echo:ts:effect-${stamp}:repeated|ts:effect-${stamp}:repeated`),
         second,
       )
+      const effectPrincipal = invoke(caller, "principalIdentityRoundTrip")
+      const effectTenant = `principal-effect-effect-${stamp}`
+      assert.ok(
+        effectPrincipal.includes(`${effectTenant}:1|${effectTenant}:2|${effectTenant}:3`),
+        effectPrincipal,
+      )
       const ephemeral = invoke(caller, "ephemeralRoundTrip", '"one-shot"')
       assert.ok(ephemeral.includes(`ephemeral:effect-${stamp}:one-shot`), ephemeral)
       assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
