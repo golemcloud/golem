@@ -257,6 +257,7 @@ pub(crate) enum SandboxNode {
 pub(crate) struct SandboxOpened {
     node: SandboxNode,
     read_only_file: bool,
+    size: u64,
 }
 
 impl SandboxOpened {
@@ -280,19 +281,50 @@ impl SandboxOpened {
         self.read_only_file
     }
 
+    /// Returns the opened regular file.
+    ///
+    /// Directory opens return `None`.
+    pub(crate) fn opened_file(&self) -> Option<&SandboxFile> {
+        match &self.node {
+            SandboxNode::File(file) => Some(file),
+            SandboxNode::Directory(_) => None,
+        }
+    }
+
+    /// Returns the size that the open read on the object. A directory open returns 0.
+    ///
+    /// The open reads the metadata of the object anyway, so this costs no call of its own.
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
     #[cfg(test)]
     pub(crate) fn scripted_file(id: u64) -> Self {
+        Self::scripted_file_of_size(id, 0)
+    }
+
+    /// A scripted open of a file that holds `size` bytes.
+    #[cfg(test)]
+    pub(crate) fn scripted_file_of_size(id: u64, size: u64) -> Self {
         Self {
             node: SandboxNode::File(SandboxFile::scripted(id)),
             read_only_file: false,
+            size,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn scripted_read_only_file(id: u64) -> Self {
+        Self::scripted_read_only_file_of_size(id, 0)
+    }
+
+    /// A scripted open of a read-only file that holds `size` bytes.
+    #[cfg(test)]
+    pub(crate) fn scripted_read_only_file_of_size(id: u64, size: u64) -> Self {
         Self {
             node: SandboxNode::File(SandboxFile::scripted(id)),
             read_only_file: true,
+            size,
         }
     }
 
@@ -313,10 +345,12 @@ impl SandboxOpened {
             Self {
                 node: SandboxNode::File(file(first_id, Arc::clone(&coordinators))),
                 read_only_file: false,
+                size: 0,
             },
             Self {
                 node: SandboxNode::File(file(second_id, coordinators)),
                 read_only_file: false,
+                size: 0,
             },
         )
     }
@@ -326,6 +360,7 @@ impl SandboxOpened {
         Self {
             node: SandboxNode::Directory(SandboxDirectory::scripted(id)),
             read_only_file: false,
+            size: 0,
         }
     }
 
@@ -337,6 +372,7 @@ impl SandboxOpened {
                 format!("programmed-directory-{identity}"),
             )),
             read_only_file: false,
+            size: 0,
         }
     }
 }
@@ -1166,9 +1202,14 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                         ));
                     }
                 };
+                let size = match kind {
+                    SandboxObjectKind::File => metadata.len(),
+                    SandboxObjectKind::Directory | SandboxObjectKind::Symlink => 0,
+                };
                 Ok(SandboxOpened {
                     node,
                     read_only_file,
+                    size,
                 })
             })
             .await
