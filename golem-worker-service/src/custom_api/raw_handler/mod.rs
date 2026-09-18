@@ -217,8 +217,8 @@ impl MountBackend for RawHandler {
         selected: &ResolvedRouteEntry,
         file: MountFile<'_>,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
-        if let MountFile::Initial(entry) = file {
-            return super::immutable_files::serve(
+        match file {
+            MountFile::Initial(entry) => super::immutable_files::serve(
                 &self.initial_files,
                 selected.route.environment_id,
                 entry,
@@ -226,13 +226,23 @@ impl MountBackend for RawHandler {
                 request.underlying.headers(),
             )
             .await
-            .map(Some);
+            .map(Some),
+            MountFile::Live {
+                agent_id,
+                path,
+                directory_request,
+            } => {
+                super::live_files::serve(
+                    &self.worker_service,
+                    request,
+                    selected,
+                    agent_id,
+                    &path,
+                    directory_request,
+                )
+                .await
+            }
         }
-        Ok(Some(RouteExecutionResult {
-            status: StatusCode::NOT_IMPLEMENTED,
-            headers: http::HeaderMap::new(),
-            body: ResponseBody::NoBody,
-        }))
     }
 
     async fn handler(

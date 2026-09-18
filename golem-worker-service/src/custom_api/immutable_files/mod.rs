@@ -7,7 +7,7 @@
 //     http://license.golem.cloud/LICENSE
 
 use super::error::RequestHandlerError;
-use super::file_response::{representation_headers, select, verified_stream};
+use super::file_response::{FileRequest, representation_headers, verified_stream};
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::RouterFileIndexEntry;
@@ -22,7 +22,12 @@ pub(super) async fn serve(
     request_headers: &HeaderMap,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let etag = format!("\"blake3-{}\"", entry.blob_key.0.into_blake3().to_hex());
-    let (status, selection) = select(method, request_headers, etag.as_bytes(), entry.size)?;
+    let request = FileRequest::new(method, request_headers, Some(etag.as_bytes()))?;
+    let extent = request
+        .selection
+        .resolve(entry.size)
+        .map_err(anyhow::Error::from)?;
+    let (status, selection) = request.response(entry.size, extent);
     let mut headers = representation_headers(&entry.path, entry.size, status, selection);
     headers.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));

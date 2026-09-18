@@ -21,6 +21,7 @@ use crate::service::worker::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
+use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
@@ -34,6 +35,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
@@ -43,8 +45,8 @@ use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph}
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-use std::collections::{BTreeMap, HashMap};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -293,11 +295,27 @@ impl LimitService for NoopLimitService {
     }
 }
 
+pub(crate) struct FileReadCall {
+    pub agent_id: AgentId,
+    pub path: String,
+    pub selection: FileByteSelection,
+    pub environment_id: EnvironmentId,
+    pub account_id: AccountId,
+    pub auth: AuthCtx,
+}
+
+#[derive(Default)]
+pub(crate) struct FileReadMock {
+    pub calls: Mutex<Vec<FileReadCall>>,
+    pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<FileReadResponse>>>>,
+}
+
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
     invocation_output: AgentInvocationOutput,
+    file_reads: Arc<FileReadMock>,
 }
 
 #[async_trait]
@@ -466,14 +484,29 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn get_file_contents(
         &self,
-        _: &AgentId,
-        _: CanonicalFilePath,
-        _: golem_common::model::filesystem::FileByteSelection,
-        _: EnvironmentId,
-        _: AccountId,
-        _: AuthCtx,
+        agent_id: &AgentId,
+        path: CanonicalFilePath,
+        selection: FileByteSelection,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth: AuthCtx,
     ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
-        unimplemented!()
+        self.file_reads.calls.lock().unwrap().push(FileReadCall {
+            agent_id: agent_id.clone(),
+            path: path.to_string(),
+            selection,
+            environment_id,
+            account_id,
+            auth,
+        });
+        let response = self
+            .file_reads
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected file read");
+        response.await
     }
 
     async fn activate_plugin(
@@ -597,6 +630,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) environment_id: EnvironmentId,
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
+    pub(crate) file_reads: Arc<FileReadMock>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
 }
@@ -660,11 +694,13 @@ impl InvocationHarness {
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
         let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
         let method_params = Arc::new(Mutex::new(Vec::new()));
+        let file_reads = Arc::new(FileReadMock::default());
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
             prepared_agent_ids,
             method_params: method_params.clone(),
             invocation_output,
+            file_reads: file_reads.clone(),
         });
 
         Self {
@@ -684,6 +720,7 @@ impl InvocationHarness {
             environment_id,
             account_id,
             account_email,
+            file_reads,
             agent_ids,
             method_params,
         }

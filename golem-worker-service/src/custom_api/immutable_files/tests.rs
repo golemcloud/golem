@@ -8,6 +8,16 @@ use http::StatusCode;
 use std::sync::Arc;
 use test_r::test;
 
+fn select(
+    method: &Method,
+    headers: &HeaderMap,
+    etag: &[u8],
+    size: u64,
+) -> Result<(StatusCode, (u64, u64)), RequestHandlerError> {
+    let request = FileRequest::new(method, headers, Some(etag))?;
+    Ok(request.response(size, request.selection.resolve(size).unwrap()))
+}
+
 fn headers(values: &[(&str, &str)]) -> HeaderMap {
     let mut headers = HeaderMap::new();
     for (name, value) in values {
@@ -145,7 +155,7 @@ fn ranges_and_preconditions() {
         tag_matches(
             &headers(&[("if-none-match", "\"a,b\\c\"")]),
             header::IF_NONE_MATCH,
-            b"\"a,b\\c\"",
+            Some(b"\"a,b\\c\""),
             false
         )
         .unwrap(),

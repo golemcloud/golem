@@ -29,6 +29,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 use test_r::test;
 
+#[path = "live_files_tests.rs"]
+mod live_files;
+
 struct StaticApiDefinitionsLookup;
 
 #[async_trait]
@@ -181,7 +184,15 @@ fn request_handler_with(
     route_resolver: RouteResolver,
     initial_files: Arc<InitialAgentFilesService>,
 ) -> RequestHandler {
-    let invocation_harness = InvocationHarness::new(
+    request_handler_with_worker(
+        route_resolver,
+        initial_files,
+        invocation_harness().worker_service,
+    )
+}
+
+fn invocation_harness() -> InvocationHarness {
+    InvocationHarness::new(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
             consumed_fuel: None,
@@ -199,9 +210,14 @@ fn request_handler_with(
             input_schema: InputSchema::Parameters(vec![]),
         },
         vec![],
-    );
-    let worker_service = invocation_harness.worker_service;
+    )
+}
 
+fn request_handler_with_worker(
+    route_resolver: RouteResolver,
+    initial_files: Arc<InitialAgentFilesService>,
+    worker_service: Arc<crate::service::worker::WorkerService>,
+) -> RequestHandler {
     RequestHandler::new(
         Arc::new(route_resolver),
         Arc::new(CallAgentHandler::new(worker_service.clone())),

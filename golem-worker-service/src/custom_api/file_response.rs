@@ -11,6 +11,7 @@ use super::http_completion::{BodyGate, GateTerminal};
 use super::http_envelope::{ResponseBodyPolicy, ResponseHead};
 use bytes::Bytes;
 use futures::{StreamExt, stream::BoxStream};
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use std::io;
 
@@ -57,29 +58,59 @@ pub(super) fn representation_headers(
     headers
 }
 
-pub(super) fn select(
-    method: &Method,
-    headers: &HeaderMap,
-    etag: &[u8],
-    size: u64,
-) -> Result<(StatusCode, (u64, u64)), RequestHandlerError> {
-    if tag_matches(headers, header::IF_MATCH, etag, true)? == Some(false) {
-        return Ok((StatusCode::PRECONDITION_FAILED, (0, 0)));
+pub(super) struct FileRequest {
+    pub selection: FileByteSelection,
+    status: StatusCode,
+}
+
+impl FileRequest {
+    pub fn new(
+        method: &Method,
+        headers: &HeaderMap,
+        etag: Option<&[u8]>,
+    ) -> Result<Self, RequestHandlerError> {
+        let status = if tag_matches(headers, header::IF_MATCH, etag, true)? == Some(false) {
+            StatusCode::PRECONDITION_FAILED
+        } else if tag_matches(headers, header::IF_NONE_MATCH, etag, false)? == Some(true) {
+            StatusCode::NOT_MODIFIED
+        } else {
+            StatusCode::OK
+        };
+        if !status.is_success() || *method == Method::HEAD {
+            return Ok(Self {
+                status,
+                selection: FileByteSelection::MetadataOnly,
+            });
+        }
+        if let Some(range) = single_header(headers, header::RANGE).and_then(parse_range)
+            && (!headers.contains_key(header::IF_RANGE)
+                || etag.is_some_and(|etag| {
+                    single_header(headers, header::IF_RANGE).map(trim_ows) == Some(etag)
+                }))
+        {
+            return Ok(Self {
+                status: StatusCode::PARTIAL_CONTENT,
+                selection: range,
+            });
+        }
+        Ok(Self {
+            status,
+            selection: FileByteSelection::Full,
+        })
     }
-    if tag_matches(headers, header::IF_NONE_MATCH, etag, false)? == Some(true) {
-        return Ok((StatusCode::NOT_MODIFIED, (0, 0)));
+
+    pub fn response(&self, size: u64, extent: FileReadExtent) -> (StatusCode, (u64, u64)) {
+        if !self.status.is_success() {
+            return (self.status, (0, 0));
+        }
+        if self.selection == FileByteSelection::MetadataOnly {
+            return (self.status, (0, size));
+        }
+        match extent {
+            FileReadExtent::Selected { offset, length } => (self.status, (offset, length)),
+            FileReadExtent::Unsatisfiable => (StatusCode::RANGE_NOT_SATISFIABLE, (0, 0)),
+        }
     }
-    if *method != Method::HEAD
-        && let Some(range) = single_header(headers, header::RANGE).and_then(parse_range)
-        && (!headers.contains_key(header::IF_RANGE)
-            || single_header(headers, header::IF_RANGE).map(trim_ows) == Some(etag))
-    {
-        return Ok(match range.resolve(size) {
-            Some(selection) => (StatusCode::PARTIAL_CONTENT, selection),
-            None => (StatusCode::RANGE_NOT_SATISFIABLE, (0, 0)),
-        });
-    }
-    Ok((StatusCode::OK, (0, size)))
 }
 
 fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&[u8]> {
@@ -96,7 +127,7 @@ fn trim_ows(value: &[u8]) -> &[u8] {
 pub(super) fn tag_matches(
     headers: &HeaderMap,
     name: header::HeaderName,
-    etag: &[u8],
+    etag: Option<&[u8]>,
     strong: bool,
 ) -> Result<Option<bool>, RequestHandlerError> {
     if !headers.contains_key(&name) {
@@ -140,7 +171,7 @@ pub(super) fn tag_matches(
         {
             return Err(invalid());
         }
-        matched |= (!strong || !weak) && &value[..=end] == etag;
+        matched |= (!strong || !weak) && Some(&value[..=end]) == etag;
         value = trim_ows(&value[end + 1..]);
         if value.is_empty() {
             return Ok(Some(matched));
@@ -152,28 +183,7 @@ pub(super) fn tag_matches(
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum ByteRange {
-    From(u64, Option<u64>),
-    Suffix(u64),
-}
-
-impl ByteRange {
-    fn resolve(self, size: u64) -> Option<(u64, u64)> {
-        match self {
-            Self::From(start, end) if start < size => {
-                Some((start, end.unwrap_or(size - 1).min(size - 1) - start + 1))
-            }
-            Self::Suffix(length) if length > 0 && size > 0 => {
-                let length = length.min(size);
-                Some((size - length, length))
-            }
-            _ => None,
-        }
-    }
-}
-
-fn parse_range(value: &[u8]) -> Option<ByteRange> {
+fn parse_range(value: &[u8]) -> Option<FileByteSelection> {
     let value = trim_ows(value).strip_prefix(b"bytes=")?;
     let dash = value.iter().position(|byte| *byte == b'-')?;
     let (start, end) = (&value[..dash], &value[dash + 1..]);
@@ -184,7 +194,9 @@ fn parse_range(value: &[u8]) -> Option<ByteRange> {
         std::str::from_utf8(value).ok()?.parse().ok()
     }
     if start.is_empty() {
-        Some(ByteRange::Suffix(number(end)?))
+        Some(FileByteSelection::Suffix {
+            length: number(end)?,
+        })
     } else {
         let start = number(start)?;
         let end = if end.is_empty() {
@@ -195,7 +207,13 @@ fn parse_range(value: &[u8]) -> Option<ByteRange> {
         if end.is_some_and(|end| end < start) {
             return None;
         }
-        Some(ByteRange::From(start, end))
+        Some(match end {
+            Some(end_inclusive) => FileByteSelection::Bounded {
+                start,
+                end_inclusive,
+            },
+            None => FileByteSelection::OpenEnded { start },
+        })
     }
 }
 

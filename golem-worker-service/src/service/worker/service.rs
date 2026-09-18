@@ -56,7 +56,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+use golem_common::model::filesystem::{
+    FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
+};
 use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -78,7 +80,7 @@ use golem_common::schema::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -1215,6 +1217,30 @@ impl WorkerService {
                 component.environment_id,
                 component.account_id,
                 auth_ctx,
+            )
+            .await
+    }
+
+    /// Reads a path selected by an authorized HTTP filesystem mount using its trusted owner.
+    pub(crate) async fn read_mounted_file(
+        &self,
+        agent_id: &AgentId,
+        path: &str,
+        selection: FileByteSelection,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+    ) -> WorkerResult<FileReadResponse> {
+        validate_file_read_path(path)?;
+        let path =
+            CanonicalFilePath::from_abs_str(path).map_err(|_| FileReadError::InvalidTarget)?;
+        self.worker_client
+            .get_file_contents(
+                agent_id,
+                path,
+                selection,
+                environment_id,
+                account_id,
+                AuthCtx::System,
             )
             .await
     }

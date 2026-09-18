@@ -253,14 +253,30 @@ fn finish_selected_response(
     request: &RichRequest,
     selected: &ResolvedRouteEntry,
 ) -> Result<Response, RequestFailure> {
+    let live_files = matches!(
+        selected.route.behavior,
+        RichRouteBehaviour::AgentFilesystem(_)
+    );
     match result.and_then(route_execution_result_to_response) {
         Ok(mut response) => {
             apply_cors_outgoing_middleware(&mut response, request, selected)?;
+            if live_files {
+                response.headers_mut().insert(
+                    http::header::CACHE_CONTROL,
+                    http::HeaderValue::from_static("no-store"),
+                );
+            }
             Ok(response)
         }
         Err(error) => {
             let mut response = Response::default();
             apply_cors_outgoing_middleware(&mut response, request, selected)?;
+            if live_files {
+                response.headers_mut().insert(
+                    http::header::CACHE_CONTROL,
+                    http::HeaderValue::from_static("no-store"),
+                );
+            }
             Err(RequestFailure {
                 error,
                 cors_headers: response.headers().clone(),
