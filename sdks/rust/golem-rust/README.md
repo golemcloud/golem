@@ -7,7 +7,14 @@ transactionally.
 ## External Durable Streams
 
 `golem_rust::durable_streams` (the default `json` feature) reads and appends to
-external Durable Streams servers through two finite, durable host operations.
+external Durable Streams servers through `golem:agent/durable-streams@2.0.0` resources.
+Each SDK reader or writer constructs one resource, journaling its immutable
+URL, mode or producer identity, deadline, and pinned secret identity without HTTP.
+All batches and retries reuse that resource; follow-up calls carry only read
+checkpoints/options or append payload/sequence/close. Rust ownership releases
+the resource when the client is dropped, including an unconsumed native stream.
+Reader `close()` stops consumption; writer `close()` sends a close-only append.
+Neither replaces the resource or releases it before the client is dropped.
 The host handles HTTP, SSE framing, authentication and protocol errors. No
 custom durable scope or SDK HTTP client is needed.
 

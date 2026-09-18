@@ -26,7 +26,7 @@ pub mod durability;
 pub mod durable_session;
 pub mod durable_stream;
 pub mod entity;
-mod external_durable_stream;
+pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
 pub mod io;

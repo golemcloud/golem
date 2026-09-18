@@ -3,9 +3,12 @@
 `golem.streams.DurableStreams` reads and appends to an existing external Durable
 Streams server. Stream creation, deletion, external forks and subscriptions are
 not part of this API. The host performs HTTP, framing, authentication, validation
-and durable recording through the two finite asynchronous operations in
-`golem:agent/durable-streams@2.0.0`: `read-durable-stream-batch` and
-`append-durable-stream-batch`.
+and durable recording through `golem:agent/durable-streams@2.0.0`. Each SDK reader
+or writer synchronously constructs one host resource. Construction journals an
+immutable descriptor without HTTP; all batches and retries reuse that resource.
+Reader `read` calls send only checkpoint, transport and pinned content type.
+Writer `append` calls send only encoded payload, sequence and close flag. URL,
+mode, timeout, producer identity and authentication stay in the descriptor.
 
 ## Read ordinary agent streams
 
@@ -41,6 +44,10 @@ application requires recoverable stream errors.
 
 `close()` prevents new reads and discards any late result. It cannot interrupt
 an arbitrary pending native import; the request timeout bounds that interval.
+EOF, producer failure and explicit close finalize the reader's resource,
+including after schema/RPC forwarding. Cleanup waits for any active native
+method to settle before dropping its borrowed resource; `close()` waits for
+that cleanup even though an active pull fails immediately.
 The default timeout is 30 seconds (allowed range 1–300000 milliseconds). Live
 tailing defaults to long-poll; `Sse` and `CatchUp` are also available. An empty
 up-to-date open response waits for `idleDelayMs` (default 100) using a durable WASI timer.
@@ -73,7 +80,7 @@ val receipt = writer.append(Vector(Vector(9007199254740993L, 7L)), close = true)
 `jsonWriter[A]` encodes each supplied value separately; the host frames the
 outer array. `byteWriter` accepts bytes and a content type (default
 `application/octet-stream`). Both return a `DurableStreamWriter[A]` with
-`append`, `close`, `retryPending`, `cancel`, `hasPending` and `isClosed`.
+`append`, `close`, `retryPending`, `cancel`, `dispose`, `hasPending` and `isClosed`.
 Omitting `producer` allocates an ID once with the existing durable host identity
 generator. Explicit producer epoch and sequence must be in 0–2^53−1; start a new
 epoch at sequence zero.
@@ -85,6 +92,14 @@ submitting any other data. `cancel()` fails the caller immediately but keeps the
 pending request, even if a late acknowledgement arrives. Retry is available
 after the bounded native attempt settles. Dropping a writer does not undo a
 remote append. Independent writers may operate concurrently.
+
+The local resource is released after an acknowledged close or sequence
+exhaustion. To release a writer without closing the remote stream, call
+`dispose(): Future[Unit]`. Disposal is idempotent, prevents further appends and
+retries, and waits for an active native method to settle before dropping its
+resource. An uncertain append remains uncertain; disposal does not undo it or
+allocate a replacement producer. Unlike disposal, `cancel()` preserves the
+resource and pending request for `retryPending()`.
 
 Only an acknowledgement for the submitted epoch and exact sequence advances
 the writer. An ahead sequence is `ProducerDiverged`, not permission to renumber
@@ -110,7 +125,10 @@ its normal fail-closed recovery behavior for interrupted writes.
 
 Both readers and writers accept `auth = Some(config.token)`, where `token` is a
 declared `golem.config.Secret[String]`. The SDK borrows the pinned capability,
-never calls `Secret.get`, and never sees a plaintext bearer token. The host
+never calls `Secret.get`, and never sees a plaintext bearer token. The constructor
+captures the secret's identity, and the SDK releases its temporary secret handle
+after construction, including if construction fails. Later methods do not load
+or borrow another secret handle. The host
 requires reveal permission and network authorization. Use HTTPS; HTTP is only
 allowed for loopback development servers. Redirects and URL userinfo are not
 supported.

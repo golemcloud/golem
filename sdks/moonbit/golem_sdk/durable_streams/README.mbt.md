@@ -5,9 +5,12 @@ external Durable Streams URL. The Golem host owns HTTP, SSE framing, authenticat
 status validation and durable call recording. This package owns application codecs,
 one pending batch, its item index, checkpoints and producer state.
 
-The SDK calls the stateless `read-durable-stream-batch` and
-`append-durable-stream-batch` functions in `golem:agent/durable-streams@2.0.0`.
-Custom component worlds using this package must import that interface.
+The SDK constructs one `durable-stream-reader` or `durable-stream-writer`
+resource in `golem:agent/durable-streams@2.0.0` per reader or writer. Construction
+is synchronous and journaled, captures an immutable descriptor, and performs no
+HTTP. All batches and retries reuse that resource. Reader methods pass only the
+checkpoint, transport and pinned content type; writer methods pass only payload,
+sequence and close flag. Custom component worlds must import that interface.
 
 ```mbt check
 ///|
@@ -25,6 +28,7 @@ test "construct an external source without starting HTTP" {
     epoch=3,
   )
   assert_false(writer.has_pending())
+  writer.drop()
 }
 ```
 
@@ -51,7 +55,10 @@ The reader drains a delivered batch before requesting another. `checkpoint()` is
 the last **fully drained** checkpoint, not a snapshot of a partially consumed
 batch. The final payload is delivered before EOF. Empty batches and up-to-date
 markers do not mean EOF. `close()` discards buffered items and prevents new pulls;
-an already pending native import may take up to its deadline to finish.
+an already pending native import may take up to its deadline to finish. The reader
+drops its resource after the final payload or explicit close; if a read is active,
+close defers the drop until that read unwinds. Native stream completion, producer
+failure and unstarted stream drop also release the resource.
 
 `Reader.read()` raises host or codec failures, never converting them to EOF.
 An `AgentStream` producer uses the SDK's native operation-level error semantics:
@@ -71,6 +78,9 @@ directly. Use explicitly result-valued streams for recoverable application error
   unchanged using `append_bytes(bytes)` or `append(array_of_bytes)`.
 - `writer.append(values, close=false)` appends a batch; `close=true` appends and
   closes atomically. `writer.close()` is a close-only append.
+- An acknowledged close releases the resource. `writer.drop()` explicitly
+  releases it without closing the remote stream; it is idempotent and rejects
+  calls while an append is active. Use `defer writer.drop()` for scoped writers.
 
 MoonBit's native `ToJson`/`FromJson` convention represents `Int64` and `UInt64` as
 JSON **strings**. For a peer using JSON numeric integers, supply explicit codecs,
@@ -101,10 +111,11 @@ without comparing bodies. Dropping a writer does not undo an external append.
 
 ## Durability, authentication and limits
 
-Both APIs borrow optional `auth : @types.Secret` directly; they never reveal its
-contents. Keep the capability alive while the reader or writer uses it. The host
-checks reveal permission and network policy and sends a string secret as a Bearer
-token. Do not put credentials in the URL.
+Both constructors borrow optional `auth : @types.Secret` directly; they never
+reveal its contents. The host captures the secret's pinned identity at construction,
+so the original capability may be dropped afterward. Resource methods check reveal
+permission and network policy and send a string secret as a Bearer token. Do not
+put credentials in the URL.
 
 `timeout_ms` (default 30000, range 1–300000) bounds each host attempt.
 `max_retries` (default 8) bounds consecutive retryable failures. Only timeout,

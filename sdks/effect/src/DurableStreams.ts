@@ -1,5 +1,5 @@
 /** Effect-native external Durable Streams. @since 1.6.0 */
-import { Effect, Option, Schema, Semaphore, Stream } from "effect"
+import { Effect, Option, Schema, Scope, Semaphore, Stream } from "effect"
 import type * as Host from "golem:agent/durable-streams@2.0.0"
 import type { Secret } from "golem:core/types@2.0.0"
 import { DurableStreamsClient } from "./host/DurableStreamsClient.js"
@@ -68,6 +68,7 @@ export interface JsonCodec<A> {
 /**
  * A serialized producer. Failure or interruption retains the exact request; only retryPending
  * may resolve it. Reconstruct through deterministic execution, not a snapshot of this object.
+ * Keep its acquisition scope open through all appends and retries; scope exit drops the resource.
  * @since 1.6.0 @category models
  */
 export interface Writer<A, E = never, R = never> {
@@ -78,9 +79,9 @@ export interface Writer<A, E = never, R = never> {
   readonly append: (
     data: A,
     options?: { readonly close?: boolean },
-  ) => Effect.Effect<AppendReceipt, DurableStreamError | E, DurableStreamsClient | R>
-  readonly close: Effect.Effect<AppendReceipt, DurableStreamError, DurableStreamsClient>
-  readonly retryPending: Effect.Effect<AppendReceipt, DurableStreamError, DurableStreamsClient>
+  ) => Effect.Effect<AppendReceipt, DurableStreamError | E, R>
+  readonly close: Effect.Effect<AppendReceipt, DurableStreamError>
+  readonly retryPending: Effect.Effect<AppendReceipt, DurableStreamError>
 }
 
 /** Lazy native Stream of individual bytes, not append boundaries. @since 1.6.0 @category readers */
@@ -120,7 +121,7 @@ export const readJson = <S extends Schema.Top>(
     }),
   )
 
-/** Allocate one producer for exact bytes. @since 1.6.0 @category writers */
+/** Acquire one scoped producer resource for exact bytes. @since 1.6.0 @category writers */
 export const makeByteWriter = (options: WriteOptions) =>
   makeWriter(
     options,
@@ -129,7 +130,7 @@ export const makeByteWriter = (options: WriteOptions) =>
     (bytes: Uint8Array) => Effect.sync(() => ({ tag: "bytes" as const, val: bytes.slice() })),
   )
 
-/** Allocate one schema-checked JSON producer. @since 1.6.0 @category writers */
+/** Acquire one scoped schema-checked JSON producer resource. @since 1.6.0 @category writers */
 export const makeJsonWriter = <S extends Schema.Top>(
   schema: S,
   options: WriteOptions & Pick<JsonCodec<S["Type"]>, "encode">,
@@ -174,21 +175,22 @@ const read = <A, E, R>(
       const options = yield* checkedOptions(input)
       const idleDelay = yield* bounded(input.idleDelayMs ?? 100, 1, 300000, "idleDelayMs")
       const host = yield* DurableStreamsClient
+      const reader = yield* host.makeReader(
+        { url: options.url, mode, timeoutMs: BigInt(options.timeoutMs) },
+        options.auth,
+      )
       const initial: { request: Host.DurableStreamReadRequest; idle: boolean } = {
         request: {
-          url: options.url,
           checkpoint: { offset: input.offset ?? "-1", cursor: input.cursor },
-          mode,
           transport: "catch-up",
           contentType: undefined,
-          timeoutMs: BigInt(options.timeoutMs),
         },
         idle: false,
       }
       return Stream.paginate(initial, (state) =>
         Effect.gen(function* () {
           if (state.idle) yield* Effect.sleep(idleDelay)
-          const batch = yield* retry(options, host.read(state.request, options.auth))
+          const batch = yield* retry(options, reader.read(state.request))
           if (batch.next.offset === "now")
             return yield* invalid("protocol-error", "Server did not resolve now")
           const items = yield* decode(batch.payload)
@@ -216,7 +218,7 @@ const makeWriter = <A, E, R>(
   defaultContentType: string,
   empty: Host.DurableStreamAppendPayload,
   encode: (data: A) => Effect.Effect<Host.DurableStreamAppendPayload, E, R>,
-): Effect.Effect<Writer<A, E, R>, DurableStreamError> =>
+): Effect.Effect<Writer<A, E, R>, DurableStreamError, DurableStreamsClient | Scope.Scope> =>
   Effect.gen(function* () {
     const options = yield* checkedOptions(input)
     const producerId = input.producerId ?? crypto.randomUUID()
@@ -224,6 +226,17 @@ const makeWriter = <A, E, R>(
     const contentType = input.contentType ?? defaultContentType
     if (!producerId || epoch < 0n || epoch > MAX_INTEGER)
       return yield* invalid("invalid-request", "Invalid producer ID or epoch")
+    const host = yield* DurableStreamsClient
+    const writer = yield* host.makeWriter(
+      {
+        url: options.url,
+        contentType,
+        producerId,
+        producerEpoch: epoch,
+        timeoutMs: BigInt(options.timeoutMs),
+      },
+      options.auth,
+    )
     const lock = yield* Semaphore.make(1)
     let nextSequence = 0n
     let closed = false
@@ -232,15 +245,14 @@ const makeWriter = <A, E, R>(
       const current = pending
       if (current === undefined) return yield* invalid("invalid-request", "No pending append")
       const { request } = current
-      const host = yield* DurableStreamsClient
-      const receipt = yield* retry(options, host.append(request, options.auth), current.retry)
-      if (receipt.epoch !== request.producer.epoch || receipt.sequence < request.producer.sequence)
+      const receipt = yield* retry(options, writer.append(request), current.retry)
+      if (receipt.epoch !== epoch || receipt.sequence < request.sequence)
         return yield* invalid("protocol-error", "Invalid producer acknowledgement")
-      if (receipt.sequence > request.producer.sequence)
+      if (receipt.sequence > request.sequence)
         return yield* invalid("producer-diverged", "Another writer advanced this producer")
       if (request.close && !receipt.closed)
         return yield* invalid("protocol-error", "Peer did not acknowledge closure")
-      nextSequence = request.producer.sequence + 1n
+      nextSequence = request.sequence + 1n
       closed = receipt.closed
       pending = undefined
       return receipt
@@ -264,12 +276,9 @@ const makeWriter = <A, E, R>(
             return yield* invalid("invalid-request", "Empty append requires close")
           pending = {
             request: {
-              url: options.url,
-              contentType,
               payload: body,
-              producer: { id: producerId, epoch, sequence: nextSequence },
+              sequence: nextSequence,
               close,
-              timeoutMs: BigInt(options.timeoutMs),
             },
             retry: { failures: 0 },
           }

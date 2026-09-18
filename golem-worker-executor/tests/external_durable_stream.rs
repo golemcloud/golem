@@ -23,6 +23,10 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::oplog::host_functions::host_request_from_typed_schema_value;
+use golem_common::model::oplog::payload::{
+    HostRequestDurableStreamAppend, HostRequestDurableStreamWriterNew,
+};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -402,6 +406,57 @@ async fn append_crash_after_remote_commit_reuses_tuple_and_body(
         assert!(!effects[0].close);
         assert!(effects[1].close);
     }
+    let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+    let mut constructors = Vec::new();
+    let mut appends = Vec::new();
+    for entry in &history {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            match start.function_name.as_str() {
+                "golem::agent::durable-streams::durable-stream-writer::new" => {
+                    let request = host_request_from_typed_schema_value(
+                        &start.function_name,
+                        start.request.clone().expect("constructor descriptor"),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    constructors.push(
+                        HostRequestDurableStreamWriterNew::try_from(request)
+                            .map_err(anyhow::Error::msg)?,
+                    );
+                }
+                "golem::agent::durable-streams::durable-stream-writer::append" => {
+                    let request = host_request_from_typed_schema_value(
+                        &start.function_name,
+                        start.request.clone().expect("compact append request"),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    appends.push(
+                        HostRequestDurableStreamAppend::try_from(request)
+                            .map_err(anyhow::Error::msg)?,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        constructors.len(),
+        1,
+        "replay recreates, not re-journals, the resource"
+    );
+    assert_eq!(constructors[0].options.url, server.url);
+    assert_eq!(constructors[0].options.producer_id, "stable-writer");
+    let resource_id = constructors[0]
+        .options
+        .resource_id(constructors[0].auth.as_ref())
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        appends.len(),
+        2,
+        "incomplete repair retains the original Start"
+    );
+    assert_eq!(appends[0].resource_id, resource_id);
+    assert_eq!(appends[1].resource_id, resource_id);
+    assert_eq!((appends[0].sequence, appends[1].sequence), (0, 1));
     drop(executor);
     let executor = start(deps, &context).await?;
     // Force reconstruction with a read; no POST from either completed append may repeat.
@@ -455,12 +510,33 @@ async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
         Ok(expected.clone())
     );
     let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+    let constructor_start = history
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name
+                    == "golem::agent::durable-streams::durable-stream-reader::new" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("reader constructor Start");
+    let constructor_end = history
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == constructor_start => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("reader constructor End");
     let start_index = history
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(start)
                 if start.function_name
-                    == "golem::agent::durable-streams::read_durable_stream_batch" =>
+                    == "golem::agent::durable-streams::durable-stream-reader::read" =>
             {
                 Some(entry.oplog_index)
             }
@@ -485,7 +561,13 @@ async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
             _ => None,
         })
         .expect("durable timer after first buffered item");
-    for (cut, additional_reads) in [(start_index, 1), (end_index, 0), (buffered_cut, 0)] {
+    for (cut, additional_reads) in [
+        (constructor_start, 1),
+        (constructor_end, 1),
+        (start_index, 1),
+        (end_index, 0),
+        (buffered_cut, 0),
+    ] {
         let before = server.peer.reads.load(Ordering::SeqCst);
         let fork = golem_common::phantom_agent_id!(
             "ExternalDurableStreams",
@@ -561,7 +643,7 @@ async fn concurrent_reads_keep_request_identity_in_both_completion_orders(
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
                         if start.function_name
-                            == "golem::agent::durable-streams::read_durable_stream_batch" =>
+                            == "golem::agent::durable-streams::durable-stream-reader::read" =>
                     {
                         Some(entry.oplog_index)
                     }
@@ -811,7 +893,7 @@ async fn concurrent_appends_keep_identity_in_both_completion_orders(
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
                         if start.function_name
-                            == "golem::agent::durable-streams::append_durable_stream_batch" =>
+                            == "golem::agent::durable-streams::durable-stream-writer::append" =>
                     {
                         Some(entry.oplog_index)
                     }

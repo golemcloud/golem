@@ -1,7 +1,11 @@
-export const readDurableStreamBatch = async (): Promise<never> => {
-  throw new Error("readDurableStreamBatch not mocked")
+export class DurableStreamReader {
+  constructor() {
+    throw new Error("DurableStreamReader not mocked")
+  }
 }
 
-export const appendDurableStreamBatch = async (): Promise<never> => {
-  throw new Error("appendDurableStreamBatch not mocked")
+export class DurableStreamWriter {
+  constructor() {
+    throw new Error("DurableStreamWriter not mocked")
+  }
 }

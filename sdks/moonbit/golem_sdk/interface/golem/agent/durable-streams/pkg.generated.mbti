@@ -7,9 +7,6 @@ import {
 }
 
 // Values
-pub async fn append_durable_stream_batch(DurableStreamAppendRequest, @types.Secret?) -> Result[DurableStreamAppendReceipt, DurableStreamError]
-
-pub async fn read_durable_stream_batch(DurableStreamReadRequest, @types.Secret?) -> Result[DurableStreamBatch, DurableStreamError]
 
 // Errors
 pub(all) suberror DurableStreamErrorKind {
@@ -45,12 +42,9 @@ pub(all) struct DurableStreamAppendReceipt {
 } derive(Eq, @debug.Debug)
 
 pub(all) struct DurableStreamAppendRequest {
-  url : String
-  content_type : String
   payload : DurableStreamAppendPayload
-  producer : DurableStreamProducer
+  sequence : UInt64
   close : Bool
-  timeout_ms : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct DurableStreamBatch {
@@ -81,18 +75,20 @@ pub(all) enum DurableStreamMode {
 pub fn DurableStreamMode::from(Int) -> Self
 pub fn DurableStreamMode::ordinal(Self) -> Int
 
-pub(all) struct DurableStreamProducer {
-  id : String
-  epoch : UInt64
-  sequence : UInt64
-} derive(Eq, @debug.Debug)
-
 pub(all) struct DurableStreamReadRequest {
-  url : String
   checkpoint : DurableStreamCheckpoint
-  mode : DurableStreamMode
   transport : DurableStreamTransport
   content_type : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamReader(Int) derive(Eq, @debug.Debug)
+pub fn DurableStreamReader::drop(Self) -> Unit
+pub fn DurableStreamReader::durable_stream_reader(DurableStreamReaderOptions, @types.Secret?) -> Self
+pub async fn DurableStreamReader::read(Self, DurableStreamReadRequest) -> Result[DurableStreamBatch, DurableStreamError]
+
+pub(all) struct DurableStreamReaderOptions {
+  url : String
+  mode : DurableStreamMode
   timeout_ms : UInt64
 } derive(Eq, @debug.Debug)
 
@@ -103,6 +99,19 @@ pub(all) enum DurableStreamTransport {
 } derive(Eq, @debug.Debug)
 pub fn DurableStreamTransport::from(Int) -> Self
 pub fn DurableStreamTransport::ordinal(Self) -> Int
+
+pub(all) struct DurableStreamWriter(Int) derive(Eq, @debug.Debug)
+pub async fn DurableStreamWriter::append(Self, DurableStreamAppendRequest) -> Result[DurableStreamAppendReceipt, DurableStreamError]
+pub fn DurableStreamWriter::drop(Self) -> Unit
+pub fn DurableStreamWriter::durable_stream_writer(DurableStreamWriterOptions, @types.Secret?) -> Self
+
+pub(all) struct DurableStreamWriterOptions {
+  url : String
+  content_type : String
+  producer_id : String
+  producer_epoch : UInt64
+  timeout_ms : UInt64
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

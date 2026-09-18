@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::{DefaultExternalDurableStreamService, ExternalDurableStreamService};
 use super::*;
 use axum::body::{Body, Bytes};
 use axum::http::{Method, Response as HttpResponse, Uri};
@@ -94,8 +95,6 @@ fn sse_retained_capacity_fits_reservation_at_growth_boundaries() {
 
 #[test]
 async fn injected_service_uses_single_attempts_and_does_not_follow_redirects() {
-    use super::super::{DefaultExternalDurableStreamService, ExternalDurableStreamService};
-
     let target = Server::new(vec![]).await;
     let server = Server::new(vec![
         response(307, &[("location", &target.url)], Body::empty()),
@@ -335,8 +334,6 @@ fn append_validates_exact_json_and_preserves_lexemes() {
 
 #[test]
 async fn rejects_invalid_bodies_and_credentials_without_a_request() {
-    use super::super::{DefaultExternalDurableStreamService, ExternalDurableStreamService};
-
     let server = Server::new(vec![]).await;
     let client = client();
     let service = DefaultExternalDurableStreamService::new().unwrap();

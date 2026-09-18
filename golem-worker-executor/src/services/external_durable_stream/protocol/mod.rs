@@ -862,5 +862,4 @@ async fn read_sse(
 }
 
 #[cfg(test)]
-#[path = "protocol_tests.rs"]
 mod tests;

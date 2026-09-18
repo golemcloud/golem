@@ -1,21 +1,25 @@
 /**
- * Finite external Durable Streams operations. Callers own checkpoints, buffered
- * items, producer progress and retries; the host records each complete attempt.
+ * External Durable Streams descriptors are recorded when resources are created.
+ * Callers own checkpoints, buffered items, producer progress and retries.
  */
 declare module 'golem:agent/durable-streams@2.0.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  /**
-   * One protocol read attempt. Replay returns the recorded batch without HTTP.
-   * Auth is a string secret used as a Bearer token only at the live wire boundary.
-   * @throws DurableStreamError
-   */
-  export function readDurableStreamBatch(request: DurableStreamReadRequest, auth: Secret | undefined): Promise<DurableStreamBatch>;
-  /**
-   * One protocol-idempotent append attempt. Retry with the identical tuple and body.
-   * The caller, not this function, owns producer progress and pending append state.
-   * @throws DurableStreamError
-   */
-  export function appendDurableStreamBatch(request: DurableStreamAppendRequest, auth: Secret | undefined): Promise<DurableStreamAppendReceipt>;
+  export class DurableStreamReader {
+    constructor(options: DurableStreamReaderOptions, auth: Secret | undefined);
+    /**
+     * One protocol attempt. Replay returns the recorded batch without HTTP.
+     * @throws DurableStreamError
+     */
+    read(request: DurableStreamReadRequest): Promise<DurableStreamBatch>;
+  }
+  export class DurableStreamWriter {
+    constructor(options: DurableStreamWriterOptions, auth: Secret | undefined);
+    /**
+     * One protocol-idempotent attempt. Retry the identical sequence, body and close flag.
+     * @throws DurableStreamError
+     */
+    append(request: DurableStreamAppendRequest): Promise<DurableStreamAppendReceipt>;
+  }
   export type Secret = golemCore200Types.Secret;
   export type DurableStreamMode = "json" | "bytes";
   export type DurableStreamTransport = "catch-up" | "long-poll" | "sse";
@@ -26,18 +30,20 @@ declare module 'golem:agent/durable-streams@2.0.0' {
     offset: string;
     cursor?: string;
   };
-  export type DurableStreamReadRequest = {
+  export type DurableStreamReaderOptions = {
     url: string;
-    checkpoint: DurableStreamCheckpoint;
     mode: DurableStreamMode;
+    /** Whole-attempt deadline, in milliseconds, from 1 through 300000. */
+    timeoutMs: bigint;
+  };
+  export type DurableStreamReadRequest = {
+    checkpoint: DurableStreamCheckpoint;
     transport: DurableStreamTransport;
     /**
      * Pin the original stream media type after the initial catch-up read.
      * Required for SSE, whose HTTP media type is text/event-stream.
      */
     contentType?: string;
-    /** Whole-attempt deadline, in milliseconds, from 1 through 300000. */
-    timeoutMs: bigint;
   };
   /**
    * A complete HTTP body or SSE data/control pair. Empty is not EOF unless closed.
@@ -49,10 +55,13 @@ declare module 'golem:agent/durable-streams@2.0.0' {
     upToDate: boolean;
     closed: boolean;
   };
-  export type DurableStreamProducer = {
-    id: string;
-    epoch: bigint;
-    sequence: bigint;
+  export type DurableStreamWriterOptions = {
+    url: string;
+    contentType: string;
+    producerId: string;
+    producerEpoch: bigint;
+    /** Whole-attempt deadline, in milliseconds, from 1 through 300000. */
+    timeoutMs: bigint;
   };
   export type DurableStreamAppendPayload =
   /** Individually encoded complete JSON values; the host frames the outer array. */
@@ -65,12 +74,9 @@ declare module 'golem:agent/durable-streams@2.0.0' {
     val: Uint8Array
   };
   export type DurableStreamAppendRequest = {
-    url: string;
-    contentType: string;
     payload: DurableStreamAppendPayload;
-    producer: DurableStreamProducer;
+    sequence: bigint;
     close: boolean;
-    timeoutMs: bigint;
   };
   export type DurableStreamAppendReceipt = {
     /** Duplicate acknowledgements may omit the offset. */

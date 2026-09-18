@@ -17,7 +17,7 @@ use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
-    human_size,
+    byte_size,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::{
@@ -522,7 +522,7 @@ impl SafeDisplay for Limits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DurableStreamConfig {
     /// Maximum encoded payload size of one external Durable Streams read or append.
-    #[serde(with = "human_size")]
+    #[serde(with = "byte_size::required")]
     pub external_batch_max_size: usize,
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
@@ -2574,12 +2574,12 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn durable_stream_config_uses_human_size() {
+    fn durable_stream_config_uses_byte_size() {
         let config = DurableStreamConfig::default();
         let mut serialized = serde_json::to_value(&config).unwrap();
-        assert_eq!(serialized["external_batch_max_size"], "8 MiB");
+        assert_eq!(serialized["external_batch_max_size"], "8388608 B");
         assert!(serialized.get("external_batch_max_bytes").is_none());
-        serialized["external_batch_max_size"] = Value::from("1.5 MiB");
+        serialized["external_batch_max_size"] = Value::from("1536 KiB");
         let decoded: DurableStreamConfig = serde_json::from_value(serialized.clone()).unwrap();
         assert_eq!(decoded.external_batch_max_size, 1_572_864);
         assert!(decoded.validate().is_ok());
@@ -2588,13 +2588,10 @@ mod tests {
                 .to_safe_string()
                 .contains("external batch maximum size: 1.50 MiB")
         );
-        serialized["external_batch_max_size"] = Value::from("0 B");
-        assert!(
-            serde_json::from_value::<DurableStreamConfig>(serialized)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
+        for invalid in ["0 B", "1.5 MiB"] {
+            serialized["external_batch_max_size"] = Value::from(invalid);
+            assert!(serde_json::from_value::<DurableStreamConfig>(serialized.clone()).is_err());
+        }
     }
 
     #[test]

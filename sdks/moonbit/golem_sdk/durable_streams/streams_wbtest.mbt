@@ -56,10 +56,10 @@ test "reader drains final nested JSON batch before EOF and checkpoint promotion"
     let base : Reader[Array[Int]] = json_reader("https://example.test/stream")
     let reader = {
       ..base,
-      read_batch: (request, auth) => {
+      read_batch: (request, resource) => {
         calls.val += 1
         assert_eq(request.checkpoint.offset, "-1")
-        assert_true(auth is None)
+        assert_eq(Some(resource), base.resource)
         Ok(batch(b"[[3,1],[9]]", "opaque:7", closed=true))
       },
     }
@@ -346,7 +346,7 @@ test "writer cancellation retains exact body tuple and close before ack" {
           ignore(started_promise.complete(()))
           gate.get()
         }
-        Ok(receipt(request.producer.sequence, closed=request.close))
+        Ok(receipt(request.sequence, closed=request.close))
       },
     }
     let input : Array[Byte] = [0, 255, 7]
@@ -364,7 +364,8 @@ test "writer cancellation retains exact body tuple and close before ack" {
       }
     })
     ignore(promise.close())
-    assert_eq(writer.producer.sequence, 0)
+    assert_eq(writer.sequence, 0)
+    assert_eq(writer.resource, base.resource)
     try writer.append([4]) catch {
       DurableStreamError::InvalidState(_) => ()
       e => raise e
@@ -379,7 +380,8 @@ test "writer cancellation retains exact body tuple and close before ack" {
       @durable-streams.DurableStreamAppendPayload::Bytes([0, 255, 7]),
     )
     assert_true(calls[0].close)
-    assert_eq(writer.producer.sequence, 1)
+    assert_eq(writer.sequence, 1)
+    assert_true(writer.resource is None)
     assert_false(writer.has_pending())
     assert_true(writer.closed)
   })
@@ -402,7 +404,7 @@ test "writer retry loop keeps exact request and only ack advances sequence" {
         if calls.length() == 1 {
           Err(error(TIMEOUT))
         } else {
-          Ok(receipt(request.producer.sequence, closed=request.close))
+          Ok(receipt(request.sequence, closed=request.close))
         }
       },
       wait: ms => waits.push(ms),
@@ -410,15 +412,15 @@ test "writer retry loop keeps exact request and only ack advances sequence" {
     ignore(writer.append([19, 2]))
     assert_eq(calls[0], calls[1])
     assert_eq(waits, [100])
-    assert_eq(writer.producer.sequence, 1)
+    assert_eq(writer.sequence, 1)
     ignore(writer.close())
-    assert_eq(calls[2].producer.sequence, 1)
+    assert_eq(calls[2].sequence, 1)
     assert_eq(
       calls[2].payload,
       @durable-streams.DurableStreamAppendPayload::Json([]),
     )
     assert_true(calls[2].close)
-    assert_eq(writer.producer.sequence, 2)
+    assert_eq(writer.sequence, 2)
   })
 }
 
@@ -439,7 +441,7 @@ test "writer mismatch and sequence exhaustion never clear uncertain state" {
       _ => fail("invalid receipt accepted")
     }
     assert_eq(writer.pending, pending)
-    assert_eq(writer.producer.sequence, 0)
+    assert_eq(writer.sequence, 0)
   }
   let writer = byte_writer(
     "https://example.test/bytes",
@@ -452,7 +454,7 @@ test "writer mismatch and sequence exhaustion never clear uncertain state" {
   } noraise {
     _ => fail("empty append accepted")
   }
-  writer.producer = { ..writer.producer, sequence: 9007199254740991, }
+  writer.sequence = 9007199254740991
   writer.prepare([1], false)
   writer.acknowledge(receipt(9007199254740991))
   try writer.prepare([2], false) catch {

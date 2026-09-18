@@ -214,6 +214,18 @@ execution; an empty live batch is not EOF, and a closed batch emits its payload 
 Each execution of a local stream starts at its configured offset. Native agent-stream forwarding
 works without an iterator or Promise adapter.
 
+Each Stream execution acquires one journaled reader resource and releases it at EOF, failure,
+interruption, or downstream termination. Writers acquire one journaled resource in the caller's
+Effect scope; keep that scope open through appends and retries. Constructors record immutable
+connection descriptors and the borrowed secret's pinned identity without making HTTP requests
+or revealing plaintext. Reads carry only checkpoint/transport/content-type; appends carry only
+payload/sequence/close. Repeated attempts reuse the same resource.
+
+Scope interruption returns promptly. If a finite WIT attempt is still in flight, actual resource
+disposal waits for its Promise to settle, because the method still borrows the native handle.
+No new operations may start after scope exit; interrupting an append within an open writer scope
+still permits `retryPending` on the same resource.
+
 Before passing a host-dependent stream to an agent method (or returning it through an agent-stream
 schema), capture its services within the invocation:
 
@@ -240,7 +252,7 @@ const roundtrip = Effect.gen(function* () {
   const writer = yield* DurableStreams.makeJsonWriter(Schema.String, options)
   yield* writer.append(["first", "last"], { close: true })
   return yield* DurableStreams.readJson(Schema.String, options).pipe(Stream.runCollect)
-})
+}).pipe(Effect.scoped)
 ```
 
 Writers serialize concurrent effects and retain one immutable producer ID/epoch/sequence, body,
@@ -479,7 +491,15 @@ The focused `durable-streams` harness case starts an in-process HTTP peer on an 
 port. Run it with a local worker executor exposing `golem:agent/durable-streams@2.0.0`; no Docker
 or external stream server is needed. The peer commits the first JSON append but drops its
 response, checks the retry's identical producer tuple/body/close, and acknowledges the duplicate
-without an offset. It also verifies exact JSON/byte payloads and authenticated request counts.
+without an offset. The bytes writer appends and then closes on the same resource; the reader
+follows an opaque checkpoint across two batches. The case verifies exact JSON/byte payloads
+and eleven authenticated HTTP requests, including the cancellation check below.
+
+`cancelRead` starts a scoped native read whose response the peer holds. A separate control read
+confirms that the HTTP request arrived before the guest interrupts the fiber. Interruption must
+finish within two seconds with no defect, before the guest asks the peer to release its response.
+The peer bounds the hold to ten seconds. `readAfterCancel` then reads through a fresh resource in
+the same agent instance, checking that delayed resource cleanup did not leave the guest unusable.
 
 `durable-streams.golem.yaml` builds only the fixture and its native-stream sink. It provisions the
 test-only secret `durableStreamToken`. Each method borrows that capability once and shares it
@@ -509,7 +529,8 @@ wasm-rquickjs inject-js --input ../wasm/agent_guest.wasm \
 ```
 
 Expected results are `[["first", "a,b"], ["last"]]` and `[3, 249, 17]`. `forwardBytes` consumes
-the external source in a separate agent through native Preview 3 stream RPC. The harness creates
+the external source in a separate agent through native Preview 3 stream RPC. The cancellation
+and subsequent invocation return `[29]` and `[41, 203]`. The harness creates
 fresh peer state and agent names on every run. This case exercises real host calls and uncertain
 acknowledgements, not executor crash recovery. Restart/replay acceptance additionally needs peer
 request counters and oplog inspection; returning the same values alone does not prove HTTP was

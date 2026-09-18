@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::{http_target, secret_target};
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::secrets::types::SecretEntry;
@@ -33,33 +33,255 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::card::SecretVerb;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions::{
-    GolemAgentAppendDurableStreamBatch, GolemAgentReadDurableStreamBatch,
+    GolemAgentDurableStreamReaderNew, GolemAgentDurableStreamReaderRead,
+    GolemAgentDurableStreamWriterAppend, GolemAgentDurableStreamWriterNew,
 };
 use golem_common::model::oplog::payload::external_durable_stream::*;
 use golem_common::model::oplog::payload::{
-    HostRequestDurableStreamAppend, HostRequestDurableStreamRead, HostResponseDurableStreamAppend,
-    HostResponseDurableStreamRead,
+    HostRequestDurableStreamAppend, HostRequestDurableStreamRead,
+    HostRequestDurableStreamReaderNew, HostRequestDurableStreamWriterNew,
+    HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
+    HostResponseDurableStreamResource,
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::wit::SecretHandleRep;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::time::Duration;
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone)]
+pub struct DurableStreamReaderEntry {
+    resource_id: String,
+    options: DurableStreamReaderOptions,
+    auth: Option<SecretEntry>,
+}
+
+impl DurableStreamReaderEntry {
+    fn from_request(request: HostRequestDurableStreamReaderNew) -> anyhow::Result<Self> {
+        Ok(Self {
+            resource_id: request
+                .options
+                .resource_id(request.auth.as_ref())
+                .map_err(anyhow::Error::msg)?,
+            options: request.options,
+            auth: request
+                .auth
+                .as_ref()
+                .map(SecretEntry::from_snapshot)
+                .transpose()?,
+        })
+    }
+
+    fn read_request(&self, request: &HostRequestDurableStreamRead) -> DurableStreamReadRequest {
+        DurableStreamReadRequest {
+            url: self.options.url.clone(),
+            checkpoint: request.checkpoint.clone(),
+            mode: self.options.mode,
+            transport: request.transport,
+            content_type: request.content_type.clone(),
+            timeout_ms: self.options.timeout_ms,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct DurableStreamWriterEntry {
+    resource_id: String,
+    options: DurableStreamWriterOptions,
+    auth: Option<SecretEntry>,
+}
+
+impl DurableStreamWriterEntry {
+    fn from_request(request: HostRequestDurableStreamWriterNew) -> anyhow::Result<Self> {
+        Ok(Self {
+            resource_id: request
+                .options
+                .resource_id(request.auth.as_ref())
+                .map_err(anyhow::Error::msg)?,
+            options: request.options,
+            auth: request
+                .auth
+                .as_ref()
+                .map(SecretEntry::from_snapshot)
+                .transpose()?,
+        })
+    }
+
+    fn append_request(
+        &self,
+        request: &HostRequestDurableStreamAppend,
+    ) -> DurableStreamAppendRequest {
+        DurableStreamAppendRequest {
+            url: self.options.url.clone(),
+            content_type: self.options.content_type.clone(),
+            payload: request.payload.clone(),
+            producer: DurableStreamProducer {
+                id: self.options.producer_id.clone(),
+                epoch: self.options.producer_epoch,
+                sequence: request.sequence,
+            },
+            close: request.close,
+            timeout_ms: self.options.timeout_ms,
+        }
+    }
+}
+
+fn validate_resource_id(expected: &str, recorded: &str) -> anyhow::Result<()> {
+    if expected != recorded {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "matching durable stream resource identity",
+            "different durable stream descriptor or pinned authentication",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 impl<Ctx: WorkerCtx> wit::Host for DurableWorkerCtx<Ctx> {}
 
-impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn read_durable_stream_batch(
-        accessor: &Accessor<U, Self>,
-        request: wit::DurableStreamReadRequest,
+impl<Ctx: WorkerCtx> wit::HostDurableStreamReader for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        options: wit::DurableStreamReaderOptions,
         auth: Option<Resource<SecretHandleRep>>,
-    ) -> anyhow::Result<Result<wit::DurableStreamBatch, wit::DurableStreamError>> {
-        let request: DurableStreamReadRequest = request.into();
-        let (auth, limit) = prepare(accessor, auth)?;
-        let recorded = HostRequestDurableStreamRead {
-            request: request.clone(),
-            auth: auth.as_ref().map(SecretEntry::to_snapshot),
+    ) -> anyhow::Result<Resource<DurableStreamReaderEntry>> {
+        let request = HostRequestDurableStreamReaderNew {
+            options: options.into(),
+            auth: auth
+                .as_ref()
+                .map(|auth| secret_entry(self, auth).map(SecretEntry::to_snapshot))
+                .transpose()?,
         };
-        let mut call = DurableCallSession::<GolemAgentReadDurableStreamBatch, Cancellable>::start_access_with_options(
+        let mut entry = DurableStreamReaderEntry::from_request(request.clone())?;
+        let mut call =
+            DurableCallSession::<GolemAgentDurableStreamReaderNew, NotCancellable>::start(
+                self,
+                request,
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+        if !call.is_live() {
+            let recorded = call
+                .recorded_request(self)
+                .await
+                .map_err(|error| call.trap(error))?;
+            let restored = DurableStreamReaderEntry::from_request(recorded)
+                .map_err(|error| call.trap(error))?;
+            validate_resource_id(&entry.resource_id, &restored.resource_id)
+                .map_err(|error| call.trap(error))?;
+            entry = restored;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(response) => {
+                    validate_resource_id(&entry.resource_id, &response.resource_id)?;
+                    return Ok(self.table().push(entry)?);
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+        call.complete(
+            self,
+            HostResponseDurableStreamResource {
+                resource_id: entry.resource_id.clone(),
+            },
+        )
+        .await?;
+        Ok(self.table().push(entry)?)
+    }
+
+    async fn drop(&mut self, resource: Resource<DurableStreamReaderEntry>) -> anyhow::Result<()> {
+        self.table().delete(resource)?;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> wit::HostDurableStreamWriter for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        options: wit::DurableStreamWriterOptions,
+        auth: Option<Resource<SecretHandleRep>>,
+    ) -> anyhow::Result<Resource<DurableStreamWriterEntry>> {
+        let request = HostRequestDurableStreamWriterNew {
+            options: options.into(),
+            auth: auth
+                .as_ref()
+                .map(|auth| secret_entry(self, auth).map(SecretEntry::to_snapshot))
+                .transpose()?,
+        };
+        let mut entry = DurableStreamWriterEntry::from_request(request.clone())?;
+        let mut call =
+            DurableCallSession::<GolemAgentDurableStreamWriterNew, NotCancellable>::start(
+                self,
+                request,
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+        if !call.is_live() {
+            let recorded = call
+                .recorded_request(self)
+                .await
+                .map_err(|error| call.trap(error))?;
+            let restored = DurableStreamWriterEntry::from_request(recorded)
+                .map_err(|error| call.trap(error))?;
+            validate_resource_id(&entry.resource_id, &restored.resource_id)
+                .map_err(|error| call.trap(error))?;
+            entry = restored;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(response) => {
+                    validate_resource_id(&entry.resource_id, &response.resource_id)?;
+                    return Ok(self.table().push(entry)?);
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+        call.complete(
+            self,
+            HostResponseDurableStreamResource {
+                resource_id: entry.resource_id.clone(),
+            },
+        )
+        .await?;
+        Ok(self.table().push(entry)?)
+    }
+
+    async fn drop(&mut self, resource: Resource<DurableStreamWriterEntry>) -> anyhow::Result<()> {
+        self.table().delete(resource)?;
+        Ok(())
+    }
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamReaderWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn read(
+        accessor: &Accessor<U, Self>,
+        resource: Resource<DurableStreamReaderEntry>,
+        request: wit::DurableStreamReadRequest,
+    ) -> anyhow::Result<Result<wit::DurableStreamBatch, wit::DurableStreamError>> {
+        let (reader, limit) = accessor.with(|mut access| {
+            let ctx = access.get();
+            Ok::<_, anyhow::Error>((
+                ctx.table().get(&resource)?.clone(),
+                ctx.state.config.durable_stream.external_batch_max_size,
+            ))
+        })?;
+        let recorded = HostRequestDurableStreamRead {
+            resource_id: reader.resource_id.clone(),
+            checkpoint: DurableStreamCheckpoint {
+                offset: request.checkpoint.offset,
+                cursor: request.checkpoint.cursor,
+            },
+            transport: match request.transport {
+                wit::DurableStreamTransport::CatchUp => DurableStreamTransport::CatchUp,
+                wit::DurableStreamTransport::LongPoll => DurableStreamTransport::LongPoll,
+                wit::DurableStreamTransport::Sse => DurableStreamTransport::Sse,
+            },
+            content_type: request.content_type,
+        };
+        let request = reader.read_request(&recorded);
+        let mut call = DurableCallSession::<GolemAgentDurableStreamReaderRead, Cancellable>::start_access_with_options(
             accessor,
             accessor.getter(),
             DurableFunctionType::ReadRemote,
@@ -87,7 +309,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
         let (result, _memory) = match live_attempt(
             accessor,
             validate_read(&request, limit),
-            auth,
+            reader.auth,
             request.timeout_ms,
             read_memory_reservation(request.transport, limit),
             async |token| service.read_batch(&request, token, limit).await,
@@ -106,19 +328,38 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
             .await?;
         Ok(response.result.map(Into::into).map_err(Into::into))
     }
+}
 
-    async fn append_durable_stream_batch(
+impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamWriterWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn append(
         accessor: &Accessor<U, Self>,
+        resource: Resource<DurableStreamWriterEntry>,
         request: wit::DurableStreamAppendRequest,
-        auth: Option<Resource<SecretHandleRep>>,
     ) -> anyhow::Result<Result<wit::DurableStreamAppendReceipt, wit::DurableStreamError>> {
-        let request: DurableStreamAppendRequest = request.into();
-        let (auth, limit) = prepare(accessor, auth)?;
+        let (writer, limit) = accessor.with(|mut access| {
+            let ctx = access.get();
+            Ok::<_, anyhow::Error>((
+                ctx.table().get(&resource)?.clone(),
+                ctx.state.config.durable_stream.external_batch_max_size,
+            ))
+        })?;
         let recorded = HostRequestDurableStreamAppend {
-            request: request.clone(),
-            auth: auth.as_ref().map(SecretEntry::to_snapshot),
+            resource_id: writer.resource_id.clone(),
+            payload: match request.payload {
+                wit::DurableStreamAppendPayload::Json(values) => {
+                    DurableStreamAppendPayload::Json(values)
+                }
+                wit::DurableStreamAppendPayload::Bytes(bytes) => {
+                    DurableStreamAppendPayload::Bytes(bytes)
+                }
+            },
+            sequence: request.sequence,
+            close: request.close,
         };
-        let mut call = DurableCallSession::<GolemAgentAppendDurableStreamBatch, Cancellable>::start_access_with_options(
+        let request = writer.append_request(&recorded);
+        let mut call = DurableCallSession::<GolemAgentDurableStreamWriterAppend, Cancellable>::start_access_with_options(
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteRemote,
@@ -146,7 +387,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
         let (result, _memory) = match live_attempt(
             accessor,
             preflight_append(&request, limit),
-            auth,
+            writer.auth,
             request.timeout_ms,
             append_memory_reservation(limit),
             async |token| service.append_batch(&request, token, limit).await,
@@ -165,23 +406,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostWithStore<U> for HasSelf<Durabl
             .await?;
         Ok(response.result.map(Into::into).map_err(Into::into))
     }
-}
-
-fn prepare<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    auth: Option<Resource<SecretHandleRep>>,
-) -> anyhow::Result<(Option<SecretEntry>, usize)> {
-    accessor.with(|mut access| {
-        let ctx = access.get();
-        let entry = auth
-            .as_ref()
-            .map(|auth| secret_entry(ctx, auth).cloned())
-            .transpose()?;
-        Ok((
-            entry,
-            ctx.state.config.durable_stream.external_batch_max_size,
-        ))
-    })
 }
 
 async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
@@ -321,48 +545,26 @@ fn denied() -> DurableStreamError {
     )
 }
 
-impl From<wit::DurableStreamReadRequest> for DurableStreamReadRequest {
-    fn from(value: wit::DurableStreamReadRequest) -> Self {
+impl From<wit::DurableStreamReaderOptions> for DurableStreamReaderOptions {
+    fn from(value: wit::DurableStreamReaderOptions) -> Self {
         Self {
             url: value.url,
-            checkpoint: DurableStreamCheckpoint {
-                offset: value.checkpoint.offset,
-                cursor: value.checkpoint.cursor,
-            },
             mode: match value.mode {
                 wit::DurableStreamMode::Json => DurableStreamMode::Json,
                 wit::DurableStreamMode::Bytes => DurableStreamMode::Bytes,
             },
-            transport: match value.transport {
-                wit::DurableStreamTransport::CatchUp => DurableStreamTransport::CatchUp,
-                wit::DurableStreamTransport::LongPoll => DurableStreamTransport::LongPoll,
-                wit::DurableStreamTransport::Sse => DurableStreamTransport::Sse,
-            },
-            content_type: value.content_type,
             timeout_ms: value.timeout_ms,
         }
     }
 }
 
-impl From<wit::DurableStreamAppendRequest> for DurableStreamAppendRequest {
-    fn from(value: wit::DurableStreamAppendRequest) -> Self {
+impl From<wit::DurableStreamWriterOptions> for DurableStreamWriterOptions {
+    fn from(value: wit::DurableStreamWriterOptions) -> Self {
         Self {
             url: value.url,
             content_type: value.content_type,
-            payload: match value.payload {
-                wit::DurableStreamAppendPayload::Json(values) => {
-                    DurableStreamAppendPayload::Json(values)
-                }
-                wit::DurableStreamAppendPayload::Bytes(bytes) => {
-                    DurableStreamAppendPayload::Bytes(bytes)
-                }
-            },
-            producer: DurableStreamProducer {
-                id: value.producer.id,
-                epoch: value.producer.epoch,
-                sequence: value.producer.sequence,
-            },
-            close: value.close,
+            producer_id: value.producer_id,
+            producer_epoch: value.producer_epoch,
             timeout_ms: value.timeout_ms,
         }
     }

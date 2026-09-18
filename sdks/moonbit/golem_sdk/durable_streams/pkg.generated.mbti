@@ -43,6 +43,7 @@ pub struct Writer[T] {
 pub async fn[T] Writer::append(Self[T], Array[T], close? : Bool) -> @durable-streams.DurableStreamAppendReceipt
 pub async fn Writer::append_bytes(Self[Byte], Bytes, close? : Bool) -> @durable-streams.DurableStreamAppendReceipt
 pub async fn[T] Writer::close(Self[T]) -> @durable-streams.DurableStreamAppendReceipt
+pub fn[T] Writer::drop(Self[T]) -> Unit raise
 pub fn[T] Writer::has_pending(Self[T]) -> Bool
 pub async fn[T] Writer::retry_pending(Self[T]) -> @durable-streams.DurableStreamAppendReceipt
 

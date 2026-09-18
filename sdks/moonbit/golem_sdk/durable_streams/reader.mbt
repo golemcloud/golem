@@ -24,7 +24,8 @@ priv struct PendingBatch {
 /// reconstructed by ordinary durable execution, not by serializing native handles.
 pub struct Reader[T] {
   priv mut request : @durable-streams.DurableStreamReadRequest
-  priv auth : @types.Secret?
+  priv mut resource : @durable-streams.DurableStreamReader?
+  priv mode : @durable-streams.DurableStreamMode
   priv live_transport : Transport
   priv decode : (Items, Int) -> T raise
   priv retry : Retry
@@ -36,7 +37,7 @@ pub struct Reader[T] {
   priv lock : @async-core.Mutex
   priv read_batch : async (
     @durable-streams.DurableStreamReadRequest,
-    @types.Secret?,
+    @durable-streams.DurableStreamReader,
   ) -> Result[@durable-streams.DurableStreamBatch, HostError]
   priv wait : async (UInt64) -> Unit
 }
@@ -55,26 +56,29 @@ fn[T] make_reader(
   idle_delay_ms : UInt64,
 ) -> Reader[T] raise {
   check_timeout(timeout_ms)
+  let retry = Retry::new(max_retries)
+  let resource = @durable-streams.DurableStreamReader::durable_stream_reader(
+    { url, mode, timeout_ms, },
+    auth,
+  )
   {
     request: {
-      url,
       checkpoint: { offset, cursor, },
-      mode,
       transport: CATCH_UP,
       content_type: None,
-      timeout_ms,
     },
-    auth,
+    resource: Some(resource),
+    mode,
     live_transport: transport,
     decode,
-    retry: Retry::new(max_retries),
+    retry,
     idle_delay_ms,
     pending: None,
     failure: None,
     closed: false,
     transferred: false,
     lock: @async-core.Mutex(),
-    read_batch: @durable-streams.read_durable_stream_batch,
+    read_batch: (request, resource) => resource.read(request),
     wait: wait_ms,
   }
 }
@@ -175,7 +179,7 @@ fn[T] Reader::install(
   batch : @durable-streams.DurableStreamBatch,
 ) -> Unit raise {
   let bytes = Bytes::from_array(batch.payload)
-  let items = match self.request.mode {
+  let items = match self.mode {
     BYTES => ByteItems(bytes)
     JSON => {
       let values : Array[Json] = if bytes.length() == 0 {
@@ -195,7 +199,6 @@ fn[T] Reader::promote(
   batch : @durable-streams.DurableStreamBatch,
 ) -> Unit {
   self.request = {
-    ..self.request,
     checkpoint: batch.next,
     content_type: match self.request.content_type {
       Some(content_type) => Some(content_type)
@@ -218,17 +221,35 @@ pub fn[T] Reader::checkpoint(self : Reader[T]) -> Checkpoint {
 }
 
 ///|
+fn[T] Reader::release_resource(self : Reader[T]) -> Unit {
+  if self.resource is Some(resource) {
+    self.resource = None
+    resource.drop()
+  }
+}
+
+///|
 /// Prevent further pulls. A pending host import is bounded by timeout_ms; this
 /// does not promise immediate interruption of an arbitrary native async import.
 pub fn[T] Reader::close(self : Reader[T]) -> Unit {
   self.closed = true
   self.pending = None
+  // An in-flight method borrows the handle until the active pull unwinds.
+  if self.lock.try_acquire() {
+    self.release_resource()
+    self.lock.release()
+  }
 }
 
 ///|
 async fn[T] Reader::pull(self : Reader[T], from_stream? : Bool = false) -> T? {
   self.lock.acquire()
-  defer self.lock.release()
+  defer {
+    if self.closed {
+      self.release_resource()
+    }
+    self.lock.release()
+  }
   guard from_stream || !self.transferred else {
     raise DurableStreamError::InvalidState("reader transferred to AgentStream")
   }
@@ -258,7 +279,7 @@ async fn[T] Reader::pull(self : Reader[T], from_stream? : Bool = false) -> T? {
       continue
     }
     self.retry.check()
-    let result = (self.read_batch)(self.request, self.auth)
+    let result = (self.read_batch)(self.request, self.resource.unwrap())
     if self.closed {
       return None
     }

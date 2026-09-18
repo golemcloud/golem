@@ -279,12 +279,21 @@ retries from the committed intent.
 
 ### Consuming and appending to external Durable Streams
 
-`durable_host/external_durable_stream/mod.rs` implements two finite async imports in
-`golem:agent/durable-streams@2.0.0`: `read-durable-stream-batch` (`ReadRemote`) and
-`append-durable-stream-batch` (`WriteRemote`). Each uses one cancellable `DurableCallSession`
-with exact request-payload identity. There is no external cursor resource, new session journal,
-background ingestion task, or top-level oplog entry. External reads are positional host inputs;
-forwarding their values into native agent streams uses the ordinary stream machinery above.
+`durable_host/external_durable_stream/mod.rs` implements `durable-stream-reader` and
+`durable-stream-writer` resources in `golem:agent/durable-streams@2.0.0`. Their serialized,
+non-cancellable `ReadLocal` constructors journal immutable options and a pinned secret snapshot,
+without HTTP or plaintext. Replay validates the guest descriptor and restores the recorded
+descriptor/secret into the resource table. Resource identity is a role-separated content hash,
+including the secret ID, pinned revision, config key and category but excluding diagnostic
+`resolved_at`. It does not depend on a table slot or constructor oplog index: snapshot initializers
+recreate resources with durability suppressed. Drop only deletes the table entry.
+
+The finite async `reader.read` (`ReadRemote`) and `writer.append` (`WriteRemote`) methods use
+cancellable `DurableCallSession`s with exact request-payload identity. Their compact requests
+contain the resource ID and operation-specific fields, not the immutable descriptor or auth.
+Resources hold no cursor or producer progress. There is no new session journal, background
+ingestion task, or top-level oplog entry. External reads are positional host inputs; forwarding
+their values into native agent streams uses the ordinary stream machinery above.
 
 `services/external_durable_stream/` owns the injected HTTP client and protocol codec. The
 `ExternalDurableStreamService` is propagated through `All` and `HasExternalDurableStreamService`
@@ -298,7 +307,8 @@ advance the checkpoint. The SDK retains the pending batch and item/byte index an
 only after draining it. `now` is resolved once by catch-up. Up-to-date and empty results are not
 EOF; only the closed flag ends a stream, after delivering the final payload. HTTP 410 is an error.
 
-Append `Start` records the exact producer ID, epoch, sequence, payload and close flag. JSON values
+Append `Start` records the resource ID, exact sequence, payload and close flag; the writer
+descriptor supplies the producer ID and epoch. JSON values
 are individually encoded and framed by the host, preserving nested arrays and integer lexemes.
 The SDK assigns an immutable pending request before awaiting, advances the sequence only after
 acknowledgment, and retains uncertain requests across cancellation. Completed replay performs no
@@ -307,8 +317,9 @@ disabling idempotence retains fail-closed recovery. The host never changes that 
 An acknowledgment ahead of the submitted sequence is a producer-diverged error for these
 non-pipelined writers, not permission to renumber data.
 
-Both operations resolve replay before current authorization, secret lookup or network I/O. Auth
-requests record only the borrowed secret's pinned identity/metadata. The live path requires
+Both methods resolve replay before current authorization, secret lookup or network I/O.
+Constructors retain the borrowed secret's pinned identity/metadata independently of the secret
+handle's lifetime. The live path requires
 network permission, secret Reveal permission and any entity `secret_keys_revealable` restriction;
 it fetches one pinned string secret and sends it as Bearer without exposing it to the SDK. HTTP
 is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and automatic HTTP

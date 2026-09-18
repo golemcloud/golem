@@ -8,6 +8,12 @@ use test_r::test;
 type ReadResult = Result<wire::DurableStreamBatch, wire::DurableStreamError>;
 type WriteResult = Result<AppendReceipt, wire::DurableStreamError>;
 thread_local! {
+    static READERS: RefCell<Vec<wire::DurableStreamReaderOptions>> = const { RefCell::new(Vec::new()) };
+    static WRITERS: RefCell<Vec<wire::DurableStreamWriterOptions>> = const { RefCell::new(Vec::new()) };
+    static READ_HANDLES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static WRITE_HANDLES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static DROPPED_READERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static DROPPED_WRITERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     static READS: RefCell<Vec<wire::DurableStreamReadRequest>> = const { RefCell::new(Vec::new()) };
     static READ_RESULTS: RefCell<VecDeque<Option<ReadResult>>> = const { RefCell::new(VecDeque::new()) };
     static WRITES: RefCell<Vec<wire::DurableStreamAppendRequest>> = const { RefCell::new(Vec::new()) };
@@ -15,29 +21,75 @@ thread_local! {
     pub(super) static WAITS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
-pub(super) async fn read_durable_stream_batch(
-    request: wire::DurableStreamReadRequest,
-    _auth: Option<&Secret>,
-) -> ReadResult {
-    READS.with_borrow_mut(|reads| reads.push(request));
-    match READ_RESULTS.with_borrow_mut(|results| results.pop_front().expect("unexpected read")) {
-        Some(result) => result,
-        None => std::future::pending().await,
-    }
-}
+pub(super) mod resources {
+    use super::*;
 
-pub(super) async fn append_durable_stream_batch(
-    request: wire::DurableStreamAppendRequest,
-    _auth: Option<&Secret>,
-) -> WriteResult {
-    WRITES.with_borrow_mut(|writes| writes.push(request));
-    match WRITE_RESULTS.with_borrow_mut(|results| results.pop_front().expect("unexpected append")) {
-        Some(result) => result,
-        None => std::future::pending().await,
+    pub struct DurableStreamReader(usize);
+
+    impl DurableStreamReader {
+        pub fn new(options: &wire::DurableStreamReaderOptions, _auth: Option<&Secret>) -> Self {
+            Self(READERS.with_borrow_mut(|readers| {
+                let id = readers.len();
+                readers.push(options.clone());
+                id
+            }))
+        }
+
+        pub async fn read(&self, request: wire::DurableStreamReadRequest) -> ReadResult {
+            READ_HANDLES.with_borrow_mut(|handles| handles.push(self.0));
+            READS.with_borrow_mut(|reads| reads.push(request));
+            match READ_RESULTS
+                .with_borrow_mut(|results| results.pop_front().expect("unexpected read"))
+            {
+                Some(result) => result,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    impl Drop for DurableStreamReader {
+        fn drop(&mut self) {
+            DROPPED_READERS.with_borrow_mut(|handles| handles.push(self.0));
+        }
+    }
+
+    pub struct DurableStreamWriter(usize);
+
+    impl DurableStreamWriter {
+        pub fn new(options: &wire::DurableStreamWriterOptions, _auth: Option<&Secret>) -> Self {
+            Self(WRITERS.with_borrow_mut(|writers| {
+                let id = writers.len();
+                writers.push(options.clone());
+                id
+            }))
+        }
+
+        pub async fn append(&self, request: wire::DurableStreamAppendRequest) -> WriteResult {
+            WRITE_HANDLES.with_borrow_mut(|handles| handles.push(self.0));
+            WRITES.with_borrow_mut(|writes| writes.push(request));
+            match WRITE_RESULTS
+                .with_borrow_mut(|results| results.pop_front().expect("unexpected append"))
+            {
+                Some(result) => result,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    impl Drop for DurableStreamWriter {
+        fn drop(&mut self) {
+            DROPPED_WRITERS.with_borrow_mut(|handles| handles.push(self.0));
+        }
     }
 }
 
 fn reset() {
+    READERS.with_borrow_mut(Vec::clear);
+    WRITERS.with_borrow_mut(Vec::clear);
+    READ_HANDLES.with_borrow_mut(Vec::clear);
+    WRITE_HANDLES.with_borrow_mut(Vec::clear);
+    DROPPED_READERS.with_borrow_mut(Vec::clear);
+    DROPPED_WRITERS.with_borrow_mut(Vec::clear);
     READS.with_borrow_mut(Vec::clear);
     WRITES.with_borrow_mut(Vec::clear);
     READ_RESULTS.with_borrow_mut(VecDeque::clear);
@@ -154,6 +206,8 @@ fn now_is_resolved_once_and_sse_pins_content_type_and_cursor() {
         assert_eq!(r[1].content_type.as_deref(), Some("application/json"));
     });
     WAITS.with_borrow(|waits| assert_eq!(waits, &[100]));
+    READERS.with_borrow(|r| assert_eq!(r.len(), 1));
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0]));
 }
 
 #[test]
@@ -243,6 +297,8 @@ fn read_retry_budget_and_retry_after_do_not_change_request() {
         assert!(r.iter().all(|r| r.checkpoint.offset == "-1"));
     });
     WAITS.with_borrow(|r| assert_eq!(r, &[17_000, 200, 400]));
+    READERS.with_borrow(|r| assert_eq!(r.len(), 1));
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0, 0, 0]));
     assert_eq!(stream.failures, 3);
     assert!(
         RetryOptions::default()
@@ -284,9 +340,7 @@ fn cancelled_append_retains_exact_tuple_and_payload_until_ack() {
     WRITES.with_borrow(|r| {
         assert_eq!(r.len(), 3);
         for request in &r[..2] {
-            assert_eq!(request.producer.id, "producer");
-            assert_eq!(request.producer.epoch, 7);
-            assert_eq!(request.producer.sequence, 0);
+            assert_eq!(request.sequence, 0);
             assert!(!request.close);
             let wire::DurableStreamAppendPayload::Json(values) = &request.payload else {
                 panic!()
@@ -294,8 +348,19 @@ fn cancelled_append_retains_exact_tuple_and_payload_until_ack() {
             assert_eq!(values, &["[9007199254740993,3]"]);
         }
         assert!(r[2].close);
-        assert_eq!(r[2].producer.sequence, 1);
+        assert_eq!(r[2].sequence, 1);
     });
+    WRITERS.with_borrow(|r| {
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].url, "https://example.test/stream");
+        assert_eq!(r[0].content_type, "application/json");
+        assert_eq!(r[0].producer_id, "producer");
+        assert_eq!(r[0].producer_epoch, 7);
+        assert_eq!(r[0].timeout_ms, 30_000);
+    });
+    WRITE_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0, 0]));
+    drop(writer);
+    DROPPED_WRITERS.with_borrow(|r| assert_eq!(r, &[0]));
 }
 
 #[test]
@@ -342,6 +407,8 @@ fn acknowledgement_without_offset_advances_sequence_and_preserves_none() {
     assert!(closed.closed);
     assert_eq!(writer.producer().sequence, 2);
     assert!(!writer.has_pending());
+    WRITERS.with_borrow(|r| assert_eq!(r.len(), 1));
+    WRITE_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0]));
 }
 
 #[test]
@@ -359,7 +426,7 @@ fn append_retry_does_not_renumber_or_reencode() {
         assert_eq!(r.len(), 2);
         for r in r {
             assert!(r.close);
-            assert_eq!(r.producer.sequence, 0);
+            assert_eq!(r.sequence, 0);
             let wire::DurableStreamAppendPayload::Bytes(bytes) = &r.payload else {
                 panic!()
             };
@@ -367,6 +434,8 @@ fn append_retry_does_not_renumber_or_reencode() {
         }
     });
     WAITS.with_borrow(|r| assert_eq!(r, &[100]));
+    WRITERS.with_borrow(|r| assert_eq!(r.len(), 1));
+    WRITE_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0]));
     assert!(matches!(
         ready(writer.append_bytes(&[1], false)).unwrap_err().kind,
         ErrorKind::Closed
@@ -375,6 +444,7 @@ fn append_retry_does_not_renumber_or_reencode() {
 
 #[test]
 fn close_only_and_producer_limit_are_checked_without_renumbering() {
+    reset();
     let mut writer = writer();
     assert!(
         writer
@@ -394,6 +464,94 @@ fn close_only_and_producer_limit_are_checked_without_renumbering() {
         .acknowledge(&receipt(MAX_PRODUCER_NUMBER, true))
         .unwrap();
     assert_eq!(writer.producer.sequence, MAX_PRODUCER_NUMBER + 1);
+}
+
+#[test]
+fn independent_readers_capture_descriptors_once_and_release_on_drop() {
+    reset();
+    let mut options = ReadOptions {
+        timeout_ms: 17_123,
+        ..ReadOptions::default()
+    };
+    let mut json = ExternalDurableStream::<u64>::json("https://example.test/json", options.clone());
+    options.timeout_ms = 29_321;
+    let bytes = ExternalDurableStream::bytes("https://example.test/bytes", options);
+    READS.with_borrow(|r| assert!(r.is_empty()));
+    READERS.with_borrow(|r| {
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].url, "https://example.test/json");
+        assert_eq!(r[0].mode, wire::DurableStreamMode::Json);
+        assert_eq!(r[0].timeout_ms, 17_123);
+        assert_eq!(r[1].url, "https://example.test/bytes");
+        assert_eq!(r[1].mode, wire::DurableStreamMode::Bytes);
+        assert_eq!(r[1].timeout_ms, 29_321);
+    });
+    READ_RESULTS.with_borrow_mut(|r| {
+        r.extend([
+            Some(Ok(batch(&[5, 0, 255], "bytes-end", true))),
+            Some(Ok(batch(b"[17]", "json-next", false))),
+            Some(Ok(batch(b"[29]", "json-end", true))),
+        ]);
+    });
+    assert_eq!(ready(bytes.collect()).unwrap(), [5, 0, 255]);
+    assert_eq!(ready(json.next()).unwrap(), Some(17));
+    assert_eq!(ready(json.next()).unwrap(), Some(29));
+    json.close();
+    assert_eq!(ready(json.next()).unwrap(), None);
+    READERS.with_borrow(|r| assert_eq!(r.len(), 2));
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[1, 0, 0]));
+    DROPPED_READERS.with_borrow(|r| assert_eq!(r, &[1]));
+    drop(json);
+    DROPPED_READERS.with_borrow(|r| assert_eq!(r, &[1, 0]));
+}
+
+#[test]
+fn independent_writers_keep_descriptors_and_drop_uncertain_operations() {
+    reset();
+    let mut first = writer();
+    let mut second = DurableStreamWriter::new(
+        "https://example.test/bytes",
+        "application/octet-stream",
+        WriteOptions {
+            producer_id: Some("second-producer".into()),
+            epoch: 11,
+            timeout_ms: 12_345,
+            ..WriteOptions::default()
+        },
+    )
+    .unwrap();
+    WRITES.with_borrow(|r| assert!(r.is_empty()));
+    let mut second_ack = receipt(0, false);
+    second_ack.epoch = 11;
+    WRITE_RESULTS.with_borrow_mut(|r| {
+        r.extend([Some(Ok(second_ack)), None]);
+    });
+    ready(second.append_bytes(&[9, 31], false)).unwrap();
+    {
+        let append = first.append_json(&[23], false);
+        assert!(
+            std::pin::pin!(append)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+    }
+    assert!(first.has_pending());
+    assert_eq!(first.producer().sequence, 0);
+    assert_eq!(second.producer().sequence, 1);
+    WRITERS.with_borrow(|r| {
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].producer_id, "producer");
+        assert_eq!(r[0].producer_epoch, 7);
+        assert_eq!(r[1].url, "https://example.test/bytes");
+        assert_eq!(r[1].content_type, "application/octet-stream");
+        assert_eq!(r[1].producer_id, "second-producer");
+        assert_eq!(r[1].producer_epoch, 11);
+        assert_eq!(r[1].timeout_ms, 12_345);
+    });
+    WRITE_HANDLES.with_borrow(|r| assert_eq!(r, &[1, 0]));
+    drop(first);
+    drop(second);
+    DROPPED_WRITERS.with_borrow(|r| assert_eq!(r, &[0, 1]));
 }
 
 #[cfg(feature = "export_golem_agentic")]
@@ -419,4 +577,14 @@ fn native_source_is_lazy_cancel_safe_and_keeps_errors() {
         assert_eq!(r.len(), 2);
         assert_eq!(r[1].checkpoint.offset, "-1");
     });
+    READERS.with_borrow(|r| assert_eq!(r.len(), 1));
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0]));
+    drop(stream);
+    DROPPED_READERS.with_borrow(|r| assert_eq!(r, &[0]));
+
+    let unread = ExternalDurableStream::bytes("https://example.test", ReadOptions::default())
+        .into_agent_stream();
+    drop(unread);
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0]));
+    DROPPED_READERS.with_borrow(|r| assert_eq!(r, &[0, 1]));
 }

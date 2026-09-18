@@ -75,9 +75,13 @@ in the item type, for example `stream<result<T, E>>`, when needed.
 
 ## External Durable Streams
 
-The SDK reads and appends existing external Durable Streams through two finite, asynchronous
-operations in `golem:agent/durable-streams@2.0.0`. It does not create streams or send HTTP itself.
-Custom component worlds using these APIs must import that interface.
+The SDK reads and appends existing external Durable Streams through reader and writer resources
+in `golem:agent/durable-streams@2.0.0`. Each SDK factory synchronously constructs one journaled
+resource, capturing its immutable URL, mode or producer identity, timeout and optional secret
+identity without HTTP. Subsequent asynchronous reads record only checkpoint, transport and
+content type; appends record only payload, sequence and close flag. Retries reuse that resource.
+The SDK does not create remote streams or send HTTP itself. Custom component worlds using these
+APIs must import that interface.
 
 ```ts
 import {
@@ -111,6 +115,8 @@ backpressure rules above. A reader retains one complete batch and an index; it d
 before requesting the next opaque offset/cursor. Final data is delivered before closed EOF. Empty
 responses and up-to-date markers are not closure. `offset: 'now'` is resolved once by catch-up;
 subsequent reads use that concrete checkpoint and the original content type, including for SSE.
+EOF and `return()` release the reader resource, including when forwarded through a native stream.
+Use `return()` to release an unused reader or one abandoned after a local decode or host failure.
 
 JSON uses the SDK's canonical schema representation by default. The canonical codec rejects
 64-bit integers outside JavaScript's safe-number range rather than rounding them. For an external
@@ -155,6 +161,10 @@ sequences greater than the submitted sequence raise
 `DurableStreamError` with kind `producer-diverged`. The SDK never steals epochs, renumbers pending
 data, or splits oversized requests. Epoch and sequence are bounded by 2^53-1; an explicit new epoch
 starts at sequence zero. Empty appends require `close: true`.
+An acknowledged closed receipt releases the writer resource. `await writer.dispose()` releases
+it without closing the remote stream, after resolving any pending request; if resolution fails,
+the handle and pending data remain available for another attempt. Disposal is serialized with
+appends and is idempotent. Appending after disposal fails with `closed`.
 
 Append receipts contain `epoch`, `sequence`, `closed`, and an optional `nextOffset`. A duplicate
 acknowledgement may omit `Stream-Next-Offset`; the SDK preserves that absence as `undefined`, not

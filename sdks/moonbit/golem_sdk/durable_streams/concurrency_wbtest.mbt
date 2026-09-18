@@ -18,7 +18,7 @@ test "one writer serializes concurrent appends without reusing the sequence" {
           ignore(signal.complete(()))
           gate.get()
         }
-        Ok(receipt(request.producer.sequence))
+        Ok(receipt(request.sequence))
       },
     }
     @async-core.with_task_group(async fn(group) {
@@ -30,14 +30,20 @@ test "one writer serializes concurrent appends without reusing the sequence" {
       })
       queued.get()
       assert_eq(calls.length(), 1)
-      assert_eq(writer.producer.sequence, 0)
+      assert_eq(writer.sequence, 0)
+      try writer.drop() catch {
+        DurableStreamError::InvalidState(_) => ()
+        e => raise e
+      } noraise {
+        _ => fail("dropped resource borrowed by active append")
+      }
       ignore(release.complete(()))
       ignore(first.wait())
       ignore(second.wait())
     })
     assert_eq(calls.length(), 2)
-    assert_eq(calls[0].producer.sequence, 0)
-    assert_eq(calls[1].producer.sequence, 1)
+    assert_eq(calls[0].sequence, 0)
+    assert_eq(calls[1].sequence, 1)
     assert_eq(
       calls[0].payload,
       @durable-streams.DurableStreamAppendPayload::Json(["11"]),
@@ -78,7 +84,7 @@ test "independent writers can finish in either order" {
         append_batch: async fn(request, _) {
           ignore(signal1.complete(()))
           gate1.get()
-          Ok(receipt(request.producer.sequence))
+          Ok(receipt(request.sequence))
         },
       }
       let writer2 = {
@@ -86,7 +92,7 @@ test "independent writers can finish in either order" {
         append_batch: async fn(request, _) {
           ignore(signal2.complete(()))
           gate2.get()
-          Ok(receipt(request.producer.sequence))
+          Ok(receipt(request.sequence))
         },
       }
       @async-core.with_task_group(async fn(group) {
@@ -108,8 +114,9 @@ test "independent writers can finish in either order" {
           ignore(second.wait())
         }
       })
-      assert_eq(writer1.producer.sequence, 1)
-      assert_eq(writer2.producer.sequence, 1)
+      assert_eq(writer1.sequence, 1)
+      assert_eq(writer2.sequence, 1)
+      assert_true(writer1.resource != writer2.resource)
     })
   }
 }
@@ -117,10 +124,11 @@ test "independent writers can finish in either order" {
 ///|
 test "native producer failure fails its operation task group" {
   run_async(async fn() {
+    let base : Reader[Int] = json_reader("https://example.test/stream")
+    let reader = { ..base, read_batch: (_, _) => Err(error(GONE)), }
+    let @durable-streams.DurableStreamReader(handle) = reader.resource.unwrap()
     try
       @async-core.with_task_group(async fn(_) {
-        let base : Reader[Int] = json_reader("https://example.test/stream")
-        let reader = { ..base, read_batch: (_, _) => Err(error(GONE)), }
         let stream = reader.into_stream()
         ignore(stream.read())
       })
@@ -130,6 +138,7 @@ test "native producer failure fails its operation task group" {
     } noraise {
       _ => fail("producer failure disappeared at operation boundary")
     }
+    assert_eq(resource_stat(handle, 3), 1)
   })
 }
 
@@ -169,10 +178,12 @@ test "closing during a host read discards completion without advancing" {
       let pull = group.spawn(async fn() { reader.read() })
       started.get()
       reader.close()
+      assert_true(reader.resource is Some(_))
       ignore(release.complete(()))
       assert_true(pull.wait() is None)
     })
     assert_true(reader.pending is None)
+    assert_true(reader.resource is None)
     assert_eq(reader.checkpoint().offset, "-1")
   })
 }
@@ -225,8 +236,8 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
         if recovered.val {
           Ok({
             next_offset: None,
-            epoch: request.producer.epoch,
-            sequence: request.producer.sequence,
+            epoch: writer_base.epoch,
+            sequence: request.sequence,
             closed: request.close,
           })
         } else {
@@ -267,6 +278,6 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
     assert_eq(writer.retry.failures, 0)
     assert_eq(writer.retry.backoff_ms, 100)
     assert_false(writer.has_pending())
-    assert_eq(writer.producer.sequence, 1)
+    assert_eq(writer.sequence, 1)
   })
 }

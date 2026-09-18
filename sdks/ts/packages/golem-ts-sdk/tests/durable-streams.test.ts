@@ -3,8 +3,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  appendDurableStreamBatch,
-  readDurableStreamBatch,
+  DurableStreamReader,
+  DurableStreamWriter,
   type DurableStreamAppendReceipt,
   type DurableStreamAppendRequest,
   type DurableStreamBatch,
@@ -24,8 +24,12 @@ import { compileSchema } from '../src/schema/adapter';
 import { z } from 'zod';
 import '../src/schema/zod';
 
-const read = vi.mocked(readDurableStreamBatch);
-const append = vi.mocked(appendDurableStreamBatch);
+const read = vi.fn<DurableStreamReader['read']>();
+const append = vi.fn<DurableStreamWriter['append']>();
+const readers = vi.mocked(DurableStreamReader);
+const writers = vi.mocked(DurableStreamWriter);
+const readerHandles: (DurableStreamReader & { [Symbol.dispose]: ReturnType<typeof vi.fn> })[] = [];
+const writerHandles: (DurableStreamWriter & { [Symbol.dispose]: ReturnType<typeof vi.fn> })[] = [];
 const url = 'https://streams.example/events';
 const encoder = new TextEncoder();
 const batch = (
@@ -56,6 +60,18 @@ const failure = (kind: DurableStreamErrorKind, retryAfterMs?: bigint) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  readerHandles.length = 0;
+  writerHandles.length = 0;
+  readers.mockImplementation(() => {
+    const handle = { read, [Symbol.dispose]: vi.fn() };
+    readerHandles.push(handle);
+    return handle;
+  });
+  writers.mockImplementation(() => {
+    const handle = { append, [Symbol.dispose]: vi.fn() };
+    writerHandles.push(handle);
+    return handle;
+  });
   vi.useFakeTimers();
 });
 afterEach(() => {
@@ -63,6 +79,30 @@ afterEach(() => {
 });
 
 describe('external Durable Stream readers', () => {
+  it('captures descriptors once, isolates handles and releases unused or failed readers', async () => {
+    const auth = {} as Secret;
+    const options = { url, auth, timeoutMs: 1739 };
+    const first = readDurableByteStream(options);
+    options.url = 'https://other.example/bytes';
+    options.timeoutMs = 23;
+    const second = readDurableByteStream(options);
+    expect(readers.mock.calls).toEqual([
+      [{ url, mode: 'bytes', timeoutMs: 1739n }, auth],
+      [{ url: options.url, mode: 'bytes', timeoutMs: 23n }, auth],
+    ]);
+    expect(readerHandles[0]).not.toBe(readerHandles[1]);
+    expect(read).not.toHaveBeenCalled();
+    await first.return();
+    expect(readerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(readerHandles[1][Symbol.dispose]).not.toHaveBeenCalled();
+    read.mockRejectedValueOnce(failure('gone'));
+    await expect(second.next()).rejects.toMatchObject({ kind: 'gone' });
+    expect(readerHandles[1][Symbol.dispose]).not.toHaveBeenCalled();
+    await second.return();
+    expect(readerHandles[1][Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(read.mock.contexts).toEqual([readerHandles[1]]);
+  });
+
   it('drains asymmetric buffered items before fetching and yields the final closed payload', async () => {
     const requests: DurableStreamReadRequest[] = [];
     read.mockImplementation(async (request) => {
@@ -71,11 +111,18 @@ describe('external Durable Stream readers', () => {
     });
     const stream = readDurableJsonStream(s.u32(), { url });
     expect(read).not.toHaveBeenCalled();
+    expect(readers).toHaveBeenCalledExactlyOnceWith(
+      { url, mode: 'json', timeoutMs: 30000n },
+      undefined,
+    );
     for (const value of [11, 23, 47]) expect(await stream.next()).toEqual({ done: false, value });
     expect(read).toHaveBeenCalledTimes(1);
     expect(await stream.next()).toEqual({ done: false, value: 83 });
     expect(await stream.next()).toEqual({ done: true, value: undefined });
     expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.contexts).toEqual([readerHandles[0], readerHandles[0]]);
+    expect(readerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(Object.keys(requests[0]).sort()).toEqual(['checkpoint', 'contentType', 'transport']);
     expect(requests.map((r) => r.checkpoint)).toEqual([
       { offset: '-1', cursor: undefined },
       { offset: 'opaque:17', cursor: 'cursor:2' },
@@ -112,6 +159,8 @@ describe('external Durable Stream readers', () => {
         'application/json',
       ]);
       expect(requests[3].checkpoint.cursor).toBe('cursor:3');
+      expect(readers).toHaveBeenCalledTimes(1);
+      expect(read.mock.contexts.every((handle) => handle === readerHandles[0])).toBe(true);
     },
   );
 
@@ -160,6 +209,7 @@ describe('external Durable Stream readers', () => {
     expect((await forwarded.next()).value).toBe(19);
     expect((await forwarded.next()).done).toBe(true);
     expect(read).toHaveBeenCalledTimes(1);
+    expect(readerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
   });
 
   it('preserves local failures and enforces single-reader ownership', async () => {
@@ -173,9 +223,12 @@ describe('external Durable Stream readers', () => {
     const stream = readDurableByteStream({ url });
     const next = stream.next();
     await expect(stream.next()).rejects.toThrow('already in progress');
+    await expect(stream.return()).rejects.toThrow('already in progress');
+    expect(readerHandles[0][Symbol.dispose]).not.toHaveBeenCalled();
     finish(batch([13, 37]));
     await next;
     await stream.return();
+    expect(readerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(1);
     read.mockRejectedValueOnce(failure('gone'));
     await expect(readDurableByteStream({ url }).next()).rejects.toMatchObject({ kind: 'gone' });
@@ -184,6 +237,53 @@ describe('external Durable Stream readers', () => {
 });
 
 describe('external Durable Stream writers', () => {
+  it('resolves uncertain data before disposal and retains the handle if resolution fails', async () => {
+    const writer = createDurableByteWriter({ url, producerId: 'dispose', maxRetries: 0 });
+    append.mockRejectedValueOnce(failure('transport')).mockRejectedValueOnce(failure('transport'));
+    await expect(writer.append(new Uint8Array([19, 53]))).rejects.toMatchObject({
+      kind: 'transport',
+    });
+    await expect(writer.dispose()).rejects.toMatchObject({ kind: 'transport' });
+    expect(writerHandles[0][Symbol.dispose]).not.toHaveBeenCalled();
+    append.mockResolvedValueOnce(receipt({ nextOffset: undefined }));
+    await writer.dispose();
+    await writer.dispose();
+    expect(writerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(append.mock.calls.map(([request]) => request)).toEqual(
+      Array(3).fill({
+        payload: { tag: 'bytes', val: new Uint8Array([19, 53]) },
+        sequence: 0n,
+        close: false,
+      }),
+    );
+    expect(append.mock.contexts.every((handle) => handle === writerHandles[0])).toBe(true);
+    expect(writers).toHaveBeenCalledTimes(1);
+    expect(writer.nextSequence).toBe(1n);
+    await expect(writer.append(new Uint8Array([83]))).rejects.toMatchObject({ kind: 'closed' });
+    expect(append).toHaveBeenCalledTimes(3);
+  });
+
+  it('queues disposal behind an active append without closing the remote stream', async () => {
+    let finish!: (value: DurableStreamAppendReceipt) => void;
+    append.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const writer = createDurableByteWriter({ url });
+    const writing = writer.append(new Uint8Array([71]));
+    const disposing = writer.dispose();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writerHandles[0][Symbol.dispose]).not.toHaveBeenCalled();
+    finish(receipt());
+    await writing;
+    await disposing;
+    expect(writerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(append).toHaveBeenCalledTimes(1);
+    expect(append.mock.calls[0][0].close).toBe(false);
+  });
+
   it('rejects encoding failures asynchronously without assigning a tuple', async () => {
     const writer = createDurableJsonWriter(s.u64(), { url });
     const result = writer.append([18446744073709551615n]);
@@ -229,14 +329,23 @@ describe('external Durable Stream writers', () => {
     });
     const [first, second] = append.mock.calls;
     expect(second[0]).toEqual(first[0]);
-    expect(second[0]).toMatchObject({
-      url,
-      producer: { id: 'stable', epoch: 0n, sequence: 0n },
+    expect(second[0]).toEqual({
+      sequence: 0n,
       close: true,
       payload: { tag: 'bytes', val: new Uint8Array([3, 241, 27]) },
     });
-    expect(first[1]).toBe(auth);
-    expect(second[1]).toBe(auth);
+    expect(writers).toHaveBeenCalledExactlyOnceWith(
+      {
+        url,
+        producerId: 'stable',
+        producerEpoch: 0n,
+        contentType: 'application/octet-stream',
+        timeoutMs: 30000n,
+      },
+      auth,
+    );
+    expect(append.mock.contexts).toEqual([writerHandles[0], writerHandles[0]]);
+    expect(writerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);
     expect(writer.nextSequence).toBe(1n);
     await expect(writer.append(new Uint8Array([9]))).rejects.toMatchObject({ kind: 'closed' });
     expect(await writer.retryPending()).toBeUndefined();
@@ -252,12 +361,14 @@ describe('external Durable Stream writers', () => {
     const writer = createDurableByteWriter({ url, producerId: 'one' });
     await expect(writer.append(new Uint8Array([17, 41]))).rejects.toBe(cancelled);
     expect((await writer.append(new Uint8Array([89]))).nextOffset).toBe('opaque:18');
-    expect(append.mock.calls.map(([r]) => [r.producer.sequence, [...r.payload.val]])).toEqual([
+    expect(append.mock.calls.map(([r]) => [r.sequence, [...r.payload.val]])).toEqual([
       [0n, [17, 41]],
       [0n, [17, 41]],
       [1n, [89]],
     ]);
     expect(writer.nextSequence).toBe(2n);
+    expect(writers).toHaveBeenCalledTimes(1);
+    expect(append.mock.contexts.every((handle) => handle === writerHandles[0])).toBe(true);
   });
 
   it('returns an offset-less retry acknowledgement and clears pending exactly once', async () => {
@@ -308,14 +419,17 @@ describe('external Durable Stream writers', () => {
     const b = first.append(new Uint8Array([31]));
     const c = second.append(new Uint8Array([79]));
     await vi.advanceTimersByTimeAsync(0);
-    expect(active.map(({ request }) => request.producer.id)).toEqual(['first', 'second']);
+    expect(writers.mock.calls.map(([options]) => options.producerId)).toEqual(['first', 'second']);
+    expect(writerHandles[0]).not.toBe(writerHandles[1]);
+    expect(append.mock.contexts).toEqual([writerHandles[0], writerHandles[1]]);
     active[1].resolve(receipt());
     await c;
     expect(first.nextSequence).toBe(0n);
     active[0].resolve(receipt());
     await a;
     await vi.advanceTimersByTimeAsync(0);
-    expect(active[2].request.producer).toEqual({ id: 'first', epoch: 0n, sequence: 1n });
+    expect(active[2].request.sequence).toBe(1n);
+    expect(append.mock.contexts[2]).toBe(writerHandles[0]);
     active[2].resolve(receipt({ sequence: 1n }));
     await b;
   });
@@ -346,7 +460,7 @@ describe('external Durable Stream writers', () => {
     expect(writer.nextSequence).toBe(0n);
     await writer.retryPending();
     expect(writer.nextSequence).toBe(1n);
-    expect(append.mock.calls.map(([r]) => r.producer.sequence)).toEqual([0n, 0n, 0n]);
+    expect(append.mock.calls.map(([r]) => r.sequence)).toEqual([0n, 0n, 0n]);
   });
 
   it('bounds automatic retries and rejects empty appends but sequences close-only', async () => {
@@ -367,7 +481,7 @@ describe('external Durable Stream writers', () => {
     });
     await writer.close();
     expect(append.mock.calls[4][0]).toMatchObject({
-      producer: { sequence: 1n },
+      sequence: 1n,
       close: true,
       payload: { tag: 'bytes', val: new Uint8Array() },
     });

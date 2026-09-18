@@ -31,8 +31,8 @@ const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
 });
 
 vi.mock('golem:agent/durable-streams@2.0.0', () => ({
-  readDurableStreamBatch: vi.fn(),
-  appendDurableStreamBatch: vi.fn(),
+  DurableStreamReader: vi.fn(),
+  DurableStreamWriter: vi.fn(),
 }));
 
 vi.mock('golem:agent/host@2.0.0', () => ({

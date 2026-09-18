@@ -2,8 +2,8 @@
 // Licensed under the Golem Source License v1.1
 
 import {
-  appendDurableStreamBatch,
-  readDurableStreamBatch,
+  DurableStreamReader as HostReader,
+  DurableStreamWriter as HostWriter,
   type DurableStreamAppendPayload,
   type DurableStreamAppendReceipt,
   type DurableStreamAppendRequest,
@@ -86,6 +86,8 @@ export interface DurableStreamWriter<T> {
   close(): Promise<DurableStreamAppendReceipt>;
   /** Resolve the retained uncertain request without assigning another sequence. */
   retryPending(): Promise<DurableStreamAppendReceipt | undefined>;
+  /** Resolve pending data, then release the local handle without closing the remote stream. */
+  dispose(): Promise<void>;
 }
 
 /** Read JSON messages lazily as an ordinary affine AgentStream. */
@@ -163,19 +165,26 @@ function readStream<T>(
   const options = checkedOptions(input);
   const live = input.live ?? 'long-poll';
   const idleDelay = boundedInteger(input.idleDelayMs ?? 100, 1, 300000, 'idleDelayMs');
+  const reader = new HostReader(
+    { url: options.url, mode, timeoutMs: BigInt(options.timeoutMs) },
+    options.auth,
+  );
   const request: DurableStreamReadRequest = {
-    url: options.url,
     checkpoint: { offset: input.offset ?? '-1', cursor: input.cursor },
-    mode,
     transport: 'catch-up',
     contentType: undefined,
-    timeoutMs: BigInt(options.timeoutMs),
   };
   let pending:
     | { batch: DurableStreamBatch; items?: ReturnType<typeof decode>; index: number }
     | undefined;
   let closed = false;
   let idle = false;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    (reader as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
+  };
   return AgentStream.from({
     [Symbol.asyncIterator]() {
       return {
@@ -199,16 +208,18 @@ function readStream<T>(
               await delay(idleDelay);
               idle = false;
             }
-            const batch = await retry(options, () => readDurableStreamBatch(request, options.auth));
+            const batch = await retry(options, () => reader.read(request));
             // Install payload + next checkpoint before another await. Decode errors cannot skip it.
             pending = { batch, index: 0 };
             request.contentType ??= batch.contentType;
           }
+          dispose();
           return { done: true, value: undefined };
         },
         async return(): Promise<IteratorResult<T>> {
           closed = true;
           pending = undefined;
+          dispose();
           return { done: true, value: undefined };
         },
       };
@@ -229,8 +240,24 @@ function createWriter<T>(
   if (!producerId || epoch < 0n || epoch > MAX_PRODUCER_INTEGER) {
     throw new DurableStreamError('invalid-request', 'Invalid producer ID or epoch');
   }
+  const writer = new HostWriter(
+    {
+      url: options.url,
+      contentType,
+      producerId,
+      producerEpoch: epoch,
+      timeoutMs: BigInt(options.timeoutMs),
+    },
+    options.auth,
+  );
   let nextSequence = 0n;
   let closed = false;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    (writer as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
+  };
   let pending: DurableStreamAppendRequest | undefined;
   let queue = Promise.resolve();
   const serialized = <R>(operation: () => Promise<R>): Promise<R> => {
@@ -244,32 +271,31 @@ function createWriter<T>(
   const resolvePending = async (): Promise<DurableStreamAppendReceipt | undefined> => {
     if (!pending) return undefined;
     const request = pending;
-    const receipt = await retry(options, () => appendDurableStreamBatch(request, options.auth));
-    if (receipt.epoch !== request.producer.epoch || receipt.sequence < request.producer.sequence) {
+    const receipt = await retry(options, () => writer.append(request));
+    if (receipt.epoch !== epoch || receipt.sequence < request.sequence) {
       throw new DurableStreamError('protocol-error', 'Invalid producer acknowledgement');
     }
-    if (receipt.sequence > request.producer.sequence) {
+    if (receipt.sequence > request.sequence) {
       throw new DurableStreamError('producer-diverged', 'Another writer advanced this producer');
     }
-    nextSequence = request.producer.sequence + 1n;
+    nextSequence = request.sequence + 1n;
     closed = receipt.closed;
     pending = undefined;
+    if (closed) dispose();
     return receipt;
   };
   const append = (payload: DurableStreamAppendPayload, close: boolean) =>
     serialized(async () => {
       await resolvePending();
-      if (closed) throw new DurableStreamError('closed', 'Durable Stream writer is closed');
+      if (closed || disposed)
+        throw new DurableStreamError('closed', 'Durable Stream writer is closed');
       if (nextSequence > MAX_PRODUCER_INTEGER) {
         throw new DurableStreamError('sequence-conflict', 'Producer sequence exhausted');
       }
       pending = {
-        url: options.url,
-        contentType,
         payload,
-        producer: { id: producerId, epoch, sequence: nextSequence },
+        sequence: nextSequence,
         close,
-        timeoutMs: BigInt(options.timeoutMs),
       };
       return (await resolvePending())!;
     });
@@ -289,6 +315,11 @@ function createWriter<T>(
     },
     close: () => append(empty, true),
     retryPending: () => serialized(resolvePending),
+    dispose: () =>
+      serialized(async () => {
+        await resolvePending();
+        dispose();
+      }),
   };
 }
 

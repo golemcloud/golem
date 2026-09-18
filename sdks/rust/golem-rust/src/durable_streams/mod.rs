@@ -4,7 +4,8 @@
 
 //! External Durable Streams clients. The host owns HTTP, framing and authentication;
 //! these clients retain only replay-reconstructed checkpoints, buffers and producer state.
-//! Each attempt calls the stateless `golem:agent/durable-streams@2.0.0` interface.
+//! Each client owns one `golem:agent/durable-streams@2.0.0` resource. Construction
+//! journals its immutable descriptor without HTTP; dropping the client releases it.
 //!
 //! Appends use the current Golem idempotence policy unchanged. With idempotence disabled,
 //! recovery of an interrupted POST can fail closed. Exactly-once effects require the peer
@@ -19,15 +20,22 @@ use serde_json::value::RawValue;
 use std::sync::Arc;
 
 #[cfg(test)]
-use tests as calls;
+use tests::resources as calls;
 #[cfg(not(test))]
 use wire as calls;
 
 pub use wire::{
     DurableStreamAppendReceipt as AppendReceipt, DurableStreamCheckpoint as Checkpoint,
-    DurableStreamErrorKind as ErrorKind, DurableStreamProducer as Producer,
-    DurableStreamTransport as Transport,
+    DurableStreamErrorKind as ErrorKind, DurableStreamTransport as Transport,
 };
+
+/// Producer identity and acknowledged sequence progress, reconstructed by replay.
+#[derive(Clone, Debug)]
+pub struct Producer {
+    pub id: String,
+    pub epoch: u64,
+    pub sequence: u64,
+}
 
 /// A host protocol failure or a local codec/state error. Errors never mean EOF.
 #[derive(Debug)]
@@ -171,6 +179,8 @@ struct Batch {
 /// Dropping a pending `next` cancels that attempt without advancing the checkpoint.
 /// Live readers are reconstructed by replay, not serialized as native stream handles.
 pub struct ExternalDurableStream<T> {
+    reader: calls::DurableStreamReader,
+    mode: wire::DurableStreamMode,
     request: wire::DurableStreamReadRequest,
     options: ReadOptions,
     decode: fn(&Items, usize) -> Result<T, Error>,
@@ -221,18 +231,26 @@ impl ExternalDurableStream<u8> {
 impl<T> ExternalDurableStream<T> {
     fn new(
         url: String,
-        options: ReadOptions,
+        mut options: ReadOptions,
         mode: wire::DurableStreamMode,
         decode: fn(&Items, usize) -> Result<T, Error>,
     ) -> Self {
-        Self {
-            request: wire::DurableStreamReadRequest {
+        let reader = calls::DurableStreamReader::new(
+            &wire::DurableStreamReaderOptions {
                 url,
-                checkpoint: options.checkpoint.clone(),
                 mode,
+                timeout_ms: options.timeout_ms,
+            },
+            options.auth.as_deref(),
+        );
+        options.auth = None;
+        Self {
+            reader,
+            mode,
+            request: wire::DurableStreamReadRequest {
+                checkpoint: options.checkpoint.clone(),
                 transport: Transport::CatchUp,
                 content_type: None,
-                timeout_ms: options.timeout_ms,
             },
             options,
             decode,
@@ -261,7 +279,7 @@ impl<T> ExternalDurableStream<T> {
                 "server did not resolve now",
             ));
         }
-        let items = match self.request.mode {
+        let items = match self.mode {
             wire::DurableStreamMode::Json => Items::Json(if batch.payload.is_empty() {
                 Vec::new()
             } else {
@@ -315,12 +333,7 @@ impl<T> ExternalDurableStream<T> {
                 wait(delay).await;
                 self.delay_ms = None;
             }
-            match calls::read_durable_stream_batch(
-                self.request.clone(),
-                self.options.auth.as_deref(),
-            )
-            .await
-            {
+            match self.reader.read(self.request.clone()).await {
                 Ok(batch) => self.install(batch)?,
                 Err(error) => {
                     let error = Error::from(error);
@@ -416,10 +429,9 @@ struct PendingAppend {
 /// call `retry_pending` to resolve that exact payload before supplying new data.
 /// Dropping this writer does not undo an external write.
 pub struct DurableStreamWriter {
-    url: String,
-    content_type: String,
+    writer: calls::DurableStreamWriter,
     producer: Producer,
-    options: WriteOptions,
+    retry: RetryOptions,
     pending: Option<PendingAppend>,
     closed: bool,
 }
@@ -443,14 +455,22 @@ impl DurableStreamWriter {
             .clone()
             .unwrap_or_else(|| crate::generate_idempotency_key().to_string());
         Ok(Self {
-            url: url.into(),
-            content_type: content_type.into(),
+            writer: calls::DurableStreamWriter::new(
+                &wire::DurableStreamWriterOptions {
+                    url: url.into(),
+                    content_type: content_type.into(),
+                    producer_id: id.clone(),
+                    producer_epoch: options.epoch,
+                    timeout_ms: options.timeout_ms,
+                },
+                options.auth.as_deref(),
+            ),
             producer: Producer {
                 id,
                 epoch: options.epoch,
                 sequence: 0,
             },
-            options,
+            retry: options.retry,
             pending: None,
             closed: false,
         })
@@ -495,12 +515,9 @@ impl DurableStreamWriter {
         }
         self.pending = Some(PendingAppend {
             request: wire::DurableStreamAppendRequest {
-                url: self.url.clone(),
-                content_type: self.content_type.clone(),
                 payload,
-                producer: self.producer.clone(),
+                sequence: self.producer.sequence,
                 close,
-                timeout_ms: self.options.timeout_ms,
             },
             failures: 0,
             delay_ms: None,
@@ -551,15 +568,13 @@ impl DurableStreamWriter {
             .pending
             .as_ref()
             .expect("acknowledgement requires a pending request");
-        if receipt.epoch != pending.request.producer.epoch
-            || receipt.sequence < pending.request.producer.sequence
-        {
+        if receipt.epoch != self.producer.epoch || receipt.sequence < pending.request.sequence {
             return Err(Error::new(
                 ErrorKind::ProtocolError,
                 "invalid producer acknowledgement",
             ));
         }
-        if receipt.sequence > pending.request.producer.sequence {
+        if receipt.sequence > pending.request.sequence {
             return Err(Error::new(
                 ErrorKind::ProducerDiverged,
                 "peer acknowledged a later producer sequence",
@@ -571,7 +586,7 @@ impl DurableStreamWriter {
                 "peer did not acknowledge closure",
             ));
         }
-        self.producer.sequence = pending.request.producer.sequence + 1;
+        self.producer.sequence = pending.request.sequence + 1;
         self.closed = receipt.closed;
         self.pending = None;
         Ok(())
@@ -587,19 +602,14 @@ impl DurableStreamWriter {
                 wait(delay).await;
                 pending.delay_ms = None;
             }
-            match calls::append_durable_stream_batch(
-                pending.request.clone(),
-                self.options.auth.as_deref(),
-            )
-            .await
-            {
+            match self.writer.append(pending.request.clone()).await {
                 Ok(receipt) => {
                     self.acknowledge(&receipt)?;
                     return Ok(receipt);
                 }
                 Err(error) => {
                     let error = Error::from(error);
-                    let Some(delay) = self.options.retry.delay(&error, pending.failures) else {
+                    let Some(delay) = self.retry.delay(&error, pending.failures) else {
                         return Err(error);
                     };
                     pending.failures += 1;

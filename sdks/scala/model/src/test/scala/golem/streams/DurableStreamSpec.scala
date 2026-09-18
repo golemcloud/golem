@@ -14,12 +14,11 @@ import zio.test._
 
 object DurableStreamSpec extends ZIOSpecDefault {
   private implicit val ec: ExecutionContext = ExecutionContext.parasitic
-  private val url                           = "https://streams.example/events"
   private val noRetry                       = DurableStreamRetry(budgetMs = 0)
   private val transient                     = DurableStreamError(DurableStreamErrorKind.Transport, "connection lost")
   private val producer                      = DurableStreamProducer("producer-a", 7, 3)
 
-  private class Host extends DurableStreamHost {
+  private class Host extends DurableStreamReadHost with DurableStreamWriteHost {
     val reads                                                                     = mutable.ArrayBuffer.empty[DurableStreamReadRequest]
     val writes                                                                    = mutable.ArrayBuffer.empty[DurableStreamAppendRequest]
     val batches                                                                   = mutable.Queue.empty[Future[DurableStreamBatch]]
@@ -29,6 +28,7 @@ object DurableStreamSpec extends ZIOSpecDefault {
     var waitFor: Long => Future[Unit]                                             = ms => { time += ms; Future.successful(()) }
     def nowMs(): BigInt                                                           = time
     def sleep(ms: Long): Future[Unit]                                             = { sleeps += ms; waitFor(ms) }
+    def dispose(): Future[Unit]                                                   = Future.successful(())
     def read(request: DurableStreamReadRequest): Future[DurableStreamBatch]       = { reads += request; batches.dequeue() }
     def append(request: DurableStreamAppendRequest): Future[DurableStreamReceipt] = {
       writes += request; receipts.dequeue()
@@ -45,10 +45,10 @@ object DurableStreamSpec extends ZIOSpecDefault {
     )
 
   private def reader(host: Host, options: DurableStreamReadOptions = DurableStreamReadOptions(retry = noRetry)) =
-    DurableStreamReader.create(host, url, false, options, (bytes: Vector[Byte]) => bytes, (byte: Byte) => byte)
+    DurableStreamReader.create(host, options, (bytes: Vector[Byte]) => bytes, (byte: Byte) => byte)
 
   private def writer(host: Host, p: DurableStreamProducer = producer, retry: DurableStreamRetry = noRetry) =
-    new DurableStreamWriter[Byte](host, url, "application/octet-stream", p, 30000, retry, DurableStreamPayload.Bytes(_))
+    new DurableStreamWriter[Byte](host, p, retry, DurableStreamPayload.Bytes(_))
 
   private def receipt(sequence: Long = 3, closed: Boolean = false, nextOffset: Option[String] = Some("next-opaque")) =
     DurableStreamReceipt(nextOffset, 7, sequence, closed)

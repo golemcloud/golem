@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::schema::schema_value::SecretValuePayload;
 use desert_rust::BinaryCodec;
 use golem_schema_derive::{FromSchema, IntoSchema};
 
@@ -35,6 +36,62 @@ pub enum DurableStreamTransport {
 pub struct DurableStreamCheckpoint {
     pub offset: String,
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
+#[desert(evolution())]
+pub struct DurableStreamReaderOptions {
+    pub url: String,
+    pub mode: DurableStreamMode,
+    pub timeout_ms: u64,
+}
+
+impl DurableStreamReaderOptions {
+    pub fn resource_id(&self, auth: Option<&SecretValuePayload>) -> Result<String, String> {
+        resource_id("golem:agent/durable-stream-reader", self, auth)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
+#[desert(evolution())]
+pub struct DurableStreamWriterOptions {
+    pub url: String,
+    pub content_type: String,
+    pub producer_id: String,
+    pub producer_epoch: u64,
+    pub timeout_ms: u64,
+}
+
+impl DurableStreamWriterOptions {
+    pub fn resource_id(&self, auth: Option<&SecretValuePayload>) -> Result<String, String> {
+        resource_id("golem:agent/durable-stream-writer", self, auth)
+    }
+}
+
+// Snapshot initialization recreates resources without their original constructor indices.
+// Identity therefore depends on the immutable descriptor, including the pinned credential,
+// but not the diagnostic time at which that credential was resolved.
+fn resource_id<T: BinaryCodec>(
+    domain: &str,
+    options: &T,
+    auth: Option<&SecretValuePayload>,
+) -> Result<String, String> {
+    let mut hasher = blake3::Hasher::new_derive_key(domain);
+    let options = desert_rust::serialize_to_byte_vec(options)
+        .map_err(|error| format!("Failed to encode durable stream descriptor: {error}"))?;
+    hasher.update(&options);
+    let auth = auth.map(|auth| {
+        (
+            auth.secret_id,
+            auth.version,
+            auth.config_key.clone(),
+            auth.category.clone(),
+        )
+    });
+    let auth = desert_rust::serialize_to_byte_vec(&auth)
+        .map_err(|error| format!("Failed to encode durable stream credential identity: {error}"))?;
+    hasher.update(&auth);
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]

@@ -85,12 +85,9 @@ private[golem] enum DurableStreamPayload {
 }
 
 private[golem] final case class DurableStreamReadRequest(
-  url: String,
   checkpoint: DurableStreamCheckpoint,
-  json: Boolean,
   transport: DurableStreamTransport,
-  contentType: Option[String],
-  timeoutMs: Long
+  contentType: Option[String]
 )
 
 private[golem] final case class DurableStreamBatch(
@@ -102,19 +99,23 @@ private[golem] final case class DurableStreamBatch(
 )
 
 private[golem] final case class DurableStreamAppendRequest(
-  url: String,
-  contentType: String,
   payload: DurableStreamPayload,
   producer: DurableStreamProducer,
-  close: Boolean,
-  timeoutMs: Long
+  close: Boolean
 )
 
 private[golem] trait DurableStreamHost {
-  def read(request: DurableStreamReadRequest): Future[DurableStreamBatch]
-  def append(request: DurableStreamAppendRequest): Future[DurableStreamReceipt]
   def nowMs(): BigInt
   def sleep(ms: Long): Future[Unit]
+  def dispose(): Future[Unit]
+}
+
+private[golem] trait DurableStreamReadHost extends DurableStreamHost {
+  def read(request: DurableStreamReadRequest): Future[DurableStreamBatch]
+}
+
+private[golem] trait DurableStreamWriteHost extends DurableStreamHost {
+  def append(request: DurableStreamAppendRequest): Future[DurableStreamReceipt]
 }
 
 /**
@@ -160,9 +161,7 @@ private[streams] final class DurableStreamRetries(host: DurableStreamHost, optio
  */
 private[golem] object DurableStreamReader {
   def create[A, Raw](
-    host: DurableStreamHost,
-    url: String,
-    json: Boolean,
+    host: DurableStreamReadHost,
     options: DurableStreamReadOptions,
     unpack: Vector[Byte] => Vector[Raw],
     decode: Raw => A
@@ -195,7 +194,7 @@ private[golem] object DurableStreamReader {
         index = 0
         if (closed) Future.successful(None)
         else {
-          val request = DurableStreamReadRequest(url, checkpoint, json, transport, contentType, options.timeoutMs)
+          val request = DurableStreamReadRequest(checkpoint, transport, contentType)
           retries.run(() => cancelled)(host.read(request)).flatMap { batch =>
             if (cancelled) Future.failed(new IllegalStateException("durable stream reader closed"))
             else {
@@ -222,7 +221,7 @@ private[golem] object DurableStreamReader {
         cancelled = true
         buffer = Vector.empty
         pending = None
-        Future.successful(())
+        host.dispose()
       }
     )
   }
@@ -236,20 +235,17 @@ private[golem] object DurableStreamReader {
  * apply.
  */
 final class DurableStreamWriter[A] private[golem] (
-  host: DurableStreamHost,
-  url: String,
-  contentType: String,
+  host: DurableStreamWriteHost,
   initialProducer: DurableStreamProducer,
-  timeoutMs: Long,
   retry: DurableStreamRetry,
   encode: Vector[A] => DurableStreamPayload
 ) {
-  require(timeoutMs >= 1 && timeoutMs <= 300000)
   private implicit val ec: ExecutionContext = ExecutionContext.parasitic
   private var producer                      = initialProducer
   private var pending                       = Option.empty[DurableStreamAppendRequest]
   private var active                        = Option.empty[Promise[DurableStreamReceipt]]
   private var cancelled                     = false
+  private var disposed                      = false
   private var closed                        = false
   private var exhausted                     = false
   private val retries                       = new DurableStreamRetries(host, retry)
@@ -258,7 +254,8 @@ final class DurableStreamWriter[A] private[golem] (
   def isClosed: Boolean   = closed
 
   def append(values: Iterable[A], close: Boolean = false): Future[DurableStreamReceipt] =
-    if (pending.isDefined || active.isDefined)
+    if (disposed) Future.failed(new IllegalStateException("durable stream writer disposed"))
+    else if (pending.isDefined || active.isDefined)
       Future.failed(
         new IllegalStateException("resolve the pending append with retryPending before submitting new data")
       )
@@ -269,7 +266,7 @@ final class DurableStreamWriter[A] private[golem] (
         .fromTry(Try {
           val payload = encode(values.iterator.toVector)
           require(close || !payload.isEmpty, "an empty append must close the stream")
-          pending = Some(DurableStreamAppendRequest(url, contentType, payload, producer, close, timeoutMs))
+          pending = Some(DurableStreamAppendRequest(payload, producer, close))
         })
         .flatMap(_ => retryPending())
 
@@ -277,7 +274,8 @@ final class DurableStreamWriter[A] private[golem] (
 
   /** Retry the exact retained tuple, encoded payload and close flag. */
   def retryPending(): Future[DurableStreamReceipt] =
-    if (active.isDefined)
+    if (disposed) Future.failed(new IllegalStateException("durable stream writer disposed"))
+    else if (active.isDefined)
       Future.failed(new IllegalStateException("durable stream writer already has an active attempt"))
     else
       pending match {
@@ -308,11 +306,24 @@ final class DurableStreamWriter[A] private[golem] (
                   receipt
                 }
               }
-              result.tryComplete(checked)
+              if (checked.isSuccess && (closed || exhausted))
+                host.dispose().onComplete(released => result.tryComplete(released.flatMap(_ => checked)))
+              else result.tryComplete(checked)
             }
           }
           result.future
       }
+
+  /**
+   * Release the local resource without closing the remote stream or undoing an
+   * uncertain append. No further appends or retries are allowed. Waits for any
+   * active native import to settle before dropping its borrowed resource.
+   */
+  def dispose(): Future[Unit] = {
+    disposed = true
+    cancel()
+    host.dispose()
+  }
 
   /**
    * Fail the caller immediately without discarding the uncertain append. The

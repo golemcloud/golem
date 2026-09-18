@@ -29,9 +29,7 @@ object DurableStreams {
   ): AgentStream[A] = {
     val codec = Schema[A].derive(JsonCodecDeriver)
     DurableStreamReader.create(
-      new DurableStreamHostApi(auth),
-      url,
-      true,
+      DurableStreamHostApi.reader(url, true, options.timeoutMs, auth),
       options,
       bytes =>
         if (bytes.isEmpty) Vector.empty
@@ -54,9 +52,7 @@ object DurableStreams {
     auth: Option[Secret[String]] = None
   ): AgentStream[Byte] =
     DurableStreamReader.create(
-      new DurableStreamHostApi(auth),
-      url,
-      false,
+      DurableStreamHostApi.reader(url, false, options.timeoutMs, auth),
       options,
       (bytes: Vector[Byte]) => bytes,
       (byte: Byte) => byte
@@ -78,11 +74,8 @@ object DurableStreams {
   ): DurableStreamWriter[A] = {
     val codec = Schema[A].derive(JsonCodecDeriver)
     new DurableStreamWriter(
-      new DurableStreamHostApi(auth),
-      url,
-      "application/json",
+      DurableStreamHostApi.writer(url, "application/json", producer, timeoutMs, auth),
       producer,
-      timeoutMs,
       retry,
       values => DurableStreamPayload.Json(values.map(codec.encodeToString))
     )
@@ -97,11 +90,8 @@ object DurableStreams {
     retry: DurableStreamRetry = DurableStreamRetry()
   ): DurableStreamWriter[Byte] =
     new DurableStreamWriter(
-      new DurableStreamHostApi(auth),
-      url,
-      contentType,
+      DurableStreamHostApi.writer(url, contentType, producer, timeoutMs, auth),
       producer,
-      timeoutMs,
       retry,
       values => DurableStreamPayload.Bytes(values)
     )

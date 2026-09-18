@@ -2,19 +2,17 @@
 /// A serialized, non-pipelining producer. An uncertain request is immutable and
 /// blocks different data until retry_pending acknowledges that exact request.
 pub struct Writer[T] {
-  priv url : String
-  priv content_type : String
+  priv mut resource : @durable-streams.DurableStreamWriter?
   priv encode : (Array[T]) -> @durable-streams.DurableStreamAppendPayload raise
-  priv auth : @types.Secret?
-  priv timeout_ms : UInt64
-  priv mut producer : @durable-streams.DurableStreamProducer
+  priv epoch : UInt64
+  priv mut sequence : UInt64
   priv mut pending : @durable-streams.DurableStreamAppendRequest?
   priv mut closed : Bool
   priv retry : Retry
   priv lock : @async-core.Mutex
   priv append_batch : async (
     @durable-streams.DurableStreamAppendRequest,
-    @types.Secret?,
+    @durable-streams.DurableStreamWriter,
   ) -> Result[Receipt, HostError]
   priv wait : async (UInt64) -> Unit
 }
@@ -42,18 +40,20 @@ fn[T] make_writer(
   guard !id.is_empty() else {
     raise DurableStreamError::InvalidState("producer ID must not be empty")
   }
-  {
-    url,
-    content_type,
-    encode,
+  let resource = @durable-streams.DurableStreamWriter::durable_stream_writer(
+    { url, content_type, producer_id: id, producer_epoch: epoch, timeout_ms, },
     auth,
-    timeout_ms,
-    producer: { id, epoch, sequence: 0, },
+  )
+  {
+    resource: Some(resource),
+    encode,
+    epoch,
+    sequence: 0,
     pending: None,
     closed: false,
     retry,
     lock: @async-core.Mutex(),
-    append_batch: @durable-streams.append_durable_stream_batch,
+    append_batch: (request, resource) => resource.append(request),
     wait: wait_ms,
   }
 }
@@ -154,18 +154,11 @@ fn[T] Writer::prepare(
   guard values.length() > 0 || close else {
     raise DurableStreamError::InvalidState("empty append requires close")
   }
-  guard self.producer.sequence <= 9007199254740991 else {
+  guard self.sequence <= 9007199254740991 else {
     raise DurableStreamError::InvalidState("producer sequence exhausted")
   }
   let payload = (self.encode)(values)
-  self.pending = Some({
-    url: self.url,
-    content_type: self.content_type,
-    payload,
-    producer: self.producer,
-    close,
-    timeout_ms: self.timeout_ms,
-  })
+  self.pending = Some({ payload, sequence: self.sequence, close, })
 }
 
 ///|
@@ -173,11 +166,11 @@ fn[T] Writer::acknowledge(self : Writer[T], receipt : Receipt) -> Unit raise {
   guard self.pending is Some(request) else {
     raise DurableStreamError::InvalidState("no pending append")
   }
-  if receipt.epoch != request.producer.epoch ||
-    receipt.sequence != request.producer.sequence ||
+  if receipt.epoch != self.epoch ||
+    receipt.sequence != request.sequence ||
     (request.close && !receipt.closed) {
-    let kind : ErrorKind = if receipt.epoch == request.producer.epoch &&
-      receipt.sequence > request.producer.sequence {
+    let kind : ErrorKind = if receipt.epoch == self.epoch &&
+      receipt.sequence > request.sequence {
       PRODUCER_DIVERGED
     } else {
       PROTOCOL_ERROR
@@ -192,23 +185,26 @@ fn[T] Writer::acknowledge(self : Writer[T], receipt : Receipt) -> Unit raise {
     self.retry.terminal = Some(error)
     raise DurableStreamError::Remote(error)
   }
-  self.producer = {
-    ..request.producer,
-    sequence: request.producer.sequence + 1,
-  }
+  self.sequence = request.sequence + 1
   self.closed = receipt.closed
   self.pending = None
   self.retry.reset()
+  if self.closed {
+    self.release_resource()
+  }
 }
 
 ///|
 async fn[T] Writer::send_pending(self : Writer[T]) -> Receipt {
+  guard self.resource is Some(resource) else {
+    raise DurableStreamError::InvalidState("writer is dropped or closed")
+  }
   guard self.pending is Some(request) else {
     raise DurableStreamError::InvalidState("no pending append")
   }
   for ;; {
     self.retry.check()
-    match (self.append_batch)(request, self.auth) {
+    match (self.append_batch)(request, resource) {
       Ok(receipt) => {
         self.acknowledge(receipt)
         return receipt
@@ -255,6 +251,26 @@ pub async fn[T] Writer::retry_pending(self : Writer[T]) -> Receipt {
   defer self.lock.release()
   self.retry.allow_explicit_attempt()
   self.send_pending()
+}
+
+///|
+fn[T] Writer::release_resource(self : Writer[T]) -> Unit {
+  if self.resource is Some(resource) {
+    self.resource = None
+    resource.drop()
+  }
+}
+
+///|
+/// Release the local resource without closing the remote stream. This is
+/// idempotent but fails while an append is active. An uncertain append is not undone.
+pub fn[T] Writer::drop(self : Writer[T]) -> Unit raise {
+  guard self.lock.try_acquire() else {
+    raise DurableStreamError::InvalidState("writer is busy")
+  }
+  defer self.lock.release()
+  self.closed = true
+  self.release_resource()
 }
 
 ///|

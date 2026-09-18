@@ -47,8 +47,12 @@ pub(all) struct DurableStreamCheckpoint {
       offset : String; cursor : String?
 } derive(Debug, Eq)
 ///|
+pub(all) struct DurableStreamReaderOptions {
+      url : String; mode : DurableStreamMode; timeout_ms : UInt64
+} derive(Debug, Eq)
+///|
 pub(all) struct DurableStreamReadRequest {
-      url : String; checkpoint : DurableStreamCheckpoint; mode : DurableStreamMode; transport : DurableStreamTransport; content_type : String?; timeout_ms : UInt64
+      checkpoint : DurableStreamCheckpoint; transport : DurableStreamTransport; content_type : String?
 } derive(Debug, Eq)
 ///|
 /// A complete HTTP body or SSE data/control pair. Empty is not EOF unless closed.
@@ -56,8 +60,8 @@ pub(all) struct DurableStreamBatch {
       payload : FixedArray[Byte]; content_type : String; next : DurableStreamCheckpoint; up_to_date : Bool; closed : Bool
 } derive(Debug, Eq)
 ///|
-pub(all) struct DurableStreamProducer {
-      id : String; epoch : UInt64; sequence : UInt64
+pub(all) struct DurableStreamWriterOptions {
+      url : String; content_type : String; producer_id : String; producer_epoch : UInt64; timeout_ms : UInt64
 } derive(Debug, Eq)
 ///|
 pub(all) enum DurableStreamAppendPayload {
@@ -66,7 +70,7 @@ pub(all) enum DurableStreamAppendPayload {
 } derive(Debug, Eq)
 ///|
 pub(all) struct DurableStreamAppendRequest {
-      url : String; content_type : String; payload : DurableStreamAppendPayload; producer : DurableStreamProducer; close : Bool; timeout_ms : UInt64
+      payload : DurableStreamAppendPayload; sequence : UInt64; close : Bool
 } derive(Debug, Eq)
 ///|
 pub(all) struct DurableStreamAppendReceipt {
@@ -121,69 +125,92 @@ pub(all) struct DurableStreamError {
       kind : DurableStreamErrorKind; message : String; retry_after_ms : UInt64?; producer_epoch : UInt64?; expected_sequence : UInt64?
 } derive(Debug, Eq)
 ///|
-/// One protocol read attempt. Replay returns the recorded batch without HTTP.
-/// Auth is a string secret used as a Bearer token only at the live wire boundary.
-pub async fn read_durable_stream_batch(request : DurableStreamReadRequest, auth : @types.Secret?) -> Result[DurableStreamBatch, DurableStreamError] {
+/// Immutable read descriptor. Construction records no HTTP effect and captures
+/// the secret's pinned identity, not its plaintext or the borrowed handle.
+pub(all) struct DurableStreamReader(Int) derive(Debug, Eq)
 
-      let lower_ptr : Int = mbt_ffi_malloc(64)
+/// Drops a resource handle.
+pub fn DurableStreamReader::drop(self : DurableStreamReader) -> Unit {
+      let DurableStreamReader(resource) = self
+      wasmImportResourceDropDurableStreamReader(resource)
+}
+///|
+/// Immutable writer descriptor. The caller owns sequence progress and pending
+/// append state; retaining this resource does not advance either automatically.
+pub(all) struct DurableStreamWriter(Int) derive(Debug, Eq)
+
+/// Drops a resource handle.
+pub fn DurableStreamWriter::drop(self : DurableStreamWriter) -> Unit {
+      let DurableStreamWriter(resource) = self
+      wasmImportResourceDropDurableStreamWriter(resource)
+}
+///|
+pub fn DurableStreamReader::durable_stream_reader(options : DurableStreamReaderOptions, auth : @types.Secret?) -> DurableStreamReader {
+
+      let ptr = mbt_ffi_str2ptr((options).url)
+
+      let (lowered, lowered1) = match (auth) {
+            None => {
+
+                  ((0), 0)
+            }
+            Some(payload0) => {
+
+                  let @types.Secret(handle) = payload0
+
+                  ((1), handle)
+            }
+      }
+      let result : Int =  wasmImportConstructorDurableStreamReader(ptr, (options).url.length(), (options).mode.ordinal(), ((options).timeout_ms).reinterpret_as_int64(), lowered, lowered1);
+      let ret = DurableStreamReader::DurableStreamReader(result)
+      mbt_ffi_free(ptr)
+      return ret
+
+}
+///|
+/// One protocol attempt. Replay returns the recorded batch without HTTP.
+pub async fn DurableStreamReader::read(self : DurableStreamReader, request : DurableStreamReadRequest) -> Result[DurableStreamBatch, DurableStreamError] {
+
+      let lower_ptr : Int = mbt_ffi_malloc(40)
       defer mbt_ffi_free(lower_ptr)
 
-      let ptr = mbt_ffi_str2ptr((request).url)
-      mbt_ffi_store32((lower_ptr + 0) + 4, (request).url.length())
-      mbt_ffi_store32((lower_ptr + 0) + 0, ptr)
+      let DurableStreamReader(handle) = self
+      mbt_ffi_store32((lower_ptr + 0) + 0, handle)
 
-      let ptr0 = mbt_ffi_str2ptr(((request).checkpoint).offset)
-      mbt_ffi_store32((lower_ptr + 0) + 12, ((request).checkpoint).offset.length())
-      mbt_ffi_store32((lower_ptr + 0) + 8, ptr0)
+      let ptr = mbt_ffi_str2ptr(((request).checkpoint).offset)
+      mbt_ffi_store32((lower_ptr + 4) + 4, ((request).checkpoint).offset.length())
+      mbt_ffi_store32((lower_ptr + 4) + 0, ptr)
 
       match (((request).checkpoint).cursor) {
             None => {
-                  mbt_ffi_store8((lower_ptr + 0) + 16, (0))
-
-                  ()
-            }
-            Some(payload1) => {
-                  mbt_ffi_store8((lower_ptr + 0) + 16, (1))
-
-                  let ptr2 = mbt_ffi_str2ptr(payload1)
-                  mbt_ffi_store32((lower_ptr + 0) + 24, payload1.length())
-                  mbt_ffi_store32((lower_ptr + 0) + 20, ptr2)
-
-                  ()
-            }
-      }
-      mbt_ffi_store8((lower_ptr + 0) + 28, (request).mode.ordinal())
-      mbt_ffi_store8((lower_ptr + 0) + 29, (request).transport.ordinal())
-
-      match ((request).content_type) {
-            None => {
-                  mbt_ffi_store8((lower_ptr + 0) + 32, (0))
-
-                  ()
-            }
-            Some(payload4) => {
-                  mbt_ffi_store8((lower_ptr + 0) + 32, (1))
-
-                  let ptr5 = mbt_ffi_str2ptr(payload4)
-                  mbt_ffi_store32((lower_ptr + 0) + 40, payload4.length())
-                  mbt_ffi_store32((lower_ptr + 0) + 36, ptr5)
-
-                  ()
-            }
-      }
-      mbt_ffi_store64((lower_ptr + 0) + 48, ((request).timeout_ms).reinterpret_as_int64())
-
-      match (auth) {
-            None => {
-                  mbt_ffi_store8((lower_ptr + 56) + 0, (0))
+                  mbt_ffi_store8((lower_ptr + 4) + 8, (0))
 
                   ()
             }
             Some(payload0) => {
-                  mbt_ffi_store8((lower_ptr + 56) + 0, (1))
+                  mbt_ffi_store8((lower_ptr + 4) + 8, (1))
 
-                  let @types.Secret(handle) = payload0
-                  mbt_ffi_store32((lower_ptr + 56) + 4, handle)
+                  let ptr1 = mbt_ffi_str2ptr(payload0)
+                  mbt_ffi_store32((lower_ptr + 4) + 16, payload0.length())
+                  mbt_ffi_store32((lower_ptr + 4) + 12, ptr1)
+
+                  ()
+            }
+      }
+      mbt_ffi_store8((lower_ptr + 4) + 20, (request).transport.ordinal())
+
+      match ((request).content_type) {
+            None => {
+                  mbt_ffi_store8((lower_ptr + 4) + 24, (0))
+
+                  ()
+            }
+            Some(payload3) => {
+                  mbt_ffi_store8((lower_ptr + 4) + 24, (1))
+
+                  let ptr4 = mbt_ffi_str2ptr(payload3)
+                  mbt_ffi_store32((lower_ptr + 4) + 32, payload3.length())
+                  mbt_ffi_store32((lower_ptr + 4) + 28, ptr4)
 
                   ()
             }
@@ -192,50 +219,48 @@ pub async fn read_durable_stream_batch(request : DurableStreamReadRequest, auth 
       let result_ptr = mbt_ffi_malloc(72 * 1)
       defer mbt_ffi_free(result_ptr)
 
-      let subtask_code = wasmImportReadDurableStreamBatch(lower_ptr, result_ptr)
+      let subtask_code = wasmImportMethodDurableStreamReaderRead(lower_ptr, result_ptr)
       @async-core.suspend_for_subtask(
       subtask_code,
 
       fn(before_started) {
             if before_started {
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 0))
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 8))
+                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 4))
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 16)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 12)) {
                         0 => ()
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 16))
 
                         }
                         _ => panic()
                   }
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 32)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 28)) {
                         0 => ()
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 36))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 32))
 
                         }
                         _ => panic()
                   }
 
             } else {
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 0))
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 8))
+                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 4))
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 16)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 12)) {
                         0 => ()
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 16))
 
                         }
                         _ => panic()
                   }
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 32)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 28)) {
                         0 => ()
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 36))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 32))
 
                         }
                         _ => panic()
@@ -334,129 +359,124 @@ pub async fn read_durable_stream_batch(request : DurableStreamReadRequest, auth 
 
 }
 ///|
-/// One protocol-idempotent append attempt. Retry with the identical tuple and body.
-/// The caller, not this function, owns producer progress and pending append state.
-pub async fn append_durable_stream_batch(request : DurableStreamAppendRequest, auth : @types.Secret?) -> Result[DurableStreamAppendReceipt, DurableStreamError] {
+pub fn DurableStreamWriter::durable_stream_writer(options : DurableStreamWriterOptions, auth : @types.Secret?) -> DurableStreamWriter {
 
-      let lower_ptr : Int = mbt_ffi_malloc(80)
+      let ptr = mbt_ffi_str2ptr((options).url)
+
+      let ptr0 = mbt_ffi_str2ptr((options).content_type)
+
+      let ptr1 = mbt_ffi_str2ptr((options).producer_id)
+
+      let (lowered, lowered3) = match (auth) {
+            None => {
+
+                  ((0), 0)
+            }
+            Some(payload2) => {
+
+                  let @types.Secret(handle) = payload2
+
+                  ((1), handle)
+            }
+      }
+      let result : Int =  wasmImportConstructorDurableStreamWriter(ptr, (options).url.length(), ptr0, (options).content_type.length(), ptr1, (options).producer_id.length(), ((options).producer_epoch).reinterpret_as_int64(), ((options).timeout_ms).reinterpret_as_int64(), lowered, lowered3);
+      let ret = DurableStreamWriter::DurableStreamWriter(result)
+      mbt_ffi_free(ptr)
+      mbt_ffi_free(ptr0)
+      mbt_ffi_free(ptr1)
+      return ret
+
+}
+///|
+/// One protocol-idempotent attempt. Retry the identical sequence, body and close flag.
+pub async fn DurableStreamWriter::append(self : DurableStreamWriter, request : DurableStreamAppendRequest) -> Result[DurableStreamAppendReceipt, DurableStreamError] {
+
+      let lower_ptr : Int = mbt_ffi_malloc(40)
       defer mbt_ffi_free(lower_ptr)
 
-      let ptr = mbt_ffi_str2ptr((request).url)
-      mbt_ffi_store32((lower_ptr + 0) + 4, (request).url.length())
-      mbt_ffi_store32((lower_ptr + 0) + 0, ptr)
-
-      let ptr0 = mbt_ffi_str2ptr((request).content_type)
-      mbt_ffi_store32((lower_ptr + 0) + 12, (request).content_type.length())
-      mbt_ffi_store32((lower_ptr + 0) + 8, ptr0)
+      let DurableStreamWriter(handle) = self
+      mbt_ffi_store32((lower_ptr + 0) + 0, handle)
 
       match (request).payload {
             Json(payload) => {
-                  mbt_ffi_store8((lower_ptr + 0) + 16, (0))
+                  mbt_ffi_store8((lower_ptr + 8) + 0, (0))
 
                   let address = mbt_ffi_malloc((payload).length() * 8);
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : String = (payload)[(index)]
                         let iter_base = address + (index * 8);
 
-                        let ptr1 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr1)
+                        mbt_ffi_store32((iter_base) + 0, ptr)
 
                   }
-                  mbt_ffi_store32((lower_ptr + 0) + 24, (payload).length())
-                  mbt_ffi_store32((lower_ptr + 0) + 20, address)
+                  mbt_ffi_store32((lower_ptr + 8) + 8, (payload).length())
+                  mbt_ffi_store32((lower_ptr + 8) + 4, address)
 
                   ()
             }
-            Bytes(payload2) => {
-                  mbt_ffi_store8((lower_ptr + 0) + 16, (1))
+            Bytes(payload0) => {
+                  mbt_ffi_store8((lower_ptr + 8) + 0, (1))
 
-                  let ptr3 = mbt_ffi_bytes2ptr(payload2)
+                  let ptr1 = mbt_ffi_bytes2ptr(payload0)
 
-                  mbt_ffi_store32((lower_ptr + 0) + 24, payload2.length())
-                  mbt_ffi_store32((lower_ptr + 0) + 20, ptr3)
-
-                  ()
-            }
-      }
-
-      let ptr4 = mbt_ffi_str2ptr(((request).producer).id)
-      mbt_ffi_store32((lower_ptr + 0) + 36, ((request).producer).id.length())
-      mbt_ffi_store32((lower_ptr + 0) + 32, ptr4)
-      mbt_ffi_store64((lower_ptr + 0) + 40, (((request).producer).epoch).reinterpret_as_int64())
-      mbt_ffi_store64((lower_ptr + 0) + 48, (((request).producer).sequence).reinterpret_as_int64())
-      mbt_ffi_store8((lower_ptr + 0) + 56, (if (request).close { 1 } else { 0 }))
-      mbt_ffi_store64((lower_ptr + 0) + 64, ((request).timeout_ms).reinterpret_as_int64())
-
-      match (auth) {
-            None => {
-                  mbt_ffi_store8((lower_ptr + 72) + 0, (0))
-
-                  ()
-            }
-            Some(payload0) => {
-                  mbt_ffi_store8((lower_ptr + 72) + 0, (1))
-
-                  let @types.Secret(handle) = payload0
-                  mbt_ffi_store32((lower_ptr + 72) + 4, handle)
+                  mbt_ffi_store32((lower_ptr + 8) + 8, payload0.length())
+                  mbt_ffi_store32((lower_ptr + 8) + 4, ptr1)
 
                   ()
             }
       }
+      mbt_ffi_store64((lower_ptr + 8) + 16, ((request).sequence).reinterpret_as_int64())
+      mbt_ffi_store8((lower_ptr + 8) + 24, (if (request).close { 1 } else { 0 }))
 
       let result_ptr = mbt_ffi_malloc(72 * 1)
       defer mbt_ffi_free(result_ptr)
 
-      let subtask_code = wasmImportAppendDurableStreamBatch(lower_ptr, result_ptr)
+      let subtask_code = wasmImportMethodDurableStreamWriterAppend(lower_ptr, result_ptr)
       @async-core.suspend_for_subtask(
       subtask_code,
 
       fn(before_started) {
             if before_started {
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 0))
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 8))
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 16)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 8)) {
                         0 => {
 
-                              for index = 0; index < (mbt_ffi_load32((lower_ptr) + 24)); index = index + 1 {
-                                    let iter_base = (mbt_ffi_load32((lower_ptr) + 20)) + (index * 8)
+                              for index = 0; index < (mbt_ffi_load32((lower_ptr) + 16)); index = index + 1 {
+                                    let iter_base = (mbt_ffi_load32((lower_ptr) + 12)) + (index * 8)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 12))
 
                         }
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 12))
 
                         }
                         _ => panic()
                   }
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 32))
 
             } else {
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 0))
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 8))
 
-                  match (mbt_ffi_load8_u((lower_ptr) + 16)) {
+                  match (mbt_ffi_load8_u((lower_ptr) + 8)) {
                         0 => {
 
-                              for index = 0; index < (mbt_ffi_load32((lower_ptr) + 24)); index = index + 1 {
-                                    let iter_base = (mbt_ffi_load32((lower_ptr) + 20)) + (index * 8)
+                              for index = 0; index < (mbt_ffi_load32((lower_ptr) + 16)); index = index + 1 {
+                                    let iter_base = (mbt_ffi_load32((lower_ptr) + 12)) + (index * 8)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 12))
 
                         }
                         1 => {
-                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 20))
+                              mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 12))
 
                         }
                         _ => panic()
                   }
-                  mbt_ffi_free(mbt_ffi_load32((lower_ptr) + 32))
 
             }
       }
