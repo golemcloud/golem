@@ -2602,6 +2602,117 @@ mod one_shot_session_tests {
         })
     }
 
+    fn string_result(value: String) -> invocation_response::Response {
+        invocation_response::Response::Result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::MethodResult(
+                SchemaValue {
+                    value: Some(schema_value::Value::StringValue(value)),
+                },
+            )),
+            component_revision: Some(3),
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    async fn scalar_string_result_preserves_utf8_without_a_provider_specific_limit() {
+        for extra in [0, 1] {
+            let document = format!("{}{}", "é".repeat(524_288), "x".repeat(extra));
+            assert_eq!(document.len(), 1_048_576 + extra);
+            let responses = stream::iter([
+                frame(accepted()),
+                frame(string_result(document.clone())),
+                frame(finished(invocation_session_completion::Outcome::Success(
+                    Empty {},
+                ))),
+            ]);
+            let result = collect_one_shot_invocation_session(responses, state_after_start())
+                .await
+                .unwrap();
+            let OneShotInvocationSessionResult::Success(output) = result else {
+                panic!("expected an ordinary scalar invocation result");
+            };
+            let golem_common::model::AgentInvocationResult::AgentMethod { output } = output.result
+            else {
+                panic!("expected a method result");
+            };
+            assert_eq!(output, golem_common::schema::SchemaValue::String(document));
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn scalar_result_does_not_complete_before_session_success_and_transport_eof() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        sender
+            .send(frame(string_result("{\"paths\":{}}".into())))
+            .await
+            .unwrap();
+        let result = collect_one_shot_invocation_session(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+            state_after_start(),
+        );
+        tokio::pin!(result);
+        assert!(futures::poll!(&mut result).is_pending());
+        sender
+            .send(frame(finished(
+                invocation_session_completion::Outcome::Success(Empty {}),
+            )))
+            .await
+            .unwrap();
+        assert!(futures::poll!(&mut result).is_pending());
+        drop(sender);
+        assert!(matches!(
+            result.await.unwrap(),
+            OneShotInvocationSessionResult::Success(_)
+        ));
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn dropping_scalar_waiter_closes_response_consumer() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        {
+            let result = collect_one_shot_invocation_session(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+                state_after_start(),
+            );
+            tokio::pin!(result);
+            assert!(futures::poll!(&mut result).is_pending());
+            assert!(!sender.is_closed());
+        }
+        sender.closed().await;
+        assert!(sender.is_closed());
+    }
+
+    #[test]
+    async fn scalar_result_is_not_returned_after_session_failure() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(string_result("{\"paths\":{}}".into())),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Execution as i32,
+                    code: "execution".into(),
+                    message: "failed after result".into(),
+                    worker_error: None,
+                },
+            ))),
+        ]);
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::Failure(failure)
+                if failure.message == "failed after result"
+        ));
+    }
+
     #[test]
     async fn successful_session_preserves_unary_result_metadata() {
         let responses = stream::iter([
