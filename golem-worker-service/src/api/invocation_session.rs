@@ -2415,6 +2415,9 @@ fn rejection_code(reason: i32) -> PublicErrorCode {
         Ok(InvocationRejectionReason::InputConflict) => PublicErrorCode::InputConflict,
         Ok(InvocationRejectionReason::InputGap) => PublicErrorCode::InputGap,
         Ok(InvocationRejectionReason::ResourceExhausted) => PublicErrorCode::ResourceExhausted,
+        // The unary, streaming and agent-RPC paths all reroute on this one; a session client is
+        // told the same thing so it can reconnect instead of surfacing a server fault.
+        Ok(InvocationRejectionReason::ShardingNotReady) => PublicErrorCode::ShardingNotReady,
         _ => PublicErrorCode::InternalError,
     }
 }
@@ -2446,6 +2449,9 @@ fn safe_rejection_message(code: PublicErrorCode) -> String {
         PublicErrorCode::ProducerError => "stream producer failed",
         PublicErrorCode::InvocationFailed => "invocation failed",
         PublicErrorCode::ProtocolError => "invocation protocol failed",
+        PublicErrorCode::ShardingNotReady => {
+            "the agent's shard is moving between executors; retry the invocation"
+        }
         PublicErrorCode::InternalError => "invocation failed",
     }
     .to_string()

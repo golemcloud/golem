@@ -292,6 +292,22 @@ pub enum TrapType {
 }
 
 impl TrapType {
+    /// `ShardLost` once the agent's oplog has latched a fence, whatever the trap was.
+    ///
+    /// A latched oplog refuses every later write, so giving the agent up is the only outcome
+    /// left. It also catches a fence that crossed a `String` boundary on its way to the trap and
+    /// no longer classifies as `ShardLost` by itself.
+    pub fn under_latched_fence(
+        self,
+        latched: Option<&crate::services::oplog::OplogFence>,
+    ) -> TrapType {
+        if latched.is_some() {
+            TrapType::Interrupt(InterruptKind::ShardLost)
+        } else {
+            self
+        }
+    }
+
     pub fn from_worker_executor_error<Ctx: WorkerCtx>(
         error: WorkerExecutorError,
         fallback_retry_from: OplogIndex,
@@ -481,6 +497,13 @@ impl TrapType {
                             Some(WorkerExecutorError::PermissionDenied { details }) => {
                                 make_error(AgentError::PermissionDenied(details.clone()))
                             }
+                            // Not a failure of the invocation: the storage refused the write
+                            // because the shard has a new owner. Classified as an interrupt so
+                            // the loop stops the agent without appending an `Error` entry to an
+                            // oplog that is no longer this executor's to write.
+                            Some(WorkerExecutorError::OplogFenced { .. }) => {
+                                TrapType::Interrupt(InterruptKind::ShardLost)
+                            }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
@@ -499,7 +522,7 @@ impl TrapType {
                             //
                             // `WorkerExecutorError::Runtime` is intentionally NOT
                             // mapped here: it is also used as a generic transient
-                            // error wrapper (e.g. for `Oplog::fallible_add`
+                            // error wrapper (e.g. for an `OplogError::Storage`
                             // failures) and must remain retriable via the default
                             // policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
@@ -508,8 +531,19 @@ impl TrapType {
                                 )))
                             }
                             _ => {
-                                // Search the full error chain for ClassifiedHostError
-                                if let Some(classified) = error
+                                // A bare `?` on an oplog write inside an anyhow host function
+                                // carries the `OplogError` itself, not its `WorkerExecutorError`
+                                // form, so the fence is looked for along the chain as well. A
+                                // storage error stays a retriable `Unknown`. After that, search
+                                // the full error chain for ClassifiedHostError.
+                                if error.chain().any(|cause| {
+                                    matches!(
+                                        cause.downcast_ref::<crate::services::oplog::OplogError>(),
+                                        Some(crate::services::oplog::OplogError::Fenced(_))
+                                    )
+                                }) {
+                                    TrapType::Interrupt(InterruptKind::ShardLost)
+                                } else if let Some(classified) = error
                                     .chain()
                                     .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
                                 {
@@ -537,6 +571,10 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
+            // What a caller can act on: refresh the routing table and retry on the owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => {
+                Some(WorkerExecutorError::ShardingNotReady)
+            }
             TrapType::Error { error, .. } => match error {
                 AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
@@ -911,6 +949,158 @@ mod tests {
         ));
     }
 
+    /// The contract every fenced host-call site depends on: a fence that escapes a host function
+    /// as an `anyhow` error must classify as `ShardLost`, so the loop gives the agent up instead
+    /// of appending an `Error` entry to the very oplog that refused the write.
+    #[test]
+    fn a_fenced_oplog_write_escaping_a_host_call_classifies_as_shard_lost() {
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "fenced-host-call".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+            owner_conflict: false,
+        };
+
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Fenced(fence)
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a fenced write must be an interrupt, got {trap:?}"
+        );
+    }
+
+    /// The deliberate other half: a transient storage failure is not a fence and must stay a
+    /// retriable failure. Classifying it as `ShardLost` would hand an agent to another executor
+    /// over a blip that retrying would have cleared.
+    #[test]
+    fn a_transient_oplog_storage_failure_does_not_relinquish_the_agent() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Storage("connection reset".to_string())
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a transient storage failure must not be treated as a lost shard, got {trap:?}"
+        );
+    }
+
+    fn fence_for(agent_id: &str) -> crate::services::oplog::OplogFence {
+        crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+            owner_conflict: false,
+        }
+    }
+
+    /// The same contract for a host function that puts a bare `?` on an oplog write: the error is
+    /// the `OplogError` itself, possibly under context, and still has to read as a lost shard.
+    #[test]
+    fn a_bare_fenced_oplog_error_escaping_a_host_call_classifies_as_shard_lost() {
+        let bare = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(fence_for(
+            "bare-fenced-host-call",
+        )));
+        let with_context = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(
+            fence_for("bare-fenced-host-call"),
+        ))
+        .context("ending atomic region");
+
+        for error in [bare, with_context] {
+            let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+                &error,
+                OplogIndex::INITIAL,
+                false,
+                false,
+                AgentMode::Durable,
+            );
+            assert!(
+                matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+                "a bare fenced oplog error must be an interrupt, got {trap:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_oplog_storage_error_is_not_shard_lost() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(crate::services::oplog::OplogError::Storage(
+                "connection reset".to_string(),
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a bare storage failure must stay a retriable failure, got {trap:?}"
+        );
+    }
+
+    /// Once the oplog has latched a fence nothing more can be written for the agent, so no trap
+    /// may lead to a retry, an exit record or a jump - only to giving the agent up.
+    #[test]
+    fn a_latched_fence_turns_every_trap_into_shard_lost() {
+        let fence = fence_for("latched");
+        let unknown_error = || TrapType::Error {
+            error: AgentError::Unknown("fence flattened into text".to_string()),
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+
+        for trap in [
+            unknown_error(),
+            TrapType::Exit,
+            TrapType::Interrupt(InterruptKind::Jump),
+            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
+        ] {
+            let reclassified = trap.clone().under_latched_fence(Some(&fence));
+            assert!(
+                matches!(reclassified, TrapType::Interrupt(InterruptKind::ShardLost)),
+                "{trap:?} under a latched fence must be a lost shard, got {reclassified:?}"
+            );
+            let decision = crate::durable_host::DurableWorkerCtx::<
+                crate::workerctx::default::Context,
+            >::fixed_decision_for_trap_type(&reclassified);
+            assert_eq!(decision, Some(RetryDecision::None));
+        }
+
+        assert!(matches!(
+            unknown_error().under_latched_fence(None),
+            TrapType::Error {
+                error: AgentError::Unknown(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            TrapType::Interrupt(InterruptKind::Jump).under_latched_fence(None),
+            TrapType::Interrupt(InterruptKind::Jump)
+        ));
+    }
+
     #[test]
     fn semantic_trap_retry_override_carries_retry_point() {
         use crate::durable_host::durability::{
@@ -989,6 +1179,44 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_oplog_write_is_a_lost_shard_and_is_never_retried() {
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "fenced".to_string(),
+        };
+        let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
+            golem_service_base::error::worker_executor::WorkerExecutorError::oplog_fenced(
+                agent_id,
+                3,
+                Some(4),
+            ),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        // An interrupt, not an error: no `Error` entry may be appended to an oplog that belongs
+        // to another executor now.
+        assert!(matches!(
+            trap,
+            TrapType::Interrupt(InterruptKind::ShardLost)
+        ));
+
+        // Callers are told what they can act on, which is the same thing as for a lapsed lease.
+        assert!(matches!(
+            trap.as_golem_error(""),
+            Some(WorkerExecutorError::ShardingNotReady)
+        ));
+
+        // And it is never retried in place - that would reopen the oplog at the stale epoch.
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
     fn permission_denied_is_a_non_retriable_invocation_rejection() {
         let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
             golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
@@ -1024,7 +1252,7 @@ mod tests {
     #[test]
     fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
         // `WorkerExecutorError::Runtime` is a generic transient-error wrapper
-        // (used e.g. for `Oplog::fallible_add` failures). It must not be
+        // (used e.g. for `OplogError::Storage` failures). It must not be
         // classified as `InternalError` (non-retriable); it must fall through
         // to `AgentError::Unknown` so the configured retry policy applies.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(

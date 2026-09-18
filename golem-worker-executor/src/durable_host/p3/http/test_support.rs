@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OplogFence, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -43,6 +43,9 @@ use wasmtime_wasi_http::{FieldMap, WasiHttpCtx};
 pub(super) struct FrameTestOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     upload_gate: tokio::sync::Semaphore,
+    /// What `fence()` answers. `add` and `enqueue_add` keep succeeding while it is set, as the
+    /// primary oplog's below-threshold adds do after the fence has latched.
+    fence: std::sync::Mutex<Option<OplogFence>>,
 }
 
 impl FrameTestOplog {
@@ -50,6 +53,7 @@ impl FrameTestOplog {
         Arc::new(Self {
             entries: std::sync::Mutex::new(Vec::new()),
             upload_gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
+            fence: std::sync::Mutex::new(None),
         })
     }
 
@@ -59,7 +63,13 @@ impl FrameTestOplog {
         Arc::new(Self {
             entries: std::sync::Mutex::new(Vec::new()),
             upload_gate: tokio::sync::Semaphore::new(0),
+            fence: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Latches `fence`, as a write the storage refused on another path would.
+    pub(super) fn latch_fence(&self, fence: OplogFence) {
+        *self.fence.lock().unwrap() = Some(fence);
     }
 
     pub(super) fn release_uploads(&self, n: usize) {
@@ -119,44 +129,47 @@ impl FrameTestOplog {
 
 #[async_trait]
 impl Oplog for FrameTestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+        Ok(OplogIndex::from_u64(entries.len() as u64))
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         let index = OplogIndex::from_u64(entries.len() as u64);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
     }
 
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Ok((first_idx, second_idx))
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         _serialized_request: Vec<u8>,
         _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         unimplemented!()
     }
 
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         _build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         unimplemented!()
     }
 
@@ -164,8 +177,11 @@ impl Oplog for FrameTestOplog {
         0
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        Ok(BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -202,6 +218,10 @@ impl Oplog for FrameTestOplog {
 
     async fn length(&self) -> u64 {
         self.entries.lock().unwrap().len() as u64
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        self.fence.lock().unwrap().clone()
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

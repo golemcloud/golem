@@ -79,6 +79,11 @@ pub enum PublicErrorCode {
     ResourceExhausted,
     ProducerError,
     InvocationFailed,
+    /// The executor that answered does not own this agent's shard right now: the assignment is
+    /// moving, or a write of its was fenced by the shard's new owner. Nothing is wrong with the
+    /// request, and a client that reconnects reaches the new owner - which is why this is not
+    /// `InternalError`.
+    ShardingNotReady,
     InternalError,
 }
 
@@ -110,6 +115,7 @@ impl PublicErrorCode {
             Self::ResourceExhausted => "resource-exhausted",
             Self::ProducerError => "producer-error",
             Self::InvocationFailed => "invocation-failed",
+            Self::ShardingNotReady => "sharding-not-ready",
             Self::InternalError => "internal-error",
         }
     }
@@ -164,6 +170,7 @@ const ALL_ERROR_CODES: &[PublicErrorCode] = &[
     PublicErrorCode::ResourceExhausted,
     PublicErrorCode::ProducerError,
     PublicErrorCode::InvocationFailed,
+    PublicErrorCode::ShardingNotReady,
     PublicErrorCode::InternalError,
 ];
 

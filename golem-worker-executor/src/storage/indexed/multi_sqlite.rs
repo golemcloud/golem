@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanCursor, ScanResume, WriterId,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,9 @@ pub struct MultiSqliteIndexedStorage {
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
+    /// Handed to every per-namespace SQLite storage this opens, so the whole fan-out writes as one
+    /// process. See [`WriterId`].
+    writer_id: WriterId,
 }
 
 struct HashCache {
@@ -82,22 +86,33 @@ impl MultiSqliteIndexedStorage {
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
+            writer_id: WriterId::process(),
         }
+    }
+
+    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
+    /// give every storage it opens one identity, and a test uses it to play two executors racing
+    /// over one oplog inside a single process.
+    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
+        self.writer_id = writer_id;
+        self
     }
 
     async fn init_storage(
         max_connections: u32,
         foreign_keys: bool,
         database: String,
+        writer_id: WriterId,
     ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let config = DbSqliteConfig {
             database,
             max_connections,
             foreign_keys,
         };
-        SqliteIndexedStorage::configured(&config)
+        let storage = SqliteIndexedStorage::configured(&config)
             .await
-            .map_err(IndexedStorageError::Other)
+            .map_err(IndexedStorageError::Other)?;
+        Ok(storage.for_writer(writer_id))
     }
 
     async fn storage_by_namespace(
@@ -186,6 +201,7 @@ impl MultiSqliteIndexedStorage {
     ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
+        let writer_id = self.writer_id;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
         // Set when this call creates the file, which makes cached listings stale. Checked only on a
         // cache miss, since a hit means the file is already open.
@@ -196,7 +212,7 @@ impl MultiSqliteIndexedStorage {
             .cache
             .get_or_insert_simple(&db, async move || {
                 flag.store(!Path::new(&existing).exists(), Ordering::SeqCst);
-                Self::init_storage(max_connections, foreign_keys, db_path).await
+                Self::init_storage(max_connections, foreign_keys, db_path, writer_id).await
             })
             .await?;
         if created.load(Ordering::SeqCst) {
@@ -255,6 +271,40 @@ impl Debug for MultiSqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for MultiSqliteIndexedStorage {
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .await
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .await
+    }
+
+    /// Answers for the per-namespace databases this fans out to, which are all
+    /// [`SqliteIndexedStorage`]. Taking the trait default here would silently report "no fence"
+    /// for a backend that has one.
+    fn supports_epoch_fencing(&self) -> bool {
+        SqliteIndexedStorage::SUPPORTS_EPOCH_FENCING
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -409,13 +459,27 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                shard_epoch,
+            )
             .await
     }
 
+    /// Overridden rather than inherited. The trait default loops [`Self::append`], which would
+    /// resolve the per-agent database and re-check the fence once per entry, in a separate
+    /// transaction each time - so a batch could land half-written, and the contract that the
+    /// fence is checked once per call would not hold.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -424,10 +488,19 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(namespace)
             .await?
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                shard_epoch,
+            )
             .await
     }
 
@@ -585,6 +658,7 @@ mod tests {
                 &first_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();
@@ -596,6 +670,7 @@ mod tests {
                 &second_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();

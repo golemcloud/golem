@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::RepoError;
+use uuid::Uuid;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -45,6 +47,50 @@ pub enum IndexedStorageError {
     Conflict(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
+    /// The write was refused because the writer no longer owns the agent's shard: the epoch it
+    /// asserted is behind the one recorded for that oplog, or the record is held by another
+    /// writer at the same epoch.
+    ///
+    /// Never retriable — retrying cannot make this executor the owner again. It is not a failure
+    /// of the storage either: the write was rejected on purpose, by a newer owner's claim.
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+        /// The stored epoch equals the asserted one but another writer recorded it. Only a shard
+        /// manager that lost its state mints a generation somebody already holds, so this says
+        /// the epoch itself has to be minted past - see [`WriterId`].
+        owner_conflict: bool,
+    },
+}
+
+/// The process behind an oplog write, recorded alongside the epoch it asserts.
+///
+/// One value per executor process, kept for the life of the process. It is deliberately *not* the
+/// executor's lease identity (`GrpcShardManagerService::executor_id`), which is regenerated
+/// whenever the manager answers `LeaseNotFound`: that identity changes while the process goes on
+/// holding the same epochs for the same oplogs, and a row keyed on it would refuse the process its
+/// own agents after every re-registration.
+///
+/// What it buys is the one thing an epoch cannot say by itself: which of two writers holding the
+/// same number wrote the record. A manager whose state was wiped mints from zero again and can
+/// grant a live owner's epoch to somebody else; both would then pass an equality check. With the
+/// writer recorded, the newcomer is refused, reports the collision, and the manager mints above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WriterId(pub Uuid);
+
+impl WriterId {
+    /// This process's writer identity, created once on first use.
+    pub fn process() -> Self {
+        static PROCESS: OnceLock<WriterId> = OnceLock::new();
+        *PROCESS.get_or_init(|| WriterId(Uuid::new_v4()))
+    }
+}
+
+impl Display for WriterId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 impl IndexedStorageError {
@@ -62,6 +108,28 @@ impl Display for IndexedStorageError {
             }
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+            IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+                owner_conflict,
+            } => match actual {
+                Some(actual) if *owner_conflict => write!(
+                    f,
+                    "Oplog write fenced for key {key}: asserted shard epoch {expected}, \
+                     which another writer holds - the stored epoch is {actual}"
+                ),
+                Some(actual) => write!(
+                    f,
+                    "Oplog write fenced for key {key}: asserted shard epoch {expected}, \
+                     the stored epoch is {actual}"
+                ),
+                None => write!(
+                    f,
+                    "Oplog write fenced for key {key}: asserted shard epoch {expected}, \
+                     but no epoch is stored for it"
+                ),
+            },
         }
     }
 }
@@ -71,6 +139,59 @@ impl std::error::Error for IndexedStorageError {}
 impl From<String> for IndexedStorageError {
     fn from(s: String) -> Self {
         IndexedStorageError::Other(s)
+    }
+}
+
+/// Carries a fence rejection out of a transaction closure.
+///
+/// [`Pool::with_tx_err`] requires its error type to be `From<RepoError>`, and
+/// [`IndexedStorageError`] deliberately is not: each backend converts a `RepoError` through its
+/// own classifier, which decides whether the failure is retriable and annotates a unique
+/// violation as a possible ownership mismatch. A blanket `From` would flatten all of that into
+/// `Other`. So the closure fails with this instead, and the backend maps it back at the boundary
+/// with the classifier it would have used anyway - which keeps `with_tx_err`'s labelled rollback
+/// and its metrics rather than hand-rolling `begin`/`rollback` at every early return.
+#[derive(Debug)]
+pub(crate) enum FencedTxError {
+    Repo(RepoError),
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+        owner_conflict: bool,
+    },
+    /// A stored value the schema should have made impossible - a negative epoch, say. Not a fence:
+    /// nobody took the oplog over, the row itself cannot be trusted.
+    Corrupt(String),
+}
+
+impl From<RepoError> for FencedTxError {
+    fn from(err: RepoError) -> Self {
+        FencedTxError::Repo(err)
+    }
+}
+
+impl FencedTxError {
+    /// `classify` is the backend's own `RepoError` classifier.
+    pub(crate) fn into_indexed_storage_error(
+        self,
+        classify: fn(RepoError) -> IndexedStorageError,
+    ) -> IndexedStorageError {
+        match self {
+            FencedTxError::Repo(err) => classify(err),
+            FencedTxError::Fenced {
+                key,
+                expected,
+                actual,
+                owner_conflict,
+            } => IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+                owner_conflict,
+            },
+            FencedTxError::Corrupt(msg) => IndexedStorageError::Other(msg),
+        }
     }
 }
 
@@ -185,9 +306,16 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 
     /// Appends multiple entries to the given key with the given id
+    ///
+    /// `shard_epoch` is the ownership generation the caller believes it holds for this key's
+    /// shard. A backend that fences checks it against the epoch recorded for the key, in the same
+    /// transaction as the insert, and refuses the whole batch with
+    /// [`IndexedStorageError::Fenced`] if it is behind. `None` asserts nothing and is for writers
+    /// that cannot know an epoch. The check is once per call, never per entry.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -196,6 +324,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         for (id, value) in pairs.iter() {
             self.append(
@@ -206,6 +335,7 @@ pub trait IndexedStorage: Debug + Sync {
                 key,
                 *id,
                 value.to_vec(),
+                shard_epoch,
             )
             .await?;
         }
@@ -295,6 +425,60 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError>;
+
+    /// Records the shard epoch that is authorised to write the given key, and this process as its
+    /// writer, as a monotonic compare-and-set: the write is accepted when `shard_epoch` is above
+    /// the stored one, or equal to it and recorded by this same writer, and refused with
+    /// [`IndexedStorageError::Fenced`] otherwise. Inserts the record if the key has none.
+    ///
+    /// Monotonic rather than a plain overwrite so that a writer holding a stale epoch cannot walk
+    /// the record backwards and un-fence itself against the current owner. Equality is what the
+    /// writer ([`WriterId`]) settles: a re-open by the process that already holds the epoch is the
+    /// ordinary case, while another process presenting the same epoch is a manager that lost its
+    /// state and minted a generation twice - refused here, reported, and minted past.
+    ///
+    /// That holds only for a key that already has a record. A key with none accepts any epoch,
+    /// whether it was never written, removed by [`Self::delete_oplog_metadata`], or written before
+    /// the record existed. For such a key the fence cannot tell a stale executor's first open from
+    /// the owner's; only the lease's admission check bounds that window.
+    ///
+    /// The default does nothing and accepts everything: a backend that cannot fence has no record
+    /// to keep.
+    async fn upsert_oplog_metadata(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _namespace: IndexedStorageNamespace,
+        _key: &str,
+        _shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        Ok(())
+    }
+
+    /// Forgets the epoch recorded for the given key. Called when the oplog itself is deleted, and
+    /// before its entries are, so that a writer still holding the old epoch is fenced by the
+    /// absent record rather than appending to an oplog that is being removed.
+    ///
+    /// Removing the record also forgets its epoch. A writer that already has the oplog open is
+    /// fenced by the absent record, but a later open at any epoch writes a new one.
+    ///
+    /// Idempotent. The default does nothing.
+    async fn delete_oplog_metadata(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _namespace: IndexedStorageNamespace,
+        _key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        Ok(())
+    }
+
+    /// Whether this backend enforces `shard_epoch` on writes. Startup refuses a configuration
+    /// that pairs a backend answering `false` with a real shard manager, because the fence would
+    /// silently not exist.
+    fn supports_epoch_fencing(&self) -> bool {
+        false
+    }
 }
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
@@ -473,6 +657,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: &V,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage
             .append(
@@ -483,6 +668,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 serialize(value).map_err(IndexedStorageError::Other)?,
+                shard_epoch,
             )
             .await
     }
@@ -494,6 +680,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage
             .append(
@@ -504,6 +691,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 value,
+                shard_epoch,
             )
             .await
     }
@@ -515,6 +703,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<u64, IndexedStorageError> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
         let mut total_bytes = 0u64;
@@ -523,7 +712,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             total_bytes += bytes.len() as u64;
             serialized_pairs.push((*id, Bytes::from(bytes)));
         }
-        self.append_many_raw(namespace, key, serialized_pairs.into())
+        self.append_many_raw(namespace, key, serialized_pairs.into(), shard_epoch)
             .await?;
         Ok(total_bytes)
     }
@@ -534,6 +723,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage
             .append_many(
@@ -543,6 +733,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 pairs,
+                shard_epoch,
             )
             .await
     }

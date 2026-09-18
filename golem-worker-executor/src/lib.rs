@@ -111,6 +111,7 @@ use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
@@ -841,30 +842,24 @@ pub async fn create_worker_executor_impl<
     let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
+    // Built once for both shapes, so neither can be left without the observer: without it a
+    // refused write never reaches the shard manager, and a manager whose state lost history goes
+    // on minting below the oplog rows that refuse it.
+    let primary_oplog_service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        golem_config.oplog.max_operations_before_commit,
+        golem_config.oplog.max_operations_before_commit_ephemeral,
+        golem_config.oplog.max_payload_size,
+        golem_config.indexed_storage_retry.clone(),
+    )
+    .await
+    .with_fence_observer(shard_service.clone());
+
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
-        None => Arc::new(
-            PrimaryOplogService::new(
-                indexed_storage.clone(),
-                blob_storage.clone(),
-                golem_config.oplog.max_operations_before_commit,
-                golem_config.oplog.max_operations_before_commit_ephemeral,
-                golem_config.oplog.max_payload_size,
-                golem_config.indexed_storage_retry.clone(),
-            )
-            .await,
-        ),
+        None => Arc::new(primary_oplog_service),
         Some(oplog_archives) => {
-            let primary = Arc::new(
-                PrimaryOplogService::new(
-                    indexed_storage.clone(),
-                    blob_storage.clone(),
-                    golem_config.oplog.max_operations_before_commit,
-                    golem_config.oplog.max_operations_before_commit_ephemeral,
-                    golem_config.oplog.max_payload_size,
-                    golem_config.indexed_storage_retry.clone(),
-                )
-                .await,
-            );
+            let primary = Arc::new(primary_oplog_service);
 
             Arc::new(MultiLayerOplogService::new(
                 primary,
@@ -902,6 +897,12 @@ pub async fn create_worker_executor_impl<
         shard_service.clone(),
         shutdown.clone(),
     );
+
+    check_oplog_fencing(
+        shard_manager_service.requires_oplog_fencing(),
+        indexed_storage.as_ref(),
+        &golem_config.indexed_storage,
+    )?;
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,
@@ -1087,7 +1088,11 @@ pub async fn create_worker_executor_impl<
 /// Derives a `DbSqliteConfig` for a module that should live in a separate
 /// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
 /// indexed storage its own DB and migration table).
-fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+///
+/// Public so test utilities can open the same file an executor uses without copying the naming
+/// rule.
+#[doc(hidden)]
+pub fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
     let database = match base.database.strip_suffix(".db") {
         Some(stem) => format!("{stem}-{suffix}.db"),
         None => format!("{}-{suffix}", base.database),
@@ -1329,5 +1334,82 @@ async fn build_inner_key_value_storage(
                 ));
             Ok((None, None, key_value_storage))
         }
+    }
+}
+
+/// Refuses a configuration whose oplog writes cannot be fenced on the shard epoch.
+///
+/// Shards move between executors under a real shard manager, so two executors can believe they
+/// own the same agent at once; the storage fence is what stops the one that has lost the shard
+/// from writing. Without it the damage is silent, which is why this is a startup failure rather
+/// than a warning.
+///
+/// Keyed on the services, not on the configuration: it is the `Bootstrap` override in effect -
+/// not a config value - that decides whether shards can move at all, which is why the
+/// single-shard executor and the debugging service are exempt without naming them here.
+fn check_oplog_fencing(
+    requires_oplog_fencing: bool,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    indexed_storage_config: &IndexedStorageConfig,
+) -> anyhow::Result<()> {
+    if requires_oplog_fencing && !indexed_storage.supports_epoch_fencing() {
+        anyhow::bail!(
+            "The configured indexed storage cannot fence oplog writes on the shard epoch, and \
+             this executor runs with a shard manager that moves shards between executors. \
+             Without the fence, an executor that has lost a shard can keep writing to its \
+             agents' oplogs. Set GOLEM__INDEXED_STORAGE__TYPE to one of Postgres, Sqlite, \
+             KVStoreSqlite, MultiSqlite or KVStoreMultiSqlite. Configured storage: {}",
+            indexed_storage_config.to_safe_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod oplog_fencing_guard_tests {
+    use super::*;
+    use crate::services::golem_config::{
+        IndexedStorageInMemoryConfig, IndexedStorageMultiSqliteConfig,
+    };
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+    use test_r::test;
+
+    #[test]
+    fn a_non_fencing_backend_under_a_real_shard_manager_is_refused() {
+        let storage = InMemoryIndexedStorage::new();
+        let config = IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {});
+
+        let error = check_oplog_fencing(true, &storage, &config)
+            .expect_err("an unfenced backend with a real shard manager must refuse to start");
+        let message = error.to_string();
+        // The message has to name the way out, or the operator is left guessing.
+        assert!(
+            message.contains("GOLEM__INDEXED_STORAGE__TYPE"),
+            "the error must name the setting to change: {message}"
+        );
+    }
+
+    #[test]
+    fn the_same_backend_is_allowed_without_a_real_shard_manager() {
+        let storage = InMemoryIndexedStorage::new();
+        let config = IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {});
+
+        // Single-shard mode: nothing can take the shard away, so there is no second writer.
+        check_oplog_fencing(false, &storage, &config).expect("single-shard mode needs no fence");
+    }
+
+    #[test]
+    fn a_fencing_backend_is_allowed_either_way() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+        let config = IndexedStorageConfig::MultiSqlite(IndexedStorageMultiSqliteConfig {
+            root_dir: dir.path().to_path_buf(),
+            max_connections: 1,
+            foreign_keys: false,
+        });
+
+        check_oplog_fencing(true, &storage, &config).expect("multi-sqlite fences");
+        check_oplog_fencing(false, &storage, &config).expect("multi-sqlite fences");
     }
 }

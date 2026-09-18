@@ -44,8 +44,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("resource exhaustion terminal batch returned no oplog entry");
@@ -202,8 +202,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream end batch returned no oplog entry");
@@ -334,8 +334,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream cancellation batch returned no oplog entry");

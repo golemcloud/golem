@@ -114,6 +114,13 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             record_invocation(was_live_before, "suspended");
             result
         }
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::ShardLost,
+            ..
+        }) => {
+            record_invocation(was_live_before, "shard_lost");
+            result
+        }
         Ok(InvokeResult::Interrupted { .. }) => {
             record_invocation(was_live_before, "restarted");
             result

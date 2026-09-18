@@ -524,20 +524,22 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed
+    /// Called when an update attempt has failed. Fails when the oplog refused to record the
+    /// failure: the agent has been given up, and must not be rebuilt on its old revision here.
     async fn on_worker_update_failed(
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
-    );
+    ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded
+    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
+    /// update: the agent has been given up, and the update must not be reported as applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    );
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the

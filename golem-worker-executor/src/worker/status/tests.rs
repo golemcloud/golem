@@ -438,6 +438,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
+                shard_epoch: None,
             },
             {
                 let idempotency_key = idempotency_key.clone();
@@ -746,6 +747,7 @@ fn recovery_errors_are_not_invocation_results() {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
+                shard_epoch: None,
             },
         ),
         (
@@ -1822,6 +1824,7 @@ impl TestCaseBuilder {
                 trace_states: vec![],
                 invocation_context: vec![],
                 wallet_pin: None,
+                shard_epoch: None,
             },
             move |mut status| {
                 status.current_idempotency_key = Some(idempotency_key);
@@ -2256,6 +2259,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2269,6 +2273,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2282,6 +2287,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }

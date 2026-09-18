@@ -214,7 +214,7 @@ impl QuotaService {
                 })?;
                 let snapshot = state.clone();
                 let prev_rev = state.current_revision();
-                let result = state.acquire_lease(pod, self.lease_duration, self.min_executors);
+                let result = state.acquire_lease(pod, self.lease_duration, self.min_executors)?;
 
                 if let Err(e) = state.bump_revision() {
                     warn!(error = %e, "failed to bump revision, rolling back");

@@ -56,11 +56,19 @@ pub trait ShardManager: Send + Sync {
     /// UUID it generated at startup. Idempotent: the same `executor_id` at the
     /// same address refreshes the existing shard lease rather than creating a
     /// second one.
+    ///
+    /// `previous_shard_epochs` is the set this process held under an earlier
+    /// `executor_id` the manager answered `LeaseNotFound` for, and is empty on
+    /// a first registration. It is evidence, not a request: it never assigns a
+    /// shard, and only raises the manager's recorded epochs where its state has
+    /// lost history, so the epochs it mints next clear the oplog rows this
+    /// process wrote before.
     async fn register(
         &self,
         port: u16,
         pod_name: Option<String>,
         executor_id: Uuid,
+        previous_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardRegistration, ShardManagerError>;
 
     /// Extends this executor's shard lease. `shard_epochs` is the set the
@@ -68,10 +76,17 @@ pub trait ShardManager: Send + Sync {
     /// claim that does not match the manager's view is renewed all the same,
     /// and the returned lease carries the manager's set, which the caller
     /// adopts exactly as it would an `AssignShards` push.
+    ///
+    /// `fenced_shard_epochs` are the epochs recorded on oplogs this executor
+    /// was refused writes to, keyed by shard. Evidence, like
+    /// `previous_shard_epochs` on `register`: above the manager's record they
+    /// mean its state lost history, and every owner of the shard is minted one
+    /// past them; at or below it they move nothing.
     async fn renew_shard_lease(
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        fenced_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError>;
 
     /// Releases the shard lease on a graceful shutdown. Lenient by contract: a
@@ -285,14 +300,21 @@ impl ShardManager for GrpcShardManager {
         port: u16,
         pod_name: Option<String>,
         executor_id: Uuid,
+        previous_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardRegistration, ShardManagerError> {
         with_retries(
             "shard_manager",
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(self.client.clone(), port, pod_name, executor_id),
-            |(client, port, pod_name, executor_id)| {
+            &(
+                self.client.clone(),
+                port,
+                pod_name,
+                executor_id,
+                previous_shard_epochs,
+            ),
+            |(client, port, pod_name, executor_id, previous_shard_epochs)| {
                 Box::pin(async move {
                     let (sent_at, response) = client
                         .call("register", move |client| {
@@ -300,6 +322,11 @@ impl ShardManager for GrpcShardManager {
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
                                 executor_id: executor_id.to_string(),
+                                previous_shard_epochs: shard_epochs_to_proto(
+                                    previous_shard_epochs
+                                        .iter()
+                                        .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                                ),
                             };
                             Box::pin(async move {
                                 let (sent_at, response) = issued(client.register(request)).await;
@@ -339,6 +366,7 @@ impl ShardManager for GrpcShardManager {
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        fenced_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
         let (sent_at, response) = self
             .client
@@ -347,6 +375,11 @@ impl ShardManager for GrpcShardManager {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
                         shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                    fenced_shard_epochs: shard_epochs_to_proto(
+                        fenced_shard_epochs
                             .iter()
                             .map(|(shard_id, epoch)| (*shard_id, *epoch)),
                     ),

@@ -17,7 +17,7 @@ use crate::oplog::debug_oplog::DebugOplog;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ShardEpoch};
 use golem_common::read_only_lock;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{
@@ -66,6 +66,11 @@ impl CreateDebugOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateDebugOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        // A debugging session discards every write, so it asserts no epoch.
+        None
+    }
+
     async fn create_oplog(
         self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -81,6 +86,9 @@ impl OplogConstructor for CreateDebugOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    // A debugging session discards every write, so it asserts no epoch and
+                    // never touches the agent's ownership record.
+                    None,
                 )
                 .await
         } else {
@@ -93,6 +101,9 @@ impl OplogConstructor for CreateDebugOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    // A debugging session discards every write, so it asserts no epoch and
+                    // never touches the agent's ownership record.
+                    None,
                 )
                 .await
         };

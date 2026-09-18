@@ -493,6 +493,98 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
     Ok(())
 }
 
+/// A delivery that keeps a shard but raises its epoch means the shard left this executor and
+/// came back, so another executor may have written to its agents in between. An agent still
+/// holding the older epoch's oplog must be given up and reopened at the new epoch; a delivery at
+/// the epoch it already holds must leave it alone.
+///
+/// Driven over the wire for the same reason as the stale-revoke test above: the sweep lives in
+/// the gRPC handler.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_delivery_that_raises_a_kept_shards_epoch_gives_its_agents_up(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("Clock", "epoch-raise-owner");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+
+    // The single-shard bootstrap holds shard 0 at epoch 0, so the agent's oplog asserts epoch 0.
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let push = |epoch: u64, revision: u64| AssignShardsRequest {
+        shard_epochs: vec![ShardEpochEntry {
+            shard_id: Some(shard),
+            epoch,
+        }],
+        revision,
+        number_of_shards: 1,
+    };
+
+    // The handler sweeps on every applied push, changed or not, so this does run the sweep.
+    let same_epoch = client.assign_shards(push(0, 5)).await?.into_inner();
+    assert!(matches!(
+        same_epoch.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        executor.worker_is_loaded(&owned_agent_id).await,
+        "a push at the epoch the agent already holds must not give it up"
+    );
+
+    let raised = client.assign_shards(push(1, 6)).await?.into_inner();
+    assert!(matches!(
+        raised.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    // The agent is idle, so assignment recovery does not track it and cannot reopen it while
+    // this waits.
+    wait_until("the superseded agent to be given up", || async {
+        !executor.worker_is_loaded(&owned_agent_id).await
+    })
+    .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+
+    // The reopen asserts epoch 1. Had it been handed the epoch-0 handle back, this push would
+    // sweep it as superseded.
+    let kept = client.assign_shards(push(1, 7)).await?.into_inner();
+    assert!(matches!(
+        kept.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        executor.worker_is_loaded(&owned_agent_id).await,
+        "the agent reopened after the raise must hold the new epoch and survive a push of it"
+    );
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]

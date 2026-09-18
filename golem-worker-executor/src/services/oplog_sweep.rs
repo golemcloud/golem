@@ -1506,9 +1506,19 @@ mod tests {
             key: &str,
             id: u64,
             value: Vec<u8>,
+            shard_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), IndexedStorageError> {
             self.inner
-                .append(svc_name, api_name, entity_name, namespace, key, id, value)
+                .append(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    id,
+                    value,
+                    shard_epoch,
+                )
                 .await
         }
 
@@ -1863,6 +1873,7 @@ mod tests {
                     metadata(&owned_agent_id.agent_id, owned_agent_id.environment_id),
                     status_lock(),
                     execution_lock(),
+                    None,
                 )
                 .await;
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
@@ -1970,11 +1981,12 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 
@@ -2817,11 +2829,12 @@ mod tests {
                 metadata(&agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
 
         let stranded = layers.archives[0]
@@ -3100,10 +3113,11 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 

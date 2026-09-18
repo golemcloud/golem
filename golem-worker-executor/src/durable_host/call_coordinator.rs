@@ -142,7 +142,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await;
+                .await?;
             // The status checkpoint is only safe after the durable boundary has committed.
             self.ctx.maybe_mid_invocation_checkpoint().await;
         }
@@ -656,7 +656,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -702,7 +702,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -764,7 +764,7 @@ where
                 card_id,
                 Some(wallet_generation),
             ))
-            .await;
+            .await?;
     }
     Ok(())
 }
@@ -1009,7 +1009,7 @@ where
     }
     worker
         .queue_card_revocations_locked(&revoked_card_ids)
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1140,7 +1140,7 @@ where
             target_holder,
             store.with(|mut access| Some(get_ctx(access.data_mut()).state.wallet_generation)),
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1222,7 +1222,7 @@ where
             retry.installed_card.card_id(),
             target_holder,
         ))
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1291,7 +1291,7 @@ where
             affected_wallets,
             local_wallet_generation: Some(wallet_generation),
         })
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1528,7 +1528,7 @@ where
             target_revision,
             Some(details.clone()),
         ))
-        .await;
+        .await?;
     tracing::warn!(
         "Worker failed to update to {}: {}, update attempt aborted",
         target_revision,
@@ -1564,6 +1564,6 @@ where
             component_size,
             active_plugins,
         )
-        .await;
+        .await?;
     Ok(())
 }

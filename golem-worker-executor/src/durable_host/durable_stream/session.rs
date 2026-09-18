@@ -192,14 +192,14 @@ impl DurableStreamStore {
                     .collect()
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         for (position, key) in result_keys {
             staged
                 .invocation_results
                 .entry(key)
                 .or_insert(entries[position].0);
         }
-        self.commit(context).await;
+        self.commit(context).await?;
         *index = staged;
         drop(index);
         self.notify_session_records_changed(Some(context));
@@ -398,7 +398,7 @@ impl DurableStreamStore {
                 result
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
 
         let mut prepared = None;
         let mut registrations = Vec::with_capacity(requests.len());
@@ -467,7 +467,7 @@ impl DurableStreamStore {
             &StreamSessionRecord::Prepared(prepared.clone()),
         )?;
 
-        self.commit_notifying(context, committed).await;
+        self.commit_notifying(context, committed).await?;
         *index = updated_index;
         self.buses
             .write()
@@ -670,8 +670,8 @@ impl DurableStreamStore {
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {

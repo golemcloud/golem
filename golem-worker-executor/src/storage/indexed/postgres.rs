@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanCursor, ScanResume, WriterId,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::ShardEpoch;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -41,6 +42,9 @@ pub struct PostgresIndexedStorage {
     pool: PostgresPool,
     drop_prefix_delete_batch_size: u64,
     semaphore: Option<Arc<Semaphore>>,
+    /// Recorded beside the epoch on every oplog this process claims, so an equal epoch from
+    /// another process is refused rather than shared. One per process; see [`WriterId`].
+    writer_id: WriterId,
 }
 
 impl PostgresIndexedStorage {
@@ -79,6 +83,7 @@ impl PostgresIndexedStorage {
             pool,
             drop_prefix_delete_batch_size: config.drop_prefix_delete_batch_size,
             semaphore,
+            writer_id: WriterId::process(),
         })
     }
 
@@ -87,7 +92,16 @@ impl PostgresIndexedStorage {
             pool,
             drop_prefix_delete_batch_size: 1024,
             semaphore: None,
+            writer_id: WriterId::process(),
         })
+    }
+
+    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
+    /// give every storage it opens one identity, and a test uses it to play two executors racing
+    /// over one oplog inside a single process.
+    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
+        self.writer_id = writer_id;
+        self
     }
 
     pub async fn run_metrics_loop(&self) -> anyhow::Result<()> {
@@ -135,6 +149,14 @@ impl PostgresIndexedStorage {
         })
     }
 
+    /// A stored epoch that will not fit a `u64` is corruption, not a fence. `to_i64` refuses to
+    /// write one, so a negative column value came from outside this code - and reading it back as
+    /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the oplog and,
+    /// reported as evidence, walks the shard manager's own mint towards its ceiling.
+    fn negative_epoch_message(value: i64, key: &str) -> String {
+        format!("Postgres indexed storage read a negative shard epoch {value} for key '{key}'")
+    }
+
     fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
         if primary_oplog_insert && err.is_pool_timeout() {
             IndexedStorageError::Transient(err.to_string())
@@ -154,6 +176,12 @@ impl PostgresIndexedStorage {
 
     fn classify_repo_error_general(err: RepoError) -> IndexedStorageError {
         Self::classify_repo_error(err, false)
+    }
+
+    /// The oplog-insert classifier as a plain `fn`, so it can be handed to
+    /// [`FencedTxError::into_indexed_storage_error`], which takes a function pointer.
+    fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
+        Self::classify_repo_error(err, true)
     }
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -319,6 +347,10 @@ impl IndexedStorage for PostgresIndexedStorage {
         Ok((super::last_key_resume(&keys, count), keys))
     }
 
+    /// Delegates to [`Self::append_many`] so a single entry and a batch share the id validation,
+    /// the permit and the epoch check. An entry that asserts an epoch is checked in the same
+    /// transaction as its insert, like a batch; one that asserts nothing is a single autocommit
+    /// `INSERT`. The permit is acquired there, not here.
     async fn append(
         &self,
         svc_name: &'static str,
@@ -328,25 +360,18 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let _permit = self.acquire_permit().await;
-        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
-        let id = Self::to_i64(id, "id")?;
-        let query = sqlx::query(
-            "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+        self.append_many(
+            svc_name,
+            api_name,
+            entity_name,
+            &namespace,
+            key,
+            vec![(id, Bytes::from(value))].into(),
+            shard_epoch,
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(id)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
+        .await
     }
 
     async fn append_many(
@@ -357,24 +382,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
         }
-        if let [(id, value)] = pairs.as_ref() {
-            return self
-                .append(
-                    svc_name,
-                    api_name,
-                    entity_name,
-                    (*namespace).clone(),
-                    key,
-                    *id,
-                    value.to_vec(),
-                )
-                .await;
-        }
-
         let _permit = self.acquire_permit().await;
         let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
         let namespace = Self::namespace((*namespace).clone());
@@ -384,9 +396,71 @@ impl IndexedStorage for PostgresIndexedStorage {
             Self::to_i64(*id, "id")?;
         }
 
+        // With no epoch asserted there is nothing to check atomically with the insert, so a lone
+        // entry is one autocommit `INSERT` rather than a transaction held open around it. An
+        // entry that asserts an epoch takes the transaction below, as a batch does.
+        if let (None, [(id, value)]) = (shard_epoch, pairs.as_ref()) {
+            return self
+                .pool
+                .with_rw(svc_name, api_name)
+                .execute(
+                    sqlx::query(
+                        "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+                    )
+                    .bind(namespace)
+                    .bind(key)
+                    .bind(i64::try_from(*id).expect("validated oplog index"))
+                    .bind(value.as_ref()),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
+        }
+
+        let writer_id = self.writer_id.to_string();
         self.pool
-            .with_tx(svc_name, api_name, |tx| {
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
+
+                    // Inside the insert transaction, and holding the row, so a writer that has
+                    // lost the shard cannot slip a batch in between the check and the insert.
+                    // `FOR UPDATE` is what serialises two executors racing over the same oplog.
+                    if let Some(expected) = shard_epoch {
+                        let stored: Option<(i64, String)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch, owner FROM oplog_metadata WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        let mut actual = None;
+                        let mut owner_matches = false;
+                        if let Some((epoch, owner)) = stored {
+                            let epoch = u64::try_from(epoch).map_err(|_| {
+                                FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
+                            })?;
+                            actual = Some(ShardEpoch(epoch));
+                            owner_matches = owner == writer_id;
+                        }
+                        // Strict equality on the epoch, and the row's own writer on top of it. A
+                        // stored epoch above ours means a newer owner has taken over; below ours
+                        // means an open skipped the assertion; equal but written by another
+                        // process means a manager that lost its state minted this generation
+                        // twice, and neither of us may write through the other. An absent row
+                        // fences too - it is written before the first entry and removed before
+                        // the last.
+                        if actual != Some(expected) || !owner_matches {
+                            return Err(FencedTxError::Fenced {
+                                key: key.clone(),
+                                expected,
+                                actual,
+                                owner_conflict: actual == Some(expected) && !owner_matches,
+                            });
+                        }
+                    }
+
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
                         let mut query_builder = QueryBuilder::<Postgres>::new(
                             "INSERT INTO index_storage (namespace, key, id, value) ",
@@ -409,7 +483,108 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
+            .map_err(|err| {
+                err.into_indexed_storage_error(if primary_oplog_insert {
+                    Self::classify_repo_error_oplog_insert
+                } else {
+                    Self::classify_repo_error_general
+                })
+            })
+    }
+
+    /// Postgres's half of [`IndexedStorage::upsert_oplog_metadata`], which states the rule this
+    /// enforces.
+    ///
+    /// The `WHERE` on the conflict path is where it lives: `epoch < EXCLUDED.epoch` for a higher
+    /// generation, or `= EXCLUDED.epoch AND owner = EXCLUDED.owner` for the same process re-opening
+    /// at the one it holds. With no record there is no conflict and any epoch is inserted. Postgres
+    /// reports one row affected for an insert and for an accepted update, and zero when the `WHERE`
+    /// excludes it - which is what the read-back below turns into a fence.
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let namespace = Self::namespace(namespace);
+        let epoch = Self::to_i64(shard_epoch.0, "shard_epoch")?;
+
+        let writer_id = self.writer_id.to_string();
+
+        let mut api = self.pool.with_rw(svc_name, api_name);
+        let result = api
+            .execute(
+                sqlx::query(
+                    r#"INSERT INTO oplog_metadata (namespace, key, epoch, owner) VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch, owner = EXCLUDED.owner
+                       WHERE oplog_metadata.epoch < EXCLUDED.epoch
+                          OR (oplog_metadata.epoch = EXCLUDED.epoch AND oplog_metadata.owner = EXCLUDED.owner);"#,
+                )
+                .bind(namespace.clone())
+                .bind(key)
+                .bind(epoch)
+                .bind(writer_id.clone()),
+            )
+            .await
+            .map_err(Self::classify_repo_error_general)?;
+
+        if result.rows_affected() == 0 {
+            // Rejected. Read the stored epoch back purely so the error can name it.
+            let stored: Option<(i64, String)> = api
+                .fetch_optional_as(
+                    sqlx::query_as(
+                        "SELECT epoch, owner FROM oplog_metadata WHERE namespace = $1 AND key = $2;",
+                    )
+                    .bind(namespace)
+                    .bind(key),
+                )
+                .await
+                .map_err(Self::classify_repo_error_general)?;
+            let mut actual = None;
+            let mut owner_matches = false;
+            if let Some((epoch, owner)) = stored {
+                let epoch = u64::try_from(epoch).map_err(|_| {
+                    IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                })?;
+                actual = Some(ShardEpoch(epoch));
+                owner_matches = owner == writer_id;
+            }
+            return Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: shard_epoch,
+                actual,
+                owner_conflict: actual == Some(shard_epoch) && !owner_matches,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let query = sqlx::query("DELETE FROM oplog_metadata WHERE namespace = $1 AND key = $2;")
+            .bind(Self::namespace(namespace))
+            .bind(key);
+
+        self.pool
+            .with_rw(svc_name, api_name)
+            .execute(query)
+            .await
+            .map(|_| ())
+            .map_err(Self::classify_repo_error_general)
+    }
+
+    fn supports_epoch_fencing(&self) -> bool {
+        true
     }
 
     async fn length(

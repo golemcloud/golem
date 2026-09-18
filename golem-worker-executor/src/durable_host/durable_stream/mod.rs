@@ -56,7 +56,8 @@ use crate::services::activity::{ActivityGate, spawn_with_activity};
 #[cfg(test)]
 use crate::services::oplog::CommitLevel;
 use crate::services::oplog::{
-    DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
+    DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
+    OplogServiceOps,
 };
 use crate::services::rpc::{DurableStreamReadError, Rpc};
 use crate::services::worker::WorkerService;
@@ -90,6 +91,7 @@ use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -252,9 +254,22 @@ pub enum StreamStoreError {
     ConsumerJournalAdvanced,
     DeletionBlocked(Vec<StreamAttachmentKey>),
     CorruptHistory(String),
+    Fenced(OplogFence),
     Oplog(String),
     RecoveryRequired,
     LiveBus(DurableLiveStreamBusError),
+}
+
+/// A refused write keeps its type as `Fenced` instead of joining `Oplog` as text, so the
+/// boundaries can report it as `OplogFenced` - a caller reroutes on that - rather than as a
+/// failure of the request.
+impl From<OplogError> for StreamStoreError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error @ OplogError::Storage(_) => Self::Oplog(error.to_string()),
+        }
+    }
 }
 
 impl std::fmt::Display for StreamStoreError {
@@ -272,6 +287,18 @@ impl From<StreamStoreError> for String {
 }
 
 impl StreamStoreError {
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
+    /// other error is rendered through `otherwise`, which says how that boundary classifies it.
+    pub(crate) fn into_worker_executor_error(
+        self,
+        otherwise: impl FnOnce(String) -> WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match self {
+            Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            error => otherwise(error.to_string()),
+        }
+    }
+
     /// Formats the dependent attachment identities that currently block deletion.
     pub fn deletion_blocked_evidence(&self) -> Option<String> {
         let Self::DeletionBlocked(dependents) = self else {
@@ -499,7 +526,10 @@ impl DurableStreamStore {
         let commit: DurableStreamCommit = Arc::new(move |committed| {
             let oplog = commit_oplog.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog
+                    .commit(CommitLevel::Always)
+                    .await
+                    .expect("oplog write");
                 if let Some(committed) = committed {
                     let _ = committed.send(());
                 }

@@ -20,8 +20,8 @@ use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
-use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogLifecycleGuard, OplogOps};
+use crate::services::oplog::plugin::{OplogProcessorPlugin, try_join_background_work};
+use crate::services::oplog::{CommitLevel, MultiLayerOplog, Oplog, OplogLifecycleGuard, OplogOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -659,6 +659,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),
+                // Unfenced: the target's shard may belong to another executor, and
+                // this is a one-shot copy, not a live oplog. The handle is closed, with
+                // any archive transfer it scheduled ended, before the target is resumed
+                // (`close_fork_target_oplog`), and the open-oplog cache never hands a
+                // handle opened without an epoch to an opener that asserts one, so the
+                // owner's first open builds its own handle and writes the metadata row.
+                None,
             )
             .await;
 
@@ -677,7 +684,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
-            new_oplog.add(entry.clone()).await;
+            new_oplog.add(entry.clone()).await?;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
@@ -736,7 +743,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     idempotency_key,
                 })
-                .await;
+                .await?;
         }
 
         for target_revision in pending_update_revisions {
@@ -749,7 +756,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     target_revision,
                     details: Some("cancelled by fork".to_string()),
                 })
-                .await;
+                .await?;
         }
 
         Ok((new_oplog, target_lifecycle))
@@ -816,13 +823,19 @@ fn rewrite_forked_oplog_entry(
 ) -> OplogEntry {
     match &mut entry {
         OplogEntry::AgentInvocationStarted {
-            wallet_pin: Some(wallet_pin),
+            wallet_pin,
+            shard_epoch,
             ..
         } => {
-            wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
-                agent_id: target_agent_id.clone(),
-            })
-            .wallet_id_hash();
+            // The source's epoch names a generation of the source's shard. The copy lands in an
+            // oplog opened without an epoch to assert, which the field records as `None`.
+            *shard_epoch = None;
+            if let Some(wallet_pin) = wallet_pin {
+                wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
+                    agent_id: target_agent_id.clone(),
+                })
+                .wallet_id_hash();
+            }
         }
         OplogEntry::CardEventQueued {
             event: QueuedCardEvent::TransferStarted(event),
@@ -856,6 +869,33 @@ fn rewrite_forked_oplog_entry(
     entry
 }
 
+/// Commits the fork target's copied oplog and closes its handle, before the target is resumed.
+///
+/// The handle asserts no epoch, so nothing it started may still be writing once the target's
+/// owner opens the oplog at its own epoch. Dropping it does not ensure that on its own:
+/// - When an oplog processor plugin is configured, the handle is a `ForwardingOplog` running its
+///   own actor and periodic-commit timer in the background. Dropping only aborts them; a
+///   checkpoint commit already under way when the caller moves on would still land, unfenced,
+///   after the owner has opened its own primary. `try_join_background_work` stops the timer and
+///   waits for the actor to drain everything already queued - including a tick the timer sent in
+///   the instant before it was stopped - before this function returns.
+/// - When the copy reaches the entry count limit, a commit (the explicit one below, or one the
+///   forwarding actor ran while draining) schedules an archive transfer that holds its own
+///   reference to the handle and ends by dropping the primary's prefix, and deleting the primary
+///   oplog once that empties it, over whatever the owner appended meanwhile. `try_abort_transfer`
+///   ends that transfer through the handle, not the agent-keyed transfer registry, which the
+///   owner's open overwrites - and runs after the forwarding actor has been joined, so it also
+///   catches a transfer the drained actor only just started.
+pub(crate) async fn close_fork_target_oplog(
+    new_oplog: Arc<dyn Oplog>,
+) -> Result<(), WorkerExecutorError> {
+    new_oplog.commit(CommitLevel::Always).await?;
+    try_join_background_work(&new_oplog).await;
+    MultiLayerOplog::try_abort_transfer(&new_oplog).await;
+    drop(new_oplog);
+    Ok(())
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
@@ -875,7 +915,11 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        new_oplog.commit(CommitLevel::Always).await;
+        // Held until the handle is fully closed, not just committed: `get_or_open` for the
+        // target agent requires this same lifecycle lock, so the real owner cannot open its own
+        // oplog - and start writing at its own epoch - until every queued forwarding checkpoint
+        // and archive transfer this fork target started has drained.
+        close_fork_target_oplog(new_oplog).await?;
         drop(target_lifecycle);
 
         // We go through worker proxy to resume the worker
@@ -953,7 +997,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     forced_commit: false,
                 }),
             )
-            .await;
+            .await?;
 
         if let Some(scope_start) = copied_scope_start {
             new_oplog
@@ -963,10 +1007,14 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     response: None,
                     forced_commit: true,
                 })
-                .await;
+                .await?;
         }
 
-        new_oplog.commit(CommitLevel::Always).await;
+        // Held until the handle is fully closed, not just committed: `get_or_open` for the
+        // target agent requires this same lifecycle lock, so the real owner cannot open its own
+        // oplog - and start writing at its own epoch - until every queued forwarding checkpoint
+        // and archive transfer this fork target started has drained.
+        close_fork_target_oplog(new_oplog).await?;
         drop(target_lifecycle);
 
         // We go through worker proxy to resume the worker
@@ -1030,17 +1078,53 @@ mod tests {
                 pinned_card_ids: Vec::new(),
                 scope_card_id: None,
             }),
+            shard_epoch: Some(7),
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {
             OplogEntry::AgentInvocationStarted {
                 wallet_pin: Some(wallet_pin),
+                shard_epoch,
                 ..
-            } => assert_eq!(
-                wallet_pin.wallet_token.wallet_id_hash,
-                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
-            ),
+            } => {
+                assert_eq!(
+                    wallet_pin.wallet_token.wallet_id_hash,
+                    CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+                );
+                assert_eq!(shard_epoch, None);
+            }
             other => panic!("expected pinned invocation start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fork_clears_the_source_shard_epoch_from_copied_invocations() {
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let entry = OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::new("fork-shard-epoch".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "test".to_string(),
+                input: SchemaValue::Record { fields: Vec::new() },
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: None,
+            shard_epoch: Some(7),
+        };
+
+        // The source's epoch belongs to the source's shard; the target's copy asserts none.
+        match rewrite_forked_oplog_entry(entry, &source, &target) {
+            OplogEntry::AgentInvocationStarted {
+                wallet_pin: None,
+                shard_epoch,
+                ..
+            } => assert_eq!(shard_epoch, None),
+            other => panic!("expected unpinned invocation start, got {other:?}"),
         }
     }
 

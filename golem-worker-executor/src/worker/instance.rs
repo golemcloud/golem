@@ -21,7 +21,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -354,7 +354,16 @@ impl OwnerExecution {
     pub(crate) async fn test_after_monotonic_clock_start(&self) -> Result<(), InterruptKind> {
         let gate = self.monotonic_clock_start_gate.lock().unwrap().take();
         if let Some(gate) = gate {
-            self.oplog.commit(CommitLevel::Always).await;
+            // The gate is entered from inside a host call, where the fence surfaces as the
+            // interrupt that gives the agent up; a transient storage failure is fatal here as
+            // everywhere else.
+            match self.oplog.commit(CommitLevel::Always).await {
+                Ok(_) => {}
+                Err(OplogError::Fenced(_)) => {
+                    return Err(InterruptKind::ShardLost);
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
             if let Some(entered) = gate.entered.lock().unwrap().take() {
                 let _ = entered.send(());
             }
@@ -411,14 +420,11 @@ impl OwnerExecution {
         }
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
-        self.commit.commit_and_update_state(level).await.0
-    }
-
-    pub async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.oplog.add(entry).await;
-        self.commit(CommitLevel::Always).await;
-        index
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+        self.commit
+            .commit_and_update_state(level)
+            .await
+            .map(|(index, _)| index)
     }
 }
 
@@ -720,7 +726,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // process crash can replay and persist the same instantiation growth again.
             owner
                 .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await;
+                .await?;
             owner
                 .startup_linear_memory_bytes
                 .store(allocated_bytes, Ordering::Release);

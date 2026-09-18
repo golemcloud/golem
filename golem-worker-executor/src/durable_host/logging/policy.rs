@@ -112,7 +112,10 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                         if !replay_state.seen_log(*level, context, message).await {
                             // haven't seen this log before
                             public_state.event_service().emit_event(event.clone(), true);
-                            public_state.worker().add_to_oplog(entry).await;
+                            public_state
+                                .worker()
+                                .add_to_oplog_or_relinquish(entry)
+                                .await;
                         } else {
                             // we have persisted emitting this log before, so we mark it as non-live and
                             // remove the entry from the seen log set.
@@ -129,7 +132,18 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                     public_state.event_service().emit_event(event.clone(), true);
 
                     if is_live && !replay_state.seen_log(*level, context, message).await {
-                        oplog.add(entry).await;
+                        // Same contract as `Worker::add_to_oplog_or_relinquish`, spelled out
+                        // because this writes through the oplog handle passed in rather than the
+                        // worker's own: a fence gives the agent up, anything else is fail-stop.
+                        match oplog.add(entry).await {
+                            Ok(_) => {}
+                            Err(crate::services::oplog::OplogError::Fenced(fence)) => {
+                                public_state.worker().mark_relinquished(
+                                    crate::worker::RelinquishReason::Fenced(Some(Box::new(fence))),
+                                );
+                            }
+                            Err(error) => panic!("oplog write: {error}"),
+                        }
                     }
                 }
             }

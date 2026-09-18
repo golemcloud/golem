@@ -672,7 +672,7 @@ impl StreamSession {
                 epoch,
             }),
         )
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(true)
     }
@@ -789,15 +789,25 @@ impl StreamSession {
     }
 
     /// Commits and indexes a session record through the producer's owned write path.
+    ///
+    /// A refused write is returned as an error; any other failure means the internally generated
+    /// record is invalid.
     async fn append_record(
         &self,
         context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
-    ) {
-        self.producer
+    ) -> Result<(), String> {
+        match self
+            .producer
             .append_session_record_attributed(context, self.entity_parent_start_index, record)
             .await
-            .expect("internally generated durable session record is valid");
+        {
+            Ok(()) => Ok(()),
+            Err(error @ StreamStoreError::Fenced(_)) => Err(error.to_string()),
+            Err(error) => {
+                panic!("internally generated durable session record is invalid: {error}")
+            }
+        }
     }
 
     async fn try_append_record(
@@ -850,7 +860,7 @@ impl StreamSession {
                 attempt_id,
             }),
         )
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(attempt_id)
     }
@@ -956,7 +966,7 @@ impl StreamSession {
                 mapping,
             }),
         )
-        .await;
+        .await?;
         Ok(())
     }
 
@@ -3104,7 +3114,7 @@ impl StreamSession {
             }
         } else {
             self.append_record(None, StreamSessionRecord::InvocationResult(record))
-                .await;
+                .await?;
             self.commit_consumer_journal().await?;
         }
         self.decode_initial(
@@ -5129,7 +5139,7 @@ impl DurableInputEndpoint {
                     }),
                 };
                 if !journaled {
-                    streams.append_record(None, record).await;
+                    streams.append_record(None, record).await?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
                         .back()

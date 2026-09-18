@@ -1588,6 +1588,107 @@ async fn manual_update_on_idle(
     Ok(())
 }
 
+/// A stop arriving while a manual update is in flight must not deadlock either side.
+///
+/// This is the shape the final review's F10 was about: the update is enqueued from the invocation
+/// loop, and a stop taking the same worker down could wait on the loop that was waiting to enqueue.
+/// The enqueue is non-blocking now (`enqueue_update_from_loop`), so both finish. The test is
+/// written as a race rather than a fixed order - either outcome is legal, a hang is not - and the
+/// timeout is the assertion.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn a_stop_racing_a_manual_update_never_deadlocks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    // Both are issued without awaiting the first: the update goes through the loop-side enqueue
+    // while the interrupt takes the worker down under it.
+    let update = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        let revision = updated_component.revision;
+        spawn(
+            async move {
+                executor
+                    .manual_update_worker(&worker_id, revision, false)
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    let stop = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        spawn(async move { executor.interrupt(&worker_id).await }.in_current_span())
+    };
+
+    let (update, stop) = tokio::time::timeout(Duration::from_secs(60), async {
+        tokio::join!(update, stop)
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("a stop racing a manual update deadlocked: neither call came back")
+    })?;
+    // Either may fail on its own terms - the worker is being stopped - but neither may hang, and
+    // the executor has to stay usable afterwards.
+    let _ = update?;
+    let _ = stop?;
+
+    // The worker is still answerable, and on a revision that is one of the two legal outcomes -
+    // the method set differs between them, so the probe is the metadata rather than a call.
+    let metadata = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.get_worker_metadata(&worker_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the agent never answered again after the race"))??;
+    assert!(
+        metadata.component_revision == updated_component.revision
+            || metadata.component_revision == ComponentRevision::INITIAL,
+        "the update either landed or did not, but the revision must be one of the two, got {:?}",
+        metadata.component_revision
+    );
+    assert!(
+        !matches!(metadata.status, AgentStatus::Failed),
+        "a stop racing an update must not fail the agent, got {:?}",
+        metadata.status
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn manual_update_on_idle_without_save_snapshot(

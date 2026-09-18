@@ -905,9 +905,15 @@ pub trait WorkerExecutorClusterControl {
     async fn restart_all_with_env_vars(&self, vars: Vec<(String, String)>);
     async fn stop(&self, idx: u16);
     async fn start(&self, idx: u16);
+    async fn pause(&self, idx: u16);
+    async fn resume(&self, idx: u16);
     async fn started_indices(&self) -> Vec<u16>;
     async fn stopped_indices(&self) -> Vec<u16>;
     async fn is_running(&self, idx: u16) -> bool;
+    /// Whether the executor at `idx` answers its gRPC health check right now. Stricter than
+    /// [`Self::is_running`]: a process that is aborting still counts as running until the OS has
+    /// finished with it, but it no longer serves.
+    async fn is_serving(&self, idx: u16) -> bool;
     async fn cluster_size(&self) -> u16;
 
     async fn stop_shard_manager(&self);
@@ -954,6 +960,14 @@ impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
         self.worker_executor_cluster.start(usize::from(idx)).await;
     }
 
+    async fn pause(&self, idx: u16) {
+        self.worker_executor_cluster.pause(usize::from(idx)).await;
+    }
+
+    async fn resume(&self, idx: u16) {
+        self.worker_executor_cluster.resume(usize::from(idx)).await;
+    }
+
     async fn started_indices(&self) -> Vec<u16> {
         self.worker_executor_cluster
             .started_indices()
@@ -978,6 +992,19 @@ impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
             return false;
         };
         worker_executor.is_running().await
+    }
+
+    async fn is_serving(&self, idx: u16) -> bool {
+        let worker_executors = self.worker_executor_cluster.to_vec();
+        let Some(worker_executor) = worker_executors.get(usize::from(idx)).cloned() else {
+            return false;
+        };
+        crate::components::is_serving_grpc(
+            &worker_executor.grpc_host(),
+            worker_executor.grpc_port(),
+            Duration::from_secs(5),
+        )
+        .await
     }
 
     async fn cluster_size(&self) -> u16 {

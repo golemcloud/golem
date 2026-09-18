@@ -382,8 +382,8 @@ impl DurableStreamStore {
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let AppliedWriteBatch { events, .. } = self
             .apply_committed_write_batch(&mut index, entries)

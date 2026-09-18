@@ -36,7 +36,7 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogReadError, SearchOplog,
 };
-use crate::services::oplog::CommitLevel;
+use crate::services::oplog::{CommitLevel, OplogError};
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
@@ -644,6 +644,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .oplog
                 .add(OplogEntry::no_op(self.entity_parent_start_index()))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -716,7 +717,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
-                .await;
+                .await?;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
             Err(InterruptKind::Jump.into())
@@ -734,7 +735,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             debug!("Worker committing oplog to {replicas} replicas");
             loop {
                 // Applying a timeout to make sure the worker remains interruptible
-                if self.state.oplog.wait_for_replicas(replicas, timeout).await {
+                let committed = self.state.oplog.wait_for_replicas(replicas, timeout).await;
+                // The shard has a new owner, so nothing was committed and nothing can be. The
+                // fence surfaces as `ShardLost`, which gives the agent up without writing, instead
+                // of acknowledging a commit that did not happen or retrying one that never will:
+                // `check_interrupt` below has no interrupt to report for a latched fence.
+                if let Some(fence) = self.state.oplog.fence() {
+                    return Err(anyhow!(WorkerExecutorError::from(OplogError::Fenced(
+                        fence
+                    ))));
+                }
+                if committed {
                     debug!("Worker committed oplog to {replicas} replicas");
                     return Ok(());
                 } else {
@@ -809,7 +820,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             self.entity_parent_start_index(),
                             deleted_region,
                         ))
-                        .await;
+                        .await?;
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
@@ -841,6 +852,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                 ))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -905,7 +917,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     begin_index,
                 ))
-                .await;
+                .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }
@@ -1600,7 +1613,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
 
             let created_by = self.created_by();
             let fork_result = loop {
