@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { fromAgentId } from "../src/DynamicClient.js"
+import { parse } from "../src/AgentIdentity.js"
+import { bind } from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 
@@ -22,7 +23,7 @@ describe("DynamicClient", () => {
       const unusedRpc = Layer.succeed(RpcClient, {
         connect: () => Effect.die("parse failure must not connect"),
       })
-      const parse = yield* fromAgentId("bad").pipe(
+      const parsed = yield* parse("bad").pipe(
         Effect.provide(
           Layer.merge(
             hostLayer(() => {
@@ -33,7 +34,7 @@ describe("DynamicClient", () => {
         ),
         Effect.result,
       )
-      expect(parse).toMatchObject({
+      expect(parsed).toMatchObject({
         _tag: "Failure",
         failure: { _tag: "AgentIdentityError", cause: identityError },
       })
@@ -41,14 +42,20 @@ describe("DynamicClient", () => {
       const rpc = Layer.succeed(RpcClient, {
         connect: () => Effect.fail(new RpcHostError(structured, "WasmRpc.create")),
       })
-      const connect = yield* fromAgentId("valid").pipe(
-        Effect.scoped,
-        Effect.provide(Layer.merge(hostLayer(), rpc)),
-        Effect.result,
-      )
+      const identity = yield* parse("valid").pipe(Effect.provide(hostLayer()))
+      const connect = yield* identity
+        .dynamicClient()
+        .pipe(Effect.scoped, Effect.provide(rpc), Effect.result)
       expect(connect).toMatchObject({
         _tag: "Failure",
         failure: { _tag: "RpcCallError", cause: structured },
+      })
+      const copied = { ...identity, constructorValue: identity.constructorValue }
+      expect(
+        yield* bind(copied).pipe(Effect.scoped, Effect.provide(unusedRpc), Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "AgentIdentityError" },
       })
     }),
   )
@@ -76,7 +83,8 @@ describe("DynamicClient", () => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* fromAgentId("valid")
+          const identity = yield* parse("valid")
+          const client = yield* identity.dynamicClient()
           const scheduled = yield* client
             .method("run")
             .schedule({ seconds: 1n, nanoseconds: 0 }, tree)

@@ -22,8 +22,8 @@ import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicCli
 export const bindAgentClient = '__golemBindAgentClient' as const;
 
 /** @internal A value that can bind itself to an existing agent identity. */
-export interface AgentClientBinding<Client> {
-  [bindAgentClient](agentId: ParsedAgentId): Client;
+export interface AgentClientBinding<Client, Config = never> {
+  [bindAgentClient](agentId: ParsedAgentId, config?: Config): Client;
 }
 
 /** Explicit parts used to construct a {@link ParsedAgentId}. */
@@ -102,13 +102,13 @@ export class ParsedAgentId {
     return { typeName, constructorValue, phantomId };
   }
 
-  /** Bind caller-supplied codecs or a reflected agent type to this identity. */
-  client<Client>(binding: AgentClientBinding<Client>): Client {
+  /** Bind a contract to this identity. Config overrides apply only if this creates the worker. */
+  client<Client, Config>(binding: AgentClientBinding<Client, Config>, config?: Config): Client {
     const bind = binding[bindAgentClient];
     if (typeof bind !== 'function') {
       throw new TypeError('Expected an agent client contract or reflected agent type');
     }
-    return bind.call(binding, this);
+    return bind.call(binding, this, config);
   }
 
   /** Invoke this identity with schema values and no discovery or typed contract. */

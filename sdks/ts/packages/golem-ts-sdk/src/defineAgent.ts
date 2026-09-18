@@ -32,7 +32,7 @@ import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { buildAgentClientSurface } from './client';
-import type { AgentClientFactory } from './client';
+import type { FullAgentClientFactory } from './client';
 
 export type { ConfigSpec } from './config';
 
@@ -192,7 +192,7 @@ export interface AgentImpl {
   readonly name: string;
 }
 
-export interface AgentClientContract<
+export interface FullAgentClientContract<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
@@ -206,26 +206,31 @@ export interface AgentClientContract<
   readonly config?: Config;
 }
 
-export interface AgentClientBindingDefinition<
+export interface MethodOnlyAgentClientDefinition<
   Methods extends MethodsRecord,
-> extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
-  readonly name?: string;
+> extends AgentClientBinding<
+  import('./client').RemoteClient<Methods>,
+  readonly import('./client').AgentConfigEntry[]
+> {
   readonly methods: Methods;
 }
 
-export interface AgentClientDefinition<
+export interface FullAgentClientDefinition<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
   Mode extends 'durable' | 'ephemeral' = 'durable',
-> extends AgentClientContract<Id, Methods, Config, Mode> {
+> extends FullAgentClientContract<Id, Methods, Config, Mode> {
   /** Construct the environment-scoped identity for an agent addressed by this definition. */
   readonly agentId: Mode extends 'ephemeral'
     ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
     : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
   /** A client factory compiled from this definition's local schemas. */
-  readonly client: AgentClientFactory<Id, Methods, Mode>;
-  [bindAgentClient](agentId: ParsedAgentId): import('./client').RemoteClient<Methods, Mode>;
+  readonly client: FullAgentClientFactory<Id, Methods, Config, Mode>;
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config?: import('./client').ConfigOverrides<Config>,
+  ): import('./client').RemoteClient<Methods, Mode>;
 }
 
 export interface AgentDefinition<
@@ -235,7 +240,7 @@ export interface AgentDefinition<
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
   HasSnapshotState extends boolean = false,
-> extends AgentClientDefinition<Id, Methods, Config, Mode> {
+> extends FullAgentClientDefinition<Id, Methods, Config, Mode> {
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
   implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
     impl: AgentImplementation<Id, Methods, Config, State, HasSnapshotState>,
@@ -407,7 +412,7 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const clientContract: AgentClientContract<Id, Methods, Config, Mode> & {
+  const clientContract: FullAgentClientContract<Id, Methods, Config, Mode> & {
     readonly name: string;
     readonly id: Id;
   } = {
@@ -422,9 +427,14 @@ export function defineAgent<
   let implemented = false;
   let surface:
     | {
-        client: AgentClientFactory<Id, Methods, Mode>;
-        agentId: AgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
-        [bindAgentClient]: AgentClientDefinition<Id, Methods, Config, Mode>[typeof bindAgentClient];
+        client: FullAgentClientFactory<Id, Methods, Config, Mode>;
+        agentId: FullAgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
+        [bindAgentClient]: FullAgentClientDefinition<
+          Id,
+          Methods,
+          Config,
+          Mode
+        >[typeof bindAgentClient];
       }
     | undefined;
   const getSurface = () => (surface ??= buildAgentClientSurface(clientContract, false));
@@ -436,8 +446,8 @@ export function defineAgent<
     get client() {
       return getSurface().client;
     },
-    [bindAgentClient](agentId) {
-      return getSurface()[bindAgentClient](agentId);
+    [bindAgentClient](agentId, config) {
+      return getSurface()[bindAgentClient](agentId, config);
     },
     implement(impl) {
       if (implemented) {

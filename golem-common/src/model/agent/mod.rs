@@ -176,6 +176,19 @@ impl AgentTypeSchemaResolver for &ComponentMetadata {
     }
 }
 
+impl AgentTypeSchemaResolver for &AgentTypeSchema {
+    fn resolve_agent_type_schema_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentTypeSchema, String> {
+        if &self.type_name == agent_type {
+            Ok((*self).clone())
+        } else {
+            Err(format!("Agent type not found: {agent_type}"))
+        }
+    }
+}
+
 impl ParsedAgentId {
     pub fn try_new(
         agent_type: AgentTypeName,
@@ -231,6 +244,12 @@ impl ParsedAgentId {
                 .input_schema
                 .fields()
                 .iter()
+                .filter(|field| {
+                    matches!(
+                        field.source,
+                        crate::schema::agent::FieldSource::UserSupplied
+                    )
+                })
                 .map(|field| NamedFieldType {
                     name: field.name.clone(),
                     body: field.schema.clone(),
@@ -295,6 +314,12 @@ pub fn typed_constructor_parameters(
             .input_schema
             .fields()
             .iter()
+            .filter(|field| {
+                matches!(
+                    field.source,
+                    crate::schema::agent::FieldSource::UserSupplied
+                )
+            })
             .map(|field| NamedFieldType {
                 name: field.name.clone(),
                 body: field.schema.clone(),

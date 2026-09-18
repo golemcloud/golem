@@ -21,6 +21,17 @@ import {
   type InvocationMetadata,
   type RegisteredAgentType,
 } from 'golem:agent/host@2.0.0';
+export {
+  DynamicToolClient,
+  ToolCommand,
+  ToolRemoteOutputError,
+  ToolType,
+  getAllToolTypes,
+  getToolType,
+  type ReflectedToolClient,
+  type ReflectedToolFailure,
+  type ToolArgument,
+} from './toolReflection';
 import type {
   AgentMethod as HostAgentMethod,
   InputSchema as HostInputSchema,
@@ -30,6 +41,7 @@ import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
 import {
   RemoteOutputError,
   resolveRemoteAgentFallibly,
+  type AgentConfigEntry,
   type RemoteAgentHandle,
 } from './bridge/agent';
 import {
@@ -67,6 +79,12 @@ export interface ReflectedInvocation<T> {
   readonly value?: T;
 }
 
+/** Canonical JSON values for declared local configuration paths. */
+export interface ReflectedConfigJsonEntry {
+  readonly path: readonly string[];
+  readonly value: JsonValue;
+}
+
 export class AgentMethod {
   readonly name: string;
   readonly description: string;
@@ -92,6 +110,11 @@ export class AgentType {
   readonly implementedBy: ComponentId;
   readonly constructorInput: SchemaRef;
   readonly methods: readonly AgentMethod[];
+  readonly config: readonly {
+    readonly path: readonly string[];
+    readonly source: 'local' | 'secret';
+    readonly schema: SchemaRef;
+  }[];
   readonly client: ReflectedAgentClientFactory;
 
   constructor(registered: RegisteredAgentType) {
@@ -104,6 +127,15 @@ export class AgentType {
     this.implementedBy = ComponentId.from(registered.implementedBy);
     this.constructorInput = inputSchemaRef(graph, raw.constructor.inputSchema);
     this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, graph)));
+    this.config = Object.freeze(
+      raw.config.map((decl) =>
+        Object.freeze({
+          path: Object.freeze([...decl.path]),
+          source: decl.source,
+          schema: SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, decl.valueType)),
+        }),
+      ),
+    );
     this.client = new ReflectedAgentClientFactory(this);
     Object.freeze(this);
   }
@@ -119,6 +151,9 @@ export class AgentType {
 
   /** Construct an agent identity from an already packed constructor value. */
   agentIdValue(input: SchemaValue, phantomId?: Uuid): ParsedAgentId {
+    if (!this.constructorInput.validateValue(input).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
+    }
     return ParsedAgentId.create({
       typeName: this.name,
       constructorValue: input,
@@ -126,7 +161,10 @@ export class AgentType {
     });
   }
 
-  [bindAgentClient](agentId: ParsedAgentId): ReflectedAgentClient {
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedAgentClient {
     const parts = agentId.parts();
     if (parts.typeName !== this.name) {
       throw new TypeError(`Reflected agent type '${this.name}' cannot bind '${parts.typeName}'`);
@@ -136,16 +174,63 @@ export class AgentType {
         `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
       );
     }
+    if (!this.constructorInput.validateValue(parts.constructorValue).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
+    }
     return new ReflectedAgentClient(
       this,
       resolveRemoteAgentFallibly(
         parts.typeName,
         parts.constructorValue,
         parts.phantomId,
-        [],
+        this.validateConfigValues(config),
         this.mode,
       ),
     );
+  }
+
+  /** Pack canonical JSON overrides for declared local config fields. */
+  packConfigJson(entries: readonly ReflectedConfigJsonEntry[]): AgentConfigEntry[] {
+    return entries.map((entry) => {
+      const declaration = this.configDeclaration(entry.path);
+      return {
+        path: [...entry.path],
+        value: {
+          graph: declaration.schema.graph,
+          value: declaration.schema.packJson(entry.value),
+        },
+      };
+    });
+  }
+
+  /** Validate schema-native overrides before opening an RPC. */
+  validateConfigValues(entries: readonly AgentConfigEntry[]): AgentConfigEntry[] {
+    return entries.map((entry) => {
+      const declaration = this.configDeclaration(entry.path);
+      if (!declaration.schema.validateValue(entry.value.value).success) {
+        throw new TypeError(`Invalid config value at '${entry.path.join('.')}'`);
+      }
+      return {
+        path: [...entry.path],
+        value: {
+          graph: declaration.schema.graph,
+          value: entry.value.value,
+        },
+      };
+    });
+  }
+
+  private configDeclaration(path: readonly string[]): (typeof this.config)[number] {
+    const declaration = this.config.find(
+      (candidate) =>
+        candidate.path.length === path.length &&
+        candidate.path.every((part, i) => part === path[i]),
+    );
+    if (!declaration) throw new TypeError(`Unknown config path '${path.join('.')}'`);
+    if (declaration.source === 'secret') {
+      throw new TypeError(`Cannot override secret config field '${path.join('.')}' over RPC`);
+    }
+    return declaration;
   }
 }
 
@@ -158,43 +243,83 @@ export interface ReflectedPhantomClient {
 export class ReflectedAgentClientFactory {
   constructor(private readonly agentType: AgentType) {}
 
-  get(input: JsonValue): ReflectedAgentClient {
+  get(input: JsonValue, config: readonly ReflectedConfigJsonEntry[] = []): ReflectedAgentClient {
     this.requireMode('durable', 'get');
-    return this.create(this.agentType.constructorInput.packJson(input));
+    return this.create(
+      this.agentType.constructorInput.packJson(input),
+      undefined,
+      this.agentType.packConfigJson(config),
+    );
   }
 
-  getValue(input: SchemaValue): ReflectedAgentClient {
+  getValue(input: SchemaValue, config: readonly AgentConfigEntry[] = []): ReflectedAgentClient {
     this.requireMode('durable', 'getValue');
-    return this.create(input);
+    return this.create(input, undefined, config);
   }
 
-  getPhantom(input: JsonValue, phantomId: Uuid): ReflectedAgentClient {
-    return this.create(this.agentType.constructorInput.packJson(input), phantomId);
+  getPhantom(
+    input: JsonValue,
+    phantomId: Uuid,
+    config: readonly ReflectedConfigJsonEntry[] = [],
+  ): ReflectedAgentClient {
+    return this.create(
+      this.agentType.constructorInput.packJson(input),
+      phantomId,
+      this.agentType.packConfigJson(config),
+    );
   }
 
-  getPhantomValue(input: SchemaValue, phantomId: Uuid): ReflectedAgentClient {
-    return this.create(input, phantomId);
+  getPhantomValue(
+    input: SchemaValue,
+    phantomId: Uuid,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedAgentClient {
+    return this.create(input, phantomId, config);
   }
 
-  newPhantom(input: JsonValue): ReflectedPhantomClient | ReflectedAgentClient {
-    return this.newPhantomValue(this.agentType.constructorInput.packJson(input));
+  newPhantom(
+    input: JsonValue,
+    config: readonly ReflectedConfigJsonEntry[] = [],
+  ): ReflectedPhantomClient | ReflectedAgentClient {
+    return this.newPhantomValue(
+      this.agentType.constructorInput.packJson(input),
+      this.agentType.packConfigJson(config),
+    );
   }
 
-  newPhantomValue(input: SchemaValue): ReflectedPhantomClient | ReflectedAgentClient {
-    if (this.agentType.mode === 'ephemeral') return this.create(input);
+  newPhantomValue(
+    input: SchemaValue,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedPhantomClient | ReflectedAgentClient {
+    if (this.agentType.mode === 'ephemeral') return this.create(input, undefined, config);
     const phantomId = Uuid.generate();
     const agentId = this.agentType.agentIdValue(input, phantomId);
     return {
       agentId,
       phantomId,
-      client: this.create(input, phantomId),
+      client: this.create(input, phantomId, config),
     };
   }
 
-  private create(input: SchemaValue, phantomId?: Uuid): ReflectedAgentClient {
+  private create(
+    input: SchemaValue,
+    phantomId?: Uuid,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedAgentClient {
+    if (!this.agentType.constructorInput.validateValue(input).success) {
+      throw new TypeError(
+        `Invalid constructor value for reflected agent type '${this.agentType.name}'`,
+      );
+    }
     return new ReflectedAgentClient(
       this.agentType,
-      resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
+      resolveRemoteAgentFallibly(
+        this.agentType.name,
+        input,
+        phantomId,
+        this.agentType.validateConfigValues(config),
+        this.agentType.mode,
+      ),
     );
   }
 
@@ -233,17 +358,27 @@ export class ReflectedAgentMethod {
     signal?: AbortSignal,
   ): Promise<ReflectedInvocation<JsonValue>> {
     const result = await this.invokeValue(this.definition.input.packJson(input), signal);
-    return {
-      metadata: result.metadata,
-      value:
-        result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
-    };
+    try {
+      return {
+        metadata: result.metadata,
+        value:
+          result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
+      };
+    } catch (error) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned invalid canonical JSON`,
+        { cause: error },
+      );
+    }
   }
 
   async invokeValue(
     input: SchemaValue,
     signal?: AbortSignal,
   ): Promise<ReflectedInvocation<SchemaValue>> {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     const result = await this.remote.invokeAndAwaitWithMetadata(
       this.definition.name,
       input,
@@ -252,6 +387,11 @@ export class ReflectedAgentMethod {
     if (this.definition.output !== undefined && result.value === undefined) {
       throw new RemoteOutputError(
         `Remote agent ${this.remote.agentId}.${this.definition.name} returned no value for a non-unit output`,
+      );
+    }
+    if (this.definition.output === undefined && result.value !== undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned a value for a unit output`,
       );
     }
     if (this.definition.output !== undefined && result.value !== undefined) {
@@ -270,6 +410,9 @@ export class ReflectedAgentMethod {
   }
 
   triggerValue(input: SchemaValue): InvocationMetadata {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     return this.remote.invokeWithMetadata(this.definition.name, input);
   }
 
@@ -278,6 +421,9 @@ export class ReflectedAgentMethod {
   }
 
   scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
     return this.remote.scheduleCancelableWithMetadata(at, this.definition.name, input);
   }
 }

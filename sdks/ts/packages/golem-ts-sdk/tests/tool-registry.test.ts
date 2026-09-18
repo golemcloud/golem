@@ -474,7 +474,7 @@ describe('tool registration', () => {
     expect(received).toBeUndefined();
   });
 
-  it('accepts the canonical option carrier for an omitted optional argument', async () => {
+  it('accepts canonical option carriers for omitted and supplied arguments', async () => {
     const definition = toolDefinition('optional-tool').body((body) =>
       body.option('label', z.string()).returns(z.void()),
     );
@@ -495,9 +495,14 @@ describe('tool registration', () => {
 
     await expect(registered.invoker([], input, {})).resolves.toEqual(ok(undefined));
     expect(received).toBeUndefined();
+    const supplied = registered.extended
+      .canonicalInputModel(commandNode)
+      .encodeTyped({ label: 'supplied' });
+    await expect(registered.invoker([], supplied, {})).resolves.toEqual(ok(undefined));
+    expect(received).toBe('supplied');
   });
 
-  it('rejects a missing canonical carrier for a present optional-of-option argument', async () => {
+  it('rejects an ambiguous optional-of-option canonical field', () => {
     const definition = toolDefinition('nested-optional-tool').body((body) =>
       body.option('label', z.string().optional()).returns(z.void()),
     );
@@ -512,18 +517,9 @@ describe('tool registration', () => {
     const registered = ToolRegistry.get('nested-optional-tool');
     const commandNode = registered?.extended.commandByPath([]);
     if (!registered || !commandNode) throw new Error('nested optional tool was not registered');
-    const inputModel = registered.extended.canonicalInputModel(commandNode);
-    expect(inputModel.encodeTyped({ label: 'present' }).value).toEqual(
-      v.record([v.option(v.option(v.string('present')))]),
+    expect(() => registered.extended.canonicalInputModel(commandNode)).toThrow(
+      'option<option<_>> is invalid',
     );
-
-    const nonCanonicalInput = {
-      graph: inputModel.codec.graph,
-      value: v.record([v.option(v.string('present'))]),
-    };
-    await expect(registered.invoker([], nonCanonicalInput, {})).rejects.toMatchObject({
-      tag: 'invalid-input',
-    });
     expect(called).toBe(false);
   });
 

@@ -95,7 +95,15 @@ declare module 'golem:tool/host@0.1.0' {
     fail(reason: ByteStreamFailure): Promise<void>;
   }
   export class ToolRpc {
+    /**
+     * Binds an ordinary tool client to its configured tool name.
+     */
     constructor(toolName: string);
+    /**
+     * Creates a tool RPC resource without trapping on invalid caller input.
+     * @throws RpcError
+     */
+    static create(toolName: string): ToolRpc;
     /**
      * Waits for the structured terminal. Callers that supplied stdout must
      * drive this wait and the already-created reader concurrently. Callers

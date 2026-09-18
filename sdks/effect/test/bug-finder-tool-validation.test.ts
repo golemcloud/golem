@@ -201,6 +201,7 @@ describe("tool metadata WIT validation", () => {
         throw new Error("no stdout declared")
       },
       rpc: () => ({ asyncInvokeAndAwait: invoke }) as never,
+      createRpc: () => ({ asyncInvokeAndAwait: invoke }) as never,
     })
     const definition = toolDefinition("pumped").body((body) => body.input({ required: true }))
     await Effect.runPromise(

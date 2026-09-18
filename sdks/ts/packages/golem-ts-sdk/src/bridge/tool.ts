@@ -57,11 +57,14 @@ export interface ToolClientTransport {
   ): RawToolInvocation;
 }
 
-export function createToolClientTransport(toolName: string): ToolClientTransport {
+export function createToolClientTransport(
+  toolName: string,
+  reflected = false,
+): ToolClientTransport {
   let rpc: ToolRpc | undefined;
   return {
     start(commandPath, input, stdin, withStdout) {
-      rpc ??= new ToolRpc(toolName);
+      rpc ??= reflected ? ToolRpc.create(toolName) : new ToolRpc(toolName);
       const inputEndpoints = stdin === undefined ? undefined : createStdin();
       const outputEndpoints = withStdout ? createStdout() : undefined;
       const future = rpc.asyncInvokeAndAwait(
@@ -232,4 +235,4 @@ export function splitToolRpcError<Declared>(
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
   };
 }
-export type { RpcError, ToolError };
+export type { RpcError };

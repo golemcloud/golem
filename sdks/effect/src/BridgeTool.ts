@@ -75,7 +75,7 @@ const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>) =>
   ) as Stream.Stream<Uint8Array, ToolRuntimeError<E>>
 
 /** Adapt the contextual Effect tool transport to the exact generated-client runtime. @since 1.6.0 @category constructors */
-export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
+export const createToolClientRuntime = (tool: string, reflected = false): ToolClientRuntime => ({
   start: <E>(
     path: readonly string[],
     input: TypedSchemaValue,
@@ -101,7 +101,7 @@ export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
           ? transport.value
               .start(tool, path, wireInput, inputStream, stdout)
               .pipe(Effect.mapError((error) => protocol("tool invocation failed", error)))
-          : liveToolStart(tool, path, wireInput, inputStream, stdout).pipe(
+          : liveToolStart(tool, path, wireInput, inputStream, stdout, reflected).pipe(
               Effect.mapError((error) => protocol("tool invocation failed", error)),
             ),
         (started) => started.cancel.pipe(Effect.ignoreCause),

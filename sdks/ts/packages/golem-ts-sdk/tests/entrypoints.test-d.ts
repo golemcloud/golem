@@ -77,5 +77,7 @@ ephemeralContract.client
 
 // @ts-expect-error lifecycle mode requires a complete exact name + id definition
 defineAgentClient({ mode: 'ephemeral', methods: contract.methods });
-// @ts-expect-error name-only binding contracts are lifecycle-free
+// @ts-expect-error binding-only contracts cannot declare a name without an ID shape
+defineAgentClient({ name: 'NamedContract', methods: contract.methods });
+// @ts-expect-error binding-only contracts cannot declare a name or lifecycle mode
 defineAgentClient({ name: 'NamedContract', mode: 'durable', methods: contract.methods });

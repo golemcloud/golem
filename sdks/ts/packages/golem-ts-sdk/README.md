@@ -73,6 +73,31 @@ invocation. Producer and cleanup failures fail the active operation or invocatio
 than becoming clean EOF. P3 has no recoverable stream-local terminal error, so model one explicitly
 in the item type, for example `stream<result<T, E>>`, when needed.
 
+## Runtime tool reflection
+
+Use `reflection.getToolType(name)` or `reflection.getAllToolTypes()` to discover tools visible to
+the calling component. A `ToolType` is an immutable metadata snapshot. Resolve command names or
+aliases with `tool.client.command(path)`; the returned command exposes its canonical `path`,
+ordered arguments, input schema, result schema, and child commands. Namespace commands appear in
+the tree but cannot be invoked until a command body is selected.
+
+```ts
+import { reflection } from '@golemcloud/golem-ts-sdk';
+
+const tool = reflection.getToolType('weather');
+if (tool) {
+  const forecast = tool.client.command(['forecast']);
+  const result = await forecast.invokeJson({ city: 'Budapest' });
+}
+```
+
+Canonical JSON records include every argument key; use `null` for an absent optional value.
+`invokeValue` accepts a schema-native value. Both forms validate against the discovered schema
+before opening RPC and check declared results after invocation. `startJson` and `startValue`
+expose stdout, result, `collect`, and cancellation for pending calls; use them when stdout is
+required. `DynamicToolClient` accepts a caller-packed typed schema value without pretending to
+know the deployed schema. Reflected output failures reject with `ToolRemoteOutputError`.
+
 The SDK uses Standard Schema-compatible schemas to define agent identities,
 method inputs, and method results.
 

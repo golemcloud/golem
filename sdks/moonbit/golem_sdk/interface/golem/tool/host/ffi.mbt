@@ -974,6 +974,9 @@ fn wasmImportMethodToolStdoutWriterFail(p0 : Int, p1 : Int, p2 : Int, p3 : Int, 
 fn wasmImportConstructorToolRpc(p0 : Int, p1 : Int) -> Int = "golem:tool/host@0.1.0" "[constructor]tool-rpc"
 
 ///|
+fn wasmImportStaticToolRpcCreate(p0 : Int, p1 : Int, p2 : Int)  = "golem:tool/host@0.1.0" "[static]tool-rpc.create"
+
+///|
 fn wasmImportMethodToolRpcInvokeAndAwait(p0 : Int, p1 : Int) -> Int = "golem:tool/host@0.1.0" "[async-lower][method]tool-rpc.invoke-and-await"
 
 ///|
