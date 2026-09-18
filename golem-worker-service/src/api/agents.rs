@@ -19,6 +19,7 @@ use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
+use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -169,6 +170,25 @@ impl AgentsApi {
         record.result(response).map(Json)
     }
 
+    /// Return the effective definition of a tool bound to an existing agent or component baseline.
+    #[oai(
+        path = "/describe-tool",
+        method = "post",
+        operation_id = "describe_tool"
+    )]
+    async fn describe_tool(
+        &self,
+        request: Json<NativeToolDescribeRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<NativeToolDefinition>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        self.worker_service
+            .describe_tool_rest(request.0, auth)
+            .await
+            .map(Json)
+            .map_err(Into::into)
+    }
+
     /// Invoke an agent through an attached live streaming session
     ///
     /// Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
@@ -303,6 +323,26 @@ pub struct NativeToolInvocationRequest {
     pub mode: NativeToolInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolDescribeRequest {
+    pub app_name: ApplicationName,
+    pub env_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolDefinition {
+    pub definition: Tool,
+    pub component_revision: ComponentRevision,
+    pub deployment_revision: golem_common::model::deployment::DeploymentRevision,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]

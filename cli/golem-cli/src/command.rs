@@ -1340,11 +1340,9 @@ pub mod tool {
         pub component: Option<ComponentName>,
         /// Deployed tool name
         pub tool_name: ToolName,
-        /// Native tool command path
-        pub command_path: Vec<String>,
-        /// Typed input JSON (`schema` and `value`), or @PATH. Defaults to an empty record.
-        #[arg(long, conflicts_with = "lookup")]
-        pub input: Option<String>,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
         /// Read raw tool stdin from this file; use `-` for process stdin
         #[arg(long, value_name = "PATH")]
         pub stdin: Option<std::path::PathBuf>,
@@ -3099,6 +3097,50 @@ mod test {
                 "result.bin"
             ]))
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
         );
     }
 

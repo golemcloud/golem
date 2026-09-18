@@ -2073,6 +2073,82 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_tool
+  /v1/agents/describe-tool:
+    post:
+      tags:
+      - Agent
+      summary: Return the effective definition of a tool bound to an existing agent or component baseline.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolDescribeRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: describe_tool
   /v1/agents/invoke-agent-session:
     get:
       tags:
@@ -3521,6 +3597,16 @@ components:
         mimeType:
           type: string
           nullable: true
+    BoolFlagShape:
+      type: object
+      required:
+      - default
+      - negatable
+      properties:
+        default:
+          type: boolean
+        negatable:
+          type: boolean
     CancelInvocationResponse:
       type: object
       title: CancelInvocationResponse
@@ -3796,6 +3882,107 @@ components:
             - RuntimeDerived
             example: RuntimeDerived
       - $ref: '#/components/schemas/CardManagedByRuntimeDerived'
+    CommandAnnotations:
+      type: object
+      required:
+      - read_only
+      - destructive
+      - idempotent
+      - open_world
+      properties:
+        read_only:
+          type: boolean
+        destructive:
+          type: boolean
+        idempotent:
+          type: boolean
+        open_world:
+          type: boolean
+    CommandBody:
+      type: object
+      required:
+      - positionals
+      - options
+      - flags
+      - constraints
+      - errors
+      properties:
+        positionals:
+          $ref: '#/components/schemas/Positionals'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        stdin:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolResultSpec'
+          - nullable: true
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorCase'
+        annotations:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandAnnotations'
+          - nullable: true
+    CommandNode:
+      type: object
+      required:
+      - name
+      - aliases
+      - doc
+      - globals
+      - subcommands
+      properties:
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        globals:
+          $ref: '#/components/schemas/Globals'
+        subcommands:
+          type: array
+          items:
+            type: integer
+            format: int32
+        body:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandBody'
+          - nullable: true
+    CommandTree:
+      type: object
+      required:
+      - nodes
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandNode'
     CompleteParameters:
       type: object
       title: CompleteParameters
@@ -3811,6 +3998,83 @@ components:
           items:
             type: integer
             format: uint8
+    Constraint:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-all
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - all-or-none
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-any
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - mutex-groups
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/RefGroup'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - implies
+          value:
+            $ref: '#/components/schemas/ImpliesC'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - forbids
+          value:
+            $ref: '#/components/schemas/ForbidsC'
     CreateAgentRequest:
       type: object
       title: CreateAgentRequest
@@ -3948,6 +4212,26 @@ components:
             properties:
               fieldName:
                 type: string
+    Doc:
+      type: object
+      required:
+      - summary
+      - description
+      - examples
+      properties:
+        summary:
+          type: string
+        description:
+          type: string
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/Example'
+    DuplicateKeyPolicy:
+      type: string
+      enum:
+      - reject
+      - last-wins
     DurationValuePayload:
       type: object
       required:
@@ -3991,6 +4275,33 @@ components:
           type: string
         workerError:
           $ref: '#/components/schemas/WorkerErrorDetails'
+    ErrorCase:
+      type: object
+      required:
+      - name
+      - doc
+      - kind
+      - exit_code
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        kind:
+          $ref: '#/components/schemas/ErrorKind'
+        exit_code:
+          type: integer
+          format: uint8
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+    ErrorKind:
+      type: string
+      enum:
+      - usage-error
+      - runtime-error
     ErrorsBody:
       type: object
       title: ErrorsBody
@@ -4004,6 +4315,16 @@ components:
           type: array
           items:
             type: string
+    Example:
+      type: object
+      required:
+      - title
+      - body
+      properties:
+        title:
+          type: string
+        body:
+          type: string
     ExportedResourceMetadata:
       type: object
       title: ExportedResourceMetadata
@@ -4588,6 +4909,74 @@ components:
       - Greater
       - LessEqual
       - Less
+    FlagShape:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool-flag
+          value:
+            $ref: '#/components/schemas/BoolFlagShape'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - count-flag
+          value:
+            type: integer
+            format: uint32
+            nullable: true
+    FlagSpec:
+      type: object
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      properties:
+        long:
+          type: string
+        short:
+          type: char
+          nullable: true
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        shape:
+          $ref: '#/components/schemas/FlagShape'
+        env_var:
+          type: string
+          nullable: true
+    ForbidsC:
+      type: object
+      required:
+      - lhs_quant
+      - lhs
+      - rhs
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
     ForkWorkerRequest:
       type: object
       title: ForkWorkerRequest
@@ -4603,6 +4992,16 @@ components:
     ForkWorkerResponse:
       type: object
       title: ForkWorkerResponse
+    Formatter:
+      type: object
+      required:
+      - name
+      - doc
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
     GetFilesResponse:
       type: object
       title: GetFilesResponse
@@ -4633,6 +5032,20 @@ components:
         lastIndex:
           type: integer
           format: uint64
+    Globals:
+      type: object
+      required:
+      - options
+      - flags
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
     HostStreamKind:
       type: string
       description: |-
@@ -4640,6 +5053,26 @@ components:
         to. The kind determines how the entry's payload is interpreted.
       enum:
       - P3HttpRequestBody
+    ImpliesC:
+      type: object
+      required:
+      - lhs_quant
+      - lhs
+      - rhs_quant
+      - rhs
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
     InterruptResponse:
       type: object
       title: InterruptResponse
@@ -4781,6 +5214,41 @@ components:
           $ref: '#/components/schemas/SchemaType'
         metadata:
           $ref: '#/components/schemas/MetadataEnvelope'
+    NativeToolDefinition:
+      type: object
+      title: NativeToolDefinition
+      required:
+      - definition
+      - componentRevision
+      - deploymentRevision
+      properties:
+        definition:
+          $ref: '#/components/schemas/Tool'
+        componentRevision:
+          type: integer
+          format: uint64
+        deploymentRevision:
+          type: integer
+          format: uint64
+    NativeToolDescribeRequest:
+      type: object
+      title: NativeToolDescribeRequest
+      required:
+      - appName
+      - envName
+      - toolName
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
     NativeToolFailure:
       type: object
       title: NativeToolFailure
@@ -4985,6 +5453,88 @@ components:
         end:
           type: integer
           format: uint64
+    OptionShape:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - optional-scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-list
+          value:
+            $ref: '#/components/schemas/RepeatableListShape'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-map
+          value:
+            $ref: '#/components/schemas/RepeatableMapShape'
+    OptionSpec:
+      type: object
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      - required
+      properties:
+        long:
+          type: string
+        short:
+          type: char
+          nullable: true
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        shape:
+          $ref: '#/components/schemas/OptionShape'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        env_var:
+          type: string
+          nullable: true
     OwnerKind:
       type: string
       description: |-
@@ -5139,6 +5689,47 @@ components:
           format: date-time
         systemCard:
           type: boolean
+    Positional:
+      type: object
+      required:
+      - name
+      - doc
+      - type_
+      - required
+      - accepts_stdio
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+    Positionals:
+      type: object
+      required:
+      - fixed
+      properties:
+        fixed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Positional'
+        tail:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TailPositional'
+          - nullable: true
     ProcessOplogEntriesParameters:
       type: object
       title: ProcessOplogEntriesParameters
@@ -6932,6 +7523,11 @@ components:
             - SnapshotBased
             example: SnapshotBased
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    Quantifier:
+      type: string
+      enum:
+      - all
+      - any
     QuantitySpec:
       type: object
       required:
@@ -7010,6 +7606,96 @@ components:
             format: uint8
         mimeType:
           type: string
+    Ref:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - present
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - value-is
+          value:
+            $ref: '#/components/schemas/ValueIsRef'
+    RefGroup:
+      type: object
+      required:
+      - refs
+      properties:
+        refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+    RepeatableListShape:
+      type: object
+      required:
+      - repetition
+      - item_type
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+    RepeatableMapShape:
+      type: object
+      required:
+      - repetition
+      - map_type
+      - duplicate_key_policy
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        map_type:
+          $ref: '#/components/schemas/SchemaType'
+        duplicate_key_policy:
+          $ref: '#/components/schemas/DuplicateKeyPolicy'
+    Repetition:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeated
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - delimited
+          value:
+            type: char
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - either
+          value:
+            type: char
     ResultSpec:
       type: object
       properties:
@@ -8578,6 +9264,21 @@ components:
             - Polymorphic
             example: Polymorphic
       - $ref: '#/components/schemas/PolymorphicCard'
+    StreamSpec:
+      type: object
+      required:
+      - doc
+      - mime
+      - required
+      properties:
+        doc:
+          $ref: '#/components/schemas/Doc'
+        mime:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
     StringAttributeValue:
       type: object
       title: StringAttributeValue
@@ -8607,6 +9308,39 @@ components:
         targetRevision:
           type: integer
           format: uint64
+    TailPositional:
+      type: object
+      required:
+      - name
+      - doc
+      - item_type
+      - min
+      - verbatim
+      - accepts_stdio
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+        min:
+          type: integer
+          format: uint32
+        max:
+          type: integer
+          format: uint32
+          nullable: true
+        separator:
+          type: string
+          nullable: true
+        verbatim:
+          type: boolean
+        accepts_stdio:
+          type: boolean
     TextRestrictions:
       type: object
       properties:
@@ -8636,6 +9370,36 @@ components:
         language:
           type: string
           nullable: true
+    Tool:
+      type: object
+      required:
+      - version
+      - commands
+      properties:
+        version:
+          type: string
+        commands:
+          $ref: '#/components/schemas/CommandTree'
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+    ToolResultSpec:
+      type: object
+      required:
+      - type_
+      - doc
+      - formatters
+      - default_formatter
+      properties:
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        doc:
+          $ref: '#/components/schemas/Doc'
+        formatters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Formatter'
+        default_formatter:
+          type: string
     TypedAgentConfigEntry:
       type: object
       title: TypedAgentConfigEntry
@@ -8772,6 +9536,16 @@ components:
           items:
             type: string
           nullable: true
+    ValueIsRef:
+      type: object
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/SchemaValue'
     VariantCaseType:
       type: object
       required:

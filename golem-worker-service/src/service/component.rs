@@ -18,6 +18,8 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::component::Component;
@@ -72,6 +74,17 @@ pub trait ComponentService: Send + Sync {
         &self,
         component_id: ComponentId,
     ) -> Result<Vec<Component>, ComponentServiceError>;
+
+    async fn get_tool_deployment_state(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, ComponentServiceError> {
+        Err(ComponentServiceError::InternalError(anyhow!(
+            "tool deployment metadata is not supported by this component service"
+        )))
+    }
 }
 
 // The error is not actually cached, just something that can be cloned and returned
@@ -197,5 +210,17 @@ impl ComponentService for RemoteComponentService {
         }
 
         Ok(results)
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, ComponentServiceError> {
+        Ok(self
+            .client
+            .get_tool_deployment_state(environment_id, component_id, component_revision)
+            .await?)
     }
 }

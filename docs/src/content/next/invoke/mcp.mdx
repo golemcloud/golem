@@ -25,25 +25,45 @@ After `golem app deploy`, the MCP server is available at `http://mcp-demo.localh
 
 ## Exporting native tools
 
-Native Golem tools can be exported alongside agents. Each export must name an actual deployed **owner component** whose component-level tool bindings permit that tool. The owner is not inferred from the tool's implementation component.
+Native Golem tools can be exported without deploying an agent. A complete tools-only application declares the implementation, binds it to an owner component, and selects commands for the MCP deployment:
 
 ```yaml
+app: mcp-tools-demo
+
+environments:
+  local:
+    server: local
+
+components:
+  my-app:file-tools:
+    componentWasm: build/file-tools.wasm
+
+  my-app:tool-owner:
+    componentWasm: build/tool-owner.wasm
+    tools:
+      file-tools: {}
+
+tools:
+  file-tools:
+    component: my-app:file-tools
+
 mcp:
   deployments:
     local:
       - subdomain: mcp-demo
-        agents:
-          CounterAgent: {}
         tools:
           file-tools:
             ownerComponent: my-app:tool-owner
-            securityScheme: mcp-oauth
             include:
               - read-file
               - list **
 ```
 
-Here, `my-app:tool-owner` must already have a resolved component-baseline binding for `file-tools`. Component-level bindings also apply to real agents, with their agent-specific overrides. The MCP deployment must contain at least one agent or tool. All security scheme references in the deployment must agree; that scheme protects the whole domain.
+The top-level declaration provisions the `file-tools` implementation. The `components.my-app:tool-owner.tools` binding authorizes each fresh owner to invoke it; an agent-only binding is insufficient. Component bindings also become defaults for real agents exported by that component, where agent bindings and presets can narrow or remove them. Use a separate component with no agents as the owner when those defaults are not wanted. The implementation component and owner component may be different, as above.
+
+Finally, `mcp.deployments.local[].tools.file-tools` exports the selected executable commands. The deployment must contain at least one agent or tool. All security scheme references in it must agree; that scheme protects the whole domain.
+
+For a remote release, put its exact `release` reference in the top-level declaration instead of `component`. The target environment must have a grant for that release. An application deployment plans and automatically reconciles grants derived from its remote declarations when the deploy actor has permission; separately managed grants are not removed.
 
 Each call creates a fresh **ephemeral owner** using that component's configuration, permissions, files, and tool bindings. It instantiates the deployed component, including its core initializers, but does not select an agent type or call an agent constructor. Tool and middleware bodies run through native invocation queueing and permission checks. Accepted execution is not restarted after owner loss, including interruption during core initialization. To invoke a tool on an existing real agent, use the native REST API or `golem tool invoke --agent`, not MCP.
 

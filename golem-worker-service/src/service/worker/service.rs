@@ -19,8 +19,9 @@ use super::{
 };
 use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, CreateAgentRequest,
-    CreateAgentResponse, NativeToolFailure, NativeToolInvocationMode, NativeToolInvocationRequest,
-    NativeToolInvocationResponse, NativeToolResult, NativeToolSuccess,
+    CreateAgentResponse, NativeToolDefinition, NativeToolDescribeRequest, NativeToolFailure,
+    NativeToolInvocationMode, NativeToolInvocationRequest, NativeToolInvocationResponse,
+    NativeToolResult, NativeToolSuccess,
 };
 use crate::invocation_session_token::{
     SessionAgentIdentity, SessionInvocationTarget, SessionTokenPayload,
@@ -64,6 +65,7 @@ use golem_common::model::invocation_session_public::{
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
@@ -3066,6 +3068,120 @@ impl WorkerService {
         })
     }
 
+    pub async fn describe_tool_rest(
+        &self,
+        request: NativeToolDescribeRequest,
+        auth: AuthCtx,
+    ) -> WorkerResult<NativeToolDefinition> {
+        let (component_id, existing_agent) = match (&request.agent_id, request.component_id) {
+            (Some(agent_id), None) => (agent_id.component_id, Some(agent_id.clone())),
+            (None, Some(component_id)) => (component_id, None),
+            _ => {
+                return Err(WorkerServiceError::TypeChecker(
+                    "exactly one of agent_id and component_id is required".to_string(),
+                ));
+            }
+        };
+        let current = self
+            .component_service
+            .get_current_by_id_uncached(component_id)
+            .await?;
+        if current.application_name != request.app_name
+            || current.environment_name != request.env_name
+        {
+            return Err(WorkerServiceError::TypeChecker(
+                "component is not deployed in the requested application and environment"
+                    .to_string(),
+            ));
+        }
+
+        if let Some(agent_id) = &existing_agent {
+            if OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+                return Err(WorkerServiceError::TypeChecker(
+                    "reserved external-tool owner names cannot be used as existing agents"
+                        .to_string(),
+                ));
+            }
+            authorize_agent_permission(
+                &auth,
+                &current,
+                agent_id,
+                AgentVerb::View,
+                AgentResourcePattern::Any,
+            )?;
+        } else {
+            authorize_component_agents_permission(
+                &auth,
+                &current,
+                AgentVerb::View,
+                AgentResourcePattern::Any,
+            )?;
+        }
+
+        let (component, owner) = if let Some(agent_id) = &existing_agent {
+            let metadata = self
+                .worker_client
+                .get_metadata(agent_id, current.environment_id, auth)
+                .await?;
+            if metadata.owner_kind != OwnerKind::ComponentAgent {
+                return Err(WorkerServiceError::TypeChecker(
+                    "existing external-tool target is not a real component agent".to_string(),
+                ));
+            }
+            let component = self
+                .component_service
+                .get_revision(component_id, metadata.component_revision)
+                .await?;
+            let parsed = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+                .map_err(WorkerServiceError::TypeChecker)?;
+            (
+                component,
+                ToolBindingOwner::AgentType {
+                    agent_type_name: parsed.agent_type,
+                },
+            )
+        } else {
+            (
+                current,
+                ToolBindingOwner::ComponentBaseline { component_id },
+            )
+        };
+        let state = self
+            .component_service
+            .get_tool_deployment_state(component.environment_id, component_id, component.revision)
+            .await?
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(
+                    "no tool deployment is active for the target".to_string(),
+                )
+            })?;
+        let tool_name = ToolName::try_from(request.tool_name.as_str())
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let registered = state.registered_tools.get(&tool_name).ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!("tool '{tool_name}' is not registered"))
+        })?;
+        if !state
+            .tool_bindings
+            .get(&owner)
+            .is_some_and(|bindings| bindings.contains_key(&tool_name))
+        {
+            return Err(WorkerServiceError::TypeChecker(format!(
+                "tool '{tool_name}' is not bound to the target owner"
+            )));
+        }
+        let definition = state
+            .tool_middleware_chains
+            .get(&owner)
+            .and_then(|chains| chains.get(&tool_name))
+            .map(|chain| chain.effective_definition.clone())
+            .unwrap_or_else(|| registered.definition.clone());
+        Ok(NativeToolDefinition {
+            definition,
+            component_revision: component.revision,
+            deployment_revision: state.deployment_revision,
+        })
+    }
+
     /// REST path: resolves the agent via the registry, validates its parameters, then delegates.
     pub async fn invoke_agent_rest(
         &self,
@@ -3348,8 +3464,8 @@ mod tests {
         decode_public_schema_value, normalize_agent_invocation_identity,
     };
     use crate::api::agents::{
-        AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest, NativeToolInvocationMode,
-        NativeToolInvocationRequest, NativeToolResult,
+        AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest, NativeToolDescribeRequest,
+        NativeToolInvocationMode, NativeToolInvocationRequest, NativeToolResult,
     };
     use crate::service::agent_resolution_cache::AgentResolutionCache;
     use crate::service::auth::{AuthService, AuthServiceError};
@@ -3394,7 +3510,9 @@ mod tests {
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::invocation_session_public::InvocationSelector;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
+    use golem_common::model::tool::{ToolBindingOwner, ToolName};
     use golem_common::model::worker::{
         AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
         RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
@@ -3808,10 +3926,26 @@ mod tests {
 
     struct StaticComponentService {
         components: Vec<Component>,
+        tool_state: Option<golem_common::model::tool::ToolDeploymentState>,
+        tool_queries: Mutex<Vec<(EnvironmentId, ComponentId, ComponentRevision)>>,
     }
 
     #[async_trait]
     impl ComponentService for StaticComponentService {
+        async fn get_tool_deployment_state(
+            &self,
+            environment_id: EnvironmentId,
+            component_id: ComponentId,
+            revision: ComponentRevision,
+        ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError>
+        {
+            self.tool_queries
+                .lock()
+                .unwrap()
+                .push((environment_id, component_id, revision));
+            Ok(self.tool_state.clone())
+        }
+
         async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
             self.components
                 .iter()
@@ -4488,6 +4622,8 @@ mod tests {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![component],
+                        tool_state: None,
+                        tool_queries: Mutex::new(vec![]),
                     }),
                     Arc::new(AllowAllAuthService),
                     Arc::new(NoopLimitService),
@@ -4573,6 +4709,8 @@ mod tests {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![pinned_component, latest_component],
+                        tool_state: None,
+                        tool_queries: Mutex::new(vec![]),
                     }),
                     Arc::new(AllowAllAuthService),
                     Arc::new(NoopLimitService),
@@ -6332,6 +6470,255 @@ mod tests {
         assert_eq!(
             *harness.worker_client.deleted_agent_ids.lock().unwrap(),
             vec![agent_id]
+        );
+    }
+
+    async fn tool_description_harness() -> (RestHarness, Arc<StaticComponentService>) {
+        use golem_common::model::tool::{
+            CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState,
+            ToolProvisionConfig, ToolSource,
+        };
+        use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
+        use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+        use std::collections::BTreeMap;
+
+        let mut harness =
+            RestHarness::new_with_pinned_and_latest_output(OutputSchema::Unit, OutputSchema::Unit);
+        let components = harness
+            .worker_service
+            .component_service
+            .get_all_revisions(harness.component_id)
+            .await
+            .unwrap();
+        let component = components.first().unwrap();
+        let tool_name = ToolName::try_from("weather").unwrap();
+        let definition = Tool {
+            version: "1.0.0".into(),
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "weather".into(),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: vec![],
+                    body: None,
+                }],
+            },
+        };
+        let registered = RegisteredTool {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition: definition.clone(),
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: ToolSource::Component {
+                component_id: component.id,
+                component_revision: component.revision,
+                component_name: component.component_name.clone(),
+            },
+            owner_account_id: component.account_id,
+            owner_account_email: component.account_email.clone(),
+            metadata_version: "0.1.0".into(),
+            metadata_digest: Default::default(),
+        };
+        let mut state = ToolDeploymentState {
+            deployment_revision: DeploymentRevision::INITIAL,
+            registered_tools: BTreeMap::from([(tool_name.clone(), registered.clone())]),
+            tool_bindings: BTreeMap::new(),
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
+        };
+        for (owner, summary) in [
+            (
+                ToolBindingOwner::ComponentBaseline {
+                    component_id: component.id,
+                },
+                "component middleware",
+            ),
+            (
+                ToolBindingOwner::AgentType {
+                    agent_type_name: harness.agent_type_name.clone(),
+                },
+                "agent middleware",
+            ),
+        ] {
+            let binding = CompiledToolBinding {
+                deployment_revision: state.deployment_revision,
+                release_id: None,
+                owner: owner.clone(),
+                tool_name: tool_name.clone(),
+                version: definition.version.clone(),
+                metadata_version: registered.metadata_version.clone(),
+                metadata_digest: Default::default(),
+                account_id: component.account_id,
+                account_email: component.account_email.clone(),
+                parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                config_keys_readable: Default::default(),
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: Default::default(),
+                source: registered.source.clone(),
+            };
+            let mut effective_definition = definition.clone();
+            effective_definition.commands.nodes[0].doc.summary = summary.into();
+            state.tool_bindings.insert(
+                owner.clone(),
+                BTreeMap::from([(tool_name.clone(), binding)]),
+            );
+            state.tool_middleware_chains.insert(
+                owner.clone(),
+                BTreeMap::from([(
+                    tool_name.clone(),
+                    CompiledToolMiddlewareChain {
+                        deployment_revision: state.deployment_revision,
+                        owner,
+                        tool_name: tool_name.clone(),
+                        effective_definition,
+                        occurrences: vec![],
+                    },
+                )]),
+            );
+        }
+        let service = Arc::new(StaticComponentService {
+            components,
+            tool_state: Some(state),
+            tool_queries: Mutex::new(vec![]),
+        });
+        harness.worker_service.component_service = service.clone();
+        (harness, service)
+    }
+
+    #[test]
+    async fn describe_tool_uses_effective_owner_definition_without_invoking() {
+        let (harness, components) = tool_description_harness().await;
+        let invoke = harness.tool_request();
+        let request = NativeToolDescribeRequest {
+            app_name: invoke.app_name,
+            env_name: invoke.env_name,
+            agent_id: None,
+            component_id: Some(harness.component_id),
+            tool_name: "weather".into(),
+        };
+        let described = harness
+            .worker_service
+            .describe_tool_rest(request.clone(), AuthCtx::system())
+            .await
+            .unwrap();
+        assert_eq!(
+            described.definition.commands.nodes[0].doc.summary,
+            "component middleware"
+        );
+        assert_eq!(described.component_revision, harness.component_revision);
+        harness
+            .worker_client
+            .set_metadata_component_revision(ComponentRevision::INITIAL);
+        let mut agent_request = request;
+        agent_request.component_id = None;
+        agent_request.agent_id = Some(AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        });
+        let described = harness
+            .worker_service
+            .describe_tool_rest(agent_request, AuthCtx::system())
+            .await
+            .unwrap();
+        assert_eq!(
+            described.definition.commands.nodes[0].doc.summary,
+            "agent middleware"
+        );
+        assert_eq!(described.component_revision, ComponentRevision::INITIAL);
+        assert_eq!(
+            components
+                .tool_queries
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, _, r)| *r)
+                .collect::<Vec<_>>(),
+            [harness.component_revision, ComponentRevision::INITIAL]
+        );
+        assert!(
+            harness
+                .worker_client
+                .invocation_session_starts
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(harness.worker_client.invocations.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    async fn describe_tool_rejects_unauthorized_reserved_and_unbound_targets() {
+        let (mut harness, components) = tool_description_harness().await;
+        let invoke = harness.tool_request();
+        let mut request = NativeToolDescribeRequest {
+            app_name: invoke.app_name,
+            env_name: invoke.env_name,
+            agent_id: None,
+            component_id: Some(harness.component_id),
+            tool_name: "weather".into(),
+        };
+        let auth = AuthCtx::agent_with_effective_surface(
+            AccountId(Uuid::new_v4()),
+            AccountEmail::new("denied@example.com"),
+            EffectiveSurface {
+                source_card_ids: vec![],
+                lower: vec![],
+                upper: vec![],
+            },
+        );
+        assert!(
+            harness
+                .worker_service
+                .describe_tool_rest(request.clone(), auth)
+                .await
+                .is_err()
+        );
+        assert!(components.tool_queries.lock().unwrap().is_empty());
+        assert!(harness.worker_client.effects.lock().unwrap().is_empty());
+        request.agent_id = Some(AgentId {
+            component_id: harness.component_id,
+            agent_id: OwnerKind::external_tool_instance_name(&IdempotencyKey::fresh()),
+        });
+        request.component_id = None;
+        assert!(
+            harness
+                .worker_service
+                .describe_tool_rest(request.clone(), AuthCtx::system())
+                .await
+                .is_err()
+        );
+        assert!(components.tool_queries.lock().unwrap().is_empty());
+        let mut state = components.tool_state.clone().unwrap();
+        state
+            .tool_bindings
+            .remove(&ToolBindingOwner::ComponentBaseline {
+                component_id: harness.component_id,
+            });
+        harness.worker_service.component_service = Arc::new(StaticComponentService {
+            components: components.components.clone(),
+            tool_state: Some(state),
+            tool_queries: Mutex::new(vec![]),
+        });
+        request.agent_id = None;
+        request.component_id = Some(harness.component_id);
+        assert!(
+            harness
+                .worker_service
+                .describe_tool_rest(request, AuthCtx::system())
+                .await
+                .is_err()
+        );
+        assert!(
+            harness
+                .worker_client
+                .invocation_session_starts
+                .lock()
+                .unwrap()
+                .is_empty()
         );
     }
 

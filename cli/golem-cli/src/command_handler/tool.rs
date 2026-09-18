@@ -23,7 +23,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, log_action};
+use crate::log::{LogColorize, LogOutput, Output, log_action};
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
     EnvironmentToolGrantGetView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
@@ -42,7 +42,9 @@ use golem_client::api::{
 use golem_client::invocation_session::{
     InvocationSession, InvocationSessionStateSnapshot, drive_native_tool_session_until,
 };
-use golem_client::model::{NativeToolInvocationMode, NativeToolInvocationRequest};
+use golem_client::model::{
+    NativeToolDescribeRequest, NativeToolInvocationMode, NativeToolInvocationRequest,
+};
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
 };
@@ -65,6 +67,10 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
+
+mod arguments;
+#[cfg(test)]
+mod arguments_tests;
 
 pub struct ToolCommandHandler {
     ctx: Arc<Context>,
@@ -312,17 +318,10 @@ impl ToolCommandHandler {
     }
 
     async fn cmd_invoke(&self, args: ToolInvokeArgs) -> anyhow::Result<()> {
-        if args.input.as_deref() == Some("-")
-            && args
-                .stdin
-                .as_deref()
-                .is_some_and(|path| path == Path::new("-"))
-        {
-            bail!("--input '-' cannot be used together with --stdin '-'");
-        }
-        if args.lookup && args.input.is_some() {
-            bail!("--lookup cannot be used with --input");
-        }
+        let _raw_stdout_guard =
+            (args.stdout && args.output.is_none()).then(|| LogOutput::new(Output::Stderr));
+        self.ctx.silence_app_context_init().await;
+
         if (args.stdin.is_some() || args.stdout) && (args.trigger || args.schedule_at.is_some()) {
             bail!("--trigger and --schedule-at cannot be used with live streams");
         }
@@ -334,14 +333,6 @@ impl ToolCommandHandler {
         {
             bail!("--lookup requires an explicit --idempotency-key other than '-'");
         }
-        let key = match args.idempotency_key {
-            Some(key) if key.value != "-" => key,
-            _ => IdempotencyKey::fresh(),
-        };
-        log_action(
-            "Using",
-            format!("idempotency key: {}", key.value.log_color_highlight()),
-        );
         let environment = self
             .ctx
             .environment_handler()
@@ -374,22 +365,47 @@ impl ToolCommandHandler {
         } else {
             unreachable!("clap requires exactly one native tool target")
         };
-        let input = args
-            .input
-            .map(|source| -> anyhow::Result<ExternalTypedSchemaValue> {
-                let json = if source == "-" {
-                    std::io::read_to_string(std::io::stdin())
-                        .map_err(|e| anyhow!("Failed to read tool input from stdin: {e}"))?
-                } else if let Some(path) = source.strip_prefix('@') {
-                    std::fs::read_to_string(path)
-                        .map_err(|e| anyhow!("Failed to read tool input '{path}': {e}"))?
-                } else {
-                    source
-                };
-                serde_json::from_str(&json)
-                    .map_err(|e| anyhow!("Invalid schema-typed tool input: {e}"))
-            })
-            .transpose()?;
+        let (command_path, input) = if args.lookup {
+            (args.tool_args, None)
+        } else {
+            let definition = self
+                .ctx
+                .golem_clients()
+                .await?
+                .agent
+                .describe_tool(&NativeToolDescribeRequest {
+                    app_name: target_environment.application_name.to_string(),
+                    env_name: target_environment.environment_name.to_string(),
+                    agent_id: agent_id.clone(),
+                    component_id: component_id.map(|id| id.0),
+                    tool_name: args.tool_name.to_string(),
+                })
+                .await
+                .map_service_error()?;
+            match arguments::parse(&definition.definition, &args.tool_args)
+                .map_err(anyhow::Error::msg)?
+            {
+                arguments::ParsedToolArguments::Help(help) => {
+                    print!("{help}");
+                    return Ok(());
+                }
+                arguments::ParsedToolArguments::Invoke {
+                    command_path,
+                    input,
+                } => (
+                    command_path,
+                    Some(ExternalTypedSchemaValue::try_from(*input).map_err(anyhow::Error::msg)?),
+                ),
+            }
+        };
+        let key = match args.idempotency_key {
+            Some(key) if key.value != "-" => key,
+            _ => IdempotencyKey::fresh(),
+        };
+        log_action(
+            "Using",
+            format!("idempotency key: {}", key.value.log_color_highlight()),
+        );
         let live = args.stdin.is_some() || args.stdout;
         if live {
             let public_target = match (&agent_id, component_id) {
@@ -411,7 +427,7 @@ impl ToolCommandHandler {
                     environment: target_environment.environment_name.to_string(),
                     idempotency_key: key.value.clone(),
                     tool_name: args.tool_name.to_string(),
-                    command_path: args.command_path,
+                    command_path: command_path.clone(),
                     target: public_target.clone(),
                     input: Box::new(input),
                     stdin: args.stdin.is_some(),
@@ -511,7 +527,7 @@ impl ToolCommandHandler {
                     agent_id,
                     component_id: component_id.map(|id| id.0),
                     tool_name: args.tool_name.to_string(),
-                    command_path: args.command_path,
+                    command_path,
                     input,
                     mode,
                     schedule_at: args.schedule_at,

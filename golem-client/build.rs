@@ -609,6 +609,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("MetadataEnvelope", "golem_common::schema::MetadataEnvelope"),
             ("Role", "golem_common::schema::Role"),
             ("TypeId", "golem_common::schema::TypeId"),
+            ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
             "/v1/components/{component_id}/workers/{agent_name}/connect",
