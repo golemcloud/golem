@@ -15,7 +15,7 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::openapi::OpenApiInputs;
+use super::openapi::{Freshness, OpenApiInputs, OpenApiKey};
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -84,7 +84,7 @@ const MAX_SNAPSHOT_ADMISSION_ATTEMPTS: usize = 3;
 
 pub struct RouteResolver {
     domain_api_cache: Option<DomainApiCache>,
-    generation: AtomicU64,
+    generation: Arc<AtomicU64>,
     max_age: Duration,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
     trusted_ingress_addresses: Vec<IpAddr>,
@@ -109,7 +109,7 @@ impl RouteResolver {
                     "route_resolver_routers",
                 )
             }),
-            generation: AtomicU64::new(0),
+            generation: Arc::new(AtomicU64::new(0)),
             max_age: config.router_cache_ttl,
             api_definition_lookup,
             trusted_ingress_addresses: config.trusted_ingress_addresses.clone(),
@@ -217,8 +217,9 @@ impl RouteResolver {
             };
             let lookup = self.api_definition_lookup.clone();
             let domain = domain.clone();
+            let freshness = Freshness::capture(self.generation.clone());
             let fetch = move || async move {
-                Self::fetch_and_build_domain_api(lookup, &domain)
+                Self::fetch_and_build_domain_api(lookup, &domain, freshness)
                     .await
                     .map(Arc::new)
             };
@@ -250,6 +251,7 @@ impl RouteResolver {
     async fn fetch_and_build_domain_api(
         lookup: Arc<dyn HttpApiDefinitionsLookup>,
         domain: &Domain,
+        freshness: Freshness,
     ) -> Result<DomainHttpApi, ()> {
         let compiled_routes = lookup.get(domain).await;
 
@@ -283,6 +285,12 @@ impl RouteResolver {
         let openapi_inputs = finalized_routes.iter().find_map(|route| {
             if let RichRouteBehaviour::OpenApiSpec(behavior) = &route.behavior {
                 Some(Arc::new(OpenApiInputs {
+                    key: OpenApiKey {
+                        environment_id: route.environment_id,
+                        deployment_revision: route.deployment_revision,
+                        domain: domain.clone(),
+                    },
+                    freshness: freshness.clone(),
                     public_origin: behavior.scheme.origin(domain),
                     routes: finalized_routes.clone(),
                 }))
@@ -651,6 +659,7 @@ pub(super) mod tests {
             let api = RouteResolver::fetch_and_build_domain_api(
                 Arc::new(RoutesLookup(std::sync::Mutex::new(Some(compiled)))),
                 &domain,
+                Freshness::capture(Arc::new(AtomicU64::new(0))),
             )
             .await
             .unwrap();

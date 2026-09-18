@@ -231,9 +231,10 @@ fn request_handler_with_worker(
             Arc::new(DefaultIdentityProvider),
         )),
         Arc::new(WebhookCallbackHandler::new(worker_service.clone(), vec![])),
-        worker_service,
+        worker_service.clone(),
         Default::default(),
         initial_files,
+        Arc::new(OpenApiService::new(worker_service)),
     )
 }
 
@@ -575,4 +576,166 @@ async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
             );
         }
     }
+}
+
+struct MovingOpenApiLookup(std::sync::atomic::AtomicBool);
+
+#[async_trait]
+impl HttpApiDefinitionsLookup for MovingOpenApiLookup {
+    async fn get(
+        &self,
+        _: &golem_common::model::domain_registration::Domain,
+    ) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+        use crate::custom_api::route_resolver::tests::test_route;
+        let moved = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        let mut router = test_route(1, "/router", None, "router");
+        let RouteBehaviour::HttpRouter(behavior) = &mut router.behavior else {
+            unreachable!()
+        };
+        behavior.openapi_provider_method = Some(golem_service_base::custom_api::RouterMethod {
+            method_name: "describe".into(),
+            input: CompiledInputSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            output: CompiledOutputSchema {
+                graph: SchemaGraph::anonymous(SchemaType::string()),
+                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+            },
+        });
+        Ok(CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@golem"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: if moved {
+                DeploymentRevision::new(3).unwrap()
+            } else {
+                DeploymentRevision::INITIAL
+            },
+            security_schemes: HashMap::new(),
+            routes: vec![
+                test_route(
+                    0,
+                    if moved {
+                        "/new/openapi.json"
+                    } else {
+                        "/old/openapi.json"
+                    },
+                    Some("GET"),
+                    "reserved",
+                ),
+                router,
+            ],
+        })
+    }
+}
+
+fn openapi_request(path: &str) -> Request {
+    Request::builder()
+        .uri(path.parse().unwrap())
+        .header("host", "example.com")
+        .finish()
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn stale_openapi_reresolves_original_url_when_endpoint_moves() {
+    use crate::custom_api::openapi::test_support::{controlled, document};
+    let lookup = Arc::new(MovingOpenApiLookup(std::sync::atomic::AtomicBool::new(
+        false,
+    )));
+    let resolver = RouteResolver::new(&RouteResolverConfig::default(), lookup.clone());
+    let mut handler = request_handler_with(
+        resolver,
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+    );
+    let (service, mut calls, mut cleanups) = controlled();
+    handler.openapi_service = Arc::new(service);
+    let handler = Arc::new(handler);
+    let task = tokio::spawn({
+        let handler = handler.clone();
+        async move {
+            handler
+                .handle_request(openapi_request("/old/openapi.json"))
+                .await
+        }
+    });
+    let (old_key, old_reply) = calls.recv().await.unwrap();
+    lookup.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    handler.route_resolver.clear_all().await;
+    handler
+        .openapi_service
+        .invalidate_environment(EnvironmentId(uuid::Uuid::nil()));
+    assert!(matches!(
+        task.await.unwrap().unwrap_err().error,
+        RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute)
+    ));
+    assert_eq!(cleanups.recv().await.unwrap(), old_key);
+    assert!(old_reply.is_closed());
+    let current = tokio::spawn({
+        let handler = handler.clone();
+        async move {
+            handler
+                .handle_request(openapi_request("/new/openapi.json"))
+                .await
+        }
+    });
+    calls.recv().await.unwrap().1.send(Ok(document())).unwrap();
+    assert_eq!(current.await.unwrap().unwrap().status(), StatusCode::OK);
+    let ordinary = handler
+        .handle_request(openapi_request("/router/unmapped"))
+        .await
+        .unwrap();
+    assert_eq!(ordinary.status(), StatusCode::NOT_FOUND);
+    assert!(calls.try_recv().is_err());
+}
+
+#[test]
+fn stale_openapi_retries_share_original_request_deadline() {
+    use crate::custom_api::openapi::test_support::{controlled, paused};
+    paused(async {
+        let resolver = RouteResolver::new(
+            &RouteResolverConfig::default(),
+            Arc::new(MovingOpenApiLookup(std::sync::atomic::AtomicBool::new(
+                false,
+            ))),
+        );
+        let mut handler = request_handler_with(
+            resolver,
+            Arc::new(InitialAgentFilesService::new(Arc::new(
+                golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+            ))),
+        );
+        let (service, mut calls, _cleanups) = controlled();
+        handler.openapi_service = Arc::new(service);
+        let handler = Arc::new(handler);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            async move {
+                handler
+                    .handle_request(openapi_request("/old/openapi.json"))
+                    .await
+            }
+        });
+        for _ in 0..7 {
+            let (_, reply) = calls.recv().await.unwrap();
+            tokio::time::advance(Duration::from_secs(4)).await;
+            handler
+                .openapi_service
+                .invalidate_environment(EnvironmentId(uuid::Uuid::nil()));
+            tokio::task::yield_now().await;
+            assert!(reply.is_closed());
+        }
+        let (_, reply) = calls.recv().await.unwrap();
+        tokio::time::advance(Duration::from_millis(2001)).await;
+        let error = task.await.unwrap().unwrap_err().error;
+        assert!(
+            matches!(error, RequestHandlerError::OpenApi(error) if error.status() == StatusCode::GATEWAY_TIMEOUT)
+        );
+        // The timed-out waiter detaches; the cache still owns the current fill.
+        assert!(!reply.is_closed());
+        handler.openapi_service.clear();
+    });
 }

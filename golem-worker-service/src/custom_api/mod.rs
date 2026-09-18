@@ -26,7 +26,7 @@ mod live_files;
 pub mod model;
 mod mounted_dispatch;
 pub mod oidc;
-mod openapi;
+pub(crate) mod openapi;
 pub mod poem_endpoint;
 mod raw_handler;
 pub mod request_handler;

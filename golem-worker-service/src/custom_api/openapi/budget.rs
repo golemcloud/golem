@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub(super) const GENERATION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const GENERATION_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const DOCUMENT_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]

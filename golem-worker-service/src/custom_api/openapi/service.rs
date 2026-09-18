@@ -11,7 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
 use super::OpenApiInputs;
-use super::budget::{Budget, GENERATION_TIMEOUT};
+use super::budget::Budget;
+use super::cache::CacheState;
 use super::http_openapi_spec::{build_security, render_full_path};
 use super::merge::{ProviderContribution, merge_bounded};
 use super::provider_document::{self, Category, DocumentError, PROVIDER_BYTE_LIMIT};
@@ -26,9 +27,9 @@ use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, timeout, timeout_at};
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -55,7 +56,7 @@ pub struct OpenApiError {
 }
 
 impl OpenApiError {
-    pub(super) fn new(category: &'static str) -> Self {
+    pub(crate) fn new(category: &'static str) -> Self {
         Self {
             category,
             diagnostic: None,
@@ -64,6 +65,10 @@ impl OpenApiError {
 
     pub fn category(&self) -> &'static str {
         self.category
+    }
+
+    pub fn is_stale(&self) -> bool {
+        self.category == "stale"
     }
 
     pub fn status(&self) -> http::StatusCode {
@@ -165,7 +170,10 @@ impl ProviderInvoker for WorkerProviderInvoker {
 #[derive(Clone)]
 pub struct OpenApiService {
     invoker: Arc<dyn ProviderInvoker>,
-    admission: Arc<Semaphore>,
+    pub(super) admission: Arc<Semaphore>,
+    pub(super) cache: Arc<Mutex<CacheState>>,
+    #[cfg(test)]
+    pub(super) processing_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl OpenApiService {
@@ -173,36 +181,13 @@ impl OpenApiService {
         Self {
             invoker: Arc::new(WorkerProviderInvoker(worker)),
             admission: Arc::new(Semaphore::new(GENERATION_CONCURRENCY)),
+            cache: Arc::new(Mutex::new(CacheState::default())),
+            #[cfg(test)]
+            processing_hook: None,
         }
     }
 
-    pub async fn generate(
-        &self,
-        inputs: Arc<OpenApiInputs>,
-    ) -> Result<Arc<OpenApiDocument>, OpenApiError> {
-        let lease = Arc::new(
-            self.admission
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| OpenApiError::new("admission"))?,
-        );
-        let budget = Budget::new(Instant::now() + GENERATION_TIMEOUT);
-        let service = self.clone();
-        let (tx, rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let result = timeout_at(budget.deadline, service.run(inputs, budget.clone(), lease))
-                .await
-                .unwrap_or_else(|_| Err(OpenApiError::new("generation-timeout")));
-            budget.cancelled.cancel();
-            let _ = tx.send(result);
-        });
-        // The task owns generation: dropping a waiter does not strand remote
-        // invocations or release admission while blocking work is still running.
-        rx.await
-            .unwrap_or_else(|_| Err(OpenApiError::new("generation-failed")))
-    }
-
-    async fn run(
+    pub(super) async fn run(
         &self,
         inputs: Arc<OpenApiInputs>,
         budget: Budget,
@@ -223,8 +208,14 @@ impl OpenApiService {
             .buffer_unordered(PROVIDER_CONCURRENCY)
             .try_collect::<Vec<_>>()
             .await?;
+        #[cfg(test)]
+        let processing_hook = self.processing_hook.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            #[cfg(test)]
+            if let Some(hook) = processing_hook {
+                hook();
+            }
             budget.check()?;
             let mut generated = inputs
                 .generated_contribution()
@@ -354,4 +345,4 @@ impl Drop for Cleanup {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::custom_api) mod tests;

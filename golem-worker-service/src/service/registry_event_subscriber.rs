@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::custom_api::openapi::OpenApiService;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
@@ -24,6 +25,7 @@ use tracing::{debug, warn};
 pub(crate) struct WorkerServiceRegistryInvalidationHandler {
     agent_resolution_cache: Arc<AgentResolutionCache>,
     route_resolver: Arc<RouteResolver>,
+    openapi_service: Arc<OpenApiService>,
     auth_service: Arc<dyn AuthService>,
 }
 
@@ -32,6 +34,7 @@ impl WorkerServiceRegistryInvalidationHandler {
         registry_service: Arc<dyn RegistryService>,
         agent_resolution_cache: Arc<AgentResolutionCache>,
         route_resolver: Arc<RouteResolver>,
+        openapi_service: Arc<OpenApiService>,
         auth_service: Arc<dyn AuthService>,
         shutdown_token: Option<CancellationToken>,
     ) {
@@ -42,6 +45,7 @@ impl WorkerServiceRegistryInvalidationHandler {
                 Arc::new(Self {
                     agent_resolution_cache,
                     route_resolver,
+                    openapi_service,
                     auth_service,
                 }),
             )
@@ -55,8 +59,9 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
                 warn!("Registry invalidation cursor expired, flushing all caches");
-                self.agent_resolution_cache.clear().await;
                 self.route_resolver.clear_all().await;
+                self.openapi_service.clear();
+                self.agent_resolution_cache.clear().await;
                 self.auth_service.clear_all_caches().await;
             }
             RegistryInvalidationEvent::DeploymentChanged {
@@ -79,6 +84,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
+                self.openapi_service.invalidate_environment(*environment_id);
             }
             RegistryInvalidationEvent::DomainRegistrationChanged {
                 environment_id,
@@ -91,6 +97,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     "Received domain registration changed event"
                 );
                 self.route_resolver.clear_all().await;
+                self.openapi_service.invalidate_environment(*environment_id);
             }
             RegistryInvalidationEvent::AccountTokensInvalidated { account_id, .. } => {
                 debug!(
@@ -123,6 +130,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
+                self.openapi_service.invalidate_environment(*environment_id);
             }
             RegistryInvalidationEvent::RetryPolicyChanged { environment_id, .. } => {
                 debug!(
@@ -131,7 +139,9 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 );
             }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
-            RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
+            RegistryInvalidationEvent::AgentSecretChanged { environment_id, .. } => {
+                self.openapi_service.invalidate_environment(*environment_id);
+            }
             RegistryInvalidationEvent::CardRevoked { .. } => {}
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
@@ -154,6 +164,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     self.route_resolver
                         .invalidate_domains_for_environment(*env_id)
                         .await;
+                    self.openapi_service.invalidate_environment(*env_id);
                 }
             }
             RegistryInvalidationEvent::EnvironmentDeleted {
@@ -174,6 +185,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
+                self.openapi_service.invalidate_environment(*environment_id);
             }
         }
     }

@@ -18,9 +18,30 @@ use golem_service_base::custom_api::{
 };
 use serde_json::json;
 use test_r::test;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-async fn inputs(providers: usize) -> Arc<OpenApiInputs> {
+pub(in crate::custom_api) async fn inputs(providers: usize) -> Arc<OpenApiInputs> {
+    let resolved = test_resolver(provider_routes(providers))
+        .resolve_matching_route(
+            &poem::Request::builder()
+                .uri("/openapi.json".parse().unwrap())
+                .header("host", "example.com")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    let inputs = resolved.openapi_inputs.unwrap();
+    Arc::new(OpenApiInputs {
+        key: inputs.key.clone(),
+        freshness: inputs.freshness.clone(),
+        public_origin: inputs.public_origin.clone(),
+        routes: inputs.routes.clone(),
+    })
+}
+
+pub(in crate::custom_api) fn provider_routes(
+    providers: usize,
+) -> Vec<golem_service_base::custom_api::CompiledRoute> {
     let mut routes = vec![test_route(0, "/openapi.json", Some("GET"), "reserved")];
     for id in 1..=providers {
         let mut route = test_route(id as i32, &format!("/r{id}"), None, "router");
@@ -40,20 +61,10 @@ async fn inputs(providers: usize) -> Arc<OpenApiInputs> {
         });
         routes.push(route);
     }
-    test_resolver(routes)
-        .resolve_matching_route(
-            &poem::Request::builder()
-                .uri("/openapi.json".parse().unwrap())
-                .header("host", "example.com")
-                .finish(),
-        )
-        .await
-        .unwrap()
-        .openapi_inputs
-        .unwrap()
+    routes
 }
 
-fn document() -> String {
+pub(in crate::custom_api) fn document() -> String {
     json!({"openapi":"3.1.0","info":{"title":"Provider","version":"1"},
         "paths":{"/":{"get":{"responses":{"200":{"description":"ok"}}}}}})
     .to_string()
@@ -83,7 +94,7 @@ impl ProviderInvoker for ControlledInvoker {
     }
 }
 
-fn controlled() -> (
+pub(in crate::custom_api) fn controlled() -> (
     OpenApiService,
     mpsc::UnboundedReceiver<Call>,
     mpsc::UnboundedReceiver<IdempotencyKey>,
@@ -94,13 +105,15 @@ fn controlled() -> (
         OpenApiService {
             invoker: Arc::new(ControlledInvoker { calls, cleanups }),
             admission: Arc::new(Semaphore::new(GENERATION_CONCURRENCY)),
+            cache: Arc::new(Mutex::new(CacheState::default())),
+            processing_hook: None,
         },
         call_rx,
         cleanup_rx,
     )
 }
 
-fn paused(future: impl std::future::Future<Output = ()>) {
+pub(in crate::custom_api) fn paused(future: impl std::future::Future<Output = ()>) {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -133,6 +146,7 @@ async fn fanout_is_bounded_and_completion_order_does_not_change_json_or_yaml() {
         reply.send(Ok(document())).unwrap();
     }
     let first = first.await.unwrap().unwrap();
+    service.clear();
     let second = tokio::spawn({
         let service = service.clone();
         async move { service.generate(inputs).await }
@@ -281,10 +295,11 @@ async fn first_failure_cancels_peers_and_never_starts_queued_providers() {
 #[test]
 #[test_r::timeout("30s")]
 async fn dropped_waiter_does_not_release_generation_admission() {
-    let inputs = inputs(1).await;
     let (service, mut calls, mut cleanups) = controlled();
     let mut replies = Vec::new();
-    for _ in 0..8 {
+    for index in 0..8 {
+        let mut inputs = inputs(1).await;
+        Arc::get_mut(&mut inputs).unwrap().key.domain.0 = format!("domain{index}.test");
         let task = tokio::spawn({
             let service = service.clone();
             let inputs = inputs.clone();
@@ -296,7 +311,7 @@ async fn dropped_waiter_does_not_release_generation_admission() {
     }
     assert_eq!(
         service
-            .generate(inputs.clone())
+            .generate(inputs(1).await)
             .await
             .unwrap_err()
             .category(),
@@ -378,16 +393,23 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
             read_only: None,
         }],
     );
-    let mut inputs = inputs(1).await;
-    let route = Arc::get_mut(&mut Arc::get_mut(&mut inputs).unwrap().routes[1]).unwrap();
-    route.environment_id = harness.environment_id;
-    let RichRouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+    let mut routes = provider_routes(1);
+    let RouteBehaviour::HttpRouter(router) = &mut routes[1].behavior else {
         unreachable!()
     };
     router.component_id = harness.component_id;
     router.agent_type = AgentTypeName("mcp-agent".into());
-    let call = prepare_call(route).unwrap();
-    let other = prepare_call(route).unwrap();
+    let resolved = test_resolver(routes)
+        .resolve_matching_route(
+            &poem::Request::builder()
+                .uri("/r1".parse().unwrap())
+                .header("host", "example.com")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    let call = prepare_call(&resolved.route).unwrap();
+    let other = prepare_call(&resolved.route).unwrap();
     assert_ne!(call.key, other.key);
     assert_ne!(call.agent_id, other.agent_id);
     let adapter = WorkerProviderInvoker(harness.worker_service.clone());

@@ -54,6 +54,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
+    pub openapi_service: Arc<crate::custom_api::openapi::OpenApiService>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
@@ -201,6 +202,9 @@ impl Services {
             config.webhook_callback_handler.hmac_key.0.clone(),
         ));
 
+        let openapi_service = Arc::new(crate::custom_api::openapi::OpenApiService::new(
+            worker_service.clone(),
+        ));
         let request_handler = Arc::new(RequestHandler::new(
             route_resolver.clone(),
             call_agent_handler.clone(),
@@ -210,6 +214,7 @@ impl Services {
             worker_service.clone(),
             config.http_session.clone(),
             initial_files,
+            openapi_service.clone(),
         ));
 
         Ok(Self {
@@ -218,6 +223,7 @@ impl Services {
             component_service,
             worker_service,
             request_handler,
+            openapi_service,
             mcp_capability_lookup,
             registry_service: registry_service_client,
             agent_resolution_cache,
