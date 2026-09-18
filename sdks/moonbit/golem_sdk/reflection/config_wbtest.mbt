@@ -64,3 +64,30 @@ test "reflected config rejects unknown, secret, and invalid values before RPC" {
     _ => fail("expected invalid schema-native config value to be rejected")
   }
 }
+
+///|
+test "native config accepts large integers without a JSON round trip" {
+  let agent_type = configured_reflected_type()
+  agent_type.config.push({
+    path: ["counter"],
+    source: @common.AgentConfigSource::LOCAL,
+    schema: SchemaRef::new({ defs: [], root: @model.schema_type(U64(None)), }),
+  })
+  let native = agent_type.validate_config_values([
+    {
+      path: ["counter"],
+      value: @model.SchemaValue::U64(18446744073709551615UL),
+    },
+  ])
+  assert_eq(native.length(), 1)
+  try
+    agent_type.pack_config_json([
+      { path: ["counter"], value: Json::number(9007199254740992.0), },
+    ])
+  catch {
+    Json(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected JSON unsafe integer to be rejected")
+  }
+}

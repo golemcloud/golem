@@ -18,6 +18,334 @@ pub fn SchemaRef::validate_value(
   guard @tool_core.schema_value_matches_graph(self.graph, value) else {
     raise Schema("schema-native value does not match reflected schema")
   }
+  self.validate_refinements(self.root, value)
+}
+
+///|
+fn numeric_bound_value(bound : @types.NumericBound) -> Double {
+  match bound {
+    Signed(value) => value.to_double()
+    Unsigned(value) => value.to_double()
+    FloatBits(bits) => bits.reinterpret_as_double()
+  }
+}
+
+///|
+fn check_numeric_refinement(
+  restrictions : @types.NumericRestrictions?,
+  value : Double,
+) -> Unit raise ReflectError {
+  match restrictions {
+    Some(restrictions) => {
+      match restrictions.min {
+        Some(bound) =>
+          if value < numeric_bound_value(bound) {
+            raise Schema("numeric value is below declared minimum")
+          }
+        None => ()
+      }
+      match restrictions.max {
+        Some(bound) =>
+          if value > numeric_bound_value(bound) {
+            raise Schema("numeric value is above declared maximum")
+          }
+        None => ()
+      }
+    }
+    None => ()
+  }
+}
+
+///|
+fn signed_below_bound(value : Int64, bound : @types.NumericBound) -> Bool {
+  match bound {
+    Signed(minimum) => value < minimum
+    Unsigned(minimum) => value < 0L || value.reinterpret_as_uint64() < minimum
+    FloatBits(bits) => value.to_double() < bits.reinterpret_as_double()
+  }
+}
+
+///|
+fn signed_above_bound(value : Int64, bound : @types.NumericBound) -> Bool {
+  match bound {
+    Signed(maximum) => value > maximum
+    Unsigned(maximum) => value >= 0L && value.reinterpret_as_uint64() > maximum
+    FloatBits(bits) => value.to_double() > bits.reinterpret_as_double()
+  }
+}
+
+///|
+fn unsigned_below_bound(value : UInt64, bound : @types.NumericBound) -> Bool {
+  match bound {
+    Signed(minimum) => minimum >= 0L && value < minimum.reinterpret_as_uint64()
+    Unsigned(minimum) => value < minimum
+    FloatBits(bits) => value.to_double() < bits.reinterpret_as_double()
+  }
+}
+
+///|
+fn unsigned_above_bound(value : UInt64, bound : @types.NumericBound) -> Bool {
+  match bound {
+    Signed(maximum) => maximum < 0L || value > maximum.reinterpret_as_uint64()
+    Unsigned(maximum) => value > maximum
+    FloatBits(bits) => value.to_double() > bits.reinterpret_as_double()
+  }
+}
+
+///|
+fn check_signed_refinement(
+  restrictions : @types.NumericRestrictions?,
+  value : Int64,
+) -> Unit raise ReflectError {
+  match restrictions {
+    Some(restrictions) => {
+      match restrictions.min {
+        Some(bound) =>
+          if signed_below_bound(value, bound) {
+            raise Schema("numeric value is below declared minimum")
+          }
+        None => ()
+      }
+      match restrictions.max {
+        Some(bound) =>
+          if signed_above_bound(value, bound) {
+            raise Schema("numeric value is above declared maximum")
+          }
+        None => ()
+      }
+    }
+    None => ()
+  }
+}
+
+///|
+fn check_unsigned_refinement(
+  restrictions : @types.NumericRestrictions?,
+  value : UInt64,
+) -> Unit raise ReflectError {
+  match restrictions {
+    Some(restrictions) => {
+      match restrictions.min {
+        Some(bound) =>
+          if unsigned_below_bound(value, bound) {
+            raise Schema("numeric value is below declared minimum")
+          }
+        None => ()
+      }
+      match restrictions.max {
+        Some(bound) =>
+          if unsigned_above_bound(value, bound) {
+            raise Schema("numeric value is above declared maximum")
+          }
+        None => ()
+      }
+    }
+    None => ()
+  }
+}
+
+///|
+fn SchemaRef::validate_refinements(
+  self : SchemaRef,
+  schema : @model.SchemaType,
+  value : @model.SchemaValue,
+) -> Unit raise ReflectError {
+  match (schema.body, value) {
+    (Ref(_), _) => self.validate_refinements(self.resolve(schema), value)
+    (S8(r), S8(v)) | (S16(r), S16(v)) | (S32(r), S32(v)) =>
+      check_numeric_refinement(r, v.to_double())
+    (S64(r), S64(v)) => check_signed_refinement(r, v)
+    (U8(r), U8(v)) => check_numeric_refinement(r, v.to_int().to_double())
+    (U16(r), U16(v)) =>
+      check_numeric_refinement(r, v.reinterpret_as_int().to_double())
+    (U32(r), U32(v)) => check_numeric_refinement(r, v.to_double())
+    (U64(r), U64(v)) => check_unsigned_refinement(r, v)
+    (F32(r), F32(v)) => check_numeric_refinement(r, v.to_double())
+    (F64(r), F64(v)) => check_numeric_refinement(r, v)
+    (Record(fields), Record(values)) =>
+      for index in 0..<fields.length() {
+        self.validate_refinements(fields[index].body, values[index])
+      }
+    (Tuple(types), Tuple(values)) =>
+      for index in 0..<types.length() {
+        self.validate_refinements(types[index], values[index])
+      }
+    (List(element), List(values))
+    | (FixedList(element, _), FixedList(values)) =>
+      for entry in values {
+        self.validate_refinements(element, entry)
+      }
+    (Map(key, entry), Map(values)) =>
+      for item in values {
+        self.validate_refinements(key, item.key)
+        self.validate_refinements(entry, item.value)
+      }
+    (Option(element), Option(Some(inner))) =>
+      self.validate_refinements(element, inner)
+    (Variant(cases), Variant(index, Some(payload))) =>
+      match cases[index.reinterpret_as_int()].payload {
+        Some(inner) => self.validate_refinements(inner, payload)
+        None => ()
+      }
+    (Result(ok, _), ResultOk(Some(payload))) =>
+      match ok {
+        Some(inner) => self.validate_refinements(inner, payload)
+        None => ()
+      }
+    (Result(_, err), ResultErr(Some(payload))) =>
+      match err {
+        Some(inner) => self.validate_refinements(inner, payload)
+        None => ()
+      }
+    (Union(branches), Union(tag, body)) =>
+      match branches.iter().find_first(branch => branch.tag == tag) {
+        Some(branch) => self.validate_refinements(branch.body, body)
+        None => ()
+      }
+    (Text(r), Text(text, language)) => {
+      match r.min_length {
+        Some(min) =>
+          if text.char_length().reinterpret_as_uint() < min {
+            raise Schema("text is shorter than declared minimum")
+          }
+        None => ()
+      }
+      match r.max_length {
+        Some(max) =>
+          if text.char_length().reinterpret_as_uint() > max {
+            raise Schema("text is longer than declared maximum")
+          }
+        None => ()
+      }
+      match r.languages {
+        Some(allowed) =>
+          if !(match language {
+              Some(lang) => allowed.contains(lang)
+              None => false
+            }) {
+            raise Schema("text language is not allowed")
+          }
+        None => ()
+      }
+      match r.regex {
+        Some(pattern) => {
+          let regex = @string.Regex::Regex(pattern) catch {
+            error => raise Schema("invalid text regex: \{repr(error)}")
+          }
+          if regex.execute(text) is None {
+            raise Schema("text does not match declared regex")
+          }
+        }
+        None => ()
+      }
+    }
+    (Binary(r), Binary(bytes, mime_type)) => {
+      match r.min_bytes {
+        Some(min) =>
+          if bytes.length().reinterpret_as_uint() < min {
+            raise Schema("binary value is shorter than declared minimum")
+          }
+        None => ()
+      }
+      match r.max_bytes {
+        Some(max) =>
+          if bytes.length().reinterpret_as_uint() > max {
+            raise Schema("binary value is longer than declared maximum")
+          }
+        None => ()
+      }
+      match r.mime_types {
+        Some(allowed) =>
+          if !(match mime_type {
+              Some(mime) => allowed.contains(mime)
+              None => false
+            }) {
+            raise Schema("binary MIME type is not allowed")
+          }
+        None => ()
+      }
+    }
+    (Path(spec), Path(path)) => {
+      guard path != "" else { raise Schema("path is empty") }
+      match spec.allowed_extensions {
+        Some(allowed) =>
+          match re"\.([^./]+)$".execute(path) {
+            Some(m) =>
+              if !allowed.contains(m.group(1).unwrap().to_owned()) {
+                raise Schema("path extension is not allowed")
+              }
+            None => ()
+          }
+        None => ()
+      }
+    }
+    (Url(restrictions), Url(url)) => {
+      let parsed = re"^([A-Za-z][A-Za-z0-9+.\-]*):".execute(url)
+      guard parsed is Some(parts) else { raise Schema("URL is invalid") }
+      match restrictions.allowed_schemes {
+        Some(allowed) =>
+          if !allowed.any(scheme => {
+              scheme.equal_ignore_ascii_case(parts.group(1).unwrap().to_owned())
+            }) {
+            raise Schema("URL scheme is not allowed")
+          }
+        None => ()
+      }
+      match restrictions.allowed_hosts {
+        Some(allowed) =>
+          match
+            re"^[A-Za-z][A-Za-z0-9+.\-]*://(?:[^@/]*@)?([^:/?#]+)".execute(url) {
+            Some(authority) => {
+              let host = authority.group(1).unwrap().to_owned()
+              if !allowed.any(item => item.equal_ignore_ascii_case(host)) {
+                raise Schema("URL host is not allowed")
+              }
+            }
+            None => raise Schema("URL host is missing")
+          }
+        None => ()
+      }
+    }
+    (Quantity(spec), Quantity(quantity)) => {
+      let unit_allowed = if spec.allowed_suffixes.length() == 0 {
+        quantity.unit == spec.base_unit
+      } else {
+        spec.allowed_suffixes.contains(quantity.unit)
+      }
+      guard unit_allowed else { raise Schema("quantity unit is not allowed") }
+      match spec.min {
+        Some(min) =>
+          if quantity_below(quantity, min) {
+            raise Schema("quantity is below declared minimum")
+          }
+        None => ()
+      }
+      match spec.max {
+        Some(max) =>
+          if quantity_below(max, quantity) {
+            raise Schema("quantity is above declared maximum")
+          }
+        None => ()
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn quantity_below(
+  left : @types.QuantityValue,
+  right : @types.QuantityValue,
+) -> Bool {
+  if left.scale == right.scale {
+    left.mantissa < right.mantissa
+  } else {
+    let left_value = left.mantissa.to_double() *
+      @math.pow(10.0, -left.scale.to_double())
+    let right_value = right.mantissa.to_double() *
+      @math.pow(10.0, -right.scale.to_double())
+    left_value < right_value
+  }
 }
 
 ///|
@@ -267,7 +595,9 @@ pub fn SchemaRef::pack_json(
   self : SchemaRef,
   value : Json,
 ) -> @model.SchemaValue raise ReflectError {
-  self.pack(self.resolve(self.root), value)
+  let packed = self.pack(self.resolve(self.root), value)
+  self.validate_value(packed)
+  packed
 }
 
 ///|
@@ -275,6 +605,7 @@ pub fn SchemaRef::unpack_json(
   self : SchemaRef,
   value : @model.SchemaValue,
 ) -> Json raise ReflectError {
+  self.validate_value(value)
   self.unpack(self.resolve(self.root), value)
 }
 

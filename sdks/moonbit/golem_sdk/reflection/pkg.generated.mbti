@@ -83,31 +83,6 @@ pub fn AgentType::resume_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgent
 pub fn AgentType::resume_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::validate_config_values(Self, Array[ReflectedConfigValue]) -> Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue] raise ReflectError
 
-pub(all) struct CallerCodecClient {
-  reusable_identity : ParsedAgentId?
-  // private fields
-}
-pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(String, C, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
-pub fn CallerCodecClient::bind(ParsedAgentId) -> Self raise ReflectError
-pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
-pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::bind_complete_with_config(String, ParsedAgentId, @schema.TypeTag[C], Config) -> Self raise ReflectError
-pub fn CallerCodecClient::bind_with_config(ParsedAgentId, Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue]) -> Self raise ReflectError
-pub fn CallerCodecClient::drop(Self) -> Unit
-pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral(String, C) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_with_config(String, C, Config) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] CallerCodecClient::get(String, C) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] CallerCodecClient::get_phantom(String, C, @types.Uuid) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_with_config(String, C, Config) -> Self raise ReflectError
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::invoke(Self, String, I) -> Invocation[O]
-pub async fn[I : @schema.IntoSchema] CallerCodecClient::invoke_unit(Self, String, I) -> Invocation[Unit]
-pub fn[C : @schema.IntoSchema] CallerCodecClient::new_phantom(String, C) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::new_phantom_with_config(String, C, Config) -> Self raise ReflectError
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
-
 pub(all) struct CreatedPhantomClient {
   agent_id : ParsedAgentId
   phantom_id : @types.Uuid
@@ -136,6 +111,29 @@ pub fn DynamicToolClient::new(String) -> Self
 pub fn DynamicToolClient::start_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?, stdout? : Bool) -> Result[@tool.ToolInvocation[ReflectedToolCustomError], @tool.ToolError[ReflectedToolCustomError]]
 pub fn DynamicToolClient::trigger_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]]
 
+pub(all) struct FullAgentClient {
+  reusable_identity : ParsedAgentId?
+  // private fields
+}
+pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(String, C, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
+pub fn[C : @schema.FromSchema] FullAgentClient::bind(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
+pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::bind_with_config(String, ParsedAgentId, @schema.TypeTag[C], Config) -> Self raise ReflectError
+pub fn FullAgentClient::drop(Self) -> Unit
+pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_with_config(String, C, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::get(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(String, C, @types.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_with_config(String, C, Config) -> Self raise ReflectError
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I) -> Invocation[O]
+pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I) -> Invocation[Unit]
+pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::new_phantom_with_config(String, C, Config) -> Self raise ReflectError
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
+
 pub(all) struct Invocation[T] {
   metadata : InvocationMetadata
   value : T
@@ -145,6 +143,17 @@ pub(all) struct InvocationMetadata {
   agent_id : ParsedAgentId
   idempotency_key : String
 } derive(Eq, @debug.Debug)
+
+pub(all) struct MethodOnlyAgentClient {
+  // private fields
+}
+pub fn MethodOnlyAgentClient::bind(ParsedAgentId) -> Self raise ReflectError
+pub fn MethodOnlyAgentClient::bind_with_config(ParsedAgentId, Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue]) -> Self raise ReflectError
+pub fn MethodOnlyAgentClient::drop(Self) -> Unit
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(Self, String, I) -> Invocation[O]
+pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(Self, String, I) -> Invocation[Unit]
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
 
 pub(all) struct ParsedAgentId {
   value : String

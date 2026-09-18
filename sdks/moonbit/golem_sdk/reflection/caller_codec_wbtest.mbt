@@ -1,6 +1,6 @@
 ///|
-test "complete binding accepts the exact name and constructor shape" {
-  validate_complete_id(
+test "full binding accepts the exact name and constructor shape" {
+  validate_full_id(
     "MarketAnalyst",
     {
       type_name: "MarketAnalyst",
@@ -12,9 +12,9 @@ test "complete binding accepts the exact name and constructor shape" {
 }
 
 ///|
-test "complete binding rejects a different agent name" {
+test "full binding rejects a different agent name" {
   try
-    validate_complete_id(
+    validate_full_id(
       "MarketAnalyst",
       {
         type_name: "OtherAgent",
@@ -32,9 +32,9 @@ test "complete binding rejects a different agent name" {
 }
 
 ///|
-test "complete binding rejects a different constructor shape" {
+test "full binding rejects a different constructor shape" {
   try
-    validate_complete_id(
+    validate_full_id(
       "MarketAnalyst",
       {
         type_name: "MarketAnalyst",

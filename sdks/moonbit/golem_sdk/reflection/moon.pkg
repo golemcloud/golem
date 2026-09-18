@@ -14,6 +14,7 @@ import {
   "golemcloud/golem_sdk/tool-core" @tool_core,
   "golemcloud/golem_sdk/tool",
   "moonbitlang/core/string",
+  "moonbitlang/core/math",
   "moonbitlang/core/encoding/base64",
 }
 

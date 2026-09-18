@@ -2,19 +2,26 @@
 /// Typed client whose `IntoSchema` and `FromSchema` implementations are
 /// authored by the caller. The environment-unique type name is the invocation
 /// address; no reflected schema is consulted.
-pub(all) struct CallerCodecClient {
+pub(all) struct FullAgentClient {
   priv transport : Transport
   reusable_identity : ParsedAgentId?
 }
 
 ///|
-fn[C : @schema.IntoSchema] caller_codec_complete(
+/// Typed method codecs bound to an existing durable identity. The ID itself
+/// supplies the target name, constructor value, and phantom identity.
+pub(all) struct MethodOnlyAgentClient {
+  priv inner : FullAgentClient
+}
+
+///|
+fn[C : @schema.IntoSchema] full_client_create(
   type_name : String,
   constructor_input : C,
   phantom_id : @types.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
   reusable : Bool,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let constructor_value = @schema.to_value_as(constructor_input)
   let reusable_identity = if reusable {
     Some(ParsedAgentId::create(type_name, constructor_value, phantom_id~))
@@ -30,59 +37,53 @@ fn[C : @schema.IntoSchema] caller_codec_complete(
 }
 
 ///|
-/// Constructs an ordinary durable client from its complete local contract.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::get(
+/// Constructs an ordinary durable client from its full local contract.
+pub fn[C : @schema.IntoSchema] FullAgentClient::get(
   type_name : String,
   constructor_input : C,
-) -> CallerCodecClient raise ReflectError {
-  caller_codec_complete(type_name, constructor_input, None, [], true)
+) -> FullAgentClient raise ReflectError {
+  full_client_create(type_name, constructor_input, None, [], true)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_with_config(
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_with_config(
   type_name : String,
   constructor_input : C,
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {
     error =>
       raise Schema(
         "failed to encode config overrides: " + agent_error_message(error),
       )
   }
-  caller_codec_complete(type_name, constructor_input, None, values, true)
+  full_client_create(type_name, constructor_input, None, values, true)
 }
 
 ///|
 /// Constructs a durable phantom client with a known phantom identity.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::get_phantom(
+pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(
   type_name : String,
   constructor_input : C,
   phantom_id : @types.Uuid,
-) -> CallerCodecClient raise ReflectError {
-  caller_codec_complete(
-    type_name,
-    constructor_input,
-    Some(phantom_id),
-    [],
-    true,
-  )
+) -> FullAgentClient raise ReflectError {
+  full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_phantom_with_config(
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(
   type_name : String,
   constructor_input : C,
   phantom_id : @types.Uuid,
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {
     error =>
       raise Schema(
         "failed to encode config overrides: " + agent_error_message(error),
       )
   }
-  caller_codec_complete(
+  full_client_create(
     type_name,
     constructor_input,
     Some(phantom_id),
@@ -93,29 +94,29 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecCl
 
 ///|
 /// Constructs a durable phantom client with a fresh phantom identity.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::new_phantom(
+pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(
   type_name : String,
   constructor_input : C,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let phantom_id = @apiHost.generate_idempotency_key()
-  CallerCodecClient::get_phantom(type_name, constructor_input, phantom_id)
+  FullAgentClient::get_phantom(type_name, constructor_input, phantom_id)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::new_phantom_with_config(
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::new_phantom_with_config(
   type_name : String,
   constructor_input : C,
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let phantom_id = @apiHost.generate_idempotency_key()
-  CallerCodecClient::get_phantom_with_config(
+  FullAgentClient::get_phantom_with_config(
     type_name, constructor_input, phantom_id, config,
   )
 }
 
 ///|
-/// Constructs the reusable identity for a complete durable contract.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(
+/// Constructs the reusable identity for a full durable contract.
+pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
   type_name : String,
   constructor_input : C,
   phantom_id? : @types.Uuid? = None,
@@ -128,15 +129,15 @@ pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(
 }
 
 ///|
-/// Binds a complete durable contract, rejecting an identity whose exact agent
+/// Binds a full durable contract, rejecting an identity whose exact agent
 /// name or constructor shape differs from the local contract.
-pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(
+pub fn[C : @schema.FromSchema] FullAgentClient::bind(
   type_name : String,
   agent_id : ParsedAgentId,
   constructor_type : @schema.TypeTag[C],
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let parts = agent_id.parts()
-  validate_complete_id(type_name, parts, constructor_type)
+  validate_full_id(type_name, parts, constructor_type)
   {
     transport: Transport::create(
       parts.type_name,
@@ -148,25 +149,25 @@ pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(
 }
 
 ///|
-pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::bind_complete_with_config(
+pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::bind_with_config(
   type_name : String,
   agent_id : ParsedAgentId,
   constructor_type : @schema.TypeTag[C],
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let parts = agent_id.parts()
-  validate_complete_id(type_name, parts, constructor_type)
+  validate_full_id(type_name, parts, constructor_type)
   let values = config.typed_values() catch {
     error =>
       raise Schema(
         "failed to encode config overrides: " + agent_error_message(error),
       )
   }
-  CallerCodecClient::bind_with_config(agent_id, values)
+  full_from_id_with_config(agent_id, values)
 }
 
 ///|
-fn[C : @schema.FromSchema] validate_complete_id(
+fn[C : @schema.FromSchema] validate_full_id(
   type_name : String,
   parts : ParsedAgentIdParts,
   _constructor_type : @schema.TypeTag[C],
@@ -179,7 +180,7 @@ fn[C : @schema.FromSchema] validate_complete_id(
   let _ : C = @schema.from_value_as(parts.constructor_value) catch {
     error =>
       raise Identity(
-        "agent ID constructor does not match the complete contract: \{repr(error)}",
+        "agent ID constructor does not match the full contract: \{repr(error)}",
       )
   }
 }
@@ -187,58 +188,52 @@ fn[C : @schema.FromSchema] validate_complete_id(
 ///|
 /// Constructs a logical ephemeral client. Its final identity is available only
 /// in invocation metadata.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral(
+pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral(
   type_name : String,
   constructor_input : C,
-) -> CallerCodecClient raise ReflectError {
-  caller_codec_complete(type_name, constructor_input, None, [], false)
+) -> FullAgentClient raise ReflectError {
+  full_client_create(type_name, constructor_input, None, [], false)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_with_config(
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_with_config(
   type_name : String,
   constructor_input : C,
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {
     error =>
       raise Schema(
         "failed to encode config overrides: " + agent_error_message(error),
       )
   }
-  caller_codec_complete(type_name, constructor_input, None, values, false)
+  full_client_create(type_name, constructor_input, None, values, false)
 }
 
 ///|
 /// Constructs an ephemeral client with a known phantom identity.
-pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral_phantom(
+pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(
   type_name : String,
   constructor_input : C,
   phantom_id : @types.Uuid,
-) -> CallerCodecClient raise ReflectError {
-  caller_codec_complete(
-    type_name,
-    constructor_input,
-    Some(phantom_id),
-    [],
-    true,
-  )
+) -> FullAgentClient raise ReflectError {
+  full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_phantom_with_config(
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(
   type_name : String,
   constructor_input : C,
   phantom_id : @types.Uuid,
   config : Config,
-) -> CallerCodecClient raise ReflectError {
+) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {
     error =>
       raise Schema(
         "failed to encode config overrides: " + agent_error_message(error),
       )
   }
-  caller_codec_complete(
+  full_client_create(
     type_name,
     constructor_input,
     Some(phantom_id),
@@ -248,18 +243,26 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecCl
 }
 
 ///|
-pub fn CallerCodecClient::bind(
+pub fn MethodOnlyAgentClient::bind(
   agent_id : ParsedAgentId,
-) -> CallerCodecClient raise ReflectError {
-  CallerCodecClient::bind_with_config(agent_id, [])
+) -> MethodOnlyAgentClient raise ReflectError {
+  MethodOnlyAgentClient::bind_with_config(agent_id, [])
 }
 
 ///|
 /// Raw typed entries are accepted without declaration-aware validation.
-pub fn CallerCodecClient::bind_with_config(
+pub fn MethodOnlyAgentClient::bind_with_config(
   agent_id : ParsedAgentId,
   config : Array[@common.TypedAgentConfigValue],
-) -> CallerCodecClient raise ReflectError {
+) -> MethodOnlyAgentClient raise ReflectError {
+  { inner: full_from_id_with_config(agent_id, config), }
+}
+
+///|
+fn full_from_id_with_config(
+  agent_id : ParsedAgentId,
+  config : Array[@common.TypedAgentConfigValue],
+) -> FullAgentClient raise ReflectError {
   let parts = agent_id.parts()
   {
     transport: Transport::create_with_config(
@@ -273,8 +276,8 @@ pub fn CallerCodecClient::bind_with_config(
 }
 
 ///|
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::invoke(
-  self : CallerCodecClient,
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(
+  self : FullAgentClient,
   method_name : String,
   input : I,
 ) -> Invocation[O] {
@@ -296,8 +299,8 @@ pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::
 }
 
 ///|
-pub async fn[I : @schema.IntoSchema] CallerCodecClient::invoke_unit(
-  self : CallerCodecClient,
+pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(
+  self : FullAgentClient,
   method_name : String,
   input : I,
 ) -> Invocation[Unit] {
@@ -312,8 +315,8 @@ pub async fn[I : @schema.IntoSchema] CallerCodecClient::invoke_unit(
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::trigger(
-  self : CallerCodecClient,
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::trigger(
+  self : FullAgentClient,
   method_name : String,
   input : I,
   output : @schema.TypeTag[O],
@@ -328,8 +331,8 @@ pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::trigge
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::schedule(
-  self : CallerCodecClient,
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule(
+  self : FullAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : I,
@@ -370,6 +373,50 @@ fn[I : @schema.IntoSchema, O : @schema.IntoSchema] reject_caller_codec_non_await
 }
 
 ///|
-pub fn CallerCodecClient::drop(self : CallerCodecClient) -> Unit {
+pub fn FullAgentClient::drop(self : FullAgentClient) -> Unit {
   self.transport.drop()
+}
+
+///|
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(
+  self : MethodOnlyAgentClient,
+  method_name : String,
+  input : I,
+) -> Invocation[O] {
+  self.inner.invoke(method_name, input)
+}
+
+///|
+pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(
+  self : MethodOnlyAgentClient,
+  method_name : String,
+  input : I,
+) -> Invocation[Unit] {
+  self.inner.invoke_unit(method_name, input)
+}
+
+///|
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::trigger(
+  self : MethodOnlyAgentClient,
+  method_name : String,
+  input : I,
+  output : @schema.TypeTag[O],
+) -> InvocationMetadata raise ReflectError {
+  self.inner.trigger(method_name, input, output)
+}
+
+///|
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::schedule(
+  self : MethodOnlyAgentClient,
+  scheduled_at : @systemClock.Instant,
+  method_name : String,
+  input : I,
+  output : @schema.TypeTag[O],
+) -> ScheduledInvocation raise ReflectError {
+  self.inner.schedule(scheduled_at, method_name, input, output)
+}
+
+///|
+pub fn MethodOnlyAgentClient::drop(self : MethodOnlyAgentClient) -> Unit {
+  self.inner.drop()
 }

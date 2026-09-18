@@ -45,6 +45,99 @@ test "64-bit JSON rejects values outside the safe integer range" {
 }
 
 ///|
+test "native 64-bit refinements compare exact integer boundaries" {
+  let signed = test_schema(
+    S64(
+      Some({
+        min: Some(@types.NumericBound::Signed(9007199254740993L)),
+        max: Some(@types.NumericBound::Signed(9007199254740993L)),
+        unit: None,
+      }),
+    ),
+  )
+  signed.validate_value(@model.SchemaValue::S64(9007199254740993L))
+  try signed.validate_value(@model.SchemaValue::S64(9007199254740992L)) catch {
+    Schema(_) => ()
+    _ => fail("expected numeric refinement rejection")
+  } noraise {
+    _ => fail("expected exact lower bound rejection")
+  }
+  let unsigned = test_schema(
+    U64(
+      Some({
+        min: Some(@types.NumericBound::Unsigned(18446744073709551615UL)),
+        max: None,
+        unit: None,
+      }),
+    ),
+  )
+  unsigned.validate_value(@model.SchemaValue::U64(18446744073709551615UL))
+  try
+    unsigned.validate_value(@model.SchemaValue::U64(18446744073709551614UL))
+  catch {
+    Schema(_) => ()
+    _ => fail("expected numeric refinement rejection")
+  } noraise {
+    _ => fail("expected exact unsigned lower bound rejection")
+  }
+}
+
+///|
+test "native path URL and quantity refinements reject invalid values" {
+  let path = test_schema(
+    Path({
+      direction: @types.PathDirection::INPUT,
+      kind: @types.PathKind::FILE,
+      allowed_mime_types: None,
+      allowed_extensions: Some(["txt"]),
+    }),
+  )
+  path.validate_value(@model.SchemaValue::Path("report.txt"))
+  try path.validate_value(@model.SchemaValue::Path("report.csv")) catch {
+    Schema(_) => ()
+    _ => fail("expected path extension rejection")
+  } noraise {
+    _ => fail("expected path extension rejection")
+  }
+  let url = test_schema(
+    Url({
+      allowed_schemes: Some(["https"]),
+      allowed_hosts: Some(["example.com"]),
+    }),
+  )
+  url.validate_value(@model.SchemaValue::Url("https://example.com/path"))
+  try
+    url.validate_value(@model.SchemaValue::Url("http://example.com/path"))
+  catch {
+    Schema(_) => ()
+    _ => fail("expected URL scheme rejection")
+  } noraise {
+    _ => fail("expected URL scheme rejection")
+  }
+  let quantity = test_schema(
+    Quantity({
+      base_unit: "kg",
+      allowed_suffixes: [],
+      min: Some({ mantissa: 10L, scale: 0, unit: "kg", }),
+      max: Some({ mantissa: 20L, scale: 0, unit: "kg", }),
+    }),
+  )
+  quantity.validate_value(
+    @model.SchemaValue::Quantity({ mantissa: 15L, scale: 0, unit: "kg", }),
+  )
+  try
+    quantity.validate_value(
+      @model.SchemaValue::Quantity({ mantissa: 21L, scale: 0, unit: "kg", }),
+    )
+  catch {
+    Schema(_) => ()
+    _ => fail("expected quantity maximum rejection")
+  } noraise {
+    _ => fail("expected quantity maximum rejection")
+  }
+}
+
+///|
 test "binary JSON round-trips unpadded base64url and MIME type" {
   let schema = test_schema(
     Binary({ min_bytes: None, max_bytes: None, mime_types: None, }),
@@ -285,6 +378,57 @@ test "schema-native reflected values reject wrong nested types" {
     error => fail("unexpected error: \{repr(error)}")
   } noraise {
     _ => fail("expected local schema-native validation failure")
+  }
+}
+
+///|
+test "declared nested numeric refinements apply to native and JSON values" {
+  let restricted = @model.schema_type(
+    U32(
+      Some({
+        min: Some(@types.Unsigned(5UL)),
+        max: Some(@types.Unsigned(10UL)),
+        unit: None,
+      }),
+    ),
+  )
+  let schema = test_schema(
+    Record([
+      { name: "count", body: restricted, metadata: @model.empty_metadata(), },
+    ]),
+  )
+  schema.validate_value(
+    @model.SchemaValue::Record([@model.SchemaValue::U32(7U)]),
+  )
+  assert_eq(
+    schema.pack_json(Json::object({ "count": Json::number(7.0) })),
+    @model.SchemaValue::Record([@model.SchemaValue::U32(7U)]),
+  )
+  try
+    schema.validate_value(
+      @model.SchemaValue::Record([@model.SchemaValue::U32(3U)]),
+    )
+  catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected native refinement rejection")
+  }
+  try schema.pack_json(Json::object({ "count": Json::number(3.0) })) catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected JSON refinement rejection")
+  }
+  try
+    schema.unpack_json(
+      @model.SchemaValue::Record([@model.SchemaValue::U32(3U)]),
+    )
+  catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected declared output refinement rejection")
   }
 }
 

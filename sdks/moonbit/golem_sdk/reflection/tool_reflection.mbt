@@ -155,7 +155,12 @@ fn tool_flag_argument(
     aliases: spec.aliases,
     short: spec.short,
     required: false,
-    default: None,
+    default: Some(
+      match spec.shape {
+        BoolFlag(shape) => @model.SchemaValue::Bool(shape.default)
+        CountFlag(_) => @model.SchemaValue::U32(0U)
+      },
+    ),
     schema: SchemaRef::new({ defs: decoded.defs, root, }),
     optional_carrier: false,
   }
@@ -437,20 +442,47 @@ fn ToolCommand::constraint_ref_matches(
   let actual = values[index]
   match reference {
     Present(_) =>
-      match actual {
-        Option(None) => false
-        _ =>
-          match self.arguments[index].default {
-            Some(default) => actual != default
-            None => true
-          }
+      if self.arguments[index].kind == "flag" {
+        match self.arguments[index].default {
+          Some(default) => actual != default
+          None => false
+        }
+      } else if self.arguments[index].default == Some(actual) {
+        false
+      } else {
+        match actual {
+          Option(inner) => inner is Some(_)
+          List(values) | FixedList(values) => !values.is_empty()
+          Map(entries) => !entries.is_empty()
+          Bool(value) => value
+          U32(value) => value != 0U
+          _ => true
+        }
       }
     ValueIs(item) => {
       let expected = @model_host.schema_value_from_wit(item.value) catch {
         _ => return false
       }
-      actual == expected
+      tool_value_matches(actual, expected)
     }
+  }
+}
+
+///|
+fn tool_value_matches(
+  actual : @model.SchemaValue,
+  expected : @model.SchemaValue,
+) -> Bool {
+  if actual == expected {
+    return true
+  }
+  match actual {
+    Option(Some(inner)) => tool_value_matches(inner, expected)
+    List(values) | FixedList(values) =>
+      values.any(value => tool_value_matches(value, expected))
+    Map(entries) =>
+      entries.any(entry => tool_value_matches(entry.value, expected))
+    _ => false
   }
 }
 
@@ -587,6 +619,7 @@ pub async fn ToolCommand::invoke_value(
     Ok(started) => started
     Err(error) => return Err(error)
   }
+  defer started.drop()
   if self.body.stdout is Some(_) {
     match started.collect() {
       Ok((result, _)) => Ok(result)

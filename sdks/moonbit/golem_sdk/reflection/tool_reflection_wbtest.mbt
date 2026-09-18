@@ -122,10 +122,104 @@ test "reflected optional tool inputs share the canonical wire schema" {
 }
 
 ///|
+extern "wasm" fn set_reflection_tool_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+
+///|
+extern "wasm" fn reset_reflection_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
+
+///|
+extern "wasm" fn reflection_resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+
+///|
+fn run_reflection_tool_async(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async-core.with_waitableset(async fn() {
+    body()
+    @async-core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps += 1
+    if steps > 1000 {
+      fail("reflected tool async test did not complete")
+    }
+    if (callback & 0xf) != 1 {
+      fail("reflected tool test unexpectedly waited on a host event")
+    }
+    callback = @async-core.cb(0, 0, 0)
+  }
+}
+
+///|
+test "repeated reflected convenience calls release result futures on every exit" {
+  let command = sample_tool().command(["run"])
+  let input = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  reset_reflection_resource_drop_counts()
+  set_reflection_tool_host_mode(1)
+  defer set_reflection_tool_host_mode(0)
+  run_reflection_tool_async(async fn() {
+    for _ in 0..<50 {
+      match command.invoke_value(input) {
+        Err(@tool.ToolError::Rpc(@tool.RpcError::Cancelled)) => ()
+        _ => fail("expected cancelled tool result")
+      }
+    }
+  })
+  assert_eq(reflection_resource_drop_count(4), 50)
+  set_reflection_tool_host_mode(2)
+  run_reflection_tool_async(async fn() {
+    for _ in 0..<50 {
+      match command.invoke_value(input) {
+        Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+        _ => fail("expected missing remote result")
+      }
+    }
+  })
+  assert_eq(reflection_resource_drop_count(4), 100)
+}
+
+///|
 test "reflected tool reports malformed remote result" {
   let command = sample_tool().command(["run"])
   match command.decode_result({ result: None, stdout: None, }) {
     Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
     _ => fail("expected missing tool result to be malformed")
   }
+}
+
+///|
+test "tool constraint references use flag defaults and nested values" {
+  let tool = sample_tool()
+  let command = tool.command(["run"])
+  let flag : @toolCommon.FlagSpec = {
+    long: "enabled",
+    short: None,
+    aliases: [],
+    doc: { summary: "", description: "", examples: [], },
+    shape: BoolFlag({ default: true, negatable: true, }),
+    env_var: None,
+  }
+  command.arguments.push(tool_flag_argument(tool, flag))
+  assert_eq(command.arguments[3].default, Some(@model.SchemaValue::Bool(true)))
+  let values = [
+    @model.SchemaValue::String("message"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(Some(@model.SchemaValue::String("fast"))),
+    @model.SchemaValue::Bool(false),
+  ]
+  assert_true(command.constraint_ref_matches(Present("enabled"), values))
+  assert_true(
+    command.constraint_ref_matches(
+      ValueIs({
+        name: "label",
+        value: @model.schema_value_to_wit(@model.SchemaValue::String("fast")),
+      }),
+      values,
+    ),
+  )
+  values[3] = @model.SchemaValue::Bool(true)
+  assert_false(command.constraint_ref_matches(Present("enabled"), values))
 }

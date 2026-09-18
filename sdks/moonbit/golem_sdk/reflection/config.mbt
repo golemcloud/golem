@@ -43,10 +43,7 @@ pub fn AgentType::validate_config_values(
   let result : Array[@common.TypedAgentConfigValue] = []
   for entry in overrides {
     let declaration = self.config_declaration(entry.path)
-    let canonical = declaration.schema.unpack_json(entry.value)
-    guard declaration.schema.pack_json(canonical) == entry.value else {
-      raise Schema("invalid config value at '\{entry.path.join(".")}'")
-    }
+    declaration.schema.validate_value(entry.value)
     let wire = @model.typed_schema_value_to_wit({
       graph: declaration.schema.graph,
       value: entry.value,

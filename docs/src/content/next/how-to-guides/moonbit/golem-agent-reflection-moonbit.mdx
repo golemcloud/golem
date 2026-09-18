@@ -1,6 +1,6 @@
 # Calling Agents with Runtime Reflection (MoonBit)
 
-Use generated clients when the complete target definition is available at
+Use generated clients when the full target definition is available at
 compile time. Otherwise choose one authority and invocation path explicitly:
 caller-authored codecs, runtime-reflected schemas, or direct schema-free
 `SchemaValue` calls.
@@ -77,23 +77,23 @@ schema contains a stream.
 
 ## Define caller-codec contracts
 
-`CallerCodecClient` does not discover payload schemas. The caller's
-`IntoSchema` and `FromSchema` implementations are the schema authority. It has
+Method-only and full clients do not discover payload schemas. The caller's
+`IntoSchema` and `FromSchema` implementations are the schema authority. They have
 two contract tiers.
 
-Binding-only contracts contain method codecs only. Bind a durable
+Method-only contracts contain method codecs only. Bind a durable
 `ParsedAgentId`; its type name, constructor value, and phantom UUID supply the
 target. Do not add a standalone name to this form:
 
 ```moonbit
-let counter = @reflection.CallerCodecClient::bind(existing_id)
+let counter = @reflection.MethodOnlyAgentClient::bind(existing_id)
 let result : @reflection.Invocation[AddOutput] = counter.invoke(
   "add",
   AddInput::{ by: 5U },
 )
 ```
 
-Complete contracts add an exact type name, typed constructor/ID shape,
+Full contracts add an exact type name, typed constructor/ID shape,
 lifecycle mode, and an optional typed config carrier:
 
 ```moonbit
@@ -104,53 +104,53 @@ struct AddInput { by : UInt }
 #derive.golem_schema
 struct AddOutput { value : UInt }
 
-let counter = @reflection.CallerCodecClient::get(
+let counter = @reflection.FullAgentClient::get(
   "CounterAgent",
   CounterId::{ name: "main" },
 )
-let known = @reflection.CallerCodecClient::get_phantom(
+let known = @reflection.FullAgentClient::get_phantom(
   "CounterAgent",
   CounterId::{ name: "main" },
   phantom_id,
 )
-let fresh = @reflection.CallerCodecClient::new_phantom(
+let fresh = @reflection.FullAgentClient::new_phantom(
   "CounterAgent",
   CounterId::{ name: "main" },
 )
-let reusable_id = @reflection.CallerCodecClient::agent_id(
+let reusable_id = @reflection.FullAgentClient::agent_id(
   "CounterAgent",
   CounterId::{ name: "main" },
   phantom_id~,
 )
 ```
 
-Bind an existing durable ID to a complete contract with a constructor type tag.
+Bind an existing durable ID to a full contract with a constructor type tag.
 This rejects both a different exact agent name and a constructor value that
 cannot be decoded as the declared ID shape before creating the RPC client:
 
 ```moonbit
-let exact = @reflection.CallerCodecClient::bind_complete(
+let exact = @reflection.FullAgentClient::bind(
   "CounterAgent",
   existing_id,
   (@schema.type_tag() : @schema.TypeTag[CounterId]),
 )
 ```
 
-`bind_complete_with_config` accepts the same typed override carrier after
-checking the complete identity. A binding-only caller uses `bind_with_config`
+`bind_with_config` accepts the same typed override carrier after
+checking the full identity. A method-only client uses `bind_with_config`
 with raw `TypedAgentConfigValue` entries; it has no declarations to validate
 those entries against locally.
 
 For ephemeral contracts, use `ephemeral` for a logical fresh target or
-`ephemeral_phantom` for a known phantom UUID. There is no generic complete
+`ephemeral_phantom` for a known phantom UUID. There is no generic full
 ephemeral binding operation:
 
 ```moonbit
-let logical = @reflection.CallerCodecClient::ephemeral(
+let logical = @reflection.FullAgentClient::ephemeral(
   "ResearchRequest",
   ResearchRequestId::{ route: "live" },
 )
-let known = @reflection.CallerCodecClient::ephemeral_phantom(
+let known = @reflection.FullAgentClient::ephemeral_phantom(
   "ResearchRequest",
   ResearchRequestId::{ route: "live" },
   phantom_id,
@@ -205,7 +205,7 @@ resumable durable identity.
 | Situation | Use |
 |---|---|
 | Generated definition available | Generated agent client |
-| Typed contract owned by the caller | `CallerCodecClient` resolved by environment type name |
+| Typed contract owned by the caller | `MethodOnlyAgentClient` or `FullAgentClient` resolved by environment type name |
 | Runtime-selected method with automatic JSON conversion | `invoke_json` |
 | Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
 | Schema-free infrastructure with Golem values | `DynamicAgentClient` |
