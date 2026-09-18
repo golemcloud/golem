@@ -406,15 +406,14 @@ impl<H: ProjectionStreamHandler> Evaluator<'_, H> {
                     (SchemaType::Union { .. }, SchemaType::Union { .. })
                 )
             }
-            ProjectionNode::Stream { item } => match (item, st, tt) {
+            ProjectionNode::Stream { item } => matches!(
+                (item, st, tt),
                 (
                     Some(_),
                     SchemaType::Stream { inner: Some(_), .. },
                     SchemaType::Stream { inner: Some(_), .. },
-                )
-                | (None, SchemaType::Stream { .. }, SchemaType::Stream { .. }) => true,
-                _ => false,
-            },
+                ) | (None, SchemaType::Stream { .. }, SchemaType::Stream { .. })
+            ),
         };
         if !shapes_match {
             self.discard_value(value);
@@ -843,10 +842,8 @@ impl<H: ProjectionStreamHandler> Evaluator<'_, H> {
                     self.discard_value(*value);
                 }
             }
-            SchemaValue::Option { inner } => {
-                if let Some(value) = inner {
-                    self.discard_value(*value);
-                }
+            SchemaValue::Option { inner: Some(value) } => {
+                self.discard_value(*value);
             }
             SchemaValue::Result(
                 ResultValuePayload::Ok { value } | ResultValuePayload::Err { value },

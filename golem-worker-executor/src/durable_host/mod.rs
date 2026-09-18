@@ -4247,7 +4247,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        let operations = self.owner_execution.tool_operations();
+        // Owner failure fences entity Stores immediately. The primary signals teardown
+        // separately when its interrupt is delivered, not when it is merely queued.
+        let fenced_entity_operations = matches!(self.runtime, OwnerRuntime::Entity(_))
+            .then(|| self.owner_execution.tool_operations());
         let invocation_loops = self
             .public_state
             .worker()
@@ -4256,7 +4259,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Arc::new(move || {
             stream_runtime_teardown.load(Ordering::Acquire)
                 || invocation_loops.is_shut_down()
-                || operations.selected_owner_failure().is_some()
+                || fenced_entity_operations
+                    .as_ref()
+                    .is_some_and(|operations| operations.selected_owner_failure().is_some())
         })
     }
 

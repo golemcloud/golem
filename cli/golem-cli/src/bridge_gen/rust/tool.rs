@@ -1066,7 +1066,7 @@ mod tests {
         for shape in [
             "pub struct GrepClient",
             "pub async fn grep(",
-            "pub fn replace(",
+            "pub async fn replace(",
             "pub enum GrepError",
             "fn new()",
         ] {
