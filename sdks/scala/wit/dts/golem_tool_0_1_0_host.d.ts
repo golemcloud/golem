@@ -96,6 +96,10 @@ declare module 'golem:tool/host@0.1.0' {
   }
   export class ToolRpc {
     /**
+     * Binds an ordinary tool client to its configured tool name.
+     */
+    constructor(toolName: string);
+    /**
      * Creates a tool RPC resource without trapping on invalid caller input.
      * @throws RpcError
      */
