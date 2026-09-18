@@ -1505,12 +1505,10 @@ async fn delete_dir_keeps_siblings_that_differ_only_in_case(
     assert_eq!(get("get-a", "foo/a").await.unwrap(), None);
 }
 
-// Only the SQLite backend runs this. When the in-memory backend deletes a directory, it keeps a
-// blob that is below a subdirectory of that directory.
 #[test]
 #[tracing::instrument]
 async fn delete_dir_deletes_nested_descendants(
-    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -1557,4 +1555,69 @@ async fn delete_dir_deletes_nested_descendants(
     assert!(deleted);
     assert_eq!(get("get-direct", "nested/direct").await.unwrap(), None);
     assert_eq!(get("get-below", "nested/below/deep").await.unwrap(), None);
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_keeps_blobs_of_other_namespaces(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cc")] deleted_namespace: &BlobStorageNamespace,
+    #[tagged_as("cs")] kept_namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("shared");
+    let blob = Path::new("shared/blob");
+
+    storage
+        .create_dir(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "create-dir",
+            deleted_namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "put-deleted",
+            deleted_namespace.clone(),
+            blob,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "put-kept",
+            kept_namespace.clone(),
+            blob,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "delete-dir",
+            deleted_namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+
+    let kept = storage
+        .get_raw(
+            "delete_dir_keeps_blobs_of_other_namespaces",
+            "get-kept",
+            kept_namespace.clone(),
+            blob,
+        )
+        .await
+        .unwrap();
+
+    assert!(deleted);
+    assert_eq!(kept, Some(Bytes::from("payload").to_vec()));
 }
