@@ -46,6 +46,12 @@ toolDefinition("ts-optional-reflection")
     "ts-optional-reflection": ({ maybe }) => ok(maybe ?? "omitted"),
   })
 
+toolDefinition("ts-cross-plain")
+  .body((body) => body.positional("label", z.string()).returns(z.string()))
+  .implement({
+    "ts-cross-plain": ({ label }) => ok(`ts-plain:${label}`),
+  })
+
 export const TsEphemeralPeer = defineAgent({
   name: "TsEphemeralPeer",
   mode: "ephemeral",

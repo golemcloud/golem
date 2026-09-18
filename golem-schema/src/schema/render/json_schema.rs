@@ -238,14 +238,16 @@ fn collect_union_branch_defs(
                 if emitted.insert(key.clone()) {
                     let mut body = render_type(graph, &branch.body, false, table, config);
                     attach_metadata(&mut body, &branch.metadata);
-                    if let Some(obj) = body.as_object_mut() {
-                        // Constrain the branch schema further with the
-                        // discriminator. For record-shaped rules this adds
-                        // an extra constraint on the discriminator field;
-                        // for string rules it adds a `pattern`/`const`.
-                        apply_discriminator_constraint(obj, &branch.discriminator);
-                    }
-                    defs.insert(key, body);
+                    defs.insert(
+                        key,
+                        obj_inline([(
+                            "allOf",
+                            Value::Array(vec![
+                                body,
+                                discriminator_constraint(&branch.discriminator),
+                            ]),
+                        )]),
+                    );
                 }
                 collect_union_branch_defs(graph, &branch.body, defs, emitted, table, config);
             }
@@ -559,38 +561,37 @@ fn sanitise_to_upper_camel(s: &str) -> String {
     }
 }
 
-fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &DiscriminatorRule) {
+fn discriminator_constraint(rule: &DiscriminatorRule) -> Value {
+    let mut obj = Map::new();
     match rule {
         DiscriminatorRule::Prefix { prefix } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(format!("^{}", regex_escape(prefix))));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(format!("^{}", regex_escape(prefix))),
+            );
         }
         DiscriminatorRule::Suffix { suffix } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(format!("{}$", regex_escape(suffix))));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(format!("{}$", regex_escape(suffix))),
+            );
         }
         DiscriminatorRule::Contains { substring } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(regex_escape(substring)));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(regex_escape(substring)),
+            );
         }
         DiscriminatorRule::Regex { regex } => {
-            obj.entry("pattern").or_insert(Value::String(regex.clone()));
+            obj.insert("pattern".to_string(), Value::String(regex.clone()));
         }
         DiscriminatorRule::FieldEquals(disc) => {
             // Constrain the field's value with `const` if a literal is set;
             // otherwise just require the field to be present.
-            let mut required = obj
-                .get("required")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if !required
-                .iter()
-                .any(|v| v.as_str() == Some(disc.field_name.as_str()))
-            {
-                required.push(Value::String(disc.field_name.clone()));
-            }
-            obj.insert("required".to_string(), Value::Array(required));
+            obj.insert(
+                "required".to_string(),
+                Value::Array(vec![Value::String(disc.field_name.clone())]),
+            );
             if let Some(lit) = &disc.literal {
                 let props = obj
                     .entry("properties")
@@ -601,9 +602,7 @@ fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &Discrimin
                     .entry(disc.field_name.clone())
                     .or_insert_with(|| obj_inline([("type", Value::String("string".to_string()))]));
                 if let Some(field_obj) = field.as_object_mut() {
-                    field_obj
-                        .entry("const")
-                        .or_insert(Value::String(lit.clone()));
+                    field_obj.insert("const".to_string(), Value::String(lit.clone()));
                 }
             }
         }
@@ -616,6 +615,7 @@ fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &Discrimin
             obj.insert("not".to_string(), not);
         }
     }
+    Value::Object(obj)
 }
 
 pub(super) fn render_type(
