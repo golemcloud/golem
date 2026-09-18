@@ -38,7 +38,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type EnvironmentId = golemApi150Host.EnvironmentId;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
-  export type Snapshot = golemApi150Host.Snapshot;
   export type Duration = wasiClocks030Types.Duration;
   export type Attribute = golemApi150Context.Attribute;
   export type AttributeValue = golemApi150Context.AttributeValue;
@@ -406,6 +405,12 @@ declare module 'golem:api/oplog@1.5.0' {
   export type FallibleResultParameters = {
     error?: string;
   };
+  export type SnapshotBasedUpdateParameters = {
+    payload: Uint8Array;
+    mimeType: string;
+    /** The filesystem snapshot taken with the application snapshot, if any */
+    filesystemSnapshot?: string;
+  };
   export type UpdateDescription =
   /** Automatic update by replaying the oplog on the new version */
   {
@@ -414,7 +419,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
-    val: Snapshot
+    val: SnapshotBasedUpdateParameters
   };
   export type PendingUpdateParameters = {
     timestamp: Datetime;
@@ -573,6 +578,15 @@ declare module 'golem:api/oplog@1.5.0' {
   export type SnapshotParameters = {
     timestamp: Datetime;
     data: SnapshotData;
+    /** The filesystem snapshot taken with the application snapshot, if any */
+    filesystemSnapshot?: string;
+  };
+  /**
+   * The store holds the named filesystem snapshot from this point
+   */
+  export type SnapshotConfirmedParameters = {
+    timestamp: Datetime;
+    filesystemSnapshot: string;
   };
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -782,6 +796,7 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
     payload: OplogPayload;
     mimeType: string;
+    filesystemSnapshot?: string;
   };
   /**
    * Raw update description used in oplog entries
@@ -838,6 +853,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     data: OplogPayload;
     mimeType: string;
+    filesystemSnapshot?: string;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -1148,6 +1164,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-delivered'
     val: RawCompletionDeliveredParameters
+  } |
+  /** The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable */
+  {
+    tag: 'snapshot-confirmed'
+    val: SnapshotConfirmedParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1450,6 +1471,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-delivered'
     val: CompletionDeliveredParameters
+  } |
+  /** The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable */
+  {
+    tag: 'snapshot-confirmed'
+    val: SnapshotConfirmedParameters
   };
   export type OplogReadError =
   {
