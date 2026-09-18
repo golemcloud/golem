@@ -810,7 +810,7 @@ impl Display for ScanCursor {
 }
 
 impl FromStr for ScanCursor {
-    type Err = String;
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self::new(s.to_string()))

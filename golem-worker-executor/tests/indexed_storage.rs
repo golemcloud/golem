@@ -29,7 +29,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace,
+    IndexedStorageNamespace, ScanResume,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -319,6 +319,7 @@ fn ns2() -> IndexedStorageNamespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
 
 #[test]
 async fn postgres_singleton_append_many_preserves_storage_contract(
@@ -1180,6 +1181,131 @@ async fn scan_with_prefix_pattern_single_paged(
     result.sort();
     assert!(result.contains(&key1.to_string()));
     assert!(result.contains(&key3.to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
+    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let keys = [
+        "A-prefix",
+        "a",
+        "a%",
+        "a%tail",
+        "a\\tail",
+        "a_tail",
+        "aa",
+        "ae\u{301}",
+        "aé",
+        "a😀",
+        "b",
+        "á",
+        "\u{10ffff}",
+        "\u{10ffff}tail",
+    ];
+    for key in keys {
+        storage
+            .append("svc", "api", "entity", ns.ns.clone(), key, 1, vec![1])
+            .await
+            .unwrap();
+    }
+    storage
+        .append("svc", "api", "entity", ns.ns.clone(), "aa", 2, vec![2])
+        .await
+        .unwrap();
+
+    let expected: Vec<String> = keys
+        .into_iter()
+        .filter(|key| key.starts_with('a'))
+        .map(str::to_string)
+        .collect();
+    let (_, literal_wildcard) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a%"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(literal_wildcard, ["a%", "a%tail"]);
+
+    let (resume, first) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a"), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(first, expected[..2]);
+
+    let deleted_marker = first.last().unwrap().clone();
+    storage
+        .delete("svc", "api", ns.ns.clone(), &deleted_marker)
+        .await
+        .unwrap();
+
+    let mut actual = first;
+    let mut resume = resume;
+    loop {
+        let (next, page) = storage
+            .scan_stable("svc", "api", ns.meta.clone(), Some("a"), resume, 2)
+            .await
+            .unwrap();
+        actual.extend(page);
+        resume = next;
+        if resume.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+
+    let (_, from_before_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("A".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        from_before_prefix,
+        expected
+            .iter()
+            .filter(|key| **key != deleted_marker)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+
+    let (_, at_upper_bound) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("b".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert!(at_upper_bound.is_empty());
+
+    let (_, maximum_prefix) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("\u{10ffff}"), None, 20)
+        .await
+        .unwrap();
+    assert_eq!(maximum_prefix, ["\u{10ffff}", "\u{10ffff}tail"]);
+
+    let (_, resumed_maximum_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("\u{10ffff}"),
+            Some(ScanResume::Marker("\u{10ffff}".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed_maximum_prefix, ["\u{10ffff}tail"]);
 }
 
 #[test]

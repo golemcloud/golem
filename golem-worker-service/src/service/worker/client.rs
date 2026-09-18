@@ -133,6 +133,12 @@ fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResul
     OneShotInvocationSessionResult::ProtocolFailure(details.into())
 }
 
+fn protocol_executor_error(details: impl Into<String>) -> WorkerExecutorError {
+    WorkerExecutorError::Unknown {
+        details: details.into(),
+    }
+}
+
 fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
     match InvocationRejectionReason::try_from(rejected.reason) {
         Ok(InvocationRejectionReason::NotFound) => rejected
@@ -166,7 +172,7 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
 
 fn decode_invocation_failure(failure: InvocationFailure) -> WorkerExecutorError {
     if failure.kind == InvocationFailureKind::Protocol as i32 {
-        WorkerExecutorError::invalid_request(failure.message)
+        protocol_executor_error(failure.message)
     } else if let Some(worker_error) = failure.worker_error {
         worker_error
             .try_into()
@@ -1869,7 +1875,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         Err(decode_invocation_failure(failure).into())
                     }
                     OneShotInvocationSessionResult::ProtocolFailure(details) => {
-                        Err(WorkerExecutorError::invalid_request(details).into())
+                        Err(protocol_executor_error(details).into())
                     }
                 },
                 WorkerServiceError::InternalCallError,
@@ -2344,7 +2350,7 @@ mod freshness_tests {
 mod one_shot_session_tests {
     use super::{
         OneShotInvocationSessionResult, collect_one_shot_invocation_session,
-        decode_invocation_failure,
+        decode_invocation_failure, protocol_executor_error,
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
@@ -2513,6 +2519,21 @@ mod one_shot_session_tests {
             result,
             OneShotInvocationSessionResult::ProtocolFailure(details)
                 if details.contains("before publishing a result")
+        ));
+    }
+
+    #[test]
+    fn invocation_protocol_failures_are_internal_errors() {
+        let decoded = decode_invocation_failure(InvocationFailure {
+            kind: InvocationFailureKind::Protocol as i32,
+            code: "protocol".to_string(),
+            message: "invalid session sequence".to_string(),
+            worker_error: None,
+        });
+        assert!(matches!(decoded, WorkerExecutorError::Unknown { .. }));
+        assert!(matches!(
+            protocol_executor_error("session ended before publishing a result"),
+            WorkerExecutorError::Unknown { .. }
         ));
     }
 

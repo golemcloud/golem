@@ -116,6 +116,55 @@ impl ScanResume {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StableScanKeyBounds {
+    lower: String,
+    inclusive: bool,
+    upper: Option<String>,
+}
+
+fn stable_scan_key_bounds(
+    prefix: Option<&str>,
+    resume: Option<ScanResume>,
+    backend: &str,
+) -> Result<StableScanKeyBounds, IndexedStorageError> {
+    let prefix = prefix.unwrap_or_default();
+    let marker = resume
+        .map(|resume| resume.into_marker(backend))
+        .transpose()?
+        .unwrap_or_default();
+    let inclusive = prefix > marker.as_str();
+
+    Ok(StableScanKeyBounds {
+        lower: if inclusive {
+            prefix.to_string()
+        } else {
+            marker
+        },
+        inclusive,
+        upper: scan_prefix_upper_bound(prefix),
+    })
+}
+
+fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
+    for (index, ch) in prefix.char_indices().rev() {
+        if ch == char::MAX {
+            continue;
+        }
+
+        let mut next = ch as u32 + 1;
+        if next == 0xD800 {
+            next = 0xE000;
+        }
+
+        let mut upper = prefix[..index].to_string();
+        upper.push(char::from_u32(next).expect("successor must be a valid Unicode scalar"));
+        return Some(upper);
+    }
+
+    None
+}
+
 /// Generic indexed storage interface
 ///
 /// The storage holds indexes identified by keys. Each index is a sequence of entries,
@@ -153,10 +202,11 @@ pub trait IndexedStorage: Debug + Sync {
     /// Pages the keys of a namespace so that the caller can delete the keys it was handed without
     /// the walk skipping any.
     ///
-    /// `resume` is `None` for the first page, then whatever the previous call returned; the
-    /// returned token is `None` once the walk is done. A backend that pages in key order only
-    /// learns that from a short page, so it may take one extra, empty call. A key present for the
-    /// whole walk is returned at least once; a key the caller deletes may or may not be.
+    /// `prefix` is a literal, case-sensitive UTF-8 prefix. `resume` is `None` for the first page,
+    /// then whatever the previous call returned; the returned token is `None` once the walk is
+    /// done. A backend that pages in key order only learns that from a short page, so it may take
+    /// one extra, empty call. A key present for the whole walk is returned at least once; a key the
+    /// caller deletes may or may not be.
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -762,5 +812,95 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
     match mode {
         AgentMode::Durable => "durable",
         AgentMode::Ephemeral => "ephemeral",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use proptest::prelude::*;
+    use test_r::test;
+
+    test_r::enable!();
+
+    #[test]
+    fn scan_prefix_upper_bound_handles_unicode_boundaries() {
+        let cases = [
+            ("", None),
+            ("abc", Some("abd")),
+            ("\u{7f}", Some("\u{80}")),
+            ("\u{ff}", Some("\u{100}")),
+            ("\u{7ff}", Some("\u{800}")),
+            ("\u{d7ff}", Some("\u{e000}")),
+            ("\u{ffff}", Some("\u{10000}")),
+            ("a\u{10ffff}", Some("b")),
+            ("\u{10ffff}a", Some("\u{10ffff}b")),
+            ("\u{10ffff}\u{10ffff}", None),
+        ];
+
+        for (prefix, expected) in cases {
+            assert_eq!(scan_prefix_upper_bound(prefix).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn stable_scan_uses_prefix_as_inclusive_first_lower_bound() {
+        assert_eq!(
+            stable_scan_key_bounds(Some("component:"), None, "test").unwrap(),
+            super::StableScanKeyBounds {
+                lower: "component:".to_string(),
+                inclusive: true,
+                upper: Some("component;".to_string()),
+            }
+        );
+        assert_eq!(
+            stable_scan_key_bounds(
+                Some("component:"),
+                Some(ScanResume::Marker("component:agent".to_string())),
+                "test",
+            )
+            .unwrap(),
+            super::StableScanKeyBounds {
+                lower: "component:agent".to_string(),
+                inclusive: false,
+                upper: Some("component;".to_string()),
+            }
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn prefix_interval_matches_starts_with(prefix in any::<String>(), keys in prop::collection::vec(any::<String>(), 0..64)) {
+            let upper = scan_prefix_upper_bound(&prefix);
+            for key in keys {
+                let in_interval = key.as_str() >= prefix.as_str()
+                    && upper.as_ref().is_none_or(|upper| key.as_str() < upper.as_str());
+                prop_assert_eq!(in_interval, key.starts_with(&prefix));
+            }
+        }
+
+        #[test]
+        fn effective_bounds_match_prefix_and_resume(
+            prefix in any::<String>(),
+            marker in any::<String>().prop_filter("markers cannot contain NUL", |value| !value.contains('\0')),
+            keys in prop::collection::vec(any::<String>(), 0..64),
+        ) {
+            let bounds = stable_scan_key_bounds(
+                Some(&prefix),
+                Some(ScanResume::Marker(marker.clone())),
+                "test",
+            ).unwrap();
+
+            for key in keys {
+                let above_lower = if bounds.inclusive {
+                    key.as_str() >= bounds.lower.as_str()
+                } else {
+                    key.as_str() > bounds.lower.as_str()
+                };
+                let in_bounds = above_lower
+                    && bounds.upper.as_ref().is_none_or(|upper| key.as_str() < upper.as_str());
+                prop_assert_eq!(in_bounds, key.starts_with(&prefix) && key > marker);
+            }
+        }
     }
 }
