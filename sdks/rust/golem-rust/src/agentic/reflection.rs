@@ -589,7 +589,7 @@ impl ParsedAgentId {
 
     pub fn client(
         &self,
-        definition: &AgentClientDefinition,
+        definition: &MethodOnlyAgentClientDefinition,
     ) -> Result<TypedAgentClient, GolemReflectError> {
         definition.bind(self)
     }
@@ -1379,7 +1379,9 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentClientDefinition, GolemReflectError, SchemaRef, validate_declared_output};
+    use super::{
+        GolemReflectError, MethodOnlyAgentClientDefinition, SchemaRef, validate_declared_output,
+    };
     use crate::schema::{
         MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
         VariantValuePayload,
@@ -1486,8 +1488,8 @@ mod tests {
 
     #[test]
     fn caller_owned_contract_can_be_partial_and_lifecycle_free() {
-        let definition = AgentClientDefinition::builder()
-            .binding_only()
+        let definition = MethodOnlyAgentClientDefinition::builder()
+            .method_only()
             .method::<String, u64>("lookup")
             .expect("method schema")
             .unit_method::<u32>("invalidate")
@@ -1502,14 +1504,14 @@ mod tests {
 
     #[test]
     fn complete_contract_rejects_a_constructor_value_with_the_wrong_shape() {
-        let definition = AgentClientDefinition::builder()
+        let definition = MethodOnlyAgentClientDefinition::builder()
             .durable::<String>("Counter")
             .build();
         let constructor = definition
             .data
             .constructor
             .as_ref()
-            .expect("complete contract constructor schema");
+            .expect("fully defined client contract constructor schema");
 
         assert!(matches!(
             constructor.validate_value(&SchemaValue::U64(1)),
@@ -1538,7 +1540,7 @@ pub struct AgentClientDefinitionBuilder<State> {
 pub struct UnselectedAgentClientContract;
 
 #[derive(Clone, Debug)]
-pub struct BindingOnlyAgentClientContract;
+pub struct MethodOnlyAgentClientContract;
 
 #[derive(Clone, Debug)]
 pub struct NoAgentClientConfig;
@@ -1550,7 +1552,7 @@ pub struct DurableAgentClientContract;
 pub struct EphemeralAgentClientContract;
 
 #[derive(Clone, Debug)]
-pub struct CompleteAgentClientContract<Id, Config, Mode>(PhantomData<(Id, Config, Mode)>);
+pub struct FullAgentClientContract<Id, Config, Mode>(PhantomData<(Id, Config, Mode)>);
 
 impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     fn new() -> Self {
@@ -1562,7 +1564,7 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
         }
     }
 
-    pub fn binding_only(self) -> AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
+    pub fn method_only(self) -> AgentClientDefinitionBuilder<MethodOnlyAgentClientContract> {
         AgentClientDefinitionBuilder {
             type_name: None,
             constructor: None,
@@ -1575,7 +1577,7 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
         self,
         type_name: impl Into<String>,
     ) -> AgentClientDefinitionBuilder<
-        CompleteAgentClientContract<Id, NoAgentClientConfig, DurableAgentClientContract>,
+        FullAgentClientContract<Id, NoAgentClientConfig, DurableAgentClientContract>,
     >
     where
         Id: crate::IntoSchema,
@@ -1584,7 +1586,7 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
             type_name: Some(type_name.into()),
             constructor: Some(SchemaRef::new(
                 crate::schema::try_into_schema_graph::<Id>()
-                    .expect("complete agent client identity must have a valid schema"),
+                    .expect("fully defined client identity must have a valid schema"),
             )),
             methods: self.methods,
             state: PhantomData,
@@ -1595,7 +1597,7 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
         self,
         type_name: impl Into<String>,
     ) -> AgentClientDefinitionBuilder<
-        CompleteAgentClientContract<Id, NoAgentClientConfig, EphemeralAgentClientContract>,
+        FullAgentClientContract<Id, NoAgentClientConfig, EphemeralAgentClientContract>,
     >
     where
         Id: crate::IntoSchema,
@@ -1604,7 +1606,7 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
             type_name: Some(type_name.into()),
             constructor: Some(SchemaRef::new(
                 crate::schema::try_into_schema_graph::<Id>()
-                    .expect("complete agent client identity must have a valid schema"),
+                    .expect("fully defined client identity must have a valid schema"),
             )),
             methods: self.methods,
             state: PhantomData,
@@ -1613,9 +1615,9 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
 }
 
 impl<Id, Mode>
-    AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, NoAgentClientConfig, Mode>>
+    AgentClientDefinitionBuilder<FullAgentClientContract<Id, NoAgentClientConfig, Mode>>
 {
-    pub fn config<C>(self) -> AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, C, Mode>>
+    pub fn config<C>(self) -> AgentClientDefinitionBuilder<FullAgentClientContract<Id, C, Mode>>
     where
         C: super::ConfigSchema,
     {
@@ -1669,17 +1671,17 @@ impl<State> AgentClientDefinitionBuilder<State> {
     }
 }
 
-impl AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
-    pub fn build(self) -> AgentClientDefinition {
-        AgentClientDefinition {
+impl AgentClientDefinitionBuilder<MethodOnlyAgentClientContract> {
+    pub fn build(self) -> MethodOnlyAgentClientDefinition {
+        MethodOnlyAgentClientDefinition {
             data: self.finish(),
         }
     }
 }
 
-impl<Id, Config, Mode> AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, Config, Mode>> {
-    pub fn build(self) -> CompleteAgentClientDefinition<Id, Config, Mode> {
-        CompleteAgentClientDefinition {
+impl<Id, Config, Mode> AgentClientDefinitionBuilder<FullAgentClientContract<Id, Config, Mode>> {
+    pub fn build(self) -> FullAgentClientDefinition<Id, Config, Mode> {
+        FullAgentClientDefinition {
             data: self.finish(),
             state: PhantomData,
         }
@@ -1687,7 +1689,7 @@ impl<Id, Config, Mode> AgentClientDefinitionBuilder<CompleteAgentClientContract<
 }
 
 #[derive(Clone, Debug)]
-pub struct AgentClientDefinition {
+pub struct MethodOnlyAgentClientDefinition {
     data: AgentClientDefinitionData,
 }
 
@@ -1698,7 +1700,7 @@ struct AgentClientDefinitionData {
     methods: Arc<[AgentClientMethodDefinition]>,
 }
 
-impl AgentClientDefinition {
+impl MethodOnlyAgentClientDefinition {
     pub fn builder() -> AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
         AgentClientDefinitionBuilder::new()
     }
@@ -1728,7 +1730,7 @@ impl AgentClientDefinition {
 }
 
 #[derive(Clone, Debug)]
-pub struct CompleteAgentClientDefinition<Id, Config, Mode> {
+pub struct FullAgentClientDefinition<Id, Config, Mode> {
     data: AgentClientDefinitionData,
     state: PhantomData<(Id, Config, Mode)>,
 }
@@ -1748,7 +1750,7 @@ where
         .collect()
 }
 
-impl<Id, Config, Mode> CompleteAgentClientDefinition<Id, Config, Mode>
+impl<Id, Config, Mode> FullAgentClientDefinition<Id, Config, Mode>
 where
     Id: crate::IntoSchema,
 {
@@ -1797,7 +1799,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClientContract>
 where
     Id: crate::IntoSchema,
 {
@@ -1853,7 +1855,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
 where
     Id: crate::IntoSchema,
 {
@@ -1870,7 +1872,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClientContract>
 where
     Id: crate::IntoSchema,
     Config: super::ConfigSchema,
@@ -1898,7 +1900,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
 where
     Id: crate::IntoSchema,
     Config: super::ConfigSchema,
@@ -1918,7 +1920,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClientContract>
 where
     Id: crate::IntoSchema,
     Config: super::ConfigSchema,
@@ -1945,7 +1947,7 @@ where
     }
 }
 
-impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
 where
     Id: crate::IntoSchema,
     Config: super::ConfigSchema,

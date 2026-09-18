@@ -1,5 +1,5 @@
 use golem_rust::agentic::AgentStream;
-use golem_rust::{AgentClientDefinition, ConfigSchema, IntoSchema, agent_client};
+use golem_rust::{MethodOnlyAgentClientDefinition, ConfigSchema, IntoSchema, agent_client};
 
 #[derive(IntoSchema)]
 struct Query {
@@ -34,7 +34,7 @@ trait EphemeralSearchApi {
     fn status(&self) -> String;
 }
 
-fn definition_is_caller_owned() -> AgentClientDefinition {
+fn definition_is_caller_owned() -> MethodOnlyAgentClientDefinition {
     SearchApiClient::client_definition().expect("valid client definition")
 }
 
@@ -55,17 +55,17 @@ fn main() {
         );
     }
 
-    let durable = AgentClientDefinition::builder()
+    let durable = MethodOnlyAgentClientDefinition::builder()
         .durable::<Query>("SearchAgent")
         .method::<Query, Vec<String>>("search")
         .expect("method schema")
         .build();
-    let ephemeral = AgentClientDefinition::builder()
+    let ephemeral = MethodOnlyAgentClientDefinition::builder()
         .ephemeral::<Query>("SearchRequest")
         .method::<Query, Vec<String>>("search")
         .expect("method schema")
         .build();
-    let configured = AgentClientDefinition::builder()
+    let configured = MethodOnlyAgentClientDefinition::builder()
         .durable::<Query>("SearchAgent")
         .config::<SearchConfig>()
         .build();

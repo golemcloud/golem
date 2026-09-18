@@ -21,6 +21,28 @@ use serde_json::{Value, json};
 use test_r::test;
 
 #[test]
+fn union_discriminator_is_combined_with_branch_body() {
+    use crate::schema::{DiscriminatorRule, UnionBranch, UnionSpec};
+
+    let ty = SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "matched".to_string(),
+            body: SchemaType::string(),
+            discriminator: DiscriminatorRule::Regex {
+                regex: "^(?:foo|bar)$".to_string(),
+            },
+            metadata: MetadataEnvelope::default(),
+        }],
+    });
+    let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+    let branch = schema["$defs"]["Matched"]["allOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("branch body and discriminator: {schema}"));
+    assert_eq!(branch[0]["type"], "string");
+    assert_eq!(branch[1]["pattern"], "^(?:foo|bar)$");
+}
+
+#[test]
 fn canonical_record_round_trips_through_json() {
     let ty = SchemaType::record(vec![
         NamedFieldType {

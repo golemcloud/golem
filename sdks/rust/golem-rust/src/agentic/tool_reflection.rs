@@ -21,7 +21,7 @@ use crate::golem_agentic::golem::tool::host::{self, ToolRpc};
 use crate::schema::tool::canonical::CanonicalSurfaceRef;
 use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::decode_tool;
-use crate::schema::tool::{CommandBody, Constraint, Doc, Ref, Tool};
+use crate::schema::tool::{CommandBody, Constraint, Doc, FlagShape, Ref, Tool};
 use crate::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -77,6 +77,50 @@ pub enum ToolArgumentKind {
     Tail,
     Option,
     Flag,
+}
+
+fn flag_default(shape: &FlagShape) -> SchemaValue {
+    match shape {
+        FlagShape::BoolFlag(shape) => SchemaValue::Bool(shape.default),
+        FlagShape::CountFlag(_) => SchemaValue::U32(0),
+    }
+}
+
+fn value_present(value: &SchemaValue, default: Option<&SchemaValue>, flag: bool) -> bool {
+    if flag {
+        return default.is_some_and(|default| default != value);
+    }
+    if default == Some(value) {
+        return false;
+    }
+    match value {
+        SchemaValue::Option { inner } => inner.is_some(),
+        SchemaValue::List { elements } | SchemaValue::FixedList { elements } => {
+            !elements.is_empty()
+        }
+        SchemaValue::Map { entries } => !entries.is_empty(),
+        SchemaValue::Bool(value) => *value,
+        SchemaValue::U32(value) => *value != 0,
+        _ => true,
+    }
+}
+
+fn value_matches(value: &SchemaValue, expected: &SchemaValue) -> bool {
+    if value == expected {
+        return true;
+    }
+    match value {
+        SchemaValue::Option { inner } => inner
+            .as_ref()
+            .is_some_and(|value| value_matches(value, expected)),
+        SchemaValue::List { elements } | SchemaValue::FixedList { elements } => {
+            elements.iter().any(|value| value_matches(value, expected))
+        }
+        SchemaValue::Map { entries } => entries
+            .iter()
+            .any(|(_, value)| value_matches(value, expected)),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -162,7 +206,15 @@ impl ToolType {
                         body.positionals.tail.as_ref().is_some_and(|s| s.min > 0),
                         None,
                     ),
-                    _ => (false, None),
+                    CanonicalSurfaceRef::GlobalFlag { node, index } => (
+                        false,
+                        Some(flag_default(
+                            &self.definition.commands.nodes[node].globals.flags[index].shape,
+                        )),
+                    ),
+                    CanonicalSurfaceRef::BodyFlag { index } => {
+                        (false, Some(flag_default(&body.flags[index].shape)))
+                    }
                 };
                 let kind = match surface {
                     CanonicalSurfaceRef::GlobalOption { .. }
@@ -302,11 +354,12 @@ impl ToolCommand {
                 .position(|argument| argument.name == *name || argument.aliases.contains(name))
                 .expect("validated constraint reference");
             match reference {
-                Ref::Present(_) => match &fields[index] {
-                    SchemaValue::Option { inner } => inner.is_some(),
-                    other => self.arguments[index].default.as_ref() != Some(other),
-                },
-                Ref::ValueIs(item) => fields[index] == item.value,
+                Ref::Present(_) => value_present(
+                    &fields[index],
+                    self.arguments[index].default.as_ref(),
+                    self.arguments[index].kind == ToolArgumentKind::Flag,
+                ),
+                Ref::ValueIs(item) => value_matches(&fields[index], &item.value),
             }
         };
         let quant = |refs: &[Ref], all: bool| -> bool {
@@ -634,8 +687,8 @@ mod tests {
     use super::*;
     use crate::schema::SchemaType;
     use crate::schema::tool::{
-        CommandBody, CommandIndex, CommandNode, CommandTree, Globals, OptionShape, OptionSpec,
-        Positional, Positionals, ResultSpec,
+        BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, FlagSpec, Globals,
+        OptionShape, OptionSpec, Positional, Positionals, ResultSpec, ValueIsRef,
     };
     use test_r::test;
 
@@ -773,5 +826,57 @@ mod tests {
             }),
             Err(ToolError::MalformedRemoteOutput(_))
         ));
+    }
+
+    #[test]
+    fn constraints_use_declared_flag_default_and_nested_value_is() {
+        let mut tool = sample();
+        let definition = Arc::make_mut(&mut tool.definition);
+        let body = definition.commands.nodes[1].body.as_mut().unwrap();
+        body.options.push(OptionSpec {
+            long: "mode".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+        body.flags.push(FlagSpec {
+            long: "enabled".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            shape: FlagShape::BoolFlag(BoolFlagShape {
+                default: true,
+                negatable: true,
+            }),
+            env_var: None,
+        });
+        body.constraints.push(Constraint::RequiresAll(vec![
+            Ref::Present("enabled".to_string()),
+            Ref::ValueIs(ValueIsRef {
+                name: "mode".to_string(),
+                value: SchemaValue::String("fast".to_string()),
+            }),
+        ]));
+        let command = tool.command(&["run"]).unwrap();
+        assert_eq!(
+            command.arguments()[2].default,
+            Some(SchemaValue::Bool(true))
+        );
+        let input = |enabled| SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("hello".to_string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("fast".to_string()))),
+                },
+                SchemaValue::Bool(enabled),
+            ],
+        };
+        assert!(command.checked_input(input(false)).is_ok());
+        assert!(command.checked_input(input(true)).is_err());
     }
 }

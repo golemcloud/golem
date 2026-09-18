@@ -405,10 +405,10 @@ fn expand(
 
         impl #client_ident {
             pub fn client_definition()
-                -> Result<#golem_rust::AgentClientDefinition, #golem_rust::GolemReflectError>
+                -> Result<#golem_rust::MethodOnlyAgentClientDefinition, #golem_rust::GolemReflectError>
             {
-                let builder = #golem_rust::AgentClientDefinition::builder()
-                    .binding_only();
+                let builder = #golem_rust::MethodOnlyAgentClientDefinition::builder()
+                    .method_only();
                 #(#definition_steps)*
                 Ok(builder.build())
             }
