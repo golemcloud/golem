@@ -22,7 +22,6 @@ use crate::services::oplog::{
 use crate::services::shard::ShardServiceDefault;
 use crate::services::stream_session_index::{METADATA_FIELD, Metadata};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
-use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
 use crate::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
@@ -1779,44 +1778,6 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
         .await;
     oplog.commit(CommitLevel::Always).await;
     assert!(service.resolve_agent_identity(&malformed).await.is_err());
-}
-
-#[test]
-async fn corrupt_initial_entry_is_returned_as_an_identity_error() {
-    let indexed = Arc::new(InMemoryIndexedStorage::new());
-    let id = owned_agent("corrupt-identity", ComponentId::new());
-    indexed
-        .with_entity("test", "seed_corrupt", "entry")
-        .append_raw(
-            IndexedStorageNamespace::OpLog {
-                agent_id: id.agent_id.clone(),
-                agent_mode: AgentMode::Durable,
-            },
-            &id.agent_id.to_redis_key(),
-            OplogIndex::INITIAL.as_u64(),
-            vec![0xff],
-        )
-        .await
-        .unwrap();
-    let oplog_service = Arc::new(
-        PrimaryOplogService::new(
-            indexed,
-            Arc::new(InMemoryBlobStorage::new()),
-            1,
-            1,
-            100,
-            RetryConfig::default(),
-        )
-        .await,
-    );
-    let service = DefaultWorkerService::new(
-        Arc::new(InMemoryKeyValueStorage::new()),
-        Arc::new(ShardServiceDefault::new()),
-        oplog_service,
-        Arc::new(UnusedComponentService),
-        Arc::new(GolemConfig::default()),
-    );
-    assert!(service.resolve_agent_identity(&id).await.is_err());
 }
 
 async fn assert_raw_cache_owner_fingerprint(

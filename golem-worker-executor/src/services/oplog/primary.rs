@@ -97,43 +97,6 @@ where
     }
 }
 
-async fn retry_storage_op_fallible<T, F, Fut>(
-    retry_config: &RetryConfig,
-    op_name: &str,
-    key: &str,
-    mut op: F,
-) -> Result<T, IndexedStorageError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
-{
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        match op().await {
-            Ok(value) => return Ok(value),
-            Err(IndexedStorageError::Transient(message)) => {
-                if let Some(delay) = get_delay(retry_config, attempts) {
-                    record_oplog_storage_retry(op_name);
-                    warn!(
-                        op = op_name,
-                        key,
-                        attempt = attempts,
-                        delay_ms = delay.as_millis() as u64,
-                        "Transient indexed storage error, retrying: {message}"
-                    );
-                    tokio::time::sleep(delay).await;
-                } else {
-                    return Err(IndexedStorageError::Transient(format!(
-                        "operation '{op_name}' failed for key '{key}' after {attempts} attempts: {message}"
-                    )));
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
 fn stored_batch_matches(mut actual: Vec<(u64, Vec<u8>)>, expected: &[(u64, Bytes)]) -> bool {
     actual.sort_unstable_by_key(|(id, _)| *id);
     actual.len() == expected.len()
@@ -738,38 +701,6 @@ impl OplogService for PrimaryOplogService {
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
         }
-    }
-
-    async fn read_initial_entry(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<Option<OplogEntry>, String> {
-        record_oplog_call("read_initial_entry");
-        let indexed_storage = self.indexed_storage.clone();
-        let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: owned_agent_id.agent_id(),
-            agent_mode,
-        };
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
-        retry_storage_op_fallible(&self.retry_config, "read_initial_entry", &key, || {
-            let indexed_storage = indexed_storage.clone();
-            let namespace = namespace.clone();
-            let key = key.clone();
-            async move {
-                read_persisted_oplog_entries(
-                    indexed_storage,
-                    namespace,
-                    key,
-                    OplogIndex::INITIAL.as_u64(),
-                    OplogIndex::INITIAL.as_u64(),
-                )
-                .await
-            }
-        })
-        .await
-        .map_err(|error| error.to_string())
-        .map(|entries| entries.into_iter().next().map(|(_, entry)| entry))
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

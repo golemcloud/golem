@@ -832,16 +832,6 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn read_initial_entry(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<Option<OplogEntry>, String> {
-        self.inner
-            .read_initial_entry(owned_agent_id, agent_mode)
-            .await
-    }
-
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
         self.inner.exists(owned_agent_id, agent_mode).await
     }

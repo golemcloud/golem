@@ -33,7 +33,7 @@ use golem_common::model::environment::EnvironmentId; // used in scan_for_compone
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::retries::get_delay;
-use golem_common::serialization::{serialize, try_deserialize};
+use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -164,31 +164,6 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         let archive = self.open(owned_agent_id, agent_mode).await;
         archive.read_source(idx, n).await
-    }
-
-    async fn read_initial_entry(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<Option<OplogEntry>, String> {
-        let archive = CompressedOplogArchive::new(
-            owned_agent_id.agent_id(),
-            agent_mode,
-            self.indexed_storage.clone(),
-            self.level,
-            self.retry_config.clone(),
-        );
-        archive
-            .fetch_and_cache_range(OplogIndex::INITIAL, OplogIndex::INITIAL)
-            .await
-            .map_err(|error| error.to_string())
-            .map(|entries| {
-                entries.and_then(|entries| {
-                    entries
-                        .into_iter()
-                        .find_map(|(index, entry)| (index == OplogIndex::INITIAL).then_some(entry))
-                })
-            })
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -357,10 +332,10 @@ impl CompressedOplogArchive {
         end_of_range: OplogIndex,
     ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, OplogReadError> {
         let source = OplogReadSource::Archive(self.level);
-        let (last_idx_in_chunk, chunk_bytes) = if let Some((last_idx_in_chunk, chunk)) = self
+        let (last_idx_in_chunk, chunk) = if let Some((last_idx_in_chunk, chunk)) = self
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
-            .closest_raw(
+            .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog {
                     agent_id: self.agent_id.clone(),
                     agent_mode: self.agent_mode,
@@ -383,23 +358,6 @@ impl CompressedOplogArchive {
         } else {
             return Ok(None);
         };
-        let chunk: CompressedOplogChunk = try_deserialize(&chunk_bytes)
-            .map_err(|error| {
-                OplogReadError::corruption(
-                    source,
-                    format!(
-                        "failed to decode compressed oplog envelope ending at {last_idx_in_chunk}: {error}"
-                    ),
-                )
-            })?
-            .ok_or_else(|| {
-                OplogReadError::corruption(
-                    source,
-                    format!(
-                        "compressed oplog envelope ending at {last_idx_in_chunk} has a missing or unsupported serialization version"
-                    ),
-                )
-            })?;
 
         let entries = chunk.decompress().map_err(|error| {
             OplogReadError::corruption(
@@ -719,31 +677,7 @@ impl CompressedOplogChunk {
     pub fn decompress(&self) -> anyhow::Result<Vec<OplogEntry>> {
         let uncompressed_data = zstd::decode_all(&*self.compressed_data)
             .map_err(|err| anyhow!("failed to decompress oplog chunk: {err}"))?;
-        try_deserialize(&uncompressed_data)
-            .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))?
-            .ok_or_else(|| {
-                anyhow!("oplog chunk has a missing or unsupported serialization version")
-            })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn corrupt_compressed_chunk_returns_an_error() {
-        let invalid_compression = CompressedOplogChunk {
-            count: 1,
-            compressed_data: b"not-zstd".to_vec(),
-        };
-        assert!(invalid_compression.decompress().is_err());
-
-        let invalid_serialization = CompressedOplogChunk {
-            count: 1,
-            compressed_data: zstd::encode_all(&b"not-an-oplog-envelope"[..], 0).unwrap(),
-        };
-        assert!(invalid_serialization.decompress().is_err());
+        deserialize(&uncompressed_data)
+            .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))
     }
 }

@@ -351,10 +351,8 @@ struct RunningWorker {
 pub trait WorkerService: Send + Sync {
     /// Loads the worker's initial metadata and last known cached status.
     ///
-    /// `Ok(None)` means the worker has no oplog (it does not exist). `Err` means the underlying
-    /// storage could not be read (after the storage layer's own retries); it is never conflated
-    /// with a missing worker, because doing so would make an outage look like a wave of deleted
-    /// workers and force a full oplog re-fold for every one of them.
+    /// `Ok(None)` means the worker has no oplog (it does not exist). Oplog storage failures follow
+    /// the oplog service's fail-stop policy; other metadata and cache failures are returned.
     async fn get(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1304,9 +1302,9 @@ impl DefaultWorkerService {
     ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
         let entry = self
             .oplog_service
-            .read_initial_entry(owned_agent_id, agent_mode)
+            .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .remove(&OplogIndex::INITIAL);
         match entry {
             None => Ok(None),
             Some(
@@ -4088,8 +4086,7 @@ mod tests {
         ));
     }
 
-    /// Oplog service that only answers "does this agent have an oplog?"; the recovery scan needs
-    /// nothing else from it.
+    /// Minimal oplog service for recovery and identity tests.
     #[derive(Debug, Default)]
     struct FakeOplogService {
         existing: Vec<OwnedAgentId>,
@@ -4164,17 +4161,6 @@ mod tests {
             unreachable!()
         }
 
-        async fn read_initial_entry(
-            &self,
-            owned_agent_id: &OwnedAgentId,
-            agent_mode: AgentMode,
-        ) -> Result<Option<OplogEntry>, String> {
-            Ok(self
-                .initial_entries
-                .get(&(owned_agent_id.clone(), agent_mode))
-                .cloned())
-        }
-
         async fn read_exact(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -4183,6 +4169,20 @@ mod tests {
             _n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             BTreeMap::new()
+        }
+
+        async fn read_source(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+            _idx: OplogIndex,
+            _n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.initial_entries
+                .get(&(owned_agent_id.clone(), agent_mode))
+                .cloned()
+                .map(|entry| BTreeMap::from([(OplogIndex::INITIAL, entry)]))
+                .unwrap_or_default()
         }
 
         async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {

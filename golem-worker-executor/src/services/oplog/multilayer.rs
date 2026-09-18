@@ -98,17 +98,6 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
-    async fn read_initial_entry(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<Option<OplogEntry>, String> {
-        Ok(self
-            .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
-            .await
-            .remove(&OplogIndex::INITIAL))
-    }
-
     /// Checks if an oplog archive exists for a worker
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 
@@ -781,26 +770,6 @@ impl OplogService for MultiLayerOplogService {
             }
         }
         result
-    }
-
-    async fn read_initial_entry(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<Option<OplogEntry>, String> {
-        if let Some(entry) = self
-            .primary
-            .read_initial_entry(owned_agent_id, agent_mode)
-            .await?
-        {
-            return Ok(Some(entry));
-        }
-        for layer in &self.lower {
-            if let Some(entry) = layer.read_initial_entry(owned_agent_id, agent_mode).await? {
-                return Ok(Some(entry));
-            }
-        }
-        Ok(None)
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
