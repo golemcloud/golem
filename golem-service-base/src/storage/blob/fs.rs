@@ -15,7 +15,7 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root,
-    validate_relative_blob_path,
+    normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -173,7 +173,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -192,7 +192,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -212,7 +212,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -238,7 +238,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -261,7 +261,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -292,7 +292,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -307,7 +307,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(());
@@ -328,7 +328,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let namespace_root = self.path_of(&namespace, Path::new(""));
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
@@ -351,7 +351,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let namespace_root = self.path_of(&namespace, Path::new(""));
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
@@ -369,7 +369,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(false);
@@ -398,7 +398,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -421,8 +421,8 @@ impl BlobStorage for FileSystemBlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
-        let from = &*validate_relative_blob_path(from)?;
-        let to = &*validate_relative_blob_path(to)?;
+        let from = &*normalized_blob_path(from)?;
+        let to = &*normalized_blob_path(to)?;
         let from_full_path = self.path_of(&namespace, from);
         let to_full_path = self.path_of(&namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;

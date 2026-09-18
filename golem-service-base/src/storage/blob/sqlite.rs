@@ -19,7 +19,7 @@ use crate::repo::RepoError;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
     blob_file_name_to_string, blob_parent_to_string, blob_path_is_root, blob_path_to_string,
-    validate_relative_blob_path,
+    normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -105,7 +105,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
             .bind(blob_parent_to_string(path)?)
@@ -128,7 +128,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let result = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
@@ -147,7 +147,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let query = sqlx::query_as(
             "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -174,7 +174,7 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let size = data.len() as i64;
         let query = sqlx::query(
                     r#"
@@ -205,7 +205,7 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let data = stream
             .make_stream_erased()
             .await?
@@ -224,7 +224,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let query = sqlx::query(
             "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -246,7 +246,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(());
@@ -278,7 +278,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let query =
             sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
@@ -301,7 +301,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let directory = blob_path_to_string(path)?;
 
         // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
@@ -343,7 +343,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(false);
@@ -397,7 +397,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let query = sqlx::query_as(
             "SELECT is_directory FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? LIMIT 1;",
         )

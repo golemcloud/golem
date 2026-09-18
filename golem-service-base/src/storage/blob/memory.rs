@@ -16,7 +16,7 @@ use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
     blob_file_name_to_string, blob_parent_to_string, blob_path_is_root, blob_path_to_string,
-    validate_relative_blob_path,
+    normalized_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -76,7 +76,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let key = blob_file_name_to_string(path)?;
 
@@ -103,7 +103,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -135,7 +135,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -163,7 +163,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -214,7 +214,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -266,7 +266,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -300,7 +300,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(());
@@ -351,7 +351,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let dir = blob_path_to_string(path)?;
 
         let key = Key {
@@ -379,7 +379,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let directory = blob_path_to_string(path)?;
         let nested = format!("{directory}/");
 
@@ -410,7 +410,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(false);
@@ -448,7 +448,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let path_str = blob_path_to_string(path)?;
         let dir_key = Key {
             namespace: namespace.clone(),

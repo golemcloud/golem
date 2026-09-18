@@ -485,7 +485,7 @@ pub struct BlobRangeError {
 /// separator are not names, so they go away, and a path at the root of a namespace becomes the
 /// empty path. Two paths that name the same blob get the same form. An absolute path, a path
 /// with `..` in it, and a path with a drive letter are errors.
-pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<Cow<'_, Path>, Error> {
+pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, Error> {
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
     }

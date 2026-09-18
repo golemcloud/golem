@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
+    blob_path_is_root, blob_path_to_string, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -517,7 +517,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -567,7 +567,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -618,7 +618,7 @@ impl BlobStorage for S3BlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         // S3 ignores a range whose end is before its start, and sends the whole object.
         if start > end {
             return Err(BlobRangeError { start, end }.into());
@@ -679,7 +679,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -778,7 +778,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -818,7 +818,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -887,7 +887,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -930,7 +930,7 @@ impl BlobStorage for S3BlobStorage {
         let to_delete = paths
             .iter()
             .map(|path| {
-                let path = &*validate_relative_blob_path(path)?;
+                let path = &*normalized_blob_path(path)?;
                 let key = prefix.join(path);
                 let key = blob_path_to_string(&key)?;
                 ObjectIdentifier::builder()
@@ -951,7 +951,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(());
@@ -995,7 +995,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
         let key = namespace_root.join(path);
@@ -1035,7 +1035,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
         let key = namespace_root.join(path);
@@ -1067,7 +1067,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
 
         if blob_path_is_root(path) {
             return Ok(false);
@@ -1101,7 +1101,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*validate_relative_blob_path(path)?;
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -1196,8 +1196,8 @@ impl BlobStorage for S3BlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
-        let from = &*validate_relative_blob_path(from)?;
-        let to = &*validate_relative_blob_path(to)?;
+        let from = &*normalized_blob_path(from)?;
+        let to = &*normalized_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
