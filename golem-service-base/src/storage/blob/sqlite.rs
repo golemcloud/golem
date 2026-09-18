@@ -18,7 +18,7 @@ use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -297,31 +297,16 @@ impl BlobStorage for SqliteBlobStorage {
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
 
-        if path.as_os_str().is_empty() {
+        if blob_path_is_root(path) {
             return Ok(false);
         }
 
         let parent = blob_parent_to_string(path)?;
         let name = blob_file_name_to_string(path)?;
 
-        let exists_query = sqlx::query_as::<_, (i64,)>(
-            "SELECT 1 FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = TRUE LIMIT 1;",
-        )
-        .bind(Self::namespace(namespace.clone()))
-        .bind(parent.clone())
-        .bind(name.clone());
-
-        let exists = self
-            .pool
-            .with_ro(target_label, op_label)
-            .fetch_optional_as(exists_query)
-            .await?
-            .is_some();
-
-        if !exists {
-            return Ok(false);
-        }
-
+        // A directory that only holds blobs has no row of its own, because put_raw writes no
+        // row for the parent. One statement removes the row of the directory and every row
+        // below it, so the number of removed rows tells whether the directory existed.
         let dir_path = if parent.is_empty() {
             name.clone()
         } else {
@@ -329,8 +314,9 @@ impl BlobStorage for SqliteBlobStorage {
         };
         // Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE,
         // which ignores ASCII case. A parent below `dir_path` is at least `dir_path/` and less
-        // than `dir_path0`, because `0` is the character after `/`. This range can use the
-        // primary key.
+        // than `dir_path0`, because `0` is the character after `/`. The OR keeps SQLite from a
+        // search on `parent`, so it searches the primary key for `namespace` and then reads the
+        // rows of that namespace.
         let descendants_start = format!("{dir_path}/");
         let descendants_end = format!("{dir_path}0");
 

@@ -15,7 +15,7 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -374,6 +374,11 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if blob_path_is_root(path) {
+            return Ok(false);
+        }
+
         let dir = blob_path_to_string(path)?;
 
         let key = Key {
