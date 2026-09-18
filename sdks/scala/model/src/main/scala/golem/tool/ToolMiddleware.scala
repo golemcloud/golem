@@ -556,9 +556,12 @@ object ToolUnderlyingRuntime {
 
   private def toolErrorMessage(error: ToolError[Nothing]): String =
     error match {
-      case ToolError.Rpc(rpc)                  => rpc.message
-      case ToolError.Tool(_)                   => "unexpected typed tool error"
-      case ToolError.UnknownToolError(name, _) => s"unexpected tool error `$name`"
+      case ToolError.Rpc(rpc)                       => rpc.message
+      case ToolError.RemoteTool(remote)             => s"remote tool error: $remote"
+      case ToolError.Tool(_)                        => "unexpected typed tool error"
+      case ToolError.UnknownToolError(name, _)      => s"unexpected tool error `$name`"
+      case ToolError.InvalidInput(message)          => message
+      case ToolError.MalformedRemoteOutput(message) => message
     }
 }
 
