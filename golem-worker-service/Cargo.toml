@@ -51,6 +51,7 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 scc = { workspace = true }
 desert_rust = { workspace = true }
+fastrand = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }

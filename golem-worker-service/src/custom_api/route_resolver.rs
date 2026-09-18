@@ -494,6 +494,8 @@ pub(super) mod tests {
                 format: OpenApiSpecFormat::Json,
             }),
             _ => RouteBehaviour::CallAgent(CallAgentBehaviour {
+                route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+                base_path_variables: 0,
                 component_id,
                 component_revision,
                 agent_type,

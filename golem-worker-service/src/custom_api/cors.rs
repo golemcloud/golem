@@ -50,6 +50,16 @@ pub fn handle_selected_preflight(
         session,
     );
     match &selected.route.behavior {
+        RichRouteBehaviour::CallAgent(agent)
+            if agent.route_mode
+                == golem_service_base::custom_api::AgentRouteMode::DurableStreams =>
+        {
+            allowed_headers.extend(
+                golem_service_base::custom_api::DURABLE_STREAM_REQUEST_HEADERS
+                    .iter()
+                    .map(|header| (*header).to_owned()),
+            );
+        }
         RichRouteBehaviour::HttpRouter(_) => {
             allowed_headers.extend(requested_preflight_headers(request)?)
         }
@@ -186,6 +196,14 @@ pub fn apply_cors_outgoing_middleware(
         http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
     ] {
         response.headers_mut().remove(name);
+    }
+    if matches!(&resolved_route.route.behavior, super::RichRouteBehaviour::CallAgent(behaviour)
+        if behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams)
+    {
+        response.headers_mut().insert(
+            http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After"),
+        );
     }
     let cors = &resolved_route.route.cors;
 
@@ -369,6 +387,67 @@ mod tests {
     use poem::{Body, Request};
     use std::sync::Arc;
     use test_r::test;
+
+    #[test]
+    async fn selected_durable_stream_preflight_allows_protocol_headers_only_on_stream_routes() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_service_base::custom_api::{AgentRouteMode, RouteBehaviour};
+
+        for (mode, headers, expected_status) in [
+            (
+                AgentRouteMode::DurableStreams,
+                "Producer-Id, Producer-Epoch, Producer-Seq, Stream-Closed, Stream-Ttl",
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                AgentRouteMode::DurableStreams,
+                "If-None-Match, Stream-Expires-At, Stream-Forked-From, Content-Type",
+                StatusCode::NO_CONTENT,
+            ),
+            (AgentRouteMode::Rest, "Producer-Id", StatusCode::FORBIDDEN),
+            (
+                AgentRouteMode::DurableStreams,
+                "X-Unexpected",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut route = test_route(1, "/stream", Some("POST"), "typed");
+            route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+            let RouteBehaviour::CallAgent(agent) = &mut route.behavior else {
+                panic!("expected typed route");
+            };
+            agent.route_mode = mode;
+            let resolver = test_resolver(vec![route]);
+            let request = Request::builder()
+                .uri("/stream".parse().unwrap())
+                .method(Method::OPTIONS)
+                .header("host", "example.com")
+                .header("origin", "https://client.example")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", headers)
+                .finish();
+            let response = crate::custom_api::request_handler::handle_preflight(&resolver, request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status, "{mode:?}: {headers}");
+            if expected_status == StatusCode::NO_CONTENT {
+                assert_eq!(
+                    response.headers()[http::header::ACCESS_CONTROL_ALLOW_METHODS],
+                    "POST"
+                );
+                let allowed = response.headers()[http::header::ACCESS_CONTROL_ALLOW_HEADERS]
+                    .to_str()
+                    .unwrap();
+                for header in headers.split(", ") {
+                    assert!(
+                        allowed
+                            .split(", ")
+                            .any(|name| name == header.to_ascii_lowercase())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     async fn requested_method_selects_one_policy_without_parent_inheritance() {

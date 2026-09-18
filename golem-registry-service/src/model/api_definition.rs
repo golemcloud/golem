@@ -24,7 +24,7 @@ use golem_service_base::custom_api::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum UnboundRouteSecurity {
     None,
@@ -32,7 +32,7 @@ pub enum UnboundRouteSecurity {
     SecurityScheme(UnboundSecuritySchemeRouteSecurity),
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct UnboundSecuritySchemeRouteSecurity {
     pub security_scheme: SecuritySchemeName,

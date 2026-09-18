@@ -655,9 +655,9 @@ mod tests {
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let _server = AbortOnDropHandle::new(tokio::spawn(crate::custom_api::http_server::serve(
-            listener, endpoint,
-        )));
+        let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+        let _server =
+            AbortOnDropHandle::new(tokio::spawn(crate::gateway_server::run(acceptor, endpoint)));
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         socket
             .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
@@ -706,9 +706,9 @@ mod tests {
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let _server = AbortOnDropHandle::new(tokio::spawn(crate::custom_api::http_server::serve(
-            listener, endpoint,
-        )));
+        let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+        let _server =
+            AbortOnDropHandle::new(tokio::spawn(crate::gateway_server::run(acceptor, endpoint)));
         let socket = tokio::net::TcpStream::connect(address).await.unwrap();
         let (mut client, connection) = h2::client::handshake(socket).await.unwrap();
         let _connection = AbortOnDropHandle::new(tokio::spawn(connection));
@@ -740,9 +740,9 @@ mod tests {
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let _server = AbortOnDropHandle::new(tokio::spawn(crate::custom_api::http_server::serve(
-            listener, endpoint,
-        )));
+        let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+        let _server =
+            AbortOnDropHandle::new(tokio::spawn(crate::gateway_server::run(acceptor, endpoint)));
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         socket.write_all(request).await.unwrap();
         let mut response = Vec::new();

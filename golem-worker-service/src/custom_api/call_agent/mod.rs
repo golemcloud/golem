@@ -316,7 +316,7 @@ impl CallAgentHandler {
         })
     }
 
-    fn resolve_method_arguments(
+    pub(super) fn resolve_method_arguments(
         &self,
         resolved_route: &ResolvedRouteEntry,
         request: &RichRequest,

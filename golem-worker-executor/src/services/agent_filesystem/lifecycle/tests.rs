@@ -624,16 +624,6 @@ fn call_count(control: &ScriptedSandboxFilesystemControl, operation: &str) -> us
         .count()
 }
 
-async fn wait_for_call(control: &ScriptedSandboxFilesystemControl, operation: &str) {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !has_call(control, operation) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-}
-
 async fn assert_insert_coordination(
     generation_handle: &FilesystemGenerationHandle<ScriptedSandboxFilesystem>,
     control: &ScriptedSandboxFilesystemControl,
@@ -1255,6 +1245,7 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     control.push_observe_allocation(Err(unsupported_allocation()));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("observe_allocation");
+    let deletion = control.block("delete_and_verify");
 
     let transition = finish_reconstruction(filesystem);
     assert!(matches!(
@@ -1266,8 +1257,17 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(weak.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(weak.upgrade().is_some());
+    deletion.release();
+    // Starting deletion does not mean its owning task has released the generation yet.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the reconstruction generation");
 }
 
 #[test]
@@ -1729,6 +1729,7 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     }));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("install_limits");
+    let deletion = control.block("delete_and_verify");
 
     let transition = set_limits(filesystem, ResolvedStorageLimits::Finite(finite));
     assert!(matches!(
@@ -1747,8 +1748,16 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(generation_handle.generation.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(generation_handle.generation.upgrade().is_some());
+    deletion.release();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while generation_handle.generation.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the limit-update generation");
 }
 
 #[test]
@@ -6629,6 +6638,116 @@ async fn delete_observer_waits_for_sandbox_verification() {
     assert!(!deletion.is_finished());
     verification_gate.release();
     deletion.await.unwrap().unwrap();
+}
+
+#[test]
+#[timeout("5s")]
+async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = filesystem.generation.as_ref().unwrap().clone();
+    control.push_delete_and_verify(Err(sandbox_error(
+        "first deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let first = delete(seal(filesystem)).await.unwrap_err();
+    assert!(first.source.to_string().contains("first deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Err(sandbox_error(
+        "persistent deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let second = first.retry().await.unwrap_err();
+    assert!(second.source.to_string().contains("persistent deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Ok(()));
+    let gate = control.block("delete_and_verify");
+    let retry = tokio::spawn(second.retry());
+    gate.wait_started().await;
+    retry.abort();
+    assert!(retry.await.unwrap_err().is_cancelled());
+    gate.release();
+    gate.wait_completed().await;
+
+    // A stale failure still refers to the old cleanup owner, not a newly provisioned path.
+    first.retry().await.unwrap();
+    assert!(generation.sandbox.read().await.is_none());
+    assert!(first.source.to_string().contains("first deletion"));
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("delete_and_verify("))
+            .count(),
+        3
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("10s")]
+async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+    let parent = tempfile::tempdir().unwrap();
+    let provisioning = SandboxFilesystemProvisioning::new(
+        Some(parent.path().to_path_buf()),
+        None,
+        golem_common::model::RetryConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let agent = agent_id();
+    let filesystem = create_fresh(
+        provisioning.clone(),
+        agent.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let root = filesystem
+        .generation
+        .as_ref()
+        .unwrap()
+        .sandbox
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .root()
+        .to_path_buf();
+    let component = root.parent().unwrap();
+    let moved = component.with_extension("moved");
+    std::fs::rename(component, &moved).unwrap();
+    std::fs::write(component, b"block directory traversal").unwrap();
+
+    let failure = delete_created(filesystem).await.unwrap_err();
+    assert_eq!(
+        failure.source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+    assert_eq!(
+        failure.retry().await.unwrap_err().source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+
+    std::fs::remove_file(component).unwrap();
+    std::fs::rename(&moved, component).unwrap();
+    failure.retry().await.unwrap();
+    assert!(!root.exists());
+
+    let replacement = create_fresh(provisioning, agent, ResolvedStorageLimits::Unlimited)
+        .await
+        .unwrap();
+    std::fs::write(root.join("replacement"), b"new generation").unwrap();
+    failure.retry().await.unwrap();
+    drop(failure);
+    assert_eq!(
+        std::fs::read(root.join("replacement")).unwrap(),
+        b"new generation"
+    );
+    delete_created(replacement).await.unwrap();
 }
 
 #[test]

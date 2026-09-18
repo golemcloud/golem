@@ -1251,6 +1251,8 @@ pub struct AgentStatusRecord {
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub has_durable_stream_history: bool,
+    pub pending_durable_stream_cancellations:
+        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
@@ -1303,6 +1305,7 @@ impl Default for AgentStatusRecord {
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             has_durable_stream_history: false,
+            pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
@@ -1406,7 +1409,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<crate::model::durable_stream::StreamSessionKeyV1>,
+    pub session_key: Option<crate::model::durable_stream::StreamSessionKey>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -1417,6 +1420,8 @@ pub struct DurableStreamSessionStatus {
     pub attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub attachment_attached: Option<bool>,
     pub lifecycle_error: Option<String>,
+    pub tombstoned_slots: HashSet<String>,
+    pub cancellation_requested: bool,
 }
 
 impl DurableStreamSessionStatus {
@@ -1430,7 +1435,7 @@ impl DurableStreamSessionStatus {
     pub fn validate_initial_attachment_reference(
         &mut self,
         attached_idx: OplogIndex,
-        attached: &crate::model::durable_stream::StreamSessionAttachedRecordV1,
+        attached: &crate::model::durable_stream::StreamSessionAttachedRecord,
     ) -> bool {
         if self.lifecycle_error.is_some() {
             return false;
@@ -1474,17 +1479,20 @@ impl DurableStreamSessionStatus {
     pub fn apply_record(
         &mut self,
         oplog_idx: OplogIndex,
-        record: &crate::model::durable_stream::StreamSessionRecordV1,
+        record: &crate::model::durable_stream::StreamSessionRecord,
     ) {
-        use crate::model::durable_stream::StreamSessionRecordV1;
+        use crate::model::durable_stream::StreamSessionRecord;
 
         let record_key = match record {
-            StreamSessionRecordV1::Prepared(v) => Some(&v.attempt.session_key),
-            StreamSessionRecordV1::Attached(v) => Some(&v.session_key),
-            StreamSessionRecordV1::ResumeAttempt(v) => Some(&v.attempt.session_key),
-            StreamSessionRecordV1::Detached(v) => Some(&v.session_key),
-            StreamSessionRecordV1::InvocationResult(v) => Some(&v.session_key),
-            StreamSessionRecordV1::Finished(v) => Some(&v.session_key),
+            StreamSessionRecord::Prepared(v) => Some(&v.attempt.session_key),
+            StreamSessionRecord::Attached(v) => Some(&v.session_key),
+            StreamSessionRecord::ResumeAttempt(v) => Some(&v.attempt.session_key),
+            StreamSessionRecord::Detached(v) => Some(&v.session_key),
+            StreamSessionRecord::InvocationResult(v) => Some(&v.session_key),
+            StreamSessionRecord::Finished(v) => Some(&v.session_key),
+            StreamSessionRecord::Tombstoned(v) => Some(&v.session_key),
+            StreamSessionRecord::CancelRequested(v) => Some(&v.session_key),
+            StreamSessionRecord::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
             _ => None,
         };
         let Some(record_key) = record_key else { return };
@@ -1505,7 +1513,7 @@ impl DurableStreamSessionStatus {
             return;
         }
         match record {
-            StreamSessionRecordV1::Prepared(v) => {
+            StreamSessionRecord::Prepared(v) => {
                 if self.prepared.is_some() {
                     self.lifecycle_error =
                         Some("durable Stream Session contains multiple Prepared records".into());
@@ -1515,7 +1523,7 @@ impl DurableStreamSessionStatus {
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
                 }
             }
-            StreamSessionRecordV1::Attached(v) => {
+            StreamSessionRecord::Attached(v) => {
                 if self.initial_attachment_epoch.is_some() {
                     self.lifecycle_error =
                         Some("durable session contains a repeated initial attachment".into());
@@ -1535,7 +1543,7 @@ impl DurableStreamSessionStatus {
                     }
                 }
             }
-            StreamSessionRecordV1::ResumeAttempt(v) => {
+            StreamSessionRecord::ResumeAttempt(v) => {
                 let Some(epoch) = self.attachment_epoch else {
                     self.lifecycle_error =
                         Some("durable resume precedes initial attachment".into());
@@ -1552,7 +1560,7 @@ impl DurableStreamSessionStatus {
                     self.attachment_attached = Some(true);
                 }
             }
-            StreamSessionRecordV1::Detached(v) => {
+            StreamSessionRecord::Detached(v) => {
                 match (self.attachment_epoch, self.attachment_attempt_id) {
                     (None, _) => {
                         self.lifecycle_error =
@@ -1569,10 +1577,14 @@ impl DurableStreamSessionStatus {
                     }
                 }
             }
-            StreamSessionRecordV1::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
-            StreamSessionRecordV1::Finished(_) => {
+            StreamSessionRecord::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
+            StreamSessionRecord::Finished(_) => {
                 self.finished.get_or_insert(oplog_idx);
             }
+            StreamSessionRecord::Tombstoned(v) => {
+                self.tombstoned_slots.insert(v.slot.clone());
+            }
+            StreamSessionRecord::CancelRequested(_) => self.cancellation_requested = true,
             _ => {}
         };
     }
@@ -1652,22 +1664,25 @@ impl DurableStreamSessionIndex {
     pub fn apply_record(
         &mut self,
         index: OplogIndex,
-        record: &crate::model::durable_stream::StreamSessionRecordV1,
+        record: &crate::model::durable_stream::StreamSessionRecord,
     ) {
-        use crate::model::durable_stream::StreamSessionRecordV1;
+        use crate::model::durable_stream::StreamSessionRecord;
 
         let key = match record {
-            StreamSessionRecordV1::Prepared(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecordV1::Attached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecordV1::Detached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::InvocationResult(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::Finished(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::Prepared(v) => &v.attempt.session_key.idempotency_key,
+            StreamSessionRecord::Attached(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
+            StreamSessionRecord::Detached(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::InvocationResult(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::Finished(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::Tombstoned(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::CancelRequested(v) => &v.session_key.idempotency_key,
+            StreamSessionRecord::ConsumerCancelApplied(v) => &v.intent.session_key.idempotency_key,
             _ => return,
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
-            None if matches!(record, StreamSessionRecordV1::Prepared(_)) => Default::default(),
+            None if matches!(record, StreamSessionRecord::Prepared(_)) => Default::default(),
             // Caller-side results have no local Prepared/Finished lifecycle.
             None => return,
         };

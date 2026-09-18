@@ -40,7 +40,8 @@ inherit_test_dep!(Tracing);
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
-// `deploy`. The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// `deploy`.
+// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
@@ -111,6 +112,7 @@ mod cmd {
     pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
+    pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";

@@ -15,10 +15,10 @@
 pub mod api_definition_lookup;
 pub mod call_agent;
 mod cors;
+pub(crate) mod durable_streams;
 pub mod error;
 mod http_completion;
 mod http_envelope;
-pub(crate) mod http_server;
 pub mod http_session;
 pub mod model;
 mod mounted_dispatch;

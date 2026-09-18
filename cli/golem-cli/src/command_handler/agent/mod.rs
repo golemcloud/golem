@@ -27,8 +27,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, log_action, log_error,
-    log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    message_for_output,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -52,8 +53,9 @@ use colored::Colorize;
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
 use crate::model::agent::{
-    AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
-    AgentsMetadataResponseView, RawAgentId,
+    AgentActionError, AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView,
+    AgentUpdateMode, AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId,
+    RedeployAgentError,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -1435,9 +1437,11 @@ impl AgentCommandHandler {
         {
             Ok(()) => {}
             Err(error) => {
-                update_results
-                    .errors
-                    .insert(agent_id.0.clone(), error.to_string());
+                update_results.errors.push(AgentActionError {
+                    component_name: component.component_name.clone(),
+                    agent_id: agent_id.clone(),
+                    error: error_message_for_output(&error),
+                });
                 self.ctx.log_handler().log_output(update_results)?;
                 return Err(error);
             }
@@ -1588,6 +1592,21 @@ impl AgentCommandHandler {
         path: String,
         output: Option<String>,
     ) -> anyhow::Result<()> {
+        let stream_to_stdout = output.as_deref() == Some("-");
+        // Keep progress and errors separate from the raw byte stream so this
+        // mode is safe to pipe into another process or redirect to a file.
+        let _stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
+        self.cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
+            .await
+    }
+
+    async fn cmd_file_contents_inner(
+        &self,
+        agent_id: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+        stream_to_stdout: bool,
+    ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -1630,6 +1649,13 @@ impl AgentCommandHandler {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| "output.bin".to_string())
         };
+
+        if stream_to_stdout {
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&file_contents)?;
+            stdout.flush()?;
+            return Ok(());
+        }
 
         // Check if file exists and ask for confirmation if needed
         if Path::new(&output_path).exists() {
@@ -1967,9 +1993,11 @@ impl AgentCommandHandler {
                 .await;
 
             if let Err(error) = &result {
-                update_results
-                    .errors
-                    .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                update_results.errors.push(AgentActionError {
+                    component_name: component_name.clone(),
+                    agent_id: agent.agent_id.agent_id.as_str().into(),
+                    error: error_message_for_output(error),
+                });
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -1995,9 +2023,11 @@ impl AgentCommandHandler {
                     )
                     .await
                 {
-                    update_results
-                        .errors
-                        .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
                 }
             }
         }
@@ -2164,13 +2194,14 @@ impl AgentCommandHandler {
         }
     }
 
-    /// Redeploys all agents of a component, returning each redeployed agent's id and the revision it
-    /// was running at before (its "from" revision).
+    /// Redeploys all agents of a component. Like updating, this is best-effort: a failure on one
+    /// agent does not stop the others, it is reported in the result instead. Successful agents
+    /// are returned with the revision they were running at before (their "from" revision).
     pub async fn redeploy_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
-    ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
+    ) -> anyhow::Result<BulkAgentActionResult<(RawAgentId, ComponentRevision)>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2180,7 +2211,7 @@ impl AgentCommandHandler {
                 "Skipping",
                 format!("redeploying agents for component {component_name}, no agent found"),
             );
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2201,24 +2232,43 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut redeployed = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
-            let agent_id: RawAgentId = agent.agent_id.agent_id.as_str().into();
+            let agent_id = agent.agent_id.agent_id.clone();
             let from_revision = agent.component_revision;
-            self.redeploy_agent(component_name, agent).await?;
-            redeployed.push((agent_id, from_revision));
+            match self.redeploy_agent(component_name, agent).await {
+                Ok(()) => result
+                    .succeeded
+                    .push((agent_id.as_str().into(), from_revision)),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "redeploying agent {}/{}: {error}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.into(),
+                        error: message_for_output(&error),
+                    });
+                }
+            }
         }
 
-        Ok(redeployed)
+        Ok(result)
     }
 
-    /// Deletes all agents of a component, returning the ids of the agents that were deleted.
+    /// Deletes all agents of a component. Best-effort: a failure on one agent does not stop the
+    /// others, it is reported in the result instead.
     pub async fn delete_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
         show_skip: bool,
-    ) -> anyhow::Result<Vec<RawAgentId>> {
+    ) -> anyhow::Result<BulkAgentActionResult<RawAgentId>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2230,7 +2280,7 @@ impl AgentCommandHandler {
                     format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2251,20 +2301,39 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut deleted = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
-            self.delete_agent(component_name, agent).await?;
-            deleted.push(agent.agent_id.agent_id.as_str().into());
+            let agent_id = &agent.agent_id.agent_id;
+            match self.delete_agent(component_name, agent).await {
+                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "deleting agent {}/{}: {error:#}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
+            }
         }
 
-        Ok(deleted)
+        Ok(result)
     }
 
+    /// Redeploys an agent by deleting and recreating it. The error says which of the two steps
+    /// failed, as a failed recreation leaves the agent deleted.
     async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
         agent_metadata: AgentMetadata,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), RedeployAgentError> {
         log_warn_action(
             "Redeploying",
             format!(
@@ -2275,7 +2344,9 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.delete_agent(component_name, &agent_metadata).await?;
+        self.delete_agent(component_name, &agent_metadata)
+            .await
+            .map_err(RedeployAgentError::Delete)?;
 
         log_action(
             "Recreating",
@@ -2291,7 +2362,8 @@ impl AgentCommandHandler {
             agent_metadata.env,
             agent_metadata.config,
         )
-        .await?;
+        .await
+        .map_err(RedeployAgentError::Recreate)?;
         log_action("Recreated", "agent");
 
         Ok(())
@@ -3322,7 +3394,8 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -3599,5 +3672,140 @@ mod tests {
         .unwrap();
 
         assert!(matches!(parsed, SchemaValue::Binary(_)));
+    }
+
+    // The shapes the SDKs produce for unstructured and multimodal parameters, as seen in the
+    // extracted agent types of the code-first test apps. The literals below are the ones used
+    // by the `*_with_rpc_and_all_types` integration tests, pinned here so a parser regression
+    // shows up without a server round-trip.
+
+    fn variant_case(name: &str, payload: SchemaType) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: Some(payload),
+            metadata: Default::default(),
+        }
+    }
+
+    fn unstructured_text_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::text(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn unstructured_binary_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::binary(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn multimodal_type() -> SchemaType {
+        SchemaType::list(SchemaType::variant(vec![
+            variant_case("Text", unstructured_text_type()),
+            variant_case("Binary", unstructured_binary_type()),
+        ]))
+    }
+
+    /// `MultimodalAdvanced<TextImageData>` with `Data` being a user-defined (named) record, as
+    /// the Rust SDK extracts it.
+    fn multimodal_advanced_graph() -> SchemaGraph {
+        let data_id = TypeId("rust_code_first_rust_main.model.Data".to_string());
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: data_id.clone(),
+                name: Some("Data".to_string()),
+                body: SchemaType::record(vec![
+                    NamedFieldType {
+                        name: "id".to_string(),
+                        body: SchemaType::u32(),
+                        metadata: Default::default(),
+                    },
+                    NamedFieldType {
+                        name: "name".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    },
+                ]),
+            }],
+            root: SchemaType::list(SchemaType::variant(vec![
+                variant_case("Text", SchemaType::string()),
+                variant_case("Image", SchemaType::list(SchemaType::u8())),
+                variant_case("Data", SchemaType::ref_to(data_id)),
+            ])),
+        }
+    }
+
+    fn assert_parses(language: SourceLanguage, ty: SchemaType, input: &str) {
+        assert_parses_in_graph(language, SchemaGraph::anonymous(ty), input);
+    }
+
+    fn assert_parses_in_graph(language: SourceLanguage, graph: SchemaGraph, input: &str) {
+        parse_method_argument_schema_value(input, &graph, &graph.root, &language)
+            .unwrap_or_else(|err| panic!("failed to parse {input:?} as {language:?}: {err}"));
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_rust_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Text("foo"))"#,
+            r#"Inline(Text("foo", "en"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_binary_type(), input);
+        }
+        assert_parses(
+            SourceLanguage::Rust,
+            multimodal_type(),
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        );
+        assert_parses_in_graph(
+            SourceLanguage::Rust,
+            multimodal_advanced_graph(),
+            r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#,
+        );
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_ts_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Text("foo")}"#,
+        ] {
+            assert_parses(SourceLanguage::TypeScript, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#,
+        ] {
+            assert_parses(
+                SourceLanguage::TypeScript,
+                unstructured_binary_type(),
+                input,
+            );
+        }
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("text", unstructured_text_type()),
+                variant_case("binary", unstructured_binary_type()),
+            ])),
+            r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#,
+        );
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("image", SchemaType::list(SchemaType::u8())),
+                variant_case("text", SchemaType::string()),
+            ])),
+            r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
+        );
     }
 }

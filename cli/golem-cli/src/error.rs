@@ -34,6 +34,7 @@ impl Error for PipedExitCode {}
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
+    ProfileNew,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -46,7 +47,12 @@ pub enum HintError {
         expected_cli_diff_model_version: u32,
         server_diff_model_version: u32,
     },
-    ShowClapHelp(ShowClapHelpTarget),
+    /// A usage error that is reported the way clap reports missing arguments: the error
+    /// message and the help of the target command are printed to stderr.
+    ShowClapHelp {
+        target: ShowClapHelpTarget,
+        error: String,
+    },
 }
 
 impl Error for HintError {}

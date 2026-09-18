@@ -43,6 +43,89 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
 
+/// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
+/// command help go to stderr with exit code 2.
+#[test]
+async fn app_new_without_input_in_non_interactive_mode_shows_help_on_stderr(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("APPLICATION_PATH must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains("Available languages"));
+    assert!(!outputs.stdout_contains("APPLICATION_PATH must be specified"));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains("Available languages"));
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "test-app-no-template"]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("at least one template must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+
+    // With structured output formats stdout stays clean
+    let outputs = ctx.cli([flag::YES, flag::FORMAT, "json", cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert_eq!(outputs.stdout().count(), 0);
+}
+
+/// `profile new` without a name starts an interactive wizard; in non-interactive mode that is a
+/// usage error reported like clap does, with or without `--yes`. The same goes for
+/// `--auth static` without a token.
+#[test]
+async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    for args in [
+        vec![cmd::PROFILE, cmd::NEW],
+        vec![flag::YES, cmd::PROFILE, cmd::NEW],
+    ] {
+        let outputs = ctx.cli(args).await;
+        assert_eq!(outputs.exit_code(), Some(2));
+        assert!(outputs.stderr_contains("NAME must be specified"));
+        assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+        assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    }
+
+    let outputs = ctx
+        .cli([cmd::PROFILE, cmd::NEW, "my-profile", "--auth", "static"])
+        .await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("--auth static requires --static-token"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+
+    // Creating and then re-creating the same profile is refused
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("already exists"));
+}
+
 #[test]
 async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
     let app_name = "test-app-help-no-upgrade";
@@ -7860,10 +7943,11 @@ async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Available languages:"));
+    // Missing template is a usage error, so the help (with the languages) goes to stderr
+    assert!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
+        .filter(|language| !outputs.stderr_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(

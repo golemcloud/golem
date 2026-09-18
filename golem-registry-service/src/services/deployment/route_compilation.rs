@@ -39,11 +39,11 @@ use golem_common::schema::{
     OutputSchema, SchemaGraph, SchemaType,
 };
 use golem_service_base::custom_api::{
-    AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
-    CompiledSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
+    CompiledOutputSchema, CompiledSchema, ConstructorParameter, CorsOptions,
+    CorsPreflightBehaviour, CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour,
+    OpenApiSpecFormat, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch,
+    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -204,6 +204,11 @@ pub fn add_agent_method_http_routes(
     let constructor_input = compiled_input(agent, &agent.constructor.input_schema);
 
     for agent_method in agent_methods {
+        let route_mode = if agent_method.uses_streams(&agent.schema) {
+            AgentRouteMode::DurableStreams
+        } else {
+            AgentRouteMode::Rest
+        };
         collect_read_only_warnings(implementer, agent, http_mount, agent_method, warnings);
 
         for http_endpoint in &agent_method.http_endpoint {
@@ -243,7 +248,27 @@ pub fn add_agent_method_http_routes(
             cors.allowed_patterns.dedup();
 
             let route_id = *current_route_id;
-            *current_route_id = current_route_id.checked_add(1).unwrap();
+            *current_route_id = ok_or_continue!(
+                current_route_id.checked_add(1).ok_or_else(|| {
+                    make_route_validation_error("HTTP route ID capacity exceeded".into())
+                }),
+                errors
+            );
+
+            let http_input = if route_mode == AgentRouteMode::DurableStreams {
+                ok_or_continue!(
+                    super::durable_streams::validate_route(
+                        agent,
+                        agent_method,
+                        http_mount,
+                        http_endpoint
+                    )
+                    .map_err(&make_route_validation_error),
+                    errors
+                )
+            } else {
+                agent_method.input_schema.clone()
+            };
 
             ok_or_continue!(
                 validate_http_method_agent_response_type(
@@ -259,7 +284,7 @@ pub fn add_agent_method_http_routes(
                     http_mount,
                     http_endpoint,
                     &agent.schema,
-                    &agent_method.input_schema,
+                    &http_input,
                     &make_route_validation_error
                 ),
                 errors
@@ -283,34 +308,110 @@ pub fn add_agent_method_http_routes(
                 errors
             );
 
+            let behaviour = CallAgentBehaviour {
+                route_mode,
+                base_path_variables: path_segments
+                    .iter()
+                    .filter(|segment| {
+                        matches!(
+                            segment,
+                            PathSegment::Variable { .. } | PathSegment::CatchAll { .. }
+                        )
+                    })
+                    .count() as u32,
+                component_id: implementer.component_id,
+                component_revision: implementer.component_revision,
+                agent_type: agent.type_name.clone(),
+                agent_mode: agent.mode,
+                method_name: agent_method.name.clone(),
+                phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
+                constructor_input: constructor_input.clone(),
+                constructor_parameters: constructor_parameters.clone(),
+                method_input: compiled_input(agent, &agent_method.input_schema),
+                method_parameters,
+                expected_agent_response: compiled_output(agent, &agent_method.output_schema),
+                method_description: Some(agent_method.description.clone()),
+                read_only: agent_method.read_only.clone(),
+            };
             let compiled = UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
                 route_match: http_endpoint.http_method.clone().into(),
-                path: path_segments.clone(),
+                path: path_segments,
                 body,
-                behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
-                    component_id: implementer.component_id,
-                    component_revision: implementer.component_revision,
-                    agent_type: agent.type_name.clone(),
-                    agent_mode: agent.mode,
-                    method_name: agent_method.name.clone(),
-                    phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
-                    constructor_input: constructor_input.clone(),
-                    constructor_parameters: constructor_parameters.clone(),
-                    method_input: compiled_input(agent, &agent_method.input_schema),
-                    method_parameters,
-                    expected_agent_response: compiled_output(agent, &agent_method.output_schema),
-                    method_description: Some(agent_method.description.clone()),
-                    read_only: agent_method.read_only.clone(),
-                }),
+                behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
                 security,
                 cors,
             };
 
-            compiled_routes.push(compiled);
+            if route_mode == AgentRouteMode::DurableStreams {
+                ok_or_continue!(
+                    add_durable_stream_route_family(
+                        compiled,
+                        behaviour,
+                        current_route_id,
+                        compiled_routes,
+                    )
+                    .map_err(|error| make_route_validation_error(error.into())),
+                    errors
+                );
+            } else {
+                compiled_routes.push(compiled);
+            }
         }
     }
+}
+
+fn add_durable_stream_route_family(
+    mut base: UnboundCompiledRoute,
+    behaviour: CallAgentBehaviour,
+    current_route_id: &mut i32,
+    routes: &mut Vec<UnboundCompiledRoute>,
+) -> Result<(), &'static str> {
+    base.route_match = HttpMethod::Put(Empty {}).into();
+    let mut session_path = base.path.clone();
+    session_path.push(PathSegment::Literal {
+        value: "invocations".into(),
+    });
+    session_path.push(PathSegment::Variable {
+        display_name: "session".into(),
+    });
+    let mut stream_path = session_path.clone();
+    stream_path.push(PathSegment::Literal {
+        value: "streams".into(),
+    });
+    stream_path.push(PathSegment::Variable {
+        display_name: "slot".into(),
+    });
+    let endpoints = [
+        (&session_path, HttpMethod::Put(Empty {})),
+        (&session_path, HttpMethod::Head(Empty {})),
+        (&session_path, HttpMethod::Get(Empty {})),
+        (&session_path, HttpMethod::Delete(Empty {})),
+        (&stream_path, HttpMethod::Put(Empty {})),
+        (&stream_path, HttpMethod::Head(Empty {})),
+        (&stream_path, HttpMethod::Get(Empty {})),
+        (&stream_path, HttpMethod::Delete(Empty {})),
+        (&stream_path, HttpMethod::Post(Empty {})),
+    ];
+    let next_route_id = current_route_id
+        .checked_add(endpoints.len() as i32)
+        .ok_or("HTTP route ID capacity exceeded")?;
+    for (route_id, (path, method)) in (*current_route_id..next_route_id).zip(endpoints) {
+        routes.push(UnboundCompiledRoute {
+            domain: base.domain.clone(),
+            route_id,
+            route_match: method.into(),
+            path: path.clone(),
+            body: base.body.clone(),
+            behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
+            security: base.security.clone(),
+            cors: base.cors.clone(),
+        });
+    }
+    *current_route_id = next_route_id;
+    routes.push(base);
+    Ok(())
 }
 
 /// Collects non-fatal warnings for a read-only `AgentMethod` and its HTTP
@@ -476,11 +577,21 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
         UnboundRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
         _ => None,
     };
-    golem_service_base::custom_api::cors_allowed_request_headers(
+    let mut headers = golem_service_base::custom_api::cors_allowed_request_headers(
         &compiled_route.body,
         parameters,
         session,
-    )
+    );
+    if matches!(&compiled_route.behaviour, RouteBehaviour::CallAgent(agent)
+        if agent.route_mode == AgentRouteMode::DurableStreams)
+    {
+        headers.extend(
+            golem_service_base::custom_api::DURABLE_STREAM_REQUEST_HEADERS
+                .iter()
+                .map(|h| (*h).to_owned()),
+        );
+    }
+    headers
 }
 
 pub fn add_webhook_callback_routes(
@@ -978,10 +1089,28 @@ mod tests {
     }
 
     fn compiled_call_agent_behaviour(mode: AgentMode, phantom_agent: bool) -> CallAgentBehaviour {
+        let (compiled_routes, errors) = compile_test_routes(&test_agent(mode, phantom_agent));
+        assert!(errors.is_empty());
+        let compiled_route = compiled_routes.into_iter().next().unwrap();
+        let RouteBehaviour::CallAgent(call_agent) = compiled_route.behaviour else {
+            panic!("expected call-agent route");
+        };
+        call_agent
+    }
+
+    fn compile_test_routes(
+        agent: &AgentTypeSchema,
+    ) -> (Vec<UnboundCompiledRoute>, Vec<DeployValidationError>) {
+        compile_test_routes_from(agent, 0)
+    }
+
+    fn compile_test_routes_from(
+        agent: &AgentTypeSchema,
+        mut current_route_id: i32,
+    ) -> (Vec<UnboundCompiledRoute>, Vec<DeployValidationError>) {
         let environment_id = EnvironmentId(Uuid::new_v4());
         let environment = test_environment(environment_id);
         let deployment = test_deployment(environment_id);
-        let agent = test_agent(mode, phantom_agent);
         let http_mount = agent.http_mount.clone().unwrap();
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
@@ -990,7 +1119,6 @@ mod tests {
             account_id: AccountId(Uuid::new_v4()),
             account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         };
-        let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -998,7 +1126,7 @@ mod tests {
         add_agent_method_http_routes(
             &environment,
             &deployment,
-            &agent,
+            agent,
             &implementer,
             &http_mount,
             &agent.methods,
@@ -1010,15 +1138,182 @@ mod tests {
             &mut warnings,
         );
 
-        assert!(errors.is_empty());
         assert!(warnings.is_empty());
+        (compiled_routes, errors)
+    }
 
-        let compiled_route = compiled_routes.into_iter().next().unwrap();
-        let RouteBehaviour::CallAgent(call_agent) = compiled_route.behaviour else {
-            panic!("expected call-agent route");
-        };
+    #[test]
+    fn durable_stream_routes_register_family_and_roundtrip_mode() {
+        use golem_common::schema::NamedField;
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].input_schema = InputSchema::parameters([
+            NamedField::user_supplied("events", SchemaType::stream(Some(SchemaType::string()))),
+            NamedField::user_supplied("limit", SchemaType::u32()),
+        ]);
+        let (routes, errors) = compile_test_routes(&agent);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(routes.len(), 10);
+        let session = "notes/invocations/{session}";
+        let slot = "notes/invocations/{session}/streams/{slot}";
+        assert_eq!(
+            routes
+                .iter()
+                .map(|route| (
+                    route.route_id,
+                    render_http_method(route.route_match.method().unwrap()),
+                    route.path.iter().map(ToString::to_string).join("/")
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (1, "PUT", session),
+                (2, "HEAD", session),
+                (3, "GET", session),
+                (4, "DELETE", session),
+                (5, "PUT", slot),
+                (6, "HEAD", slot),
+                (7, "GET", slot),
+                (8, "DELETE", slot),
+                (9, "POST", slot),
+                (0, "PUT", "notes"),
+            ]
+            .map(|(id, method, path)| (id, method.to_owned(), path.to_owned()))
+        );
+        let mut identities = BTreeSet::new();
+        for route in routes {
+            assert!(identities.insert((
+                render_http_method(route.route_match.method().unwrap()),
+                route.path.iter().map(ToString::to_string).join("/")
+            )));
+            let RouteBehaviour::CallAgent(ref call) = route.behaviour else {
+                panic!()
+            };
+            assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
+            assert_eq!(call.method_parameters.len(), 1);
+            assert_eq!(call.method_input.input_schema.fields().len(), 2);
+            let RequestBodySchema::JsonBody { ref expected } = route.body else {
+                panic!()
+            };
+            assert_eq!(
+                expected.graph.root,
+                SchemaType::record(vec![NamedFieldType {
+                    name: "limit".into(),
+                    body: SchemaType::u32(),
+                    metadata: Default::default(),
+                }])
+            );
+            let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
+            let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();
+            let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =
+                restored.behaviour.into();
+            let restored: RouteBehaviour = proto.try_into().unwrap();
+            let RouteBehaviour::CallAgent(call) = restored else {
+                panic!()
+            };
+            assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
+        }
+        assert!(identities.contains(&("PUT".into(), "notes".into())));
+        assert!(identities.contains(&(
+            "POST".into(),
+            "notes/invocations/{session}/streams/{slot}".into()
+        )));
+        assert!(!identities.contains(&("GET".into(), "notes".into())));
+        let rest = compiled_call_agent_behaviour(AgentMode::Durable, false);
+        assert_eq!(rest.route_mode, AgentRouteMode::Rest);
+    }
 
-        call_agent
+    #[test]
+    fn route_id_capacity_reports_validation_errors_without_partial_families() {
+        let rest = test_agent(AgentMode::Durable, false);
+        let mut streaming = rest.clone();
+        streaming.methods[0].output_schema =
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
+
+        for (agent, count) in [(&rest, 1), (&streaming, 10)] {
+            let (routes, errors) = compile_test_routes_from(agent, i32::MAX - count);
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(routes.len(), count as usize);
+            assert_eq!(
+                routes.iter().map(|route| route.route_id).max(),
+                Some(i32::MAX - 1)
+            );
+
+            for start in [i32::MAX - count + 1, i32::MAX] {
+                let (routes, errors) = compile_test_routes_from(agent, start);
+                assert!(routes.is_empty());
+                assert_eq!(errors.len(), 1);
+                assert!(matches!(
+                    &errors[0],
+                    DeployValidationError::HttpApiDeploymentAgentMethodInvalid { error, .. }
+                        if error == "HTTP route ID capacity exceeded"
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn durable_stream_base_capture_count_survives_route_family_and_serialization() {
+        use golem_common::model::agent::{PathSegment as AgentPathSegment, PathVariable};
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].output_schema =
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
+        agent.http_mount.as_mut().unwrap().path_prefix = vec![
+            AgentPathSegment::PathVariable(PathVariable {
+                variable_name: "tenant".into(),
+            }),
+            AgentPathSegment::Literal(LiteralSegment {
+                value: "invocations".into(),
+            }),
+            AgentPathSegment::PathVariable(PathVariable {
+                variable_name: "session".into(),
+            }),
+        ];
+        let (routes, errors) = compile_test_routes(&agent);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(routes.len(), 10);
+        for route in routes {
+            let headers = collect_allowed_request_headers(&route);
+            assert_eq!(
+                headers,
+                golem_service_base::custom_api::DURABLE_STREAM_REQUEST_HEADERS
+                    .iter()
+                    .map(|h| (*h).to_owned())
+                    .collect::<BTreeSet<_>>()
+            );
+            for header in [
+                "stream-closed",
+                "producer-id",
+                "producer-epoch",
+                "producer-seq",
+            ] {
+                assert!(headers.contains(header), "missing {header}");
+            }
+            let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
+            let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();
+            let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =
+                restored.behaviour.into();
+            let RouteBehaviour::CallAgent(call) = RouteBehaviour::try_from(proto).unwrap() else {
+                panic!()
+            };
+            assert_eq!(call.base_path_variables, 2);
+        }
+    }
+
+    #[test]
+    fn durable_stream_invalid_slot_reports_method_and_slot() {
+        for name in ["invocations", "$result", "__ds"] {
+            let mut agent = test_agent(AgentMode::Durable, false);
+            agent.methods[0].input_schema =
+                InputSchema::parameters([golem_common::schema::NamedField::user_supplied(
+                    name,
+                    SchemaType::stream(Some(SchemaType::string())),
+                )]);
+            let (routes, errors) = compile_test_routes(&agent);
+            assert!(routes.is_empty());
+            assert_eq!(errors.len(), 1);
+            let error = format!("{:?}", errors[0]);
+            assert!(error.contains("fetch"), "{error}");
+            assert!(error.contains(name), "{error}");
+        }
     }
 
     fn test_deployment_with_openapi(openapi_endpoint: &str) -> HttpApiDeployment {
@@ -1159,6 +1454,8 @@ mod tests {
                 path: path.clone(),
                 body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
+                    route_mode: AgentRouteMode::Rest,
+                    base_path_variables: 0,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
@@ -1196,6 +1493,8 @@ mod tests {
                     },
                 },
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
+                    route_mode: AgentRouteMode::Rest,
+                    base_path_variables: 0,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),

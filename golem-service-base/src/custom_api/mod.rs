@@ -288,7 +288,7 @@ impl CompiledOutputSchema {
     }
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
@@ -549,9 +549,12 @@ pub struct AgentFilesystemBehaviour {
     pub filesystem_bindings: Vec<FileMapping>,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CallAgentBehaviour {
+    pub route_mode: AgentRouteMode,
+    /// Number of captured variables in the declared base path, excluding DS session and slot.
+    pub base_path_variables: u32,
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
@@ -578,6 +581,26 @@ pub struct CallAgentBehaviour {
     #[desert(default)]
     pub read_only: Option<ReadOnlyConfig>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
+pub enum AgentRouteMode {
+    Rest,
+    DurableStreams,
+}
+
+/// Request headers for durable-stream session creation, conditional reads,
+/// closing appends and producer-tracked appends.
+pub const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
+    "content-type",
+    "if-none-match",
+    "stream-ttl",
+    "stream-expires-at",
+    "stream-forked-from",
+    "stream-closed",
+    "producer-id",
+    "producer-epoch",
+    "producer-seq",
+];
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
