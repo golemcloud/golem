@@ -104,16 +104,16 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+            KeyValueStorageNamespace::AgentStatus { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
@@ -168,6 +168,30 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
             .await
     }
 
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .set_with_expiry(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            )
+            .await
+    }
+
     async fn set_many(
         &self,
         svc_name: &'static str,
@@ -202,6 +226,34 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
                 key,
                 expected,
                 pairs,
+            )
+            .await
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .compare_and_mutate_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
             )
             .await
     }

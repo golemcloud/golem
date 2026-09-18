@@ -24,6 +24,7 @@ use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
 use std::sync::Arc;
+use std::time::Duration;
 
 const DB_TYPE: &str = "postgres";
 
@@ -88,18 +89,36 @@ impl PostgresKeyValueStorage {
             KeyValueStorageNamespace::Worker { .. } => "worker".to_string(),
             // agent_id embedded so each agent's split status fields are an isolated key space
             // (per-agent `keys`/`del_many` select only that agent's rows).
-            KeyValueStorageNamespace::AgentStatus { agent_id } => {
-                format!("agent-status:{}", agent_id.to_redis_key())
+            KeyValueStorageNamespace::AgentStatus {
+                agent_id,
+                fingerprint,
+            } => {
+                format!("agent-status:{}:{fingerprint}", agent_id.to_redis_key())
             }
-            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
-                format!("agent-invocation-result-index:{}", agent_id.to_redis_key())
-            }
-            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
-                format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
-            }
-            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+            KeyValueStorageNamespace::AgentInvocationResultIndex {
+                agent_id,
+                fingerprint,
+            } => {
                 format!(
-                    "agent:durable_stream_session_index:{}",
+                    "agent-invocation-result-index:{}:{fingerprint}",
+                    agent_id.to_redis_key()
+                )
+            }
+            KeyValueStorageNamespace::AgentStatusCheckpoint {
+                agent_id,
+                fingerprint,
+            } => {
+                format!(
+                    "agent-status-checkpoint:{}:{fingerprint}",
+                    agent_id.to_redis_key()
+                )
+            }
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+                agent_id,
+                fingerprint,
+            } => {
+                format!(
+                    "agent:durable_stream_session_index:{}:{fingerprint}",
                     agent_id.to_redis_key()
                 )
             }
@@ -147,6 +166,20 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .await
             .map(|_| ())
             .map_err(KeyValueStorageError::from)
+    }
+
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        _expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
     }
 
     async fn set_many(
@@ -268,6 +301,107 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                         tx.execute(builder.build()).await?;
                     }
                     if expected.is_none() && !pairs.iter().any(|(field, _)| field == &key) {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;",
+                            )
+                            .bind(&namespace)
+                            .bind(&key),
+                        )
+                        .await?;
+                    }
+                    Ok(true)
+                }
+                .boxed()
+            })
+            .await
+            .map_err(KeyValueStorageError::from)
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        _expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        let namespace = Self::namespace(namespace);
+        let sets: Vec<(String, Vec<u8>)> = sets
+            .iter()
+            .map(|(key, value)| {
+                record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+                ((*key).to_string(), (*value).to_vec())
+            })
+            .collect();
+        let deletions: Vec<String> = deletions.iter().map(|field| (*field).to_string()).collect();
+        let expected = expected.map(ToOwned::to_owned);
+        let key = key.to_string();
+
+        self.pool
+            .with_tx(svc_name, api_name, move |tx| {
+                async move {
+                    let matched = match &expected {
+                        Some(expected) => {
+                            tx.execute(
+                                sqlx::query(
+                                    "UPDATE kv_storage SET value = value WHERE namespace = $1 AND key = $2 AND value = $3;",
+                                )
+                                .bind(&namespace)
+                                .bind(&key)
+                                .bind(expected),
+                            )
+                            .await?
+                            .rows_affected()
+                                == 1
+                        }
+                        None => {
+                            tx.execute(
+                                sqlx::query(
+                                    "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;",
+                                )
+                                .bind(&namespace)
+                                .bind(&key)
+                                .bind(b"".as_slice()),
+                            )
+                            .await?
+                            .rows_affected()
+                                == 1
+                        }
+                    };
+                    if !matched {
+                        return Ok(false);
+                    }
+                    for chunk in sets.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
+                        let mut builder = QueryBuilder::<Postgres>::new(
+                            "INSERT INTO kv_storage (namespace, key, value) ",
+                        );
+                        builder.push_values(chunk, |mut row, (field, value)| {
+                            row.push_bind(&namespace).push_bind(field).push_bind(value);
+                        });
+                        builder.push(
+                            " ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;",
+                        );
+                        tx.execute(builder.build()).await?;
+                    }
+                    for chunk in deletions.chunks(Self::MANY_KEYS_DELETE_CHUNK_SIZE) {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);",
+                            )
+                            .bind(&namespace)
+                            .bind(chunk),
+                        )
+                        .await?;
+                    }
+                    if expected.is_none()
+                        && !sets.iter().any(|(field, _)| field == &key)
+                        && !deletions.iter().any(|field| field == &key)
+                    {
                         tx.execute(
                             sqlx::query(
                                 "DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;",

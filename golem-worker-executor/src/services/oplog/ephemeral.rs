@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{DurableStreamSessionStatus, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId};
 use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
@@ -55,6 +55,7 @@ use tracing::{Instrument, Level, debug, info, warn};
 pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    fingerprint: AgentFingerprint,
     primary_service: Arc<dyn OplogService>,
     jobs: UnboundedSender<EphemeralJob>,
     closed: OplogCloseCompletion,
@@ -190,6 +191,7 @@ impl EphemeralOplog {
     pub(crate) async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
         primary_service: Arc<dyn OplogService>,
@@ -344,6 +346,7 @@ impl EphemeralOplog {
         Self {
             owned_agent_id,
             agent_mode,
+            fingerprint,
             primary_service,
             jobs,
             closed,
@@ -778,6 +781,7 @@ impl Oplog for EphemeralOplog {
                 index.as_ref(),
                 &self.owned_agent_id,
                 self.agent_mode,
+                self.fingerprint,
                 snapshot.committed,
                 &snapshot.buffer,
                 session_key,

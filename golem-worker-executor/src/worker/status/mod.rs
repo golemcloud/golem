@@ -12,11 +12,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentResourceDescription, AgentStatus, AgentStatusRecord, DurableStreamSessionIndex,
-    FailedUpdateRecord, IdempotencyKey, InvocationResultMembership, OplogProcessorCheckpointState,
-    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    SuccessfulUpdateRecord, Timestamp,
+    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
+    DurableStreamSessionIndex, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -76,6 +76,7 @@ where
 pub async fn calculate_last_known_status_with_checkpoint<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
 ) -> Result<Option<AgentStatusRecord>, String>
@@ -92,7 +93,7 @@ where
             // The checkpoint is only a fold baseline, and this function has no way to report a
             // read failure: falling back to a full recompute costs time, not correctness.
             worker_service
-                .read_status_checkpoint(owned_agent_id, agent_mode)
+                .read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                 .await
                 .unwrap_or_else(|err| {
                     tracing::error!(

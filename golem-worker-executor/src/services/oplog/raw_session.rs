@@ -16,7 +16,7 @@ use crate::services::stream_session_index::StreamSessionIndexService;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamSessionKey, StreamSessionRecord};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{DurableStreamSessionStatus, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -49,13 +49,14 @@ impl RawSessionCache {
         service: Option<&Arc<StreamSessionIndexService>>,
         id: &OwnedAgentId,
         mode: AgentMode,
+        fingerprint: AgentFingerprint,
         committed: OplogIndex,
         buffer: &VecDeque<OplogEntry>,
         key: &StreamSessionKey,
     ) -> Result<Option<DurableStreamSessionStatus>, String> {
         let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
         let mut status = service
-            .lookup_persisted(id, mode, committed, &key.idempotency_key)
+            .lookup_persisted(id, mode, fingerprint, committed, &key.idempotency_key)
             .await?
             .filter(|status| status.session_key.as_ref() == Some(key));
         for (offset, entry) in buffer.iter().enumerate() {
