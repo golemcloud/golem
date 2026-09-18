@@ -76,8 +76,8 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -176,9 +176,10 @@ export type {
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
-  AgentClientFactory,
+  FullAgentClientFactory,
+  MethodOnlyAgentClientSpec,
   AgentConfigEntry,
-  AgentClientSpec,
+  FullAgentClientSpec,
   ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,

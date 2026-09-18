@@ -723,25 +723,25 @@ describe('RPC client', () => {
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBe(phantomId);
   });
 
-  it('rejects lifecycle fields on partial JavaScript binding contracts', () => {
+  it('rejects lifecycle fields on a method-only JavaScript client', () => {
     expect(() =>
       defineAgentClient({
         mode: 'durable',
         methods: { ping: method({ input: {}, returns: z.string() }) },
       } as any),
     ).toThrow(
-      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
+      'A method-only client may define only methods; name, id, config, and mode require a fully defined client',
     );
   });
 
-  it('rejects a type name without an ID shape on binding contracts', () => {
+  it('rejects a type name without an ID shape on a method-only client', () => {
     expect(() =>
       defineAgentClient({
         name: 'NamedBinding',
         methods: { ping: method({ input: {}, returns: z.string() }) },
       } as any),
     ).toThrow(
-      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
+      'A method-only client may define only methods; name, id, config, and mode require a fully defined client',
     );
   });
 

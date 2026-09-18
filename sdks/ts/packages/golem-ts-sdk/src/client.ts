@@ -36,9 +36,9 @@ import { SchemaRef } from './schema/ref';
 import type { MarkerKindOf } from './schema/markers';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
-  AgentClientContract,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  FullAgentClientContract,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   CallerInput,
   ConfigSpec,
   IdRecord,
@@ -196,7 +196,7 @@ export interface EphemeralRemoteClientFactory<
   ): RemoteClient<Methods, 'ephemeral'>;
 }
 
-export type AgentClientFactory<
+export type FullAgentClientFactory<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
@@ -205,7 +205,7 @@ export type AgentClientFactory<
   ? EphemeralRemoteClientFactory<Id, Methods, Config>
   : RemoteClientFactory<Id, Methods, Config>;
 
-export type AgentClientSpec<
+export type FullAgentClientSpec<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
@@ -217,7 +217,7 @@ export type AgentClientSpec<
   readonly config?: Config;
 } & (Mode extends 'ephemeral' ? { readonly mode: 'ephemeral' } : { readonly mode?: 'durable' });
 
-export interface AgentClientBindingSpec<Methods extends MethodsRecord> {
+export interface MethodOnlyAgentClientSpec<Methods extends MethodsRecord> {
   readonly methods: Methods;
   readonly name?: never;
   readonly id?: never;
@@ -234,18 +234,18 @@ export function defineAgentClient<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
 >(
-  spec: AgentClientSpec<Id, Methods, Config, 'ephemeral'>,
-): AgentClientDefinition<Id, Methods, Config, 'ephemeral'>;
+  spec: FullAgentClientSpec<Id, Methods, Config, 'ephemeral'>,
+): FullAgentClientDefinition<Id, Methods, Config, 'ephemeral'>;
 export function defineAgentClient<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
 >(
-  spec: AgentClientSpec<Id, Methods, Config, 'durable'>,
-): AgentClientDefinition<Id, Methods, Config, 'durable'>;
+  spec: FullAgentClientSpec<Id, Methods, Config, 'durable'>,
+): FullAgentClientDefinition<Id, Methods, Config, 'durable'>;
 export function defineAgentClient<Methods extends MethodsRecord>(
-  spec: AgentClientBindingSpec<Methods>,
-): AgentClientBindingDefinition<Methods>;
+  spec: MethodOnlyAgentClientSpec<Methods>,
+): MethodOnlyAgentClientDefinition<Methods>;
 export function defineAgentClient(spec: {
   readonly name?: string;
   readonly id?: IdRecord;
@@ -253,8 +253,8 @@ export function defineAgentClient(spec: {
   readonly config?: ConfigSpec;
   readonly mode?: 'durable' | 'ephemeral';
 }):
-  | AgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
-  | AgentClientBindingDefinition<MethodsRecord> {
+  | FullAgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
+  | MethodOnlyAgentClientDefinition<MethodsRecord> {
   return defineAgentClientImpl(spec);
 }
 
@@ -265,17 +265,21 @@ function defineAgentClientImpl(spec: {
   readonly config?: ConfigSpec;
   readonly mode?: 'durable' | 'ephemeral';
 }):
-  | AgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
-  | AgentClientBindingDefinition<MethodsRecord> {
+  | FullAgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
+  | MethodOnlyAgentClientDefinition<MethodsRecord> {
   if (spec.name !== undefined && spec.id !== undefined) {
-    const exact: AgentClientContract<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'> =
-      {
-        name: spec.name,
-        id: spec.id,
-        methods: spec.methods,
-        config: spec.config,
-        mode: spec.mode ?? 'durable',
-      };
+    const exact: FullAgentClientContract<
+      IdRecord,
+      MethodsRecord,
+      ConfigSpec,
+      'durable' | 'ephemeral'
+    > = {
+      name: spec.name,
+      id: spec.id,
+      methods: spec.methods,
+      config: spec.config,
+      mode: spec.mode ?? 'durable',
+    };
     return Object.freeze({ ...exact, ...buildAgentClientSurface(exact, true) });
   }
   if (
@@ -285,7 +289,7 @@ function defineAgentClientImpl(spec: {
     spec.mode !== undefined
   ) {
     throw new TypeError(
-      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
+      'A method-only client may define only methods; name, id, config, and mode require a fully defined client',
     );
   }
   const binding = buildAgentIdBinding(spec, true);
@@ -567,7 +571,10 @@ export function buildAgentClientSurface<
   Config extends ConfigSpec,
   Mode extends 'durable' | 'ephemeral',
 >(
-  def: AgentClientContract<Id, Methods, Config, Mode> & { readonly name: string; readonly id: Id },
+  def: FullAgentClientContract<Id, Methods, Config, Mode> & {
+    readonly name: string;
+    readonly id: Id;
+  },
   fallible: boolean,
 ): {
   client: Mode extends 'ephemeral'

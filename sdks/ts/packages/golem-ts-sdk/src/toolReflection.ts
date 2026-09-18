@@ -421,7 +421,8 @@ export class ToolType {
       return type;
     };
     const transport =
-      runtime ?? createToolClientRuntime(this.lookupName, createToolClientTransport(this.lookupName, true));
+      runtime ??
+      createToolClientRuntime(this.lookupName, createToolClientTransport(this.lookupName, true));
     const visited = new Set<number>();
     const build = (
       index: number,

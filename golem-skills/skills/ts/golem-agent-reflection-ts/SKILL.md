@@ -87,7 +87,7 @@ inspect their `cause` without parsing messages.
 
 ## Bind with a Method-Only Contract
 
-Use a binding-only contract when an existing durable `ParsedAgentId` supplies
+Use a method-only client when an existing durable `ParsedAgentId` supplies
 the target name and constructor value:
 
 ```typescript
@@ -105,7 +105,7 @@ const client = existingAgentId.client(PingContract);
 const result = await client.ping();
 ```
 
-A binding-only contract contains only `methods`; it cannot declare `name`,
+A method-only client contains only `methods`; it cannot declare `name`,
 `id`, `config`, or `mode`. It performs no discovery and uses durable result
 semantics.
 
@@ -113,7 +113,7 @@ Binding-only callers can pass raw typed configuration entries as the second argu
 
 ## Construct an Agent ID with Caller-Owned Schemas
 
-A complete caller-owned contract is the Level 2 option when the target name,
+A fully defined client is the Level 2 option when the target name,
 constructor shape, and methods are known locally but the target implementation
 is not imported. Its `agentId` helper accepts values described by any supported
 Standard Schema library:
@@ -153,7 +153,7 @@ const second = await schemaValueId
 The first form validates and packs constructor fields through the caller's
 schema library. The explicit `ParsedAgentId.create` form is for infrastructure that
 already owns a Golem `SchemaValue`; record fields must be in the target
-constructor's declared order. Binding that ID to a complete durable contract
+constructor's declared order. Binding that ID to a fully defined durable client
 checks both the exact agent name and structural conformance to the contract's
 local ID schema before creating the client. When runtime metadata is available,
 prefer `agentType.agentId(json)` or pack with `agentType.constructorInput`

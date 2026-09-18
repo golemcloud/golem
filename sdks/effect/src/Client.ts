@@ -192,8 +192,8 @@ export interface MethodOnlyClient<
   >
 }
 
-/** Complete caller-owned client definition with typed identity and lifecycle factories. @since 1.6.0 @category models */
-export type CompleteClient<
+/** Fully defined caller-owned client definition with typed identity and lifecycle factories. @since 1.6.0 @category models */
+export type FullClient<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
   Mode extends AgentCommon.AgentMode,
@@ -479,12 +479,12 @@ export function defineAgentClient<
   F extends ConfigFields = never,
 >(
   definition: ClientDefinition<C, Methods, "ephemeral", F> & { readonly mode: "ephemeral" },
-): CompleteClient<C, Methods, "ephemeral", F>
+): FullClient<C, Methods, "ephemeral", F>
 export function defineAgentClient<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
   F extends ConfigFields = never,
->(definition: ClientDefinition<C, Methods, "durable", F>): CompleteClient<C, Methods, "durable", F>
+>(definition: ClientDefinition<C, Methods, "durable", F>): FullClient<C, Methods, "durable", F>
 export function defineAgentClient<
   const Definition extends { readonly methods: Record<string, AnyMethodSpec> },
 >(
