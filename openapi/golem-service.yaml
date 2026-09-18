@@ -19761,6 +19761,7 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
     r#BeginAtomicRegionParams:
       title: r#BeginAtomicRegionParams
       type: object
@@ -19831,6 +19832,7 @@ components:
       - timestamp
       - cardId
       - parentIds
+      - walletGeneration
     r#CardEventQueuedParams:
       title: r#CardEventQueuedParams
       type: object
@@ -19859,6 +19861,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardInstallFailedParams:
       title: r#CardInstallFailedParams
       type: object
@@ -19898,6 +19901,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardRevokedCascadeParams:
       title: r#CardRevokedCascadeParams
       type: object
@@ -19917,6 +19921,7 @@ components:
       required:
       - timestamp
       - revokedCardIds
+      - localWalletGeneration
     r#CardRevokedParams:
       title: r#CardRevokedParams
       type: object
@@ -19937,6 +19942,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
     r#CardTransferConfirmedParams:
       title: r#CardTransferConfirmedParams
       type: object
@@ -19987,6 +19993,7 @@ components:
       - transferId
       - cardId
       - targetHolder
+      - sourceWalletGeneration
     r#CardTransferredParams:
       title: r#CardTransferredParams
       type: object
@@ -19999,7 +20006,7 @@ components:
           type: string
           format: uuid
         sourceCardId:
-          description: Source card identity, absent only on legacy entries.
+          description: Source card identity.
           type: string
           format: uuid
         installedCardId:
@@ -20014,8 +20021,10 @@ components:
       required:
       - timestamp
       - transferId
+      - sourceCardId
       - installedCardId
       - targetHolder
+      - targetWalletGeneration
     r#CommittedRemoteTransactionParams:
       title: r#CommittedRemoteTransactionParams
       type: object

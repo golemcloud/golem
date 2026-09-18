@@ -685,9 +685,9 @@ mod tests {
                     entity_parent_start_index: None,
                     transfer_id,
                     card_id: source_card_id,
-                    source_holder: None,
+                    source_holder: target_holder.clone(),
                     target_holder: target_holder.clone(),
-                    source_wallet_generation: Some(1),
+                    source_wallet_generation: 1,
                 },
             ),
             (

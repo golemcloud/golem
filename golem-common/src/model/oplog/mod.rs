@@ -349,9 +349,7 @@ impl OplogEntry {
 
     pub fn specifies_component_revision(&self) -> Option<ComponentRevision> {
         match self {
-            OplogEntry::Create {
-                component_revision, ..
-            } => Some(*component_revision),
+            OplogEntry::Create { parameters, .. } => Some(parameters.component_revision),
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),

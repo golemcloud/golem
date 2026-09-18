@@ -833,7 +833,9 @@ impl TestWorkerExecutor {
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::revoke(
+                    card_id,
+                )),
             ))
             .await)
     }
@@ -852,7 +854,9 @@ impl TestWorkerExecutor {
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::install(card),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::install(
+                    card,
+                )),
             ))
             .await;
         Ok(())

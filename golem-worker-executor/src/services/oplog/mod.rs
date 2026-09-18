@@ -1019,7 +1019,7 @@ pub trait OplogOps: Oplog {
             trace_id: ctx.trace_id,
             trace_states: ctx.trace_states,
             invocation_context,
-            wallet_pin: Some(wallet_pin),
+            wallet_pin: Box::new(wallet_pin),
         })
     }
 
