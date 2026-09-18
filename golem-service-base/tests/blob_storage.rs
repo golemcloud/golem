@@ -3052,7 +3052,7 @@ async fn get_metadata_of_a_directory_of_blobs_finds_no_blob(
 #[test]
 #[tracing::instrument]
 async fn a_copy_or_a_move_onto_itself_changes_nothing(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
