@@ -20,7 +20,6 @@ use super::cors::{
 use super::durable_streams::DurableStreamsHandler;
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
-use super::mounted_dispatch::dispatch_mount;
 use super::oidc::handler::OidcHandler;
 use super::raw_handler::RawHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
@@ -211,7 +210,9 @@ impl RequestHandler {
                     .await
             }
             RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
-                dispatch_mount(request, resolved_route, &mut self.raw_handler.clone()).await
+                self.raw_handler
+                    .dispatch_mount(request, resolved_route)
+                    .await
             }
         }
     }

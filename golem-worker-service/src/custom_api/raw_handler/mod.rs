@@ -47,6 +47,7 @@ pub(super) struct RawHandler {
     worker_service: Arc<WorkerService>,
     limits: HttpSessionLimits,
     initial_files: Arc<InitialAgentFilesService>,
+    file_deadline: Option<tokio::time::Instant>,
 }
 
 impl RawHandler {
@@ -59,6 +60,30 @@ impl RawHandler {
             worker_service,
             limits,
             initial_files,
+            file_deadline: None,
+        }
+    }
+
+    pub(super) async fn dispatch_mount(
+        &self,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let mut backend = self.clone();
+        if matches!(
+            selected.route.behavior,
+            RichRouteBehaviour::AgentFilesystem(_)
+        ) {
+            let deadline = tokio::time::Instant::now() + self.limits.exchange_timeout;
+            backend.file_deadline = Some(deadline);
+            tokio::time::timeout_at(
+                deadline,
+                super::mounted_dispatch::dispatch_mount(request, selected, &mut backend),
+            )
+            .await
+            .unwrap_or(Err(RequestHandlerError::RawDeadline))
+        } else {
+            super::mounted_dispatch::dispatch_mount(request, selected, &mut backend).await
         }
     }
 
@@ -239,6 +264,9 @@ impl MountBackend for RawHandler {
                     agent_id,
                     &path,
                     directory_request,
+                    self.file_deadline.ok_or_else(|| {
+                        RequestHandlerError::invariant_violated("Missing file serving deadline")
+                    })?,
                 )
                 .await
             }

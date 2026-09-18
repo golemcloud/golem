@@ -142,6 +142,80 @@ async fn mounted_read_rejects_paths_before_normalization() {
 }
 
 #[test]
+fn live_deadline_is_shared_by_mappings_head_and_body() {
+    use std::time::Duration;
+    use tokio::time::Instant;
+    use tokio_util::sync::CancellationToken;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::pause();
+            let harness = invocation_harness();
+            let cancelled = CancellationToken::new();
+            for head in [FileReadHead::Absent, file(3, 0, 3, b"abc").head] {
+                let guard = cancelled.clone().drop_guard();
+                harness.file_reads.responses.lock().unwrap().push_back(
+                    async move {
+                        let _guard = guard;
+                        tokio::time::sleep(Duration::from_secs(200)).await;
+                        _guard.disarm();
+                        Ok(read(head, vec![]))
+                    }
+                    .boxed(),
+                );
+            }
+            let start = Instant::now();
+            let response = endpoint(&harness, vec![route(&[("/*", "/a/$1"), ("/*", "/b/$1")])])
+                .execute(request("GET", "/sites/42/file", &[]))
+                .await;
+            assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                "https://client.example"
+            );
+            assert!(start.elapsed() >= Duration::from_secs(300));
+            assert!(start.elapsed() < Duration::from_secs(301));
+            assert_eq!(harness.file_reads.calls.lock().unwrap().len(), 2);
+            assert!(cancelled.is_cancelled());
+
+            let harness = invocation_harness();
+            let cancelled = CancellationToken::new();
+            let guard = cancelled.clone().drop_guard();
+            let source = futures::stream::poll_fn(move |_| {
+                let _ = &guard;
+                std::task::Poll::Pending
+            })
+            .boxed();
+            harness.file_reads.responses.lock().unwrap().push_back(
+                async move {
+                    tokio::time::sleep(Duration::from_secs(200)).await;
+                    Ok(FileReadResponse {
+                        head: file(3, 0, 3, b"abc").head,
+                        body: source,
+                    })
+                }
+                .boxed(),
+            );
+            let start = Instant::now();
+            let mut response = endpoint(&harness, vec![route(&[("/*", "/a/$1")])])
+                .execute(request("GET", "/sites/42/file", &[]))
+                .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(start.elapsed() >= Duration::from_secs(200));
+            assert!(start.elapsed() < Duration::from_secs(201));
+            assert!(!cancelled.is_cancelled());
+            tokio::time::advance(Duration::from_secs(100)).await;
+            tokio::task::yield_now().await;
+            assert!(cancelled.is_cancelled());
+            assert!(response.take_body().into_vec().await.is_err());
+        });
+}
+
+#[test]
 async fn mounted_read_auth_uses_system_and_typed_selection_is_terminal() {
     let harness = invocation_harness();
     let mut protected = route(&[("/*", "/public/$1")]);
