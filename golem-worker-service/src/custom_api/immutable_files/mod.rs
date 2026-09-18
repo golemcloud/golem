@@ -1,0 +1,288 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+
+use super::error::RequestHandlerError;
+use super::http_completion::{BodyGate, GateTerminal};
+use super::http_envelope::{ResponseBodyPolicy, ResponseHead};
+use super::{ResponseBody, RouteExecutionResult};
+use bytes::Bytes;
+use futures::{StreamExt, stream::BoxStream};
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::custom_api::RouterFileIndexEntry;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
+use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use std::io;
+
+pub(super) async fn serve(
+    files: &InitialAgentFilesService,
+    environment_id: EnvironmentId,
+    entry: &RouterFileIndexEntry,
+    method: &Method,
+    request_headers: &HeaderMap,
+) -> Result<RouteExecutionResult, RequestHandlerError> {
+    let etag = format!("\"blake3-{}\"", entry.blob_key.0.into_blake3().to_hex());
+    let (status, selection) = select(method, request_headers, etag.as_bytes(), entry.size)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if status != StatusCode::NOT_MODIFIED {
+        headers.insert(header::CONTENT_LENGTH, selection.1.into());
+    }
+    if status == StatusCode::RANGE_NOT_SATISFIABLE {
+        headers.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes */{}", entry.size)).unwrap(),
+        );
+    }
+    if status.is_success() {
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(
+                mime_guess::from_path(&entry.path)
+                    .first_or_octet_stream()
+                    .as_ref(),
+            )
+            .unwrap(),
+        );
+        headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        headers.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        if status == StatusCode::PARTIAL_CONTENT {
+            headers.insert(
+                header::CONTENT_RANGE,
+                HeaderValue::from_str(&format!(
+                    "bytes {}-{}/{}",
+                    selection.0,
+                    selection.0 + selection.1 - 1,
+                    entry.size
+                ))
+                .unwrap(),
+            );
+        }
+    }
+    let body = if *method == Method::HEAD || !status.is_success() || selection.1 == 0 {
+        // Even conditional responses must not hide a broken deployment index.
+        let metadata = files
+            .get_metadata(environment_id, entry.blob_key)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Indexed initial file blob is missing"))?;
+        if metadata.size != entry.size {
+            return Err(anyhow::anyhow!(
+                "Initial file size differs from deployment index: expected {}, got {}",
+                entry.size,
+                metadata.size
+            )
+            .into());
+        }
+        ResponseBody::NoBody
+    } else {
+        let opened = files
+            .get_range(environment_id, entry.blob_key, selection.0, selection.1)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Indexed initial file blob is missing"))?;
+        if opened.total_size != entry.size {
+            return Err(anyhow::anyhow!(
+                "Initial file size differs from deployment index: expected {}, got {}",
+                entry.size,
+                opened.total_size
+            )
+            .into());
+        }
+        ResponseBody::Stream(poem::Body::from_bytes_stream(verified_stream(
+            opened.stream,
+            selection.1,
+        )))
+    };
+    Ok(RouteExecutionResult {
+        status,
+        headers,
+        body,
+    })
+}
+
+fn select(
+    method: &Method,
+    headers: &HeaderMap,
+    etag: &[u8],
+    size: u64,
+) -> Result<(StatusCode, (u64, u64)), RequestHandlerError> {
+    if tag_matches(headers, header::IF_MATCH, etag, true)? == Some(false) {
+        return Ok((StatusCode::PRECONDITION_FAILED, (0, 0)));
+    }
+    if tag_matches(headers, header::IF_NONE_MATCH, etag, false)? == Some(true) {
+        return Ok((StatusCode::NOT_MODIFIED, (0, 0)));
+    }
+    if *method != Method::HEAD
+        && let Some(range) = single_header(headers, header::RANGE).and_then(parse_range)
+        && (!headers.contains_key(header::IF_RANGE)
+            || single_header(headers, header::IF_RANGE).map(trim_ows) == Some(etag))
+    {
+        return Ok(match range.resolve(size) {
+            Some(selection) => (StatusCode::PARTIAL_CONTENT, selection),
+            None => (StatusCode::RANGE_NOT_SATISFIABLE, (0, 0)),
+        });
+    }
+    Ok((StatusCode::OK, (0, size)))
+}
+
+fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&[u8]> {
+    let mut values = headers.get_all(name).iter();
+    let first = values.next()?;
+    values.next().is_none().then_some(first.as_bytes())
+}
+
+fn trim_ows(value: &[u8]) -> &[u8] {
+    value.trim_ascii_start().trim_ascii_end()
+}
+
+/// Entity tags are opaque bytes, not quoted strings with backslash escapes.
+fn tag_matches(
+    headers: &HeaderMap,
+    name: header::HeaderName,
+    etag: &[u8],
+    strong: bool,
+) -> Result<Option<bool>, RequestHandlerError> {
+    if !headers.contains_key(&name) {
+        return Ok(None);
+    }
+    let values = headers
+        .get_all(name)
+        .iter()
+        .map(HeaderValue::as_bytes)
+        .collect::<Vec<_>>();
+    let joined = values.join(b",".as_slice());
+    let mut value = trim_ows(&joined);
+    if value == b"*" {
+        return Ok(Some(true));
+    }
+    let invalid = || RequestHandlerError::RawRequest(StatusCode::BAD_REQUEST);
+    let mut matched = false;
+    loop {
+        // HTTP list fields allow empty elements, including a trailing comma.
+        while let Some(rest) = value.strip_prefix(b",") {
+            value = trim_ows(rest);
+        }
+        if value.is_empty() {
+            return Ok(Some(matched));
+        }
+        let weak = value.starts_with(b"W/");
+        if weak {
+            value = &value[2..];
+        }
+        if value.first() != Some(&b'"') {
+            return Err(invalid());
+        }
+        let end = value[1..]
+            .iter()
+            .position(|byte| *byte == b'"')
+            .ok_or_else(invalid)?
+            + 1;
+        if value[1..end]
+            .iter()
+            .any(|byte| !matches!(*byte, 0x21 | 0x23..=0x7e | 0x80..=0xff))
+        {
+            return Err(invalid());
+        }
+        matched |= (!strong || !weak) && &value[..=end] == etag;
+        value = trim_ows(&value[end + 1..]);
+        if value.is_empty() {
+            return Ok(Some(matched));
+        }
+        if value.first() != Some(&b',') {
+            return Err(invalid());
+        }
+        value = trim_ows(&value[1..]);
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum ByteRange {
+    From(u64, Option<u64>),
+    Suffix(u64),
+}
+
+impl ByteRange {
+    fn resolve(self, size: u64) -> Option<(u64, u64)> {
+        match self {
+            Self::From(start, end) if start < size => {
+                Some((start, end.unwrap_or(size - 1).min(size - 1) - start + 1))
+            }
+            Self::Suffix(length) if length > 0 && size > 0 => {
+                let length = length.min(size);
+                Some((size - length, length))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn parse_range(value: &[u8]) -> Option<ByteRange> {
+    let value = trim_ows(value).strip_prefix(b"bytes=")?;
+    let dash = value.iter().position(|byte| *byte == b'-')?;
+    let (start, end) = (&value[..dash], &value[dash + 1..]);
+    fn number(value: &[u8]) -> Option<u64> {
+        if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(value).ok()?.parse().ok()
+    }
+    if start.is_empty() {
+        Some(ByteRange::Suffix(number(end)?))
+    } else {
+        let start = number(start)?;
+        let end = if end.is_empty() {
+            None
+        } else {
+            Some(number(end)?)
+        };
+        if end.is_some_and(|end| end < start) {
+            return None;
+        }
+        Some(ByteRange::From(start, end))
+    }
+}
+
+fn verified_stream(
+    stream: BoxStream<'static, Result<Bytes, anyhow::Error>>,
+    length: u64,
+) -> BoxStream<'static, Result<Bytes, io::Error>> {
+    let mut gate = BodyGate::new(&ResponseHead {
+        status: StatusCode::OK,
+        headers: HeaderMap::new(),
+        content_length: Some(length),
+        body_policy: ResponseBodyPolicy::Stream,
+    });
+    gate.session_success();
+    futures::stream::unfold(Some((stream, gate)), |state| async move {
+        let (mut stream, mut gate) = state?;
+        loop {
+            let output = match stream.next().await {
+                Some(Ok(bytes)) => gate.push(bytes),
+                Some(Err(_)) => gate.producer_failure(),
+                None => gate.body_eof(),
+            };
+            match output.terminal {
+                Some(GateTerminal::Abort(_)) => {
+                    return Some((Err(io::Error::other("File storage stream failed")), None));
+                }
+                Some(GateTerminal::Complete) => return output.bytes.map(|bytes| (Ok(bytes), None)),
+                None => {
+                    if let Some(bytes) = output.bytes {
+                        return Some((Ok(bytes), Some((stream, gate))));
+                    }
+                }
+            }
+        }
+    })
+    .boxed()
+}
+
+#[cfg(test)]
+mod tests;

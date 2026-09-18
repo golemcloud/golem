@@ -70,7 +70,17 @@ impl SafeDisplay for RouteResolverError {
     }
 }
 
-type DomainApiCache = Cache<(Domain, u64), (), Arc<DomainHttpApi>, ()>;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct DomainApiCacheKey {
+    domain: Domain,
+    generation: u64,
+}
+
+type DomainApiCache = Cache<DomainApiCacheKey, (), Arc<DomainHttpApi>, ()>;
+
+// One initial snapshot admission and two retries for invalidation or expiry races.
+// Persistent churn fails the request rather than serving stale routes or retrying forever.
+const MAX_SNAPSHOT_ADMISSION_ATTEMPTS: usize = 3;
 
 pub struct RouteResolver {
     domain_api_cache: Option<DomainApiCache>,
@@ -184,7 +194,7 @@ impl RouteResolver {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if let Some(cache) = &self.domain_api_cache {
             for key in cache.keys().await {
-                if key.1 < generation {
+                if key.generation < generation {
                     cache.remove_if_cached(&key, |_| true).await;
                 }
             }
@@ -199,9 +209,12 @@ impl RouteResolver {
         &self,
         domain: &Domain,
     ) -> Result<Arc<DomainHttpApi>, RouteResolverError> {
-        for _ in 0..3 {
+        for _ in 0..MAX_SNAPSHOT_ADMISSION_ATTEMPTS {
             let generation = self.generation.load(Ordering::SeqCst);
-            let key = (domain.clone(), generation);
+            let key = DomainApiCacheKey {
+                domain: domain.clone(),
+                generation,
+            };
             let lookup = self.api_definition_lookup.clone();
             let domain = domain.clone();
             let fetch = move || async move {
