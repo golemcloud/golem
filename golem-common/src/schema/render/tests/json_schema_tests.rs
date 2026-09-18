@@ -497,8 +497,14 @@ fn union_emits_per_branch_defs() {
     assert!(defs.contains_key(right_key));
     // The branch def must carry the discriminator constraint (`const` on
     // the field).
-    assert_eq!(defs[left_key]["allOf"][1]["properties"]["kind"]["const"], json!("L"));
-    assert_eq!(defs[right_key]["allOf"][1]["properties"]["kind"]["const"], json!("R"));
+    assert_eq!(
+        defs[left_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("L")
+    );
+    assert_eq!(
+        defs[right_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("R")
+    );
 }
 
 #[test]

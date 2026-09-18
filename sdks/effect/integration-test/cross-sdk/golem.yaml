@@ -35,6 +35,7 @@ components:
         - effect-cross-sdk:effect-provider/EffectFixture
       tools:
         - effect-cross-sdk:ts-peer/ts-cross-plain
+        - effect-cross-sdk:ts-peer/ts-optional-reflection
   effect-cross-sdk:effect-consumer:
     dir: effect-consumer
     templates: effect
@@ -72,6 +73,7 @@ agents:
   RustPeer:
     tools:
       ts-cross-plain: {}
+      ts-optional-reflection: {}
   EffectConsumer:
     tools:
       ts-cross-streaming: {}
